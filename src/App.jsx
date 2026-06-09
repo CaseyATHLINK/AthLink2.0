@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2, Clock,
-  X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2
+  X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus
 } from "lucide-react";
 
 const PENALTY=["DNF","DNC","DNS","OCS","DSQ","BFD","UFD","RET","RDG","DGM","DNE"];
@@ -70,94 +70,7 @@ const REAL_2024={
   ],
 };
 
-const SAMPLE_TEXT=`RHKYC 29er Spring Series 2024
-venue: Royal Hong Kong Yacht Club
-date: Apr 2024
-class: 29er
-discards: 1
-Emily Polson / Tiffany Mak / 3084 / 1 1 2 1 1 2
-Cameron Law / Christopher Lam / 3054 / 2 2 1 2 2 1
-Yuto Tsutsumi / Taishi Goto / 3140 / 3 4 3 3 4 3
-Raphael Mak / Louis Polson / 2846 / 4 3 5 4 3 4
-Casey Law / Conrad Lunsden / 2876 / 5 5 4 5 5 6
-Ayden Pang / Tomoe Thiry / 2521 / 6 6 6 6 6 5
-Jamie Tsang / Cheuk Wing Mak / 2750 / 7 7 7 7 7 7
-Chloe Kong / Ethan Kong / 2411 / 8 8 8 DNF 8 8`;
-
-function parsePaste(text){
-  const lines=text.split("\n").map(l=>l.trim()).filter(Boolean);
-  if(!lines.length) return{ok:false,error:"Nothing to parse yet."};
-  const meta={venue:"",date:"",cls:"",discards:1};
-  const entries=[];let name="";
-  for(const line of lines){
-    const m=line.match(/^(venue|date|class|discards|name)\s*:\s*(.+)$/i);
-    if(m){const k=m[1].toLowerCase(),v=m[2].trim();
-      if(k==="venue") meta.venue=v;else if(k==="date") meta.date=v;
-      else if(k==="class") meta.cls=v;else if(k==="name") name=v;
-      else if(k==="discards") meta.discards=Math.max(0,parseInt(v)||0);
-      continue;}
-    if(line.includes("/")){
-      const parts=line.split("/").map(p=>p.trim());
-      if(parts.length<4) return{ok:false,error:`Need 4 "/" fields: Helm / Crew / Sail / scores`};
-      const[helm,crew,sail,scoreStr]=parts;
-      const races=scoreStr.split(/\s+/).filter(Boolean).map(t=>/^\d+$/.test(t)?parseInt(t):t.toUpperCase());
-      if(!helm) return{ok:false,error:"Missing helm name."};
-      if(!races.length) return{ok:false,error:`No scores for ${helm}.`};
-      entries.push({helm,crew,sail:sail||"—",div:"",races});
-    }else if(!name){name=line;}
-  }
-  if(!entries.length) return{ok:false,error:"No boats found. Format: Helm / Crew / Sail / 1 2 3"};
-  const maxR=Math.max(...entries.map(e=>e.races.length));
-  return{ok:true,event:{id:"imp_"+Date.now(),name:name||"Imported Regatta",
-    cls:meta.cls||"—",doublehanded:entries.some(e=>e.crew),
-    venue:meta.venue||"—",date:meta.date||"Imported",
-    discards:Math.min(meta.discards,Math.max(0,maxR-1)),
-    scoring:`Low Point · ${Math.min(meta.discards,Math.max(0,maxR-1))} discard(s)`,
-    source:"Imported",status:"Final",entries}};
-}
-
-function parseSailwaveText(rawText){
-  try{
-    const sm=rawText.match(/Sailed:\s*(\d+),\s*Discards:\s*(\d+).*?Entries:\s*(\d+)/i);
-    if(!sm) return{ok:false,error:"No Sailwave header found."};
-    const numRaces=parseInt(sm[1]),numDisc=parseInt(sm[2]);
-    const firstLine=(rawText.split('\n')[0]||"").trim().slice(0,80)||"Imported Regatta";
-    const rowRe=/\b(\d{1,2}(?:st|nd|rd|th))\b(.+?)(?=\b\d{1,2}(?:st|nd|rd|th)\b|Sailwave|$)/gis;
-    const entries=[];let m;
-    while((m=rowRe.exec(rawText))!==null&&entries.length<50){
-      const seg=m[2];
-      const tokens=(seg.match(/\b(?:\d+\.?\d*|DNF|DNC|DNS|OCS|DSQ|BFD|UFD|RET|RDG)\b/gi)||[]);
-      if(tokens.length<numRaces+2) continue;
-      const raceTokens=tokens.slice(-(numRaces+2),-2);
-      const races=raceTokens.map(t=>/^\d/.test(t)?Math.round(parseFloat(t)):t.toUpperCase());
-      if(races.length!==numRaces) continue;
-      const sailM=seg.match(/\b(\d{2,5})\b/);
-      const sail=sailM?sailM[1]:"—";
-      const nameBlock=seg.replace(/\b(?:\d+\.?\d*|DNF|DNC|DNS|OCS|DSQ|BFD|UFD|RET|RDG|29er|ILCA|Male|Female|Junior|Mix)\b/gi,"").replace(/[()]/g,"").replace(/\s+/g," ").trim();
-      const nameParts=nameBlock.split(",").map(n=>n.trim().replace(/\s+/g," ")).filter(n=>n.length>1&&!/^\d+$/.test(n));
-      entries.push({sail,div:"",helm:nameParts[0]||"Unknown",crew:nameParts[1]||"",races});
-    }
-    if(entries.length<3) return{ok:false,error:`Found ${entries.length} boats only. Try Manual import.`};
-    return{ok:true,event:{id:"imp_"+Date.now(),name:firstLine,cls:"29er",doublehanded:entries.some(e=>e.crew),
-      venue:"—",date:"Imported",discards:numDisc,
-      scoring:`Low Point · ${numDisc} discard(s)`,source:"PDF import",status:"Provisional",entries}};
-  }catch(e){return{ok:false,error:"Parse error: "+e.message};}
-}
-
-let _pdfjs=null;
-function loadPdfJs(){
-  if(_pdfjs) return Promise.resolve(_pdfjs);
-  return new Promise((res,rej)=>{
-    const s=document.createElement("script");
-    s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-    s.onload=()=>{const lib=window.pdfjsLib;if(!lib) return rej(new Error("unavailable"));
-      lib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-      _pdfjs=lib;res(lib);};
-    s.onerror=()=>rej(new Error("load failed"));
-    document.body.appendChild(s);
-  });
-}
-
+/* ---- Scoring engine ---- */
 function scoreEvent(ev){
   const fleet=ev.entries.length,pen=fleet+1,disc=ev.discards;
   const rows=ev.entries.map(e=>{
@@ -206,11 +119,11 @@ const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
 /* ---- Supabase REST client ---- */
 const SB_URL=import.meta.env.VITE_SUPABASE_URL;
 const SB_KEY=import.meta.env.VITE_SUPABASE_ANON_KEY;
-const sbHeaders=(SB_URL&&SB_KEY)?{"apikey":SB_KEY,"Authorization":`Bearer ${SB_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"}:null;
-async function sbGet(path){if(!sbHeaders) return null;const r=await fetch(`${SB_URL}/rest/v1/${path}`,{headers:sbHeaders});return r.ok?r.json():null;}
-async function sbPost(table,body){if(!sbHeaders) return null;const r=await fetch(`${SB_URL}/rest/v1/${table}`,{method:"POST",headers:sbHeaders,body:JSON.stringify(body)});return r.ok?r.json():null;}
-async function sbPatch(table,filter,body){if(!sbHeaders) return;await fetch(`${SB_URL}/rest/v1/${table}?${filter}`,{method:"PATCH",headers:sbHeaders,body:JSON.stringify(body)});}
-async function sbDelete(table,filter){if(!sbHeaders) return;await fetch(`${SB_URL}/rest/v1/${table}?${filter}`,{method:"DELETE",headers:{...sbHeaders,"Prefer":""}});}
+const sbH=(SB_URL&&SB_KEY)?{"apikey":SB_KEY,"Authorization":`Bearer ${SB_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"}:null;
+const sbGet=async p=>{if(!sbH) return null;const r=await fetch(`${SB_URL}/rest/v1/${p}`,{headers:sbH});return r.ok?r.json():null;};
+const sbPost=async(t,b)=>{if(!sbH) return null;const r=await fetch(`${SB_URL}/rest/v1/${t}`,{method:"POST",headers:sbH,body:JSON.stringify(b)});return r.ok?r.json():null;};
+const sbPatch=async(t,f,b)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"PATCH",headers:sbH,body:JSON.stringify(b)});};
+const sbDel=async(t,f)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"DELETE",headers:{...sbH,"Prefer":""}});};
 
 function dbToApp(ev){
   return{id:ev.id,name:ev.name,cls:ev.class,doublehanded:ev.doublehanded,
@@ -220,13 +133,18 @@ function dbToApp(ev){
       helm:e.helm_name,crew:e.crew_name||"",races:e.races||[]}))};
 }
 async function saveEventToDb(ev){
-  if(!sbHeaders) return;
+  if(!sbH) return;
   const ins=await sbPost("events",{name:ev.name,class:ev.cls,doublehanded:ev.doublehanded,
     venue:ev.venue,date:ev.date,discards:ev.discards,scoring:ev.scoring,source:ev.source,status:ev.status});
-  if(!ins?.[0]?.id){console.error("Event insert failed");return;}
+  if(!ins?.[0]?.id) return;
   await sbPost("entries",ev.entries.map(e=>({event_id:ins[0].id,sail:e.sail,division:e.div,
     helm_name:e.helm,crew_name:e.crew||null,races:e.races})));
 }
+
+/* ---- Manual import form helpers ---- */
+const defRow=n=>({helm:"",crew:"",sail:"",div:"",scores:Array(n).fill("")});
+const emptyForm=()=>({name:"",venue:"",date:"",discards:1,numRaces:5,
+  rows:[defRow(5),defRow(5),defRow(5)]});
 
 /* ================================================================ */
 export default function AthLinkMVP(){
@@ -236,137 +154,152 @@ export default function AthLinkMVP(){
   const[verified,setVerified]=useState({});
   const[q,setQ]=useState("");const[filter,setFilter]=useState("all");
   const[note,setNote]=useState(null);
+  /* modal */
   const[open,setOpen]=useState(false);
   const[tab,setTab]=useState("pdf");
-  const[paste,setPaste]=useState("");
+  /* pdf tab */
   const[parsedPdf,setParsedPdf]=useState(null);
   const[pdfError,setPdfError]=useState("");
   const[pdfLoading,setPdfLoading]=useState(false);
+  /* manual tab */
+  const[mf,setMf]=useState(emptyForm());
+  /* result editor */
   const[editCell,setEditCell]=useState(null);
   const[editVal,setEditVal]=useState("");
 
-  /* Load from Supabase; seed on first run; fallback to hardcoded */
+  /* Supabase load + seed */
   useEffect(()=>{
     (async()=>{
-      if(!sbHeaders){setEvents([REAL_2024,REAL_2023]);return;}
+      if(!sbH){setEvents([REAL_2024,REAL_2023]);return;}
       const data=await sbGet("events?select=*,entries(*)&order=created_at.desc");
       if(!data){setEvents([REAL_2024,REAL_2023]);return;}
       if(data.length===0){
         await saveEventToDb(REAL_2023);await saveEventToDb(REAL_2024);
-        const seeded=await sbGet("events?select=*,entries(*)&order=created_at.desc");
-        setEvents((seeded||[]).map(dbToApp));
-      }else{setEvents(data.map(dbToApp));}
+        const s=await sbGet("events?select=*,entries(*)&order=created_at.desc");
+        setEvents((s||[]).map(dbToApp));
+      }else setEvents(data.map(dbToApp));
     })();
   },[]);
 
-  /* Events for the current class portal, already sorted desc from DB */
-  const classEvents=useMemo(()=>{
-    if(!portal) return[];
-    return events.filter(ev=>ev.cls===portal);
-  },[events,portal]);
-
-  /* People derived from current class only */
+  const classEvents=useMemo(()=>portal?events.filter(e=>e.cls===portal):[],[events,portal]);
   const people=useMemo(()=>{
     const map=new Map();
     classEvents.forEach(ev=>ev.entries.forEach(e=>{
-      [e.helm,e.crew].forEach(nm=>{if(nm&&!map.has(nm)) map.set(nm,{name:nm,nat:META[nm]?.nat,ws:null});});
+      [e.helm,e.crew].forEach(nm=>{if(nm&&!map.has(nm)) map.set(nm,{name:nm,nat:META[nm]?.nat});});
     }));
     return[...map.values()];
   },[classEvents]);
-
-  const parsedFromPaste=useMemo(()=>paste.trim()?parsePaste(paste):null,[paste]);
 
   const go=v=>{setView(v);window.scrollTo(0,0);};
   const enterPortal=id=>{setPortal(id);setView({name:"events"});};
   const goHome=()=>{setPortal(null);setView({name:"events"});};
 
-  /* Delete event */
   const deleteEvent=async(evId,e)=>{
     e.stopPropagation();
-    if(!window.confirm("Remove this regatta? This cannot be undone.")) return;
-    await sbDelete("events",`id=eq.${evId}`);
-    setEvents(prev=>prev.filter(ev=>ev.id!==evId));
+    if(!window.confirm("Remove this regatta?")) return;
+    await sbDel("events",`id=eq.${evId}`);
+    setEvents(p=>p.filter(ev=>ev.id!==evId));
   };
 
-  /* Import (manual) */
-  const doImport=async()=>{
-    if(!parsedFromPaste?.ok) return;
-    const raw=parsedFromPaste.event;
-    const ev={...raw,cls:raw.cls==="—"?portal:raw.cls};
-    const existing=new Set();
-    events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew) existing.add(en.crew);}));
-    const incoming=new Set();
-    ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew) incoming.add(en.crew);});
-    let matched=0,created=0;
-    incoming.forEach(n=>existing.has(n)?matched++:created++);
-    await saveEventToDb(ev);
-    setEvents(p=>[ev,...p]);
-    setNote({name:ev.name,matched,created});
-    setOpen(false);setPaste("");setTab("pdf");
-    setTimeout(()=>setNote(null),6500);
-  };
-
-  /* Import (PDF) */
-  const doImportPdf=async()=>{
-    if(!parsedPdf) return;
-    const ev={...parsedPdf,cls:parsedPdf.cls==="—"?portal:parsedPdf.cls};
-    const existing=new Set();
-    events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew) existing.add(en.crew);}));
-    const incoming=new Set();
-    ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew) incoming.add(en.crew);});
-    let matched=0,created=0;
-    incoming.forEach(n=>existing.has(n)?matched++:created++);
-    await saveEventToDb(ev);
-    setEvents(p=>[ev,...p]);
-    setNote({name:ev.name,matched,created});
-    setOpen(false);setParsedPdf(null);setPdfError("");setTab("pdf");
-    setTimeout(()=>setNote(null),6500);
-  };
-
-  /* PDF text extraction */
+  /* ---- PDF import (calls /api/parse_pdf backend) ---- */
   const handlePdf=async file=>{
     if(!file) return;
     setPdfLoading(true);setParsedPdf(null);setPdfError("");
     try{
-      const lib=await loadPdfJs();
-      const buf=await file.arrayBuffer();
-      const doc=await lib.getDocument({data:buf}).promise;
-      let text="";
-      for(let i=1;i<=doc.numPages;i++){
-        const page=await doc.getPage(i);
-        const content=await page.getTextContent();
-        text+=content.items.map(it=>it.str).join(" ")+"\n";
+      const res=await fetch("/api/parse_pdf",{
+        method:"POST",
+        headers:{"Content-Type":"application/octet-stream"},
+        body:file,
+      });
+      const data=await res.json();
+      if(data.ok){
+        setParsedPdf({
+          id:"imp_"+Date.now(),name:data.name,
+          cls:portal,doublehanded:data.entries.some(e=>e.crew),
+          venue:"—",date:"Imported",discards:data.discards,
+          scoring:`Low Point · ${data.discards} discard(s)`,
+          source:"PDF import",status:"Provisional",
+          entries:data.entries.map(e=>({...e,div:e.div||""})),
+        });
+      }else{
+        setPdfError(data.error||"Could not parse this PDF.");
       }
-      const result=parseSailwaveText(text);
-      if(result.ok) setParsedPdf(result.event);
-      else setPdfError(result.error);
-    }catch(e){setPdfError("Couldn't read this PDF here. Send it in chat for a clean import.");}
-    finally{setPdfLoading(false);}
+    }catch{
+      setPdfError("Upload failed — are you on the deployed Vercel site? PDF parsing requires the backend server.");
+    }finally{setPdfLoading(false);}
   };
 
-  /* Result editor */
-  const startEdit=(evId,sail,helm,raceIdx,currentVal)=>{setEditCell({evId,sail,helm,raceIdx});setEditVal(String(currentVal));};
+  const importEvent=async ev=>{
+    const existing=new Set();
+    events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew) existing.add(en.crew);}));
+    const incoming=new Set();
+    ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew) incoming.add(en.crew);});
+    let matched=0,created=0;
+    incoming.forEach(n=>existing.has(n)?matched++:created++);
+    await saveEventToDb(ev);
+    setEvents(p=>[ev,...p]);
+    setNote({name:ev.name,matched,created});
+    setOpen(false);
+    setTimeout(()=>setNote(null),6500);
+  };
+
+  const doImportPdf=async()=>{if(parsedPdf) await importEvent(parsedPdf);setParsedPdf(null);setPdfError("");};
+
+  /* ---- Manual import form ---- */
+  const updMeta=(k,v)=>setMf(f=>({...f,[k]:v}));
+  const updRow=(i,k,v)=>setMf(f=>({...f,rows:f.rows.map((r,ri)=>ri===i?{...r,[k]:v}:r)}));
+  const updScore=(i,j,v)=>setMf(f=>({...f,rows:f.rows.map((r,ri)=>ri===i?{...r,scores:r.scores.map((s,si)=>si===j?v:s)}:r)}));
+  const addRow=()=>setMf(f=>({...f,rows:[...f.rows,defRow(f.numRaces)]}));
+  const delRow=i=>setMf(f=>({...f,rows:f.rows.filter((_,ri)=>ri!==i)}));
+  const setNumRaces=n=>setMf(f=>({...f,numRaces:n,rows:f.rows.map(r=>({...r,scores:Array(n).fill("").map((_,i)=>r.scores[i]||"")}))}));
+  const buildManualEvent=()=>{
+    const rows=mf.rows.filter(r=>r.helm.trim());
+    if(!rows.length) return null;
+    const disc=Math.min(mf.discards,Math.max(0,mf.numRaces-1));
+    return{
+      id:"imp_"+Date.now(),name:mf.name||"Imported Regatta",
+      cls:portal,doublehanded:rows.some(r=>r.crew.trim()),
+      venue:mf.venue||"—",date:mf.date||"Imported",
+      discards:disc,scoring:`Low Point · ${disc} discard(s)`,
+      source:"Manual import",status:"Final",
+      entries:rows.map(r=>({
+        helm:r.helm.trim(),crew:r.crew.trim(),sail:r.sail.trim()||"—",div:r.div.trim(),
+        races:r.scores.map(s=>s.trim()).filter(Boolean)
+          .map(s=>/^\d+$/.test(s)?parseInt(s):s.toUpperCase()),
+      })),
+    };
+  };
+  const doImportManual=async()=>{
+    const ev=buildManualEvent();
+    if(!ev) return;
+    await importEvent(ev);
+    setMf(emptyForm());
+  };
+
+  /* ---- Result editor ---- */
+  const startEdit=(evId,sail,helm,raceIdx,val)=>{setEditCell({evId,sail,helm,raceIdx});setEditVal(String(val));};
   const commitEdit=async()=>{
     if(!editCell) return;
     const raw=editVal.trim().toUpperCase();
-    let newVal;
-    if(/^\d+$/.test(raw)){newVal=parseInt(raw);if(newVal<1){setEditCell(null);return;}}
-    else if(PENALTY.includes(raw)){newVal=raw;}
+    let nv;
+    if(/^\d+$/.test(raw)){nv=parseInt(raw);if(nv<1){setEditCell(null);return;}}
+    else if(PENALTY.includes(raw)) nv=raw;
     else{setEditCell(null);return;}
     const{evId,sail,helm,raceIdx}=editCell;
     const entry=events.find(e=>e.id===evId)?.entries.find(e=>e.sail===sail&&e.helm===helm);
-    if(entry?._dbId){const updated=[...entry.races];updated[raceIdx]=newVal;await sbPatch("entries",`id=eq.${entry._dbId}`,{races:updated});}
+    if(entry?._dbId){const u=[...entry.races];u[raceIdx]=nv;await sbPatch("entries",`id=eq.${entry._dbId}`,{races:u});}
     setEvents(prev=>prev.map(ev=>{
       if(ev.id!==evId) return ev;
       return{...ev,entries:ev.entries.map(e=>{
         if(e.sail!==sail||e.helm!==helm) return e;
-        const r=[...e.races];r[raceIdx]=newVal;return{...e,races:r};
+        const r=[...e.races];r[raceIdx]=nv;return{...e,races:r};
       })};
     }));
     setEditCell(null);
   };
 
   const cls=CLASSES.find(c=>c.id===portal);
+  const manualReady=!!buildManualEvent();
 
   return(
   <div className="al-root">
@@ -387,7 +320,7 @@ export default function AthLinkMVP(){
     .nav button.home{color:#9fbdd9;font-size:13px;}
     .nav button.home:hover{color:#fff;}
     .strip{background:linear-gradient(140deg,#1b4470,#143358);color:#cfe0f1;padding:28px 0 22px;}
-    .strip h1{font-family:'Barlow',sans-serif;color:#fff;font-size:28px;font-weight:800;margin:0 0 14px;letter-spacing:-.01em;line-height:1.05;}
+    .strip h1{font-family:'Barlow',sans-serif;color:#fff;font-size:28px;font-weight:800;margin:0 0 14px;}
     .pillbar{display:flex;gap:20px;flex-wrap:wrap;}
     .pill{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#9fbdd9;}
     .pill b{color:#fff;font-family:'Barlow',sans-serif;font-size:19px;}
@@ -399,10 +332,10 @@ export default function AthLinkMVP(){
     .evname{font-family:'Barlow',sans-serif;font-weight:700;font-size:17px;margin:0 0 3px;}
     .evmeta{font-size:13px;color:var(--mut);display:flex;gap:12px;flex-wrap:wrap;align-items:center;}
     .evmeta span{display:flex;align-items:center;gap:5px;}
-    .badge{font-size:11px;font-weight:700;color:var(--navy2);background:var(--sky);padding:4px 9px;border-radius:20px;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;}
+    .badge{font-size:11px;font-weight:700;color:var(--navy2);background:var(--sky);padding:4px 9px;border-radius:20px;display:inline-flex;align-items:center;gap:5px;}
     .badge.imp{color:#0a7a48;background:#d8f0e3;}
     .cls{font-family:'Barlow',sans-serif;font-weight:700;font-size:12px;color:#fff;background:var(--navy2);padding:4px 10px;border-radius:7px;flex:none;}
-    .delbtn{background:none;border:0;color:#c0392b;cursor:pointer;padding:6px;border-radius:7px;display:grid;place-items:center;opacity:.5;transition:.15s;flex:none;}
+    .delbtn{background:none;border:0;color:#c0392b;cursor:pointer;padding:6px;border-radius:7px;display:grid;place-items:center;opacity:.45;transition:.15s;flex:none;}
     .delbtn:hover{opacity:1;background:#fbe7e4;}
     .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:auto;}
     table{width:100%;border-collapse:collapse;font-size:13px;min-width:680px;}
@@ -410,8 +343,7 @@ export default function AthLinkMVP(){
     thead th.l{text-align:left;padding-left:18px;}
     tbody td{padding:10px 5px;text-align:center;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;}
     tbody td.l{text-align:left;padding-left:18px;}
-    tbody td.editable{cursor:text;}
-    tbody td.editable:hover{background:#eef4fb;}
+    tbody td.editable{cursor:text;}tbody td.editable:hover{background:#eef4fb;}
     tbody tr:last-child td{border-bottom:0;}
     .rk{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;width:40px;}
     .rk.p1{color:var(--gold);}.rk.p2{color:#7d8a98;}.rk.p3{color:#a86a32;}
@@ -422,8 +354,8 @@ export default function AthLinkMVP(){
     .disc{color:var(--mut);}.code{color:#c0392b;font-weight:600;font-size:11px;}
     .net{font-family:'Barlow',sans-serif;font-weight:700;color:var(--navy);}
     .vchip{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--accent);font-weight:600;}
-    .divtag{font-size:10px;font-weight:700;letter-spacing:.03em;color:var(--navy2);background:var(--sky);padding:2px 7px;border-radius:5px;}
-    .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px 2px;font-family:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
+    .divtag{font-size:10px;font-weight:700;color:var(--navy2);background:var(--sky);padding:2px 7px;border-radius:5px;}
+    .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px;font:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
     .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px;}
     .acard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;}
     .acard:hover{border-color:#b9cee4;transform:translateY(-2px);box-shadow:0 12px 28px -16px rgba(22,58,99,.55);}
@@ -459,8 +391,7 @@ export default function AthLinkMVP(){
     .hrk.p1{color:var(--gold);}.hrk.p2{color:#7d8a98;}.hrk.p3{color:#a86a32;}
     .hrk small{display:block;font-size:10px;color:var(--mut);font-weight:600;}
     .rolechip{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:5px;text-transform:uppercase;font-family:'Barlow',sans-serif;}
-    .rolechip.helm{color:#fff;background:var(--navy2);}
-    .rolechip.crew{color:var(--navy2);background:var(--sky);}
+    .rolechip.helm{color:#fff;background:var(--navy2);}.rolechip.crew{color:var(--navy2);background:var(--sky);}
     .miniraces{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;}
     .rc{width:24px;height:24px;border-radius:6px;background:var(--sky);color:var(--navy);font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;}
     .rc.c{background:#fbe3e0;color:#c0392b;}.rc.d{background:#eef2f7;color:var(--mut);}.rc.w{background:var(--accent);color:#fff;}
@@ -468,14 +399,14 @@ export default function AthLinkMVP(){
     .home-hero{background:linear-gradient(140deg,#1b4470,#143358);padding:42px 0 36px;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:#fff;font-size:36px;font-weight:800;margin:0 0 8px;}
     .home-hero p{color:#bcd2e8;font-size:15px;margin:0;}
-    .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:0;}
+    .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
     .class-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;cursor:pointer;transition:.18s;animation:rise .5s both;}
     .class-card:hover{border-color:#b9cee4;transform:translateY(-3px);box-shadow:0 16px 36px -16px rgba(22,58,99,.6);}
     .class-tag{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--sky);padding:4px 11px;border-radius:6px;display:inline-block;margin-bottom:14px;}
     .class-name{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0 0 14px;line-height:1.25;color:var(--ink);}
     .class-stats{display:flex;gap:20px;font-size:12px;color:var(--mut);margin-bottom:18px;}
     .class-stats b{display:block;font-family:'Barlow',sans-serif;font-size:20px;color:var(--ink);font-weight:700;}
-    /* misc */
+    /* Modal */
     .notice{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:60;background:var(--navy);color:#fff;border-radius:13px;padding:14px 20px;display:flex;gap:13px;align-items:center;box-shadow:0 20px 50px -18px rgba(0,0,0,.6);animation:rise .4s both;max-width:92%;}
     .notice b{font-family:'Barlow',sans-serif;}
     .notice .ico{background:var(--accent);color:#fff;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;}
@@ -484,7 +415,7 @@ export default function AthLinkMVP(){
     .prov{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#9a6b1f;background:#f6ecd6;padding:4px 10px;border-radius:20px;font-weight:600;}
     .foot{font-size:12px;color:var(--mut);text-align:center;padding:30px 0;}
     .ov{position:fixed;inset:0;background:rgba(16,33,58,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;animation:fade .2s both;}
-    .modal{background:var(--paper);width:100%;max-width:600px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;}
+    .modal{background:var(--paper);width:100%;max-width:680px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;}
     .mhead{background:var(--navy);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;}
     .mhead h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
     .mhead .x{background:rgba(255,255,255,.12);border:0;color:#fff;width:32px;height:32px;border-radius:8px;cursor:pointer;display:grid;place-items:center;}
@@ -492,15 +423,30 @@ export default function AthLinkMVP(){
     .mtabs{display:flex;gap:6px;padding:14px 22px 0;}
     .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;background:none;color:var(--mut);padding:9px 14px;border-radius:9px 9px 0 0;cursor:pointer;display:flex;align-items:center;gap:7px;}
     .mtabs button.on{color:var(--navy);background:#fff;border:1px solid var(--line);border-bottom:0;}
-    .mbody{padding:18px 22px 22px;}
-    .hint{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 13px;font-size:12.5px;color:var(--mut);line-height:1.55;margin-bottom:12px;}
-    .hint code{background:var(--sky);color:var(--navy);padding:1px 6px;border-radius:5px;font-size:12px;}
-    textarea{width:100%;min-height:160px;border:1px solid var(--line);border-radius:10px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.5;color:var(--ink);background:#fff;resize:vertical;outline:none;}
-    textarea:focus{border-color:var(--accent);}
+    .mbody{padding:18px 22px 22px;max-height:72vh;overflow-y:auto;}
     .prev{margin-top:12px;border-radius:10px;padding:12px 14px;font-size:13px;}
     .prev.ok{background:#d8f0e3;color:#0a6b41;}.prev.err{background:#fbe7e4;color:#a8362a;}
     .mfoot{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;}
     .link{background:none;border:0;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;padding:0;}
+    /* Manual import table */
+    .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
+    .meta-grid label{font-size:12px;color:var(--mut);display:block;margin-bottom:3px;font-weight:600;}
+    .meta-grid input{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px;color:var(--ink);background:#fff;outline:none;}
+    .meta-grid input:focus{border-color:var(--accent);}
+    .race-ctrl{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+    .race-ctrl span{font-size:13px;color:var(--mut);font-weight:600;}
+    .stepper{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:var(--ink);}
+    .stepper button{width:28px;height:28px;border:1px solid var(--line);border-radius:7px;background:#fff;cursor:pointer;display:grid;place-items:center;color:var(--navy);transition:.1s;}
+    .stepper button:hover{background:var(--sky);}
+    .rtable-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;}
+    .rtable{width:100%;border-collapse:collapse;font-size:12.5px;}
+    .rtable thead th{background:var(--navy);color:#fff;font-family:'Barlow',sans-serif;font-weight:600;padding:8px 4px;text-align:center;font-size:11.5px;white-space:nowrap;}
+    .rtable thead th.l{text-align:left;padding-left:8px;}
+    .rtable tbody td{border-bottom:1px solid var(--line);padding:0;vertical-align:middle;}
+    .rtable tbody tr:last-child td{border-bottom:0;}
+    .rtable tbody td input{width:100%;border:0;outline:none;font:inherit;font-size:12.5px;padding:7px 5px;background:transparent;color:var(--ink);}
+    .rtable tbody td input:focus{background:#eef4fb;}
+    .rtable tbody td.del-td{width:28px;text-align:center;border-left:1px solid var(--line);}
     @keyframes rise{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
     @keyframes fade{from{opacity:0;}to{opacity:1;}}
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
@@ -509,46 +455,38 @@ export default function AthLinkMVP(){
   {/* TOPBAR */}
   <div className="topbar"><div className="topin">
     <div className="brand" onClick={goHome} title="Hong Kong Sailing"><Link2 size={15}/></div>
-    {cls && <span className="topname">{cls.name}</span>}
+    {cls&&<span className="topname">{cls.name}</span>}
     <nav className="nav">
-      {portal && <button className="home" onClick={goHome}><ArrowLeft size={14}/> All classes</button>}
-      {portal && <button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Regattas</button>}
-      {portal && <button className={view.name==="athletes"||view.name==="profile"?"on":""} onClick={()=>go({name:"athletes"})}>Athletes</button>}
+      {portal&&<button className="home" onClick={goHome}><ArrowLeft size={14}/> All classes</button>}
+      {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Regattas</button>}
+      {portal&&<button className={view.name==="athletes"||view.name==="profile"?"on":""} onClick={()=>go({name:"athletes"})}>Athletes</button>}
     </nav>
   </div></div>
 
-  {/* ===== HOME PAGE ===== */}
+  {/* HOME */}
   {!portal&&(<>
     <div className="home-hero"><div className="wrap">
       <h1 className="disp">Hong Kong Sailing</h1>
       <p>Select a class association to view results and athlete profiles</p>
     </div></div>
     <div className="wrap sec">
-      <p className="seclabel"><Anchor size={14}/> Class Associations</p>
+      <p className="seclabel"><Anchor size={14}/>Class Associations</p>
       <div className="classes-grid">
         {CLASSES.map((c,i)=>{
           const ce=events.filter(e=>e.cls===c.id);
-          const cp=new Set();
-          ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm) cp.add(e.helm);if(e.crew) cp.add(e.crew);}));
-          return(
-            <div className="class-card" key={c.id} style={{animationDelay:`${i*80}ms`}} onClick={()=>enterPortal(c.id)}>
-              <span className="class-tag">{c.short}</span>
-              <p className="class-name">{c.name}</p>
-              <div className="class-stats">
-                <div><b>{ce.length}</b>regattas</div>
-                <div><b>{cp.size}</b>sailors</div>
-              </div>
-              <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(c.id);}}>
-                Enter portal <ChevronRight size={16}/>
-              </button>
-            </div>
-          );
+          const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm) cp.add(e.helm);if(e.crew) cp.add(e.crew);}));
+          return(<div className="class-card" key={c.id} style={{animationDelay:`${i*80}ms`}} onClick={()=>enterPortal(c.id)}>
+            <span className="class-tag">{c.short}</span>
+            <p className="class-name">{c.name}</p>
+            <div className="class-stats"><div><b>{ce.length}</b>regattas</div><div><b>{cp.size}</b>sailors</div></div>
+            <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(c.id);}}>Enter portal <ChevronRight size={16}/></button>
+          </div>);
         })}
       </div>
     </div>
   </>)}
 
-  {/* ===== EVENTS ===== */}
+  {/* EVENTS */}
   {portal&&view.name==="events"&&(<>
     <div className="strip"><div className="wrap">
       <h1 className="disp">{cls?.name}</h1>
@@ -559,91 +497,82 @@ export default function AthLinkMVP(){
     </div></div>
     <div className="wrap sec">
       <div className="toolbar">
-        <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/> Results</p>
-        <button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/> Import a regatta</button>
+        <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
+        <button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>
       </div>
       {classEvents.map((ev,i)=>{
         const s=scoreEvent(ev);
-        return(
-          <div className="ev" key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
-            <div className="evicon"><Anchor size={20}/></div>
-            <div style={{flex:1,minWidth:0}}>
-              <p className="evname">{ev.name}</p>
-              <div className="evmeta">
-                <span><MapPin size={13}/>{ev.venue}</span>
-                <span><Calendar size={13}/>{ev.date}</span>
-                <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
-              </div>
-            </div>
-            <span className={"badge"+(ev.source==="Imported"||ev.source==="PDF import"?" imp":"")}><BadgeCheck size={12}/>{ev.source}</span>
-            <span className="cls">{ev.cls}</span>
-            <button className="delbtn" onClick={e=>deleteEvent(ev.id,e)} title="Remove regatta"><Trash2 size={16}/></button>
-            <ChevronRight size={18} color="#9fb2c8"/>
+        return(<div className="ev" key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
+          <div className="evicon"><Anchor size={20}/></div>
+          <div style={{flex:1,minWidth:0}}>
+            <p className="evname">{ev.name}</p>
+            <div className="evmeta"><span><MapPin size={13}/>{ev.venue}</span><span><Calendar size={13}/>{ev.date}</span><span><Users size={13}/>{s.fleet} boats · {s.races} races</span></div>
           </div>
-        );
+          <span className={"badge"+(ev.source==="Imported"||ev.source==="Manual import"||ev.source==="PDF import"?" imp":"")}><BadgeCheck size={12}/>{ev.source}</span>
+          <span className="cls">{ev.cls}</span>
+          <button className="delbtn" onClick={e=>deleteEvent(ev.id,e)} title="Remove"><Trash2 size={16}/></button>
+          <ChevronRight size={18} color="#9fb2c8"/>
+        </div>);
       })}
       {classEvents.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No regattas yet. Import one to get started.</p>}
     </div>
   </>)}
 
-  {/* ===== SINGLE EVENT ===== */}
+  {/* EVENT DETAIL */}
   {portal&&view.name==="event"&&(()=>{
-    const ev=events.find(e=>e.id===view.id);
-    if(!ev) return null;
+    const ev=events.find(e=>e.id===view.id);if(!ev) return null;
     const s=scoreEvent(ev);
-    return(
-      <div className="wrap sec" style={{paddingTop:26}}>
-        <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/> All regattas</button>
-        <h1 className="disp" style={{fontSize:24,margin:"0 0 6px"}}>{ev.name}</h1>
-        <div className="evmeta" style={{marginBottom:10}}>
-          <span><MapPin size={13}/>{ev.venue}</span><span><Calendar size={13}/>{ev.date}</span>
-          <span><Flag size={13}/>{ev.cls} · {ev.scoring}</span>
-        </div>
-        <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
-          <span className="vchip"><BadgeCheck size={13}/>Source: {ev.source}</span>
-          <span className="prov"><Clock size={12}/>{ev.status}</span>
-          <span style={{fontSize:12,color:"var(--mut)",marginLeft:"auto",display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span>
-        </div>
-        <div className="panel"><table>
-          <thead><tr>
-            <th>Pos</th><th className="l">Boat</th><th>Sail</th>
-            {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
-            <th>Net</th>
-          </tr></thead>
-          <tbody>
-            {s.rows.map(r=>(
-              <tr key={r.sail+r.helm}>
-                <td className={`rk ${r.rank<=3?"p"+r.rank:""}`}>{r.rank}</td>
-                <td className="l"><div className="boat">
-                  <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
-                  <div>
-                    <div className="namelink" onClick={()=>go({name:"profile",id:r.helm})}>{r.helm}</div>
-                    <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew})}>{r.crew}</span></>:"single-handed"}{r.div?<span className="divtag" style={{marginLeft:8}}>{r.div}</span>:null}</div>
-                  </div>
-                </div></td>
-                <td className="cn">{r.sail}</td>
-                {Array.from({length:s.races}).map((_,i)=>{
-                  const c=r.races[i];
-                  const isEditing=editCell&&editCell.evId===ev.id&&editCell.sail===r.sail&&editCell.helm===r.helm&&editCell.raceIdx===i;
-                  if(isEditing) return<td key={i}><input className="cellinput" autoFocus value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={commitEdit} onKeyDown={e=>{if(e.key==="Enter") commitEdit();if(e.key==="Escape") setEditCell(null);}}/></td>;
-                  if(c===undefined) return<td key={i} className="disc">–</td>;
-                  return<td key={i} className={"editable "+(isCode(c)?"code":r.discardSet.has(i)?"disc":"")} onClick={()=>startEdit(ev.id,r.sail,r.helm,i,c)} title="Click to edit">{isCode(c)?c:r.discardSet.has(i)?`(${c})`:c}</td>;
-                })}
-                <td className="net">{r.net}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table></div>
-        <p style={{fontSize:12,color:"var(--mut)",marginTop:12}}>( ) = discard · red = penalty (fleet+1={s.fleet+1}) · edits persist to database</p>
+    return(<div className="wrap sec" style={{paddingTop:26}}>
+      <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All regattas</button>
+      <h1 className="disp" style={{fontSize:24,margin:"0 0 6px"}}>{ev.name}</h1>
+      <div className="evmeta" style={{marginBottom:10}}>
+        <span><MapPin size={13}/>{ev.venue}</span><span><Calendar size={13}/>{ev.date}</span>
+        <span><Flag size={13}/>{ev.cls} · {ev.scoring}</span>
       </div>
-    );
+      <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <span className="vchip"><BadgeCheck size={13}/>Source: {ev.source}</span>
+        <span className="prov"><Clock size={12}/>{ev.status}</span>
+        <span style={{fontSize:12,color:"var(--mut)",marginLeft:"auto",display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span>
+      </div>
+      <div className="panel"><table>
+        <thead><tr>
+          <th>Pos</th><th className="l">Boat</th><th>Sail</th>
+          {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
+          <th>Net</th>
+        </tr></thead>
+        <tbody>
+          {s.rows.map(r=>(
+            <tr key={r.sail+r.helm}>
+              <td className={`rk ${r.rank<=3?"p"+r.rank:""}`}>{r.rank}</td>
+              <td className="l"><div className="boat">
+                <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
+                <div>
+                  <div className="namelink" onClick={()=>go({name:"profile",id:r.helm})}>{r.helm}</div>
+                  <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew})}>{r.crew}</span></>:"single-handed"}{r.div?<span className="divtag" style={{marginLeft:8}}>{r.div}</span>:null}</div>
+                </div>
+              </div></td>
+              <td className="cn">{r.sail}</td>
+              {Array.from({length:s.races}).map((_,i)=>{
+                const c=r.races[i];
+                const isE=editCell&&editCell.evId===ev.id&&editCell.sail===r.sail&&editCell.helm===r.helm&&editCell.raceIdx===i;
+                if(isE) return<td key={i}><input className="cellinput" autoFocus value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={commitEdit} onKeyDown={e=>{if(e.key==="Enter") commitEdit();if(e.key==="Escape") setEditCell(null);}}/></td>;
+                if(c===undefined) return<td key={i} className="disc">–</td>;
+                return<td key={i} className={"editable "+(isCode(c)?"code":r.discardSet.has(i)?"disc":"")} onClick={()=>startEdit(ev.id,r.sail,r.helm,i,c)} title="Click to edit">{isCode(c)?c:r.discardSet.has(i)?`(${c})`:c}</td>;
+              })}
+              <td className="net">{r.net}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+      <p style={{fontSize:12,color:"var(--mut)",marginTop:12}}>( ) = discard · red = penalty (fleet+1={s.fleet+1}) · edits persist to database</p>
+    </div>);
   })()}
 
-  {/* ===== ATHLETES ===== */}
+  {/* ATHLETES */}
   {portal&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:26}}>
       <h1 className="disp" style={{fontSize:25,margin:"0 0 4px"}}>Athletes</h1>
-      <p style={{color:"var(--mut)",fontSize:14,margin:"0 0 18px"}}>One profile per sailor, auto-built from results across every event.</p>
+      <p style={{color:"var(--mut)",fontSize:14,margin:"0 0 18px"}}>One profile per sailor, auto-built from results.</p>
       <div className="toolbar">
         <div className="srch"><Search size={16} color="#9fb2c8"/><input placeholder="Search sailors…" value={q} onChange={e=>setQ(e.target.value)}/></div>
         <div className="seg">{["all","verified","unverified"].map(f=>(
@@ -651,143 +580,161 @@ export default function AthLinkMVP(){
         ))}</div>
       </div>
       <div className="agrid">
-        {people
-          .filter(p=>q?p.name.toLowerCase().includes(q.toLowerCase()):true)
+        {people.filter(p=>q?p.name.toLowerCase().includes(q.toLowerCase()):true)
           .filter(p=>filter==="all"?true:filter==="verified"?verified[p.name]:!verified[p.name])
           .map((p,i)=>{
             const ag=aggregate(p.name,classEvents);
-            return(
-              <div className="acard" key={p.name} style={{animationDelay:`${i*28}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
-                <div className="achead">
-                  <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
-                  <div><div className="acn">{p.name}</div>
-                    <div className="cn" style={{marginTop:2}}>{p.nat||cls?.short}{ag.events>1?" · multi-event":""}</div></div>
-                </div>
-                <div className="acstat">
-                  <div><b>{ag.events}</b>regattas</div>
-                  <div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
-                  <div style={{marginLeft:"auto",alignSelf:"center"}}>
-                    {verified[p.name]?<span className="vchip"><BadgeCheck size={13}/> Verified</span>:<span style={{fontSize:11.5,color:"var(--mut)"}}>Unverified</span>}
-                  </div>
-                </div>
+            return(<div className="acard" key={p.name} style={{animationDelay:`${i*28}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
+              <div className="achead">
+                <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
+                <div><div className="acn">{p.name}</div><div className="cn" style={{marginTop:2}}>{p.nat||cls?.short}{ag.events>1?" · multi-event":""}</div></div>
               </div>
-            );
+              <div className="acstat">
+                <div><b>{ag.events}</b>regattas</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
+                <div style={{marginLeft:"auto",alignSelf:"center"}}>{verified[p.name]?<span className="vchip"><BadgeCheck size={13}/>Verified</span>:<span style={{fontSize:11.5,color:"var(--mut)"}}>Unverified</span>}</div>
+              </div>
+            </div>);
           })}
       </div>
     </div>
   )}
 
-  {/* ===== PROFILE ===== */}
+  {/* PROFILE */}
   {portal&&view.name==="profile"&&(()=>{
     const name=view.id;
     const p=people.find(x=>x.name===name)||{name};
-    const ag=aggregate(name,events);  // all events for cross-class history
+    const ag=aggregate(name,events);
     const isV=verified[name];
-    return(
-      <div className="wrap sec" style={{paddingTop:22}}>
-        <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/> Athletes</button>
-        <div className="phead">
-          <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
-          <div style={{flex:1,minWidth:200}}>
-            <h1 className="pname disp">{name}</h1>
-            <div className="pmeta"><span><Anchor size={14}/>{cls?.short}</span>{p.nat?<span><Flag size={14}/>{p.nat}</span>:null}</div>
-            <div className="pstats">
-              <div><div className="v disp">{ag.events}</div><div className="k">Regattas</div></div>
-              <div><div className="v disp">{ag.best?"#"+ag.best:"—"}</div><div className="k">Best result</div></div>
-              <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
-              <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
-            </div>
-          </div>
-          <div className="claimbox">
-            {isV?(
-              <div className="vbox"><b><BadgeCheck size={16}/>Verified profile</b>
-                <div style={{marginTop:5}}>Tracking {ag.events} regatta{ag.events>1?"s":""} in one record.</div></div>
-            ):(
-              <>
-                <button className="btn cta" onClick={()=>setVerified({...verified,[name]:true})}><BadgeCheck size={16}/>Verify this profile</button>
-                <div className="wsid">No World Sailing ID — matched by name + sail number</div>
-              </>
-            )}
+    return(<div className="wrap sec" style={{paddingTop:22}}>
+      <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>Athletes</button>
+      <div className="phead">
+        <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
+        <div style={{flex:1,minWidth:200}}>
+          <h1 className="pname disp">{name}</h1>
+          <div className="pmeta"><span><Anchor size={14}/>{cls?.short}</span>{p.nat?<span><Flag size={14}/>{p.nat}</span>:null}</div>
+          <div className="pstats">
+            <div><div className="v disp">{ag.events}</div><div className="k">Regattas</div></div>
+            <div><div className="v disp">{ag.best?"#"+ag.best:"—"}</div><div className="k">Best result</div></div>
+            <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
+            <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
           </div>
         </div>
-        <div style={{marginTop:22}}>
-          <p className="seclabel"><Trophy size={14}/>Result history</p>
-          {ag.history.map((h,i)=>(
-            <div className="histrow" key={h.ev.id+i} style={{animationDelay:`${i*70}ms`}}>
-              <div className={`hrk ${h.row.rank<=3?"p"+h.row.rank:""}`}>#{h.row.rank}<small>of {h.fleet}</small></div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
-                  <span className="disp" style={{fontWeight:700,fontSize:15,cursor:"pointer"}} onClick={()=>go({name:"event",id:h.ev.id})}>{h.ev.name}</span>
-                  <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
-                </div>
-                <div className="cn" style={{marginTop:3}}>
-                  {h.ev.date} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}
-                </div>
-                <div className="miniraces">
-                  {h.row.races.map((c,j)=>(<div key={j} className={`rc ${isCode(c)?"c":c===1?"w":h.row.discardSet.has(j)?"d":""}`}>{isCode(c)?c.slice(0,2):c}</div>))}
-                </div>
-              </div>
-              <span className="vchip"><BadgeCheck size={13}/>Verified</span>
-            </div>
-          ))}
+        <div className="claimbox">
+          {isV?(<div className="vbox"><b><BadgeCheck size={16}/>Verified profile</b><div style={{marginTop:5}}>Tracking {ag.events} regatta{ag.events>1?"s":""} in one record.</div></div>)
+           :(<><button className="btn cta" onClick={()=>setVerified({...verified,[name]:true})}><BadgeCheck size={16}/>Verify this profile</button><div className="wsid">Matched by name + sail number</div></>)}
         </div>
-        {!isV&&<p style={{fontSize:13,color:"var(--mut)",marginTop:14,display:"flex",gap:7,alignItems:"center"}}><Sparkles size={15} color="var(--accent)"/>Built automatically from results. Verifying lets {name.split(" ")[0]} own this record.</p>}
       </div>
-    );
+      <div style={{marginTop:22}}>
+        <p className="seclabel"><Trophy size={14}/>Result history</p>
+        {ag.history.map((h,i)=>(
+          <div className="histrow" key={h.ev.id+i} style={{animationDelay:`${i*70}ms`}}>
+            <div className={`hrk ${h.row.rank<=3?"p"+h.row.rank:""}`}>#{h.row.rank}<small>of {h.fleet}</small></div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+                <span className="disp" style={{fontWeight:700,fontSize:15,cursor:"pointer"}} onClick={()=>go({name:"event",id:h.ev.id})}>{h.ev.name}</span>
+                <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
+              </div>
+              <div className="cn" style={{marginTop:3}}>{h.ev.date} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}</div>
+              <div className="miniraces">{h.row.races.map((c,j)=>(<div key={j} className={`rc ${isCode(c)?"c":c===1?"w":h.row.discardSet.has(j)?"d":""}`}>{isCode(c)?c.slice(0,2):c}</div>))}</div>
+            </div>
+            <span className="vchip"><BadgeCheck size={13}/>Verified</span>
+          </div>
+        ))}
+      </div>
+      {!isV&&<p style={{fontSize:13,color:"var(--mut)",marginTop:14,display:"flex",gap:7,alignItems:"center"}}><Sparkles size={15} color="var(--accent)"/>Built from results. Verifying lets {name.split(" ")[0]} own this record.</p>}
+    </div>);
   })()}
 
-  {/* ===== IMPORT MODAL ===== */}
+  {/* IMPORT MODAL */}
   {open&&(
     <div className="ov" onClick={()=>setOpen(false)}>
       <div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="mhead"><Upload size={18}/><h3>Import a regatta</h3><button className="x" onClick={()=>setOpen(false)}><X size={16}/></button></div>
         <div className="mtabs">
           <button className={tab==="pdf"?"on":""} onClick={()=>setTab("pdf")}><FileText size={15}/>Upload PDF</button>
-          <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual import</button>
+          <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
         </div>
         <div className="mbody">
-          {tab==="pdf"?(
-            <>
-              <label className="btn cta" style={{cursor:"pointer",marginBottom:4}}>
-                {pdfLoading?<><Loader2 size={16} className="spin"/>Reading PDF…</>:<><Upload size={16}/>Import file from computer</>}
-                <input type="file" accept="application/pdf" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handlePdf(e.target.files?.[0])}/>
-              </label>
-              {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError} <button className="link" onClick={()=>setTab("manual")}>Try manual →</button></div>}
-              {parsedPdf&&(
-                <div style={{marginTop:14}}>
-                  <div className="prev ok"><b>{parsedPdf.name}</b> — {parsedPdf.entries.length} boats, {Math.max(...parsedPdf.entries.map(e=>e.races.length))} races, {parsedPdf.discards} discards.</div>
-                  <div className="mfoot">
-                    <button className="btn ghost" onClick={()=>{setParsedPdf(null);setPdfError("");}}>Cancel</button>
-                    <button className="btn cta" onClick={doImportPdf}><Upload size={16}/>Import regatta</button>
-                  </div>
-                </div>
-              )}
-            </>
-          ):(
-            <>
-              <div className="hint">
-                First line = regatta name. Optional: <code>venue:</code> <code>date:</code> <code>class:</code> <code>discards:</code>. Then one boat per line: <code>Helm / Crew / Sail / scores</code>
-                <div style={{marginTop:8}}><button className="link" onClick={()=>setPaste(SAMPLE_TEXT)}>Load a sample →</button></div>
-              </div>
-              <textarea value={paste} onChange={e=>setPaste(e.target.value)} placeholder={"Spring Nationals 2024\nvenue: Aberdeen\nclass: 29er\ndiscards: 1\nCameron Law / Christopher Lam / 3054 / 1 2 1 DNF 3"}/>
-              {parsedFromPaste&&(parsedFromPaste.ok
-                ?<div className="prev ok"><b>{parsedFromPaste.event.name}</b> — {parsedFromPaste.event.entries.length} boats, {Math.max(...parsedFromPaste.event.entries.map(e=>e.races.length))} races.</div>
-                :<div className="prev err"><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{parsedFromPaste.error}</div>)}
+
+          {/* ---- PDF tab ---- */}
+          {tab==="pdf"&&(<>
+            <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.5}}>Upload a Sailwave Overall Results PDF. The backend server parses the table automatically — no manual steps.</p>
+            <label className="btn cta" style={{cursor:"pointer"}}>
+              {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing PDF…</>:<><Upload size={16}/>Choose PDF file</>}
+              <input type="file" accept="application/pdf" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handlePdf(e.target.files?.[0])}/>
+            </label>
+            {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
+            {parsedPdf&&(<div style={{marginTop:14}}>
+              <div className="prev ok"><b>{parsedPdf.name}</b> — {parsedPdf.entries.length} boats, {Math.max(...parsedPdf.entries.map(e=>e.races.length))} races, {parsedPdf.discards} discards. Ready to import.</div>
               <div className="mfoot">
-                <button className="btn ghost" onClick={()=>setOpen(false)}>Cancel</button>
-                <button className="btn cta" disabled={!parsedFromPaste?.ok} onClick={doImport}><Upload size={16}/>Import regatta</button>
+                <button className="btn ghost" onClick={()=>{setParsedPdf(null);setPdfError("");}}>Cancel</button>
+                <button className="btn cta" onClick={doImportPdf}><Upload size={16}/>Import regatta</button>
               </div>
-            </>
-          )}
+            </div>)}
+          </>)}
+
+          {/* ---- Manual entry tab ---- */}
+          {tab==="manual"&&(<>
+            {/* Event metadata */}
+            <div className="meta-grid">
+              <div><label>Event name</label><input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="Spring Nationals 2025"/></div>
+              <div><label>Date</label><input value={mf.date} onChange={e=>updMeta("date",e.target.value)} placeholder="Apr 2025"/></div>
+              <div><label>Venue</label><input value={mf.venue} onChange={e=>updMeta("venue",e.target.value)} placeholder="RHKYC, Hong Kong"/></div>
+              <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
+            </div>
+            {/* Race count control */}
+            <div className="race-ctrl">
+              <span>Number of races</span>
+              <div className="stepper">
+                <button onClick={()=>mf.numRaces>1&&setNumRaces(mf.numRaces-1)}><Minus size={13}/></button>
+                <span>{mf.numRaces}</span>
+                <button onClick={()=>mf.numRaces<20&&setNumRaces(mf.numRaces+1)}><Plus size={13}/></button>
+              </div>
+            </div>
+            {/* Results table */}
+            <div className="rtable-wrap">
+              <table className="rtable">
+                <thead><tr>
+                  <th className="l" style={{minWidth:100}}>Helm</th>
+                  <th className="l" style={{minWidth:100}}>Crew</th>
+                  <th style={{minWidth:50}}>Sail</th>
+                  <th style={{minWidth:50}}>Div</th>
+                  {Array.from({length:mf.numRaces}).map((_,i)=><th key={i} style={{minWidth:36}}>R{i+1}</th>)}
+                  <th style={{width:28}}></th>
+                </tr></thead>
+                <tbody>
+                  {mf.rows.map((row,i)=>(
+                    <tr key={i}>
+                      <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Emily Polson"/></td>
+                      <td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Tiffany Mak"/></td>
+                      <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="3084" style={{textAlign:"center"}}/></td>
+                      <td><input value={row.div} onChange={e=>updRow(i,"div",e.target.value)} placeholder="F Jr" style={{textAlign:"center"}}/></td>
+                      {Array.from({length:mf.numRaces}).map((_,j)=>(
+                        <td key={j}><input value={row.scores[j]||""} onChange={e=>updScore(i,j,e.target.value)} placeholder="–" style={{textAlign:"center"}}/></td>
+                      ))}
+                      <td className="del-td"><button style={{background:"none",border:0,color:"#c0392b",cursor:"pointer",padding:4,opacity:.55}} onClick={()=>delRow(i)}><X size={13}/></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <button className="btn ghost" style={{fontSize:13,padding:"7px 12px"}} onClick={addRow}><Plus size={14}/>Add boat</button>
+              <span style={{fontSize:12,color:"var(--mut)"}}>Scores: numbers or DNF · DNC · DSQ · OCS etc.</span>
+            </div>
+            <div className="mfoot">
+              <button className="btn ghost" onClick={()=>setOpen(false)}>Cancel</button>
+              <button className="btn cta" disabled={!manualReady} onClick={doImportManual}><Upload size={16}/>Import regatta</button>
+            </div>
+          </>)}
+
         </div>
       </div>
     </div>
   )}
 
   {note&&(<div className="notice"><div className="ico"><Sparkles size={18}/></div>
-    <div><b>{note.name} imported</b>
-      <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>Matched {note.matched} sailors · {note.created} new profiles created</div></div></div>)}
-
+    <div><b>{note.name} imported</b><div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>Matched {note.matched} sailors · {note.created} new profiles created</div></div></div>)}
   <div className="foot">Powered by AthLink</div>
   </div>
   );
