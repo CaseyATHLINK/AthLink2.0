@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2, Clock,
@@ -223,10 +223,97 @@ const avatarColor=(name)=>{
 };
 const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
 
+/* ---- Supabase REST client (no package needed — plain fetch) ----
+   Falls back to hardcoded data when env vars are absent (chat preview / local dev) */
+const SB_URL = import.meta.env.VITE_SUPABASE_URL;
+const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const sbHeaders = (SB_URL && SB_KEY) ? {
+  "apikey": SB_KEY,
+  "Authorization": `Bearer ${SB_KEY}`,
+  "Content-Type": "application/json",
+  "Prefer": "return=representation",
+} : null;
+
+async function sbGet(path) {
+  if (!sbHeaders) return null;
+  const r = await fetch(`${SB_URL}/rest/v1/${path}`, { headers: sbHeaders });
+  return r.ok ? r.json() : null;
+}
+async function sbPost(table, body) {
+  if (!sbHeaders) return null;
+  const r = await fetch(`${SB_URL}/rest/v1/${table}`, {
+    method: "POST", headers: sbHeaders, body: JSON.stringify(body),
+  });
+  return r.ok ? r.json() : null;
+}
+async function sbPatch(table, filter, body) {
+  if (!sbHeaders) return;
+  await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, {
+    method: "PATCH", headers: sbHeaders, body: JSON.stringify(body),
+  });
+}
+
+/* ---- Transform: Supabase row → app event format ---- */
+function dbToApp(ev) {
+  return {
+    id: ev.id,
+    name: ev.name,
+    cls: ev.class,
+    doublehanded: ev.doublehanded,
+    venue: ev.venue || "—",
+    date: ev.date || "—",
+    discards: ev.discards,
+    scoring: ev.scoring || "",
+    source: ev.source || "Imported",
+    status: ev.status || "Final",
+    entries: (ev.entries || []).map(e => ({
+      _dbId: e.id,              // kept for edit persistence
+      sail: e.sail || "—",
+      div: e.division || "",
+      helm: e.helm_name,
+      crew: e.crew_name || "",
+      races: e.races || [],
+    })),
+  };
+}
+
+/* ---- Save one event + all its entries to Supabase ---- */
+async function saveEventToDb(ev) {
+  if (!sbHeaders) return;
+  const inserted = await sbPost("events", {
+    name: ev.name, class: ev.cls, doublehanded: ev.doublehanded,
+    venue: ev.venue, date: ev.date, discards: ev.discards,
+    scoring: ev.scoring, source: ev.source, status: ev.status,
+  });
+  if (!inserted?.[0]?.id) { console.error("Event insert failed"); return; }
+  const evId = inserted[0].id;
+  await sbPost("entries", ev.entries.map(e => ({
+    event_id: evId, sail: e.sail, division: e.div,
+    helm_name: e.helm, crew_name: e.crew || null, races: e.races,
+  })));
+}
+
 /* ================================================================ */
 export default function AthLinkMVP(){
   /* --- core state --- */
-  const[events,setEvents]=useState([REAL_2023,REAL_2024]);
+  const[events,setEvents]=useState([]);
+
+  useEffect(()=>{
+    (async()=>{
+      if(!sbHeaders){ setEvents([REAL_2023,REAL_2024]); return; }
+      const data = await sbGet("events?select=*,entries(*)&order=created_at.asc");
+      if(!data){ setEvents([REAL_2023,REAL_2024]); return; }
+      if(data.length===0){
+        // First run: seed the two championship events
+        await saveEventToDb(REAL_2023);
+        await saveEventToDb(REAL_2024);
+        const seeded = await sbGet("events?select=*,entries(*)&order=created_at.asc");
+        setEvents((seeded||[]).map(dbToApp));
+      } else {
+        setEvents(data.map(dbToApp));
+      }
+    })();
+  },[]);
   const[verified,setVerified]=useState({});
   const[q,setQ]=useState(""); const[filter,setFilter]=useState("all");
   const[note,setNote]=useState(null);
@@ -256,7 +343,7 @@ export default function AthLinkMVP(){
   const go=(v)=>{setView(v);window.scrollTo(0,0);};
 
   /* ---- import handler (manual) ---- */
-  const doImport=()=>{
+  const doImport=async()=>{
     if(!parsedFromPaste?.ok) return;
     const ev=parsedFromPaste.event;
     const existing=new Set();
@@ -265,6 +352,7 @@ export default function AthLinkMVP(){
     ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew) incoming.add(en.crew);});
     let matched=0,created=0;
     incoming.forEach(n=>existing.has(n)?matched++:created++);
+    await saveEventToDb(ev);
     setEvents(p=>[...p,ev]);
     setNote({name:ev.name,matched,created});
     setOpen(false);setPaste("");setTab("pdf");
@@ -272,7 +360,7 @@ export default function AthLinkMVP(){
   };
 
   /* ---- import handler (pdf) ---- */
-  const doImportPdf=()=>{
+  const doImportPdf=async()=>{
     if(!parsedPdf) return;
     const existing=new Set();
     events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew) existing.add(en.crew);}));
@@ -280,6 +368,7 @@ export default function AthLinkMVP(){
     parsedPdf.entries.forEach(en=>{incoming.add(en.helm);if(en.crew) incoming.add(en.crew);});
     let matched=0,created=0;
     incoming.forEach(n=>existing.has(n)?matched++:created++);
+    await saveEventToDb(parsedPdf);
     setEvents(p=>[...p,parsedPdf]);
     setNote({name:parsedPdf.name,matched,created});
     setOpen(false);setParsedPdf(null);setPdfError("");setTab("pdf");
@@ -312,7 +401,7 @@ export default function AthLinkMVP(){
     setEditCell({evId,sail,helm,raceIdx});
     setEditVal(String(currentVal));
   };
-  const commitEdit=()=>{
+  const commitEdit=async()=>{
     if(!editCell) return;
     const raw=editVal.trim().toUpperCase();
     let newVal;
@@ -320,6 +409,12 @@ export default function AthLinkMVP(){
     else if(PENALTY.includes(raw)){newVal=raw;}
     else{setEditCell(null);return;}
     const{evId,sail,helm,raceIdx}=editCell;
+    // Persist to Supabase if we have the DB id
+    const entry=events.find(e=>e.id===evId)?.entries.find(e=>e.sail===sail&&e.helm===helm);
+    if(entry?._dbId){
+      const updated=[...entry.races]; updated[raceIdx]=newVal;
+      await sbPatch("entries",`id=eq.${entry._dbId}`,{races:updated});
+    }
     setEvents(prev=>prev.map(ev=>{
       if(ev.id!==evId) return ev;
       return{...ev,entries:ev.entries.map(e=>{
