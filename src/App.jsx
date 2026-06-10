@@ -152,39 +152,46 @@ function scoreEvent(ev){
     // Convert each raw score to a numeric point value for net scoring
     const pts=e.races.map(c=>{
       if(!isCode(c)) return(c||pen);
-      if(c==="RDG") return c; // RDG stored as number already by parser; if string, keep as pen
-      return pen; // all other codes = fleet+1
+      return pen; // all penalty codes = fleet+1 for calculation purposes
     });
 
-    // For discard ranking: assign a sort weight to each score
-    // DNE is excluded from discard candidates entirely
-    // Everything else: use the numeric pts value; penalty codes without a number → pen
+    // For discard ranking: DNE can never be discarded; everything else
+    // sorted by point weight descending, top N become discards
     const weights=pts.map((v,i)=>{
       const raw=e.races[i];
-      if(isCode(raw)&&NEVER_DISCARD.has(raw)) return -Infinity; // never discard DNE
-      if(typeof v==="string") return pen; // RDG stored as string (shouldn't happen)
+      if(isCode(raw)&&NEVER_DISCARD.has(raw)) return -Infinity;
       return v;
     });
-
-    // Sort indices by weight descending, pick top `disc` as discards
     const order=weights.map((w,i)=>({w,i})).sort((a,b)=>b.w-a.w);
     const discardSet=new Set(order.slice(0,disc).filter(o=>o.w>-Infinity).map(o=>o.i));
 
-    // Net = sum of numeric pts, excluding discarded indices
-    const numPts=pts.map(v=>typeof v==="string"?pen:v);
+    const numPts=pts.map(v=>v);
     const total=numPts.reduce((a,b)=>a+b,0);
     const dropped=numPts.reduce((s,v,i)=>discardSet.has(i)?s+v:s,0);
+    const calcNet=total-dropped;
 
-    return{...e,pts:numPts,total,net:total-dropped,discardSet};
+    // Use PDF-sourced rank/net when available (they are always correct).
+    // Fall back to our calculation only for manually-entered events or
+    // PDFs where the rank column wasn't parseable.
+    const rank = e.pdf_rank ?? null;
+    const net  = e.pdf_net  ?? calcNet;
+
+    return{...e,pts:numPts,total,net,calcNet,discardSet,rank};
   });
 
-  rows.sort((a,b)=>a.net-b.net||a.total-b.total);
-  let prev=null,prevRank=0;
-  rows.forEach((r,i)=>{
-    if(prev&&r.net===prev.net&&r.total===prev.total) r.rank=prevRank;
-    else{r.rank=i+1;prevRank=r.rank;}
-    prev=r;
-  });
+  // Sort by PDF rank when available, otherwise by calculated net
+  const hasPdfRank = rows.some(r=>r.rank!==null);
+  if(hasPdfRank){
+    rows.sort((a,b)=>(a.rank??9999)-(b.rank??9999));
+  } else {
+    rows.sort((a,b)=>a.net-b.net||a.total-b.total);
+    let prev=null,prevRank=0;
+    rows.forEach((r,i)=>{
+      if(prev&&r.net===prev.net&&r.total===prev.total) r.rank=prevRank;
+      else{r.rank=i+1;prevRank=r.rank;}
+      prev=r;
+    });
+  }
   return{rows,fleet,races:Math.max(...ev.entries.map(e=>e.races.length))};
 }
 
@@ -263,7 +270,7 @@ function dbToApp(ev){
     venue:ev.venue||"—",country:ev.country||"",date:ev.date||"—",discards:ev.discards,
     scoring:ev.scoring||"",source:ev.source||"Imported",status:ev.status||"Final",
     entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",nat:e.nat||"",div:e.division||"",
-      helm:e.helm_name,crew:e.crew_name||"",races:e.races||[]}))};
+      helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null}))};
 }
 async function saveEventToDb(ev){
   if(!sbH) return;
@@ -272,7 +279,7 @@ async function saveEventToDb(ev){
     scoring:ev.scoring,source:ev.source,status:ev.status});
   if(!ins?.[0]?.id) return ins;
   await sbPost("entries",ev.entries.map(e=>({event_id:ins[0].id,sail:e.sail,nat:e.nat||null,
-    division:e.div,helm_name:e.helm,crew_name:e.crew||null,races:e.races})));
+    division:e.div,helm_name:e.helm,crew_name:e.crew||null,races:e.races,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null})));
   return ins;
 }
 async function updateEventStatus(evId,status){
@@ -408,6 +415,7 @@ export default function AthLinkMVP(){
         sail:e.sail||"—",nat:e.nat||"",div:e.div||"",
         helm:e.helm||"",crew:e.crew||"",
         races:(e.races||[]),
+        pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
       })),
     };
     setPreviewEv(ev);setImportStep("preview");
