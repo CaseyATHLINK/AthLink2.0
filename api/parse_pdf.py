@@ -1,13 +1,14 @@
 """
-AthLink PDF parser v3 — Vercel serverless function.
+AthLink PDF parser v4 — Vercel serverless function.
 
-Handles:
-  - Sailwave PDF (standard, any column arrangement)
-  - Sailwave HTML → PDF (ourclubadmin, extra columns, (RET [51.0]) scores)
-  - Manage2sail PDF (combined helm/crew cell, Q1-F13 columns, birth years)
-  - SailingResults.net (Pl / Name multiline)
-  - Clubspot (best-effort, names in SAILORS section)
-  - Multi-fleet: returns list of fleets for client-side picker
+Universal parser covering:
+  - Sailwave PDF (standard, any column arrangement, wrapped text in cells)
+  - Sailwave HTML via ourclubadmin (doubled headers, TP5 [17.0] scores)
+  - Manage2sail (split 2-row header, combined helm+crew cell with birth years)
+  - SailingResults.net
+  - Clubspot (SAILORS section below table)
+  - ourclubadmin multi-class (Rank Class Sail number Club Helm's Name Crew's Name)
+  - Multi-fleet / split Gold/Silver/Bronze fleet events
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -21,36 +22,30 @@ except ImportError:
 # ── penalty codes ──────────────────────────────────────────────────────────
 CODES = {
     'DNF','DNC','DNS','OCS','DSQ','BFD','UFD','RET','RDG','DGM','DNE',
-    'SCP','NSC','PRP','TAL','ZFP','STP','DPI','BFD','TP5','TPP','TPN',
+    'SCP','NSC','PRP','TAL','ZFP','STP','DPI','TP5','TPP','TPN',
 }
+
+def fix_doubled(s):
+    """Fix 'RRaannkk' → 'Rank' (doubled-character font artifact in ourclubadmin PDFs)."""
+    c = str(s or '').replace('\n', ' ').strip()
+    if len(c) >= 4 and all(c[i] == c[i+1] for i in range(0, min(len(c)-1, 8), 2)):
+        return c[::2]
+    return c
 
 # ── score parsing ──────────────────────────────────────────────────────────
 def clean_score(raw):
-    """
-    Parse any score cell variant into int/float or code string.
-    Handles: 1, 1.0, (5.0), (RET [51.0]), [17.0], 10.9 DPI, 11.9 SCP, TP5 [17.0]
-    """
     if raw is None:
         return None
     s = str(raw).strip().replace('\n', ' ')
     if not s or s in ('-', '—', '–', '*', ''):
         return None
-
-    # Strip outer discard parens: (5.0) → 5.0 | (RET [51.0]) → RET [51.0]
-    inner = s.strip('()')
-
-    # Extract a penalty code anywhere in the string (before the number or after)
-    # Patterns: "RET [51.0]", "10.9 DPI", "TP5 [17.0]", "DNF"
+    inner = re.sub(r'^\(|\)$', '', s.strip())
     parts = re.split(r'[\s\[\]]+', inner.strip())
     parts = [p for p in parts if p]
-
     for p in parts:
-        up = p.upper().rstrip('.')
+        up = re.sub(r'[^A-Z]', '', p.upper())
         if up in CODES:
             return up
-
-    # No code found – try to parse as a number
-    # Handle "11.9" (keep as float), "5.0" → 5, "17" → 17
     num_str = re.sub(r'[^\d.]', '', parts[0]) if parts else ''
     if num_str:
         try:
@@ -58,41 +53,35 @@ def clean_score(raw):
             return int(n) if n == int(n) else round(n, 2)
         except ValueError:
             pass
-
     return None
 
-# ── column header recognition ──────────────────────────────────────────────
+# ── header helpers ─────────────────────────────────────────────────────────
 def is_race_hdr(cell):
-    """True if the cell looks like a race column header."""
-    s = str(cell or '').strip().upper()
-    # R1, F1, O1, Q1 (manage2sail), plain digits 1-20, Race N, Race1
+    s = fix_doubled(str(cell or '')).strip().upper()
     return bool(
         re.match(r'^[RFOQ]\d{1,2}$', s) or
+        re.match(r'^[FQ]\d{1,2}$', s) or
         re.match(r'^(RACE\s*\d{1,2})$', s) or
         re.match(r'^\d{1,2}$', s)
     )
 
 def hdr_key(cell):
-    """Normalise a header string for matching."""
-    return re.sub(r"[\s\n_()/\\']+", '', str(cell or '').lower())
+    return re.sub(r"[\s\n_()/\\']+", '', fix_doubled(str(cell or '')).lower())
 
 # ── name helpers ───────────────────────────────────────────────────────────
 def strip_birth_year(name):
-    """Remove (YYYY) birth year suffix used by manage2sail."""
-    return re.sub(r'\s*\(\d{4}\)\s*', '', name).strip()
+    return re.sub(r'\s*\(\d{4}\)\s*', '', str(name)).strip()
 
 def strip_club_suffix(name):
-    """Remove club abbreviations like (KYC), (HKSI) from manage2sail names."""
-    return re.sub(r'\s*\([^)]{2,10}\)\s*$', '', name).strip()
+    return re.sub(r'\s*\([A-Z]{2,6}\)\s*$', '', str(name)).strip()
 
 def title_name(n):
-    """Title-case ALL-CAPS names; leave mixed-case untouched."""
     if not n:
         return ''
     parts = str(n).strip().split()
     out = []
     for p in parts:
-        if len(p) > 1 and p.isalpha() and p == p.upper():
+        if len(p) > 1 and re.match(r'^[A-Z\-]+$', p):
             out.append(p.title())
         else:
             out.append(p)
@@ -104,10 +93,76 @@ def clean_name(raw):
     n = strip_club_suffix(n)
     return title_name(n)
 
-# ── metadata extraction ────────────────────────────────────────────────────
+def join_wrapped(cell_value):
+    """Join a wrapped single-person name cell: 'Dylan\nCreighton' → 'Dylan Creighton'."""
+    lines = [l.strip() for l in str(cell_value or '').split('\n') if l.strip()]
+    return clean_name(' '.join(lines))
+
+def split_combined_names(cell_value):
+    """
+    Split a COMBINED helm+crew cell into (helm, crew).
+    
+    Logic:
+    - Comma present → split on comma (each part may span wrapped lines)
+    - No comma, birth years present → each \n-separated line is a person (manage2sail)
+    - No comma, no birth years → single wrapped name, join with space
+    """
+    if not cell_value:
+        return '', ''
+    raw = str(cell_value).strip()
+
+    # Case 1: comma divides the two sailors
+    if ',' in raw:
+        comma_parts = raw.split(',', 1)
+        def rejoin(s):
+            return ' '.join(l.strip() for l in s.split('\n') if l.strip())
+        helm = clean_name(rejoin(comma_parts[0]))
+        crew = clean_name(rejoin(comma_parts[1]))
+        return helm, crew
+
+    # Case 2: birth years → manage2sail combined cell
+    if re.search(r'\(\d{4}\)', raw):
+        lines = raw.split('\n')
+        person_lines = []
+        current = ''
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            current = (current + ' ' + line).strip()
+            # When we hit a birth year, this person is complete
+            if re.search(r'\(\d{4}\)', line):
+                person_lines.append(current)
+                current = ''
+        if current:
+            person_lines.append(current)
+        helm = clean_name(person_lines[0]) if person_lines else ''
+        crew = clean_name(person_lines[1]) if len(person_lines) > 1 else ''
+        return helm, crew
+
+    # Case 3: no comma, no birth year → wrapped single name
+    return clean_name(join_wrapped(raw)), ''
+
+# ── sail / nationality ─────────────────────────────────────────────────────
+def parse_sail_country(raw):
+    if raw is None:
+        return '', ''
+    s = str(raw).strip()
+    m = re.match(r'^([A-Z]{3})\s+(\d+.*)$', s)
+    if m:
+        return m.group(1), m.group(2).strip()
+    return '', s
+
+def flag_from_ioc(code):
+    if not code:
+        return ''
+    up = code.upper().strip()
+    return up if re.match(r'^[A-Z]{3}$', up) else ''
+
+# ── metadata ───────────────────────────────────────────────────────────────
 def extract_event_name(text):
-    kw = r'(?i)(championship|regatta|nationals|cup|trophy|open|series|race|sailing|woche)'
-    skip = r'(?i)^(sailed|discard|entries|result|rank|pos|overall|start|finish|http|www|point|powered)'
+    kw = r'(?i)(championship|regatta|nationals|cup|trophy|open|series|race|sailing|woche|ovington)'
+    skip = r'(?i)^(sailed|discard|entries|result|rank|pos|overall|start|finish|http|www|point|powered|report)'
     for line in text.split('\n'):
         line = line.strip()
         if len(line) > 8 and re.search(kw, line) and not re.match(skip, line):
@@ -119,315 +174,261 @@ def extract_event_name(text):
     return 'Imported Regatta'
 
 def extract_discards(text):
-    """Handle 'Discards: 2', 'Discard rule: Global: 3', 'Discards: 1, To count'."""
     m = re.search(r'[Dd]iscard[^:]*[:\s]+(?:Global[:\s]+)?(\d+)', text)
     return int(m.group(1)) if m else 1
 
 def extract_date(text):
-    """Extract 'provisional as of' or 'results as of' date → dd/mm/yyyy."""
-    # Patterns like: "As of 22 JUN 2022", "as of 1/12/2024", "as of November 16, 2025"
-    patterns = [
-        r'[Aa]s\s+[Oo]f\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})',          # 22 JUN 2022
-        r'[Aa]s\s+[Oo]f\s+(\d{1,2})/(\d{1,2})/(\d{4})',                 # 1/12/2024
-        r'[Aa]s\s+[Oo]f\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})',          # November 16, 2025
-        r'[Pp]rovisional.*?(\d{1,2})[/.](\d{1,2})[/.](\d{4})',           # provisional ... 22.02.2023
-    ]
     months = {
         'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
         'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12,
     }
-    for pat in patterns:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            g = m.groups()
-            try:
-                if len(g) == 3:
-                    a, b, c = g
-                    # Determine which is day, month, year
-                    if a.isdigit() and not b.isdigit():
-                        # "22 JUN 2022" or "November 16, 2025" won't hit second branch
-                        mo = months.get(b[:3].lower())
-                        if mo:
-                            return f"{int(a):02d}/{mo:02d}/{c}"
-                    elif not a.isdigit() and b.isdigit():
-                        # "November 16, 2025"
-                        mo = months.get(a[:3].lower())
-                        if mo:
-                            return f"{int(b):02d}/{mo:02d}/{c}"
-                    elif a.isdigit() and b.isdigit() and c.isdigit():
-                        # 1/12/2024
-                        return f"{int(a):02d}/{int(b):02d}/{c}"
-            except (ValueError, AttributeError):
-                continue
+    s = text[:3000]
+    patterns = [
+        (r'[Aa]s\s+[Oo]f\s+[\d:]+\s+[Oo]n\s+([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})', 'mdy'),
+        (r'[Aa]s\s+[Oo]f\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})', 'dmy'),
+        (r'[Aa]s\s+[Oo]f\s+(\d{1,2})/(\d{1,2})/(\d{4})', 'dmy_num'),
+        (r'[Pp]rovisional.*?(\d{1,2})[/.](\d{1,2})[/.](\d{4})', 'dmy_num'),
+        (r'\b(\d{1,2})/(\d{1,2})/(\d{4})\b', 'dmy_num'),
+        (r'\b(\d{4})-(\d{2})-(\d{2})\b', 'iso'),
+    ]
+    for pat, fmt in patterns:
+        m = re.search(pat, s, re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+        a, b, c = m.group(1), m.group(2), m.group(3)
+        try:
+            if fmt == 'mdy':
+                mo = months.get(a[:3].lower())
+                if mo: return f"{int(b):02d}/{mo:02d}/{c}"
+            elif fmt == 'dmy':
+                mo = months.get(b[:3].lower())
+                if mo: return f"{int(a):02d}/{mo:02d}/{c}"
+            elif fmt == 'dmy_num':
+                return f"{int(a):02d}/{int(b):02d}/{c}"
+            elif fmt == 'iso':
+                return f"{int(c):02d}/{int(b):02d}/{a}"
+        except (ValueError, AttributeError):
+            continue
     return ''
 
-def extract_fleet_name(text):
-    """Try to identify the fleet/class name from section headers."""
-    patterns = [
-        r'(?i)^(29er|ilca\s*\d?|optimist\s*\w*|laser|rs\w+|finn|470|49er|nacra)',
-        r'(?i)(29er|ilca\s*(?:4|6|7)|optimist|laser)\s+(?:fleet|class|euro)',
-        r'(?i)^(\w[\w\s\-/]+(?:fleet|class|division))',
-    ]
-    for line in text.split('\n')[:30]:
-        line = line.strip()
-        for pat in patterns:
-            m = re.match(pat, line, re.IGNORECASE)
-            if m:
-                return line[:60]
-    return None
-
 # ── column mapping ─────────────────────────────────────────────────────────
-def detect_cols(header_row):
+def detect_cols(header_rows):
+    """Accept one or two header rows (manage2sail has a split header)."""
+    if not header_rows:
+        return {}
+    if isinstance(header_rows[0], (list, tuple)):
+        n = max(len(r) for r in header_rows)
+        merged = []
+        for i in range(n):
+            cells = [str(r[i] or '') if i < len(r) else '' for r in header_rows]
+            merged.append(' '.join(c for c in cells if c.strip()))
+    else:
+        merged = header_rows
+
     cols = {}
-    for i, cell in enumerate(header_row):
+    for i, cell in enumerate(merged):
         h = hdr_key(cell)
-        # Rank
-        if h in ('rank','rk','rk.','pos','pl','place','position'):
+        if h in ('rank','rk','rk.','pos','pl','place','position','#'):
             cols.setdefault('rank', i)
-        # Helm
-        elif h in ('helmname','helm','helmname','helmsname','name','skipper'):
+        elif h in ('helmname','helm','helmsname','skipper'):
             cols.setdefault('helm', i)
-        # Crew
         elif h in ('crewname','crew','crewsname','mate'):
             cols['crew'] = i
-        # Sail
-        elif h in ('sailno','sail','sailnum','sailnumber','no.','boatno',
-                   'sailnumber','sailno.','number'):
+        elif h in ('sailors','name','helmcrew','name(s)','helmandsailors'):
+            cols.setdefault('sailors', i)
+        elif h in ('sailno','sail','sailnum','sailnumber','no.','boatno','sailno.','number'):
             cols.setdefault('sail', i)
-        # Division / Fleet / Class
-        elif h in ('division','div','fleet','class','dinghy class/fleet',
-                   'dinghyclass/fleet','fleet/class','boatclass'):
+        elif h in ('division','div','fleet','class','dinghyclass/fleet','fleet/class',
+                   'boatclass','dinghyclass','boatgender'):
             cols.setdefault('div', i)
-        # Nationality
         elif h in ('nat','nationality','country','sailnationalletter','nationalletter'):
             cols.setdefault('nat', i)
-        # Club
-        elif h in ('club','clubs','clubname','club/association','clubassociation',
-                   'cluborg','club/org'):
+        elif h in ('club','clubs','clubname','club/association','clubassociation','club/org'):
             cols.setdefault('club', i)
-        # Totals (to exclude from race range)
-        elif h in ('total','totalpts','totalpoints','pts','points'):
+        elif h in ('total','totalpts','totalpoints','pts','points','totalpts.'):
             cols['total'] = i
-        elif h in ('nett','net','netpts','netpoints','nettpts','nettpoints'):
+        elif h in ('nett','net','netpts','netpoints','nettpts','nettpoints','nett.','netpts.'):
             cols['net'] = i
-        # Race columns
         if is_race_hdr(cell):
             cols.setdefault('race_start', i)
             cols['race_end'] = i
     return cols
 
+# ── row parsing ────────────────────────────────────────────────────────────
+def parse_row_with_cols(row, cols):
+    def get(key, default=''):
+        idx = cols.get(key)
+        if idx is None or idx >= len(row):
+            return default
+        return str(row[idx] or '').strip()
+
+    helm_raw = get('helm')
+    crew_raw = get('crew')
+    sail_raw = get('sail')
+    nat_raw  = get('nat')
+    div_raw  = get('div')
+
+    if 'sailors' in cols and not helm_raw:
+        # Combined column: split into helm + crew
+        helm_raw, crew_raw = split_combined_names(get('sailors'))
+    else:
+        # Dedicated helm/crew columns: just join wrapped lines
+        if helm_raw:
+            helm_raw = join_wrapped(helm_raw)
+        if crew_raw:
+            crew_raw = join_wrapped(crew_raw)
+        # Check if helm cell has two people (manage2sail combined despite dedicated col)
+        if helm_raw and '\n' in get('helm') and not crew_raw:
+            raw_helm_cell = get('helm')
+            h, c = split_combined_names(raw_helm_cell)
+            helm_raw, crew_raw = h, c
+
+    extracted_nat, clean_sail = parse_sail_country(sail_raw)
+    if not nat_raw and extracted_nat:
+        nat_raw = extracted_nat
+
+    race_start = cols.get('race_start')
+    race_end   = cols.get('race_end')
+    races = []
+    if race_start is not None and race_end is not None:
+        skip_cols = {cols.get('total'), cols.get('net')}
+        for i in range(race_start, race_end + 1):
+            if i >= len(row) or i in skip_cols:
+                continue
+            sc = clean_score(row[i])
+            if sc is not None:
+                races.append(sc)
+
+    return {
+        'helm':  clean_name(helm_raw),
+        'crew':  clean_name(crew_raw),
+        'sail':  clean_sail or '—',
+        'nat':   flag_from_ioc(nat_raw),
+        'div':   div_raw,
+        'races': races,
+    }
+
 # ── table parser ───────────────────────────────────────────────────────────
 def parse_table(tbl, fleet_hint=''):
-    """
-    Return {'entries': [...], 'fleet': str, 'discards': int} or None.
-    """
-    if not tbl or len(tbl) < 3:
+    if not tbl or len(tbl) < 2:
         return None
 
-    # Find header row: must have ≥3 race-like columns OR explicit name columns
-    header_idx = None
-    for i, row in enumerate(tbl[:16]):
-        if row is None:
-            continue
-        txt = ' '.join(str(c or '').strip().lower() for c in row)
-        race_cnt = sum(1 for c in row if is_race_hdr(c))
-        has_name = any(k in txt for k in ('helm','crewname','crew name','name','skipper'))
-        if (has_name or race_cnt >= 3) and len(row) >= 4:
-            header_idx = i
+    # Find header row(s)
+    header_end = None
+    header_rows = None
+    for idx, row in enumerate(tbl[:6]):
+        text = ' '.join(fix_doubled(str(c or '')) for c in row).lower()
+        if any(k in text for k in ('helm', 'name', 'sailor', 'rank', 'rk', 'pos')):
+            # Check for two-row header (manage2sail)
+            if idx + 1 < len(tbl):
+                # Two-row header only for manage2sail: second row is ONLY race-col headers (O1,F1...)
+                next_row = tbl[idx+1]
+                next_non_empty = [str(c).strip() for c in next_row if str(c or '').strip()]
+                import re as _re
+                is_pure_race_row = bool(next_non_empty) and all(_re.match(r'^[RFOQ]\d{1,2}$', c.upper()) for c in next_non_empty)
+                if is_pure_race_row:
+                    header_rows = [tbl[idx], tbl[idx+1]]
+                    header_end  = idx + 2
+                else:
+                    header_rows = [tbl[idx]]
+                    header_end  = idx + 1
+            else:
+                header_rows = [tbl[idx]]
+                header_end  = idx + 1
             break
 
-    if header_idx is None:
+    if header_end is None:
+        header_rows = [tbl[0]]
+        header_end  = 1
+
+    cols = detect_cols(header_rows)
+
+    has_name  = ('helm' in cols or 'sailors' in cols)
+    has_races = ('race_start' in cols)
+    if not (has_name and has_races):
         return None
-
-    hdr = [str(c or '').strip() for c in tbl[header_idx]]
-    cols = detect_cols(hdr)
-
-    if 'helm' not in cols or 'race_start' not in cols:
-        return None
-
-    # Narrow race range (exclude Total/Net)
-    r0 = cols['race_start']
-    r1 = cols['race_end']
-    for k in ('total', 'net'):
-        if k in cols and cols[k] <= r1:
-            r1 = cols[k] - 1
-    race_idxs = list(range(r0, r1 + 1))
 
     entries = []
-    for row in tbl[header_idx + 1:]:
-        if row is None:
+    for row in tbl[header_end:]:
+        if not row or not any(str(c or '').strip() for c in row):
             continue
-        cells = [str(c or '').strip() for c in row]
-        if all(c == '' for c in cells):
+        first = fix_doubled(str(row[0] or '')).strip().lower()
+        if first in ('rank','rk','pos','pl','name','helm','helmname','sailor'):
             continue
-
-        joined = ' '.join(cells).lower()
-        # Skip fleet separator rows and re-header rows
-        if re.match(r'^\d+-\w+\s+(fleet|class)', joined, re.I):
+        if len([c for c in row if str(c or '').strip()]) < 3:
             continue
-        if 'helmname' in joined and 'crewname' in joined:
+        e = parse_row_with_cols(row, cols)
+        if not e['helm'] or not e['races']:
             continue
-        if re.match(r'(?i)^\s*(rank|rk|pos|place)', joined):
-            continue
+        if fleet_hint and not e['div']:
+            e['div'] = fleet_hint
+        entries.append(e)
 
-        helm_raw = cells[cols['helm']] if cols['helm'] < len(cells) else ''
+    return {'entries': entries} if entries else None
 
-        # --- Manage2sail: name cell may contain BOTH names on separate lines ---
-        name_lines = [ln.strip() for ln in helm_raw.replace('\r', '\n').split('\n') if ln.strip()]
-
-        helm = ''
-        crew = ''
-
-        if len(name_lines) >= 2 and 'crew' not in cols:
-            # Two sailors in one cell (manage2sail style)
-            helm = clean_name(name_lines[0])
-            crew = clean_name(name_lines[1])
-        elif len(name_lines) >= 1:
-            helm = clean_name(name_lines[0])
-
-        # Separate crew column
-        if 'crew' in cols and cols['crew'] < len(cells):
-            c_raw = cells[cols['crew']].strip()
-            if c_raw:
-                crew = clean_name(c_raw)
-
-        if not helm or len(helm) < 2:
-            continue
-        # Skip rows where "helm" looks like a column header
-        if helm.lower() in ('helm name', 'helm', 'name', 'sailors', 'rank', 'pl', 'rk', 'skipper'):
-            continue
-
-        # Sail number (strip country prefix)
-        sail = '—'
-        if 'sail' in cols and cols['sail'] < len(cells):
-            raw = cells[cols['sail']]
-            # Handle "NZL 3025" → "3025", "HKG 3055" → "3055"
-            m = re.search(r'(?:[A-Z]{3}\s+)?(\d+)', raw)
-            if m:
-                sail = m.group(1)
-
-        # Division
-        div = ''
-        if 'div' in cols and cols['div'] < len(cells):
-            dv = cells[cols['div']]
-            if not re.match(r'^\d', dv.strip()):
-                div = dv.strip()[:40]
-
-        # Race scores
-        races = []
-        for j in race_idxs:
-            if j < len(cells):
-                s = clean_score(cells[j])
-                if s is not None:
-                    races.append(s)
-
-        if races:
-            entries.append({
-                'helm': helm,
-                'crew': crew,
-                'sail': sail,
-                'div': div,
-                'races': races,
-            })
-
-    if not entries:
-        return None
-
-    return {'entries': entries, 'fleet': fleet_hint}
-
-# ── detect fleet sections within a page's text ────────────────────────────
-FLEET_PATTERNS = re.compile(
-    r'(?i)\b(29er|49er|49erFX|ILCA\s*\d?|Optimist\s*(?:Main|Intermediate|Green|Junior)?'
-    r'|Laser|RS\w+|2\.4mR|2\.4\s*mR|Finn|470|Nacra\s*\d+)\b'
-)
-
-def detect_fleets_in_text(text):
-    """Return list of fleet names found in PDF text."""
-    found = []
-    seen = set()
-    for m in FLEET_PATTERNS.finditer(text):
-        name = re.sub(r'\s+', ' ', m.group(0).strip())
-        key = name.lower()
-        if key not in seen:
-            seen.add(key)
-            found.append(name)
-    return found
-
-# ── group tables by fleet section ─────────────────────────────────────────
-def group_tables_by_fleet(all_tables, full_text):
-    """
-    Returns list of (fleet_name, [tables]) tuples.
-    If only one fleet detected, returns a single group.
-    """
-    detected = detect_fleets_in_text(full_text)
-
-    if len(detected) <= 1:
-        return [(detected[0] if detected else '', all_tables)]
-
-    # Assign each table to a fleet by scanning page text just before the table.
-    # Simple approach: split tables into groups whenever a new fleet name appears.
-    groups = {}
-    current_fleet = detected[0] if detected else ''
-
-    for tbl in all_tables:
-        if not tbl:
-            continue
-        # Check first row of table for fleet indicator
-        first_row_text = ' '.join(str(c or '') for c in (tbl[0] or []))
-        for fleet in detected:
-            if fleet.lower() in first_row_text.lower():
-                current_fleet = fleet
-                break
-        groups.setdefault(current_fleet, []).append(tbl)
-
-    return list(groups.items())
-
-# ── Clubspot best-effort ───────────────────────────────────────────────────
+# ── Clubspot ───────────────────────────────────────────────────────────────
 def try_clubspot(full_text):
-    """
-    CLUBSPOT format: main table has sail numbers + scores.
-    SAILORS section below maps positions to names.
-    Extract what we can; leave names blank if unparsed.
-    """
-    # Find the SAILORS section
     sailors_match = re.search(r'\bSAILORS\b', full_text, re.IGNORECASE)
     if not sailors_match:
         return None
 
     sailors_text = full_text[sailors_match.end():]
-    # Names in SAILORS section are usually "First LAST\nFirst LAST" pairs
-    names = re.findall(r'[A-Z][a-z]+(?:\s+[A-Za-z]+)+', sailors_text)
-
-    # Find main results table rows: sail number + scores
-    # Pattern: "1 HKG 2751 ..." with numbers following
-    rows = []
-    for line in full_text[:sailors_match.start()].split('\n'):
+    name_lines = []
+    for line in sailors_text.split('\n'):
         line = line.strip()
-        m = re.match(r'^(\d+)\s+([A-Z]{3}\s+\d+|\d+)\s+.*?(\d[\d\s\(\)]+)$', line)
-        if m:
+        if not line or re.search(r'[\d/:]', line) or 'http' in line.lower():
+            continue
+        if re.match(r'^[A-Z][a-z]', line):
+            name_lines.append(line)
+
+    sailors = []
+    i = 0
+    while i + 1 < len(name_lines):
+        first = name_lines[i]
+        last  = name_lines[i+1]
+        if re.match(r'^[A-Z][a-z]+$', first) and re.match(r'^[A-Z][a-z]+', last):
+            sailors.append(f"{first} {last}")
+            i += 2
+        else:
+            i += 1
+
+    rows = []
+    main_text = full_text[:sailors_match.start()]
+    for line in main_text.split('\n'):
+        line = line.strip()
+        if re.match(r'^(\d+)\s+([A-Z]{3}\s+\d+|\d+)', line):
             rows.append(line)
 
-    if not rows:
-        return None
-
     entries = []
-    helm_idx = 0
-    for i, row in enumerate(rows):
+    for i2, row in enumerate(rows):
         parts = row.split()
-        sail = next((p for p in parts if re.match(r'^\d{2,5}$', p)), '—')
-        scores = [clean_score(p) for p in parts if clean_score(p) is not None]
-        # Remove rank, sail from scores
-        helm = names[helm_idx] if helm_idx < len(names) else ''
-        crew = names[helm_idx + 1] if (helm_idx + 1) < len(names) else ''
-        if helm:
-            helm = title_name(helm)
-        if crew:
-            crew = title_name(crew)
-        helm_idx += 2
-        if scores:
-            entries.append({'helm': helm, 'crew': crew, 'sail': sail, 'div': '', 'races': scores})
+        nat = ''; sail = '—'
+        if len(parts) >= 3 and re.match(r'^[A-Z]{3}$', parts[1]) and parts[2].isdigit():
+            nat, sail = parts[1], parts[2]
+        elif len(parts) >= 2:
+            _, sail = parse_sail_country(parts[1])
+        score_vals = [clean_score(p) for p in parts[2:] if clean_score(p) is not None]
+        helm = sailors[i2*2]     if i2*2 < len(sailors) else ''
+        crew = sailors[i2*2+1]   if i2*2+1 < len(sailors) else ''
+        if score_vals:
+            entries.append({'helm':helm,'crew':crew,'sail':sail,'nat':nat,'div':'','races':score_vals})
 
     return entries if entries else None
+
+# ── Fleet detection ────────────────────────────────────────────────────────
+FLEET_PATTERNS = re.compile(
+    r'(?i)\b(29er|49er|49erFX|ILCA\s*\d?|Optimist\s*(?:Main|Intermediate|Green|Junior|Novice)?'
+    r'|Laser|RS\w+|2\.4\s*mR|Finn|470|Nacra\s*\d+|420|Topper)\b'
+)
+
+def detect_fleets_in_text(text):
+    found = []; seen = set()
+    for m in FLEET_PATTERNS.finditer(text):
+        name = re.sub(r'\s+', ' ', m.group(0).strip())
+        key = name.lower()
+        if key not in seen:
+            seen.add(key); found.append(name)
+    return found
 
 # ── main parse ─────────────────────────────────────────────────────────────
 def parse_pdf_bytes(pdf_bytes: bytes) -> dict:
@@ -441,116 +442,105 @@ def parse_pdf_bytes(pdf_bytes: bytes) -> dict:
             ):
                 tbls = page.extract_tables(strategy) or []
                 if tbls:
-                    all_tables.extend(tbls)
-                    break
+                    all_tables.extend(tbls); break
 
-    ev_name   = extract_event_name(full_text)
-    discards  = extract_discards(full_text)
-    prov_date = extract_date(full_text)
+    ev_name  = extract_event_name(full_text)
+    discards = extract_discards(full_text)
+    ev_date  = extract_date(full_text)
+    results  = []
 
-    # Group tables by fleet
-    fleet_groups = group_tables_by_fleet(all_tables, full_text)
+    # ── pdfplumber table extraction ───────────────────────────────
+    if all_tables:
+        detected_fleets = detect_fleets_in_text(full_text)
+        fleet_groups = {}
+        current_fleet = detected_fleets[0] if len(detected_fleets) == 1 else ''
 
-    results = []  # list of {fleet, entries, discards}
+        for tbl in all_tables:
+            if not tbl: continue
+            first_text = ' '.join(str(c or '') for c in (tbl[0] or []))
+            for fleet in detected_fleets:
+                if fleet.lower() in first_text.lower():
+                    current_fleet = fleet; break
+            fleet_sec = re.search(
+                r'(\d+-(?:Gold|Silver|Bronze|Emerald)\s+Fleet|Gold Fleet|Silver Fleet|Bronze Fleet)',
+                first_text, re.IGNORECASE
+            )
+            if fleet_sec:
+                current_fleet = fleet_sec.group(1)
 
-    for fleet_name, tables in fleet_groups:
-        seen = set()
-        fleet_entries = []
-        for tbl in tables:
-            parsed = parse_table(tbl, fleet_name)
+            parsed = parse_table(tbl, current_fleet)
             if parsed and parsed['entries']:
+                grp = current_fleet or 'main'
+                if grp not in fleet_groups:
+                    fleet_groups[grp] = []
+                seen_keys = {(e['helm'].lower(), e['sail']) for e in fleet_groups[grp]}
                 for e in parsed['entries']:
-                    key = (e['helm'].lower(), e['sail'])
-                    if key not in seen:
-                        seen.add(key)
-                        fleet_entries.append(e)
+                    k = (e['helm'].lower(), e['sail'])
+                    if k not in seen_keys:
+                        seen_keys.add(k); fleet_groups[grp].append(e)
 
-        if fleet_entries:
-            results.append({
-                'fleet': fleet_name,
-                'entries': fleet_entries,
-                'discards': discards,
-            })
+        for fname, entries in fleet_groups.items():
+            if entries:
+                results.append({'fleet': fname if fname != 'main' else '', 'entries': entries, 'discards': discards})
 
-    # Clubspot fallback if nothing found
+    # ── Clubspot fallback ─────────────────────────────────────────
     if not results:
-        clubspot = try_clubspot(full_text)
-        if clubspot:
-            results.append({'fleet': '', 'entries': clubspot, 'discards': discards})
+        cs = try_clubspot(full_text)
+        if cs:
+            results.append({'fleet': '', 'entries': cs, 'discards': discards})
 
     if not results:
         raise ValueError(
-            'No results table found. '
-            'Supported: Sailwave (any version), Manage2sail, SailingResults.net. '
+            'No results table found. Supported: Sailwave, Manage2sail, SailingResults.net, Clubspot. '
             'For other formats use Manual entry.'
         )
 
-    # Single fleet → return directly (legacy path, no picker needed)
+    results = [r for r in results if r.get('entries')]
+
+    # Merge Gold/Silver/Bronze/Emerald fleet sections into one event
+    gsb = [r for r in results if re.search(r'Gold|Silver|Bronze|Emerald|Sapphire', r.get('fleet',''), re.IGNORECASE)]
+    other = [r for r in results if r not in gsb]
+    if gsb and not other:
+        merged = []
+        seen = set()
+        for r in sorted(gsb, key=lambda x: x.get('fleet','')):
+            for e in r['entries']:
+                k = (e['helm'].lower(), e['sail'])
+                if k not in seen:
+                    seen.add(k); merged.append(e)
+        return {'ok':True,'multi':False,'name':ev_name,'discards':discards,'date':ev_date,'entries':merged}
+
     if len(results) == 1:
         r = results[0]
-        return {
-            'ok': True,
-            'multi': False,
-            'name': ev_name,
-            'discards': r['discards'],
-            'date': prov_date,
-            'entries': r['entries'],
-        }
+        return {'ok':True,'multi':False,'name':ev_name,'discards':r['discards'],'date':ev_date,'entries':r['entries']}
 
-    # Multiple fleets → return picker data
     return {
-        'ok': True,
-        'multi': True,
-        'name': ev_name,
-        'date': prov_date,
-        'fleets': [
-            {
-                'name': r['fleet'],
-                'entries': r['entries'],
-                'discards': r['discards'],
-                'count': len(r['entries']),
-            }
-            for r in results
-        ],
+        'ok': True, 'multi': True, 'name': ev_name, 'date': ev_date,
+        'fleets': [{'name':r['fleet'],'entries':r['entries'],'discards':r['discards'],'count':len(r['entries'])} for r in results],
     }
 
 # ── Vercel handler ─────────────────────────────────────────────────────────
 class handler(BaseHTTPRequestHandler):
-
     def do_OPTIONS(self):
-        self.send_response(200)
-        self._cors()
-        self.end_headers()
-
+        self.send_response(200); self._cors(); self.end_headers()
     def do_POST(self):
         if pdfplumber is None:
-            return self._respond(500, {
-                'ok': False,
-                'error': 'pdfplumber not installed — check requirements.txt.',
-            })
+            return self._respond(500, {'ok':False,'error':'pdfplumber not installed.'})
         length = int(self.headers.get('Content-Length', 0))
-        if length == 0:
-            return self._respond(400, {'ok': False, 'error': 'No file received.'})
-        pdf_bytes = self.rfile.read(length)
+        if not length:
+            return self._respond(400, {'ok':False,'error':'No file received.'})
         try:
-            result = parse_pdf_bytes(pdf_bytes)
-            self._respond(200, result)
+            self._respond(200, parse_pdf_bytes(self.rfile.read(length)))
         except Exception as exc:
-            self._respond(422, {'ok': False, 'error': str(exc)})
-
+            self._respond(422, {'ok':False,'error':str(exc)})
     def _cors(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
+        self.send_header('Access-Control-Allow-Origin','*')
+        self.send_header('Access-Control-Allow-Methods','POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers','Content-Type')
     def _respond(self, status, data):
         body = json.dumps(data).encode()
-        self.send_response(status)
-        self._cors()
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *_):
-        pass
+        self.send_response(status); self._cors()
+        self.send_header('Content-Type','application/json')
+        self.send_header('Content-Length',str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+    def log_message(self, *_): pass
