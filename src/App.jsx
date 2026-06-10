@@ -312,6 +312,38 @@ function parseHtmlScore(raw){
   if(code) return code;
   return null;
 }
+// Returns [score, codeAnnotation] — for cells like "(41 UFD)" → [41, "UFD"]
+function parseHtmlScoreWithCode(raw){
+  if(!raw) return [null,null];
+  const s=raw.trim().replace(/\xa0/g,' ').replace(/&nbsp;/g,' ').trim();
+  if(!s||s==='-'||s==='—') return [null,null];
+  const inner=s.replace(/^\(|\)$/g,'');
+  const parts=inner.split(/[\s\[\]]+/).filter(Boolean);
+  let num=null,code=null;
+  for(const p of parts){
+    const up=p.replace(/[^A-Z]/g,'').toUpperCase();
+    if(SCORE_CODES_SET.has(up)){code=up;}
+    else{const ns=p.replace(/[^\d.]/g,'');if(ns){const n=parseFloat(ns);if(!isNaN(n))num=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}}
+  }
+  if(num!==null) return [num,code];
+  if(code) return [code,null];
+  return [null,null];
+}
+  if(!raw) return null;
+  const s=raw.trim().replace(/\xa0/g,' ').replace(/&nbsp;/g,' ').trim();
+  if(!s||s==='-'||s==='—') return null;
+  const inner=s.replace(/^\(|\)$/g,'');
+  const parts=inner.split(/[\s\[\]]+/).filter(Boolean);
+  let num=null,code=null;
+  for(const p of parts){
+    const up=p.replace(/[^A-Z]/g,'').toUpperCase();
+    if(SCORE_CODES_SET.has(up)){code=up;}
+    else{const ns=p.replace(/[^\d.]/g,'');if(ns){const n=parseFloat(ns);if(!isNaN(n))num=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}}
+  }
+  if(num!==null) return num;
+  if(code) return code;
+  return null;
+}
 
 function parseHtmlDate(text){
   const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
@@ -443,10 +475,12 @@ function parseHtml(htmlString){
         const netRaw=get(colIdx.net);
         if(netRaw){const n=parseFloat(netRaw);if(!isNaN(n))pdfNet=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}
 
-        const races=raceCols.map(ci=>parseHtmlScore(cells[ci]?.textContent)).filter(v=>v!==null);
+        const raceResults=raceCols.map(ci=>parseHtmlScoreWithCode(cells[ci]?.textContent));
+        const races=raceResults.map(([sc])=>sc).filter(v=>v!==null);
+        const race_codes=raceResults.filter(([sc])=>sc!==null).map(([,cd])=>cd||null);
         if(!races.length) return;
 
-        entries.push({helm,crew,sail,nat,div,races,pdf_rank:pdfRank,pdf_net:pdfNet});
+        entries.push({helm,crew,sail,nat,div,races,race_codes,pdf_rank:pdfRank,pdf_net:pdfNet});
       });
 
       if(entries.length) fleetGroups.push({name:fleetName,entries,discards});
@@ -810,7 +844,7 @@ export default function AthLinkMVP(){
     .divtag.male{color:#1a5e8a;background:#d9edf7;}
     .divtag.female{color:#8a1a3c;background:#f7d9e3;}
     .divtag.mixed{color:#5a1a8a;background:#ead9f7;}
-    .divtag.junior{color:#1a5e8a;background:#e8f4ff;}
+    .divtag.junior{color:#0a6b41;background:#d4f0e0;}
     .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px;font:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
     .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px;}
     .acard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;}
@@ -852,7 +886,7 @@ export default function AthLinkMVP(){
     .rolechip{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:5px;text-transform:uppercase;font-family:'Barlow',sans-serif;}
     .rolechip.helm{color:#fff;background:var(--navy2);}.rolechip.crew{color:var(--navy2);background:var(--sky);}
     .miniraces{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;}
-    .rc{width:24px;height:24px;border-radius:6px;background:#dce8f5;color:#2a6aa0;font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;}
+    .rc{width:24px;height:24px;border-radius:6px;background:#f0f2f5;color:#2c3e50;font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;}
     .rc.c{background:#fbe3e0;color:#c0392b;}
     .rc.d{background:#f0f2f5;color:#8a99aa;}
     .rc.g1{background:#f5e8b4;color:#8a6200;}
@@ -1084,7 +1118,7 @@ export default function AthLinkMVP(){
   const gender=gMap[gRaw]||(gRaw?gRaw[0].toUpperCase()+gRaw.slice(1):'');
   const gCls=gender==='Male'?'male':gender==='Female'?'female':gender==='Mixed'?'mixed':'';
   return(<>{gender&&<span className={`divtag ${gCls}`} style={{marginLeft:8}}>{gender}</span>}
-    {isJunior&&<span className="divtag junior" style={{marginLeft:4}}>Junior</span>}
+    {isJunior&&<span className="divtag junior" style={{marginLeft:4}}>Jr</span>}
   </>);
 })()}</div>
               </div>
@@ -1230,7 +1264,7 @@ export default function AthLinkMVP(){
           </div>
           <div className="mbody">
             {tab==="pdf"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload a results PDF or Sailwave HTML file — supports Sailwave, Manage2sail, SailingResults.net and more. Multi-fleet files will show a fleet picker.</p>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload a results PDF or Sailwave HTML file (preferred) — supports Sailwave, Manage2sail and more. Multi-fleet files will show a fleet picker.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose PDF file</>}
                 <input type="file" accept="application/pdf,.html,text/html" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handlePdf(e.target.files?.[0])}/>
@@ -1242,9 +1276,8 @@ export default function AthLinkMVP(){
                 <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Event name</label>
                 <input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="2025 29er Asian Championship" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
               </div>
-              <div className="meta-grid three">
-                <div><label>Host Country</label><input value={mf.club} onChange={e=>updMeta("club",e.target.value)} placeholder="HKG"/></div>
-                <div><label>Country</label><input value={mf.country} onChange={e=>updMeta("country",e.target.value)} placeholder="HKG"/></div>
+              <div className="meta-grid">
+                <div><label>Host Country</label><input value={mf.club} onChange={e=>updMeta("club",e.target.value.toUpperCase())} placeholder="HKG" style={{textTransform:"uppercase"}}/></div>
                 <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
               </div>
               <div style={{marginBottom:14}}>
