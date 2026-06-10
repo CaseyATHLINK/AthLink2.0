@@ -529,6 +529,13 @@ export default function AthLinkMVP(){
   const[editCell,setEditCell]=useState(null);
   const[editVal,setEditVal]=useState("");
   const[editEvMeta,setEditEvMeta]=useState(null);
+  const[deleteConfirm,setDeleteConfirm]=useState(null); // {id, name, pos}
+  const[evFilter,setEvFilter]=useState("");     // AI filter query for events list
+  const[evFilterActive,setEvFilterActive]=useState(null); // parsed filter fn + label
+  const[evFilterLoading,setEvFilterLoading]=useState(false);
+  const[profileFilter,setProfileFilter]=useState("");  // AI filter for profile history
+  const[profileFilterActive,setProfileFilterActive]=useState(null);
+  const[profileFilterLoading,setProfileFilterLoading]=useState(false);
 
   useEffect(()=>{
     (async()=>{
@@ -579,17 +586,83 @@ export default function AthLinkMVP(){
   const enterPortal=id=>{setPortal(id);go({name:"events"});};
 
   /* ── event ops ────────────────────────────────────────────── */
-  const deleteEvent=async(evId,e)=>{
+  const deleteEvent=(evId,evName,e)=>{
     e.stopPropagation();
-    if(!window.confirm("Remove this regatta?")) return;
-    await sbDel("events",`id=eq.${evId}`);
-    setEvents(p=>p.filter(ev=>ev.id!==evId));
+    const rect=e.currentTarget.getBoundingClientRect();
+    setDeleteConfirm({id:evId,name:evName,x:rect.right,y:rect.bottom});
+  };
+  const confirmDelete=async()=>{
+    if(!deleteConfirm) return;
+    await sbDel("events",`id=eq.${deleteConfirm.id}`);
+    setEvents(p=>p.filter(ev=>ev.id!==deleteConfirm.id));
+    setDeleteConfirm(null);
   };
   const confirmDraft=async(evId)=>{
     await updateEventStatus(evId,"Final");
     setEvents(p=>p.map(ev=>ev.id===evId?{...ev,status:"Final"}:ev));
     setNote({name:"Results confirmed",matched:0,created:0,msg:"Event is now official."});
     setTimeout(()=>setNote(null),4000);
+  };
+
+  /* ── AI smart filter ─────────────────────────────────────── */
+  const buildFilterPrompt=(query,context)=>
+    `You are a sailing results filter engine. The user has described a filter in natural language.
+Return ONLY a JSON object (no markdown, no explanation) with two fields:
+  "label": short human-readable description of the filter (max 8 words)
+  "code": a JavaScript arrow function body string that takes an event object "ev" and returns true/false.
+    The event object has: ev.name (string), ev.date (dd/mm/yyyy string), ev.entries (array of {helm,crew,sail,nat,div}),
+    and scoreEvent(ev).fleet (number of boats), scoreEvent(ev).races (number of races).
+    You can use these fields in the code. The code must be valid JS for use in new Function("ev","scoreEvent","return "+code).
+Context: ${context}
+Query: "${query}"`;
+
+  const runEvFilter=async()=>{
+    if(!evFilter.trim()){setEvFilterActive(null);return;}
+    setEvFilterLoading(true);
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",max_tokens:300,
+          messages:[{role:"user",content:buildFilterPrompt(evFilter,`Class: ${cls?.name||"unknown"}, Events: ${classEvents.length}`)}]
+        })
+      });
+      const data=await res.json();
+      const text=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      const clean=text.replace(/```json|```/g,"").trim();
+      const parsed=JSON.parse(clean);
+      const fn=new Function("ev","scoreEvent","return "+parsed.code);
+      setEvFilterActive({label:parsed.label,fn});
+    }catch(err){
+      setEvFilterActive({label:"Filter error",fn:()=>true});
+    }finally{setEvFilterLoading(false);}
+  };
+
+  const runProfileFilter=async(historyItems)=>{
+    if(!profileFilter.trim()){setProfileFilterActive(null);return;}
+    setProfileFilterLoading(true);
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",max_tokens:300,
+          messages:[{role:"user",content:buildFilterPrompt(profileFilter,
+            "Each item has: h.ev (event object with .name,.date,.country), h.row.rank (number), h.row.net (number), h.fleet (total boats), h.role ('Helm' or 'Crew'), h.partner (string name).
+The function takes 'h' not 'ev'. Return code that uses 'h'."
+          )}]
+        })
+      });
+      const data=await res.json();
+      const text=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      const clean=text.replace(/```json|```/g,"").trim();
+      const parsed=JSON.parse(clean);
+      const fn=new Function("h","scoreEvent","return "+parsed.code);
+      setProfileFilterActive({label:parsed.label,fn});
+    }catch(err){
+      setProfileFilterActive({label:"Filter error",fn:()=>true});
+    }finally{setProfileFilterLoading(false);}
   };
 
   const saveEvMeta=async()=>{
@@ -964,6 +1037,22 @@ export default function AthLinkMVP(){
     .scorecell .scode{font-size:8px;font-weight:800;color:#e74c3c;letter-spacing:.04em;text-transform:uppercase;}
 
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
+    /* Delete confirm */
+    .del-confirm{position:fixed;z-index:80;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:0 12px 32px -10px rgba(0,0,0,.3);min-width:220px;animation:rise .15s both;}
+    .del-confirm p{margin:0 0 10px;font-size:13px;color:var(--ink);font-weight:600;}
+    .del-confirm .del-name{color:var(--navy);font-family:'Barlow',sans-serif;}
+    .del-confirm-btns{display:flex;gap:8px;}
+    /* AI search */
+    .ai-srch{display:flex;align-items:center;gap:0;background:#fff;border:1.5px solid var(--line);border-radius:10px;overflow:hidden;transition:.2s;}
+    .ai-srch:focus-within{border-color:var(--accent);}
+    .ai-srch input{flex:1;border:0;outline:0;font:inherit;font-size:13px;padding:9px 13px;background:none;color:var(--ink);}
+    .ai-srch input::placeholder{color:#9fb2c8;}
+    .ai-srch-btn{border:0;background:var(--accent);color:#fff;padding:0 14px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;height:100%;display:flex;align-items:center;gap:6px;white-space:nowrap;transition:.15s;}
+    .ai-srch-btn:hover{background:var(--accent2);}
+    .ai-srch-btn:disabled{opacity:.6;cursor:default;}
+    .filter-chip{display:inline-flex;align-items:center;gap:6px;background:#eef4fb;border:1px solid #b9cee4;border-radius:20px;padding:4px 10px 4px 12px;font-size:12px;font-weight:600;color:var(--navy);margin-bottom:12px;}
+    .filter-chip button{border:0;background:none;cursor:pointer;color:var(--mut);padding:0;display:flex;align-items:center;line-height:1;}
+    .filter-chip button:hover{color:#c0392b;}
   `}</style>
 
   {/* ── TOPBAR ── */}
@@ -1027,29 +1116,58 @@ export default function AthLinkMVP(){
       </div></div>
       <div className="wrap sec">
         <button className="back" onClick={goHome}><ArrowLeft size={16}/>Hong Kong Sailing</button>
-        <div className="toolbar">
+        <div className="toolbar" style={{marginBottom:8}}>
           <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
           <button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>
         </div>
-        {classEvents.map((ev,i)=>{
-          const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
-          return(<div className={`ev${isDraft?" draft":""}`} key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
-            <div className="evicon"><Anchor size={20}/></div>
-            <div style={{flex:1,minWidth:0}}>
-              <p className="evname">{ev.name}</p>
-              <div className="evmeta">
-                <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
-                <span><Calendar size={13}/>{formatDate(ev.date)}</span>
-                <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
-              </div>
+        <div style={{marginBottom:12}}>
+          <div className="ai-srch">
+            <input
+              placeholder="Smart filter — e.g. "more than 30 boats" or "Emily Polson and Casey Law""
+              value={evFilter}
+              onChange={e=>setEvFilter(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter")runEvFilter();}}
+            />
+            <button className="ai-srch-btn" disabled={evFilterLoading||!evFilter.trim()} onClick={runEvFilter}>
+              {evFilterLoading?<Loader2 size={13} className="spin"/>:<Sparkles size={13}/>}
+              {evFilterLoading?"Filtering…":"Filter"}
+            </button>
+          </div>
+          {evFilterActive&&(
+            <div className="filter-chip" style={{marginTop:8}}>
+              <Sparkles size={11}/>
+              {evFilterActive.label}
+              <button onClick={()=>{setEvFilterActive(null);setEvFilter("");}}><X size={13}/></button>
             </div>
-            {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
-            <span className="cls">{ev.cls}</span>
-            <button className="delbtn" onClick={e=>deleteEvent(ev.id,e)}><Trash2 size={16}/></button>
-            <ChevronRight size={18} color="#9fb2c8"/>
-          </div>);
-        })}
-        {classEvents.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No regattas yet. Import one to get started.</p>}
+          )}
+        </div>
+        {(()=>{
+          const filtered=evFilterActive
+            ?classEvents.filter(ev=>{try{return evFilterActive.fn(ev,scoreEvent);}catch{return true;}})
+            :classEvents;
+          return(<>
+            {filtered.map((ev,i)=>{
+              const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
+              return(<div className={`ev${isDraft?" draft":""}`} key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
+                <div className="evicon"><Anchor size={20}/></div>
+                <div style={{flex:1,minWidth:0}}>
+                  <p className="evname">{ev.name}</p>
+                  <div className="evmeta">
+                    <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
+                    <span><Calendar size={13}/>{formatDate(ev.date)}</span>
+                    <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
+                  </div>
+                </div>
+                {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
+                <span className="cls">{ev.cls}</span>
+                <button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>
+                <ChevronRight size={18} color="#9fb2c8"/>
+              </div>);
+            })}
+            {filtered.length===0&&classEvents.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No results match this filter. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setEvFilterActive(null);setEvFilter("");}}>Clear filter</button></p>}
+            {classEvents.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No regattas yet. Import one to get started.</p>}
+          </>);
+        })()}
       </div>
     </>
   )}
@@ -1206,9 +1324,29 @@ export default function AthLinkMVP(){
         </div>
       </div>
       <div style={{marginTop:22}}>
-        <p className="seclabel"><Trophy size={14}/>Result history</p>
-        {ag.history.map((h,i)=>(
-          <div className="histrow" key={h.ev.id+i} style={{animationDelay:`${i*70}ms`}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
+          <p className="seclabel" style={{margin:0}}><Trophy size={14}/>Result history</p>
+          <div className="ai-srch" style={{flex:1,minWidth:220,maxWidth:400}}>
+            <input
+              placeholder="Filter — e.g. "top 3 finishes" or "2023 events""
+              value={profileFilter}
+              onChange={e=>setProfileFilter(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter")runProfileFilter(ag.history);}}
+            />
+            <button className="ai-srch-btn" disabled={profileFilterLoading||!profileFilter.trim()} onClick={()=>runProfileFilter(ag.history)}>
+              {profileFilterLoading?<Loader2 size={13} className="spin"/>:<Sparkles size={13}/>}
+              {profileFilterLoading?"…":"Filter"}
+            </button>
+          </div>
+          {profileFilterActive&&(
+            <div className="filter-chip">
+              <Sparkles size={11}/>{profileFilterActive.label}
+              <button onClick={()=>{setProfileFilterActive(null);setProfileFilter("");}}><X size={13}/></button>
+            </div>
+          )}
+        </div>
+        {(profileFilterActive?ag.history.filter(h=>{try{return profileFilterActive.fn(h,scoreEvent);}catch{return true;}}):ag.history).map((h,i)=>(
+          <div className="histrow" key={h.ev.id+i} style={{animationDelay:`${i*70}ms`,cursor:"pointer"}} onClick={()=>go({name:"event",id:h.ev.id})}>
             <div className={`hrk ${h.row.rank<=3?"p"+h.row.rank:""}`}>#{h.row.rank}<small>of {h.fleet}</small></div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
@@ -1413,6 +1551,18 @@ export default function AthLinkMVP(){
             </div>
           </div>);
         })()}
+      </div>
+    </div>
+  )}
+
+  {deleteConfirm&&(
+    <div style={{position:"fixed",inset:0,zIndex:75}} onClick={()=>setDeleteConfirm(null)}>
+      <div className="del-confirm" style={{top:Math.min(deleteConfirm.y+4,window.innerHeight-120),left:Math.max(deleteConfirm.x-230,8)}} onClick={e=>e.stopPropagation()}>
+        <p>Remove <span className="del-name">"{deleteConfirm.name}"</span>?</p>
+        <div className="del-confirm-btns">
+          <button className="btn ghost" style={{flex:1,fontSize:12,padding:"6px 10px"}} onClick={()=>setDeleteConfirm(null)}>Cancel</button>
+          <button className="btn" style={{flex:1,fontSize:12,padding:"6px 10px",background:"#e74c3c",color:"#fff"}} onClick={confirmDelete}><Trash2 size={13}/>Delete</button>
+        </div>
       </div>
     </div>
   )}
