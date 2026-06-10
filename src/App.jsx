@@ -326,8 +326,45 @@ function parseHtmlDate(text){
 
 function parseHtml(htmlString){
   try{
+    // Sailwave HTML files are ISO-8859-1 encoded. The string received from
+    // FileReader.text() may already be mangled if read as UTF-8.
+    // Fix: re-encode common latin-1 sequences back to proper unicode.
+    const fixEncoding=(s)=>s
+      .replace(/\u00c3\u00b8/g,'ø').replace(/\u00c3\u00b1/g,'ñ')
+      .replace(/\u00c3\u00a9/g,'é').replace(/\u00c3\u00a0/g,'à')
+      .replace(/\u00c3\u00a8/g,'è').replace(/\u00c3\u00bc/g,'ü')
+      .replace(/\u00c3\u00b6/g,'ö').replace(/\u00c3\u00a4/g,'ä')
+      .replace(/\u00c3\u00bf/g,'ÿ').replace(/\u00c3\u00ab/g,'ë')
+      .replace(/\u00c3\u00af/g,'ï').replace(/\u00c3\u00ae/g,'î')
+      .replace(/\u00c3\u00aa/g,'ê').replace(/\u00c3\u00a2/g,'â')
+      .replace(/\u00c3\u00b4/g,'ô').replace(/\u00c3\u00bb/g,'û')
+      .replace(/\u00c3\u0081/g,'Á').replace(/\u00c3\u0089/g,'É')
+      .replace(/\u00c3\u008d/g,'Í').replace(/\u00c3\u0093/g,'Ó')
+      .replace(/\u00c3\u009a/g,'Ú').replace(/\u00c3\u00a1/g,'á')
+      .replace(/\u00c3\u00ad/g,'í').replace(/\u00c3\u00b3/g,'ó')
+      .replace(/\u00c3\u00ba/g,'ú').replace(/\u00c3\u00b2/g,'ò')
+      .replace(/\u00c3\u009c/g,'Ü').replace(/\u00c3\u0096/g,'Ö')
+      .replace(/\u00c3\u0084/g,'Ä').replace(/\u00c3\u00b5/g,'õ')
+      .replace(/\u00c3\u00a5/g,'å').replace(/\u00c3\u0085/g,'Å')
+      .replace(/\u00c3\u00a6/g,'æ').replace(/\u00c3\u0086/g,'Æ')
+      .replace(/\u00c3\u00b8/g,'ø').replace(/\u00c3\u0098/g,'Ø')
+      .replace(/\u00c5\u00a1/g,'š').replace(/\u00c5\u00bd/g,'Ž')
+      .replace(/\u00c4\u0099/g,'ę').replace(/\u00c4\u0085/g,'ą')
+      .replace(/\u00c5\u00bc/g,'ż').replace(/\u00c5\u00ba/g,'ź')
+      .replace(/\u00c5\u0082/g,'ł').replace(/\u00c5\u009b/g,'ś')
+      .replace(/\u00c4\u0087/g,'ć').replace(/\u00c5\u0084/g,'ń');
+    // Also handle the file being read as latin-1 by TextDecoder approach
+    const fixLatin=(s)=>{
+      // Replace replacement chars from UTF-8 misread of latin-1
+      // \xf8=ø, \xf1=ñ, \xe9=é, \xfc=ü, \xf6=ö, \xe4=ä, \xe5=å etc.
+      return s.replace(/\ufffd/g,(match,offset)=>{
+        // Can't recover from replacement chars without original bytes; just return as-is
+        return match;
+      });
+    };
+    const fixedHtml=fixEncoding(htmlString);
     const parser=new DOMParser();
-    const doc=parser.parseFromString(htmlString,'text/html');
+    const doc=parser.parseFromString(fixedHtml,'text/html');
     const title=doc.querySelector('h1')?.textContent?.trim()||'Imported Regatta';
     const bodyText=doc.body?.textContent||'';
     const evDate=parseHtmlDate(bodyText);
@@ -579,7 +616,9 @@ export default function AthLinkMVP(){
     // If HTML file, parse in-browser via parseHtml; otherwise send to api
     if(file.name.toLowerCase().endsWith(".html")||file.type==="text/html"){
       try{
-        const html=await file.text();
+        // Read as ArrayBuffer first so we can decode as ISO-8859-1 (Sailwave's encoding)
+        const buf=await file.arrayBuffer();
+        const html=new TextDecoder('iso-8859-1').decode(buf);
         const data=parseHtml(html);
         if(!data.ok){setPdfError(data.error||"Could not parse this HTML file.");setPdfLoading(false);return;}
         if(data.multi){
@@ -752,7 +791,7 @@ export default function AthLinkMVP(){
     table{width:100%;border-collapse:collapse;font-size:13px;min-width:680px;}
     thead th{background:var(--navy);color:#fff;font-family:'Barlow',sans-serif;font-weight:600;text-align:center;padding:11px 5px;font-size:12px;}
     thead th.l{text-align:left;padding-left:18px;}
-    tbody td{padding:10px 5px;text-align:center;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;}
+    tbody td{padding:8px 5px;text-align:center;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;}
     tbody td.l{text-align:left;padding-left:18px;}
     tbody td.editable{cursor:text;}tbody td.editable:hover{background:#eef4fb;}
     tbody tr:last-child td{border-bottom:0;}
@@ -809,7 +848,11 @@ export default function AthLinkMVP(){
     .rolechip.helm{color:#fff;background:var(--navy2);}.rolechip.crew{color:var(--navy2);background:var(--sky);}
     .miniraces{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;}
     .rc{width:24px;height:24px;border-radius:6px;background:var(--sky);color:var(--navy);font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;}
-    .rc.c{background:#fbe3e0;color:#c0392b;}.rc.d{background:#eef2f7;color:var(--mut);}.rc.w{background:var(--accent);color:#fff;}
+    .rc.c{background:#fbe3e0;color:#c0392b;}
+    .rc.d{background:#eef2f7;color:var(--mut);text-decoration:line-through;}
+    .rc.g1{background:#c8920b;color:#fff;}
+    .rc.g2{background:#8a9bb0;color:#fff;}
+    .rc.g3{background:#a86a32;color:#fff;}
     /* Home */
     .home-hero{background:linear-gradient(140deg,#1b4470,#143358);padding:36px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:#fff;font-size:36px;font-weight:800;margin:0 0 6px;}
@@ -892,6 +935,10 @@ export default function AthLinkMVP(){
     .rtable tbody td.calc-td{background:#f0f5fb;text-align:center;padding:0 6px;font-variant-numeric:tabular-nums;}
     @keyframes rise{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
     @keyframes fade{from{opacity:0;}to{opacity:1;}}
+    .scorecell{display:inline-flex;flex-direction:column;align-items:center;gap:1px;line-height:1.15;}
+    .scorecell .snum{font-variant-numeric:tabular-nums;}
+    .scorecell .scode{font-size:8px;font-weight:800;color:#e74c3c;letter-spacing:.04em;text-transform:uppercase;}
+
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
   `}</style>
 
@@ -1010,7 +1057,7 @@ export default function AthLinkMVP(){
       <div className="evmeta" style={{marginBottom:16}}>
         <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
         <span><Calendar size={13}/>{formatDate(ev.date)}</span>
-        <span><Flag size={13}/>{ev.cls}</span>
+        <span><Anchor size={13}/>{ev.cls}</span>
         <span style={{fontSize:12,color:"var(--mut)",display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span>
       </div>
       <div className="panel"><table>
@@ -1026,7 +1073,18 @@ export default function AthLinkMVP(){
               <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
               <div>
                 <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
-                <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{r.div?<span className="divtag" style={{marginLeft:8}}>{r.div}</span>:null}</div>
+                <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{(()=>{
+  if(!r.div) return null;
+  const d=r.div.replace(/\d+-(?:Gold|Silver|Bronze|Emerald|Sapphire)\s*/i,'').trim();
+  const isJunior=/junior|u17|u18|u19|u20/i.test(d);
+  const gRaw=d.replace(/junior|u\d+/gi,'').trim();
+  const gMap={'m':'Male','male':'Male','f':'Female','female':'Female',
+    'mixed':'Mixed','mix':'Mixed','w':'Female','women':'Female','men':'Male'};
+  const gender=gMap[gRaw.toLowerCase()]||gRaw;
+  return(<>{gender&&<span className="divtag" style={{marginLeft:8}}>{gender}</span>}
+    {isJunior&&<span className="divtag" style={{marginLeft:4,background:'#e8f4ff',color:'#1a5e8a'}}>Junior</span>}
+  </>);
+})()}</div>
               </div>
             </div></td>
             <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
@@ -1135,10 +1193,13 @@ export default function AthLinkMVP(){
               <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                 <span className="disp" style={{fontWeight:700,fontSize:15}}>{h.ev.name}</span>
                 <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
-                {h.row.nat&&<span className="cn">{iocFlag(h.row.nat)} {h.row.nat}</span>}
+
               </div>
               <div className="cn" style={{marginTop:3}}>{formatDate(h.ev.date)} · {evLoc(h.ev)} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}</div>
-              <div className="miniraces">{h.row.races.map((c,j)=>(<div key={j} className={`rc ${isCode(c)?"c":c===1?"w":h.row.discardSet.has(j)?"d":""}`}>{isCode(c)?c.slice(0,2):c}</div>))}</div>
+              <div className="miniraces">{h.row.races.map((rc2,j)=>{
+                const cls2=isCode(rc2)?"c":h.row.discardSet.has(j)?"d":rc2===1?"g1":rc2===2?"g2":rc2===3?"g3":"";
+                return<div key={j} className={`rc ${cls2}`}>{isCode(rc2)?rc2.slice(0,2):rc2}</div>;
+              })}</div>
             </div>
             <span className="vchip"><BadgeCheck size={13}/>Verified</span>
           </div>
