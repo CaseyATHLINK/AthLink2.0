@@ -92,6 +92,47 @@ def clean_score(raw):
 
     return None
 
+
+def clean_score_with_code(raw):
+    """
+    Like clean_score but also returns the penalty code annotation when a
+    numeric score has an associated code (e.g. "7 STP" → (7, "STP")).
+    Returns (score, code_annotation) where code_annotation may be None.
+    """
+    if raw is None:
+        return None, None
+    s = str(raw).strip().replace('\n', ' ')
+    if not s or s in ('-', '—', '–', '*', ''):
+        return None, None
+
+    inner = re.sub(r'^\(|\)$', '', s.strip())
+    parts = re.split(r'[\s\[\]]+', inner.strip())
+    parts = [p for p in parts if p]
+
+    num = None
+    code = None
+    for p in parts:
+        up = re.sub(r'[^A-Z]', '', p.upper())
+        if up in CODES:
+            code = up
+        else:
+            ns = re.sub(r'[^\d.]', '', p)
+            if ns:
+                try:
+                    n = float(ns)
+                    num = int(n) if n == int(n) else round(n, 2)
+                except ValueError:
+                    pass
+
+    if num is not None:
+        # Return the number AND the code label (for display annotation)
+        return num, code
+
+    if code is not None:
+        return code, None
+
+    return None, None
+
 # ── header helpers ─────────────────────────────────────────────────────────
 def is_race_hdr(cell):
     s = fix_doubled(str(cell or '')).strip().upper()
@@ -334,14 +375,16 @@ def parse_row_with_cols(row, cols):
     race_start = cols.get('race_start')
     race_end   = cols.get('race_end')
     races = []
+    race_codes = []  # parallel array: code annotation when a numeric score had a code label
     if race_start is not None and race_end is not None:
         skip_cols = {cols.get('total'), cols.get('net')}
         for i in range(race_start, race_end + 1):
             if i >= len(row) or i in skip_cols:
                 continue
-            sc = clean_score(row[i])
+            sc, code_ann = clean_score_with_code(row[i])
             if sc is not None:
                 races.append(sc)
+                race_codes.append(code_ann)  # None for plain scores, "STP" etc for annotated
 
     # Extract PDF rank (first column) and net score (last meaningful column)
     # Get rank from dedicated column, or fall back to first column
@@ -373,14 +416,15 @@ def parse_row_with_cols(row, cols):
                 pass
 
     return {
-        'helm':     clean_name(helm_raw),
-        'crew':     clean_name(crew_raw),
-        'sail':     clean_sail or '—',
-        'nat':      flag_from_ioc(nat_raw),
-        'div':      div_raw,
-        'races':    races,
-        'pdf_rank': pdf_rank,
-        'pdf_net':  pdf_net,
+        'helm':       clean_name(helm_raw),
+        'crew':       clean_name(crew_raw),
+        'sail':       clean_sail or '—',
+        'nat':        flag_from_ioc(nat_raw),
+        'div':        div_raw,
+        'races':      races,
+        'race_codes': race_codes,
+        'pdf_rank':   pdf_rank,
+        'pdf_net':    pdf_net,
     }
 
 # ── table parser ───────────────────────────────────────────────────────────
@@ -486,7 +530,7 @@ def try_clubspot(full_text):
         helm = sailors[i2*2]     if i2*2 < len(sailors) else ''
         crew = sailors[i2*2+1]   if i2*2+1 < len(sailors) else ''
         if score_vals:
-            entries.append({'helm':helm,'crew':crew,'sail':sail,'nat':nat,'div':'','races':score_vals,'pdf_rank':i2+1,'pdf_net':None})
+            entries.append({'helm':helm,'crew':crew,'sail':sail,'nat':nat,'div':'','races':score_vals,'race_codes':[None]*len(score_vals),'pdf_rank':i2+1,'pdf_net':None})
 
     return entries if entries else None
 
