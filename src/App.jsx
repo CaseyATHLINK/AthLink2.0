@@ -270,7 +270,7 @@ function dbToApp(ev){
     venue:ev.venue||"—",country:ev.country||"",date:ev.date||"—",discards:ev.discards,
     scoring:ev.scoring||"",source:ev.source||"Imported",status:ev.status||"Final",
     entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",nat:e.nat||"",div:e.division||"",
-      helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null}))};
+      helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null}))};
 }
 async function saveEventToDb(ev){
   if(!sbH) return;
@@ -279,7 +279,7 @@ async function saveEventToDb(ev){
     scoring:ev.scoring,source:ev.source,status:ev.status});
   if(!ins?.[0]?.id) return ins;
   await sbPost("entries",ev.entries.map(e=>({event_id:ins[0].id,sail:e.sail,nat:e.nat||null,
-    division:e.div,helm_name:e.helm,crew_name:e.crew||null,races:e.races,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null})));
+    division:e.div,helm_name:e.helm,crew_name:e.crew||null,races:e.races,race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null})));
   return ins;
 }
 async function updateEventStatus(evId,status){
@@ -289,6 +289,149 @@ async function updateEventStatus(evId,status){
 /* ── manual form ─────────────────────────────────────────────────────── */
 const defRow=n=>({helm:"",crew:"",sail:"",nat:"",div:"",scores:Array(n).fill("")});
 const emptyForm=()=>({name:"",club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
+
+/* ── HTML (Sailwave) parser ────────────────────────────────────────────────
+   Parses the standard Sailwave HTML results format directly in the browser.
+   No server round-trip needed.
+   ──────────────────────────────────────────────────────────────────────── */
+const SCORE_CODES_SET=new Set(["DNF","DNC","DNS","OCS","DSQ","BFD","UFD","RET","RDG","DGM","DNE","SCP","NSC","PRP","TAL","ZFP","STP","DPI","TP5","TPP","TPN","NSC"]);
+
+function parseHtmlScore(raw){
+  if(!raw) return null;
+  const s=raw.trim().replace(/\xa0/g,' ').replace(/&nbsp;/g,' ').trim();
+  if(!s||s==='-'||s==='—') return null;
+  const inner=s.replace(/^\(|\)$/g,'');
+  const parts=inner.split(/[\s\[\]]+/).filter(Boolean);
+  let num=null,code=null;
+  for(const p of parts){
+    const up=p.replace(/[^A-Z]/g,'').toUpperCase();
+    if(SCORE_CODES_SET.has(up)){code=up;}
+    else{const ns=p.replace(/[^\d.]/g,'');if(ns){const n=parseFloat(ns);if(!isNaN(n))num=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}}
+  }
+  if(num!==null) return num;
+  if(code) return code;
+  return null;
+}
+
+function parseHtmlDate(text){
+  const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  // "as of HH:MM on Month Day, Year"
+  let m=text.match(/as\s+of\s+[\d:]+\s+on\s+([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i);
+  if(m){const mo=months[m[1].slice(0,3).toLowerCase()];if(mo)return`${String(parseInt(m[2])).padStart(2,'0')}/${String(mo).padStart(2,'0')}/${m[3]}`;}
+  // "As of DD MON YYYY"
+  m=text.match(/as\s+of\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i);
+  if(m){const mo=months[m[2].slice(0,3).toLowerCase()];if(mo)return`${String(parseInt(m[1])).padStart(2,'0')}/${String(mo).padStart(2,'0')}/${m[3]}`;}
+  return '';
+}
+
+function parseHtml(htmlString){
+  try{
+    const parser=new DOMParser();
+    const doc=parser.parseFromString(htmlString,'text/html');
+    const title=doc.querySelector('h1')?.textContent?.trim()||'Imported Regatta';
+    const bodyText=doc.body?.textContent||'';
+    const evDate=parseHtmlDate(bodyText);
+    // Extract discards
+    let discards=1;
+    const discardMatch=bodyText.match(/Discards?\s*:\s*(\d+)/i);
+    if(discardMatch) discards=parseInt(discardMatch[1]);
+
+    const fleetGroups=[];
+    // Each fleet has a summarytitle h3 + a summarytable
+    const fleetHeaders=doc.querySelectorAll('.summarytitle, h3.summarytitle');
+    const fleetTables=doc.querySelectorAll('.summarytable');
+
+    // If no summarytable class, grab all tables
+    const tables=fleetTables.length?fleetTables:doc.querySelectorAll('table');
+
+    tables.forEach((tbl,tblIdx)=>{
+      const fleetName=fleetHeaders[tblIdx]?.textContent?.trim()||'';
+      const thead=tbl.querySelector('thead');
+      const tbody=tbl.querySelector('tbody');
+      if(!thead||!tbody) return;
+
+      // Build column index map from header
+      const headers=[...thead.querySelectorAll('th,td')].map(th=>th.textContent.trim().toLowerCase().replace(/[\s\n_()/']+/g,''));
+      const colIdx={};
+      headers.forEach((h,i)=>{
+        if(['rank','rk','pos','pl'].includes(h)) colIdx.rank??=i;
+        else if(['helmname','helm','helmsname'].includes(h)) colIdx.helm??=i;
+        else if(['crewname','crew','crewsname'].includes(h)) colIdx.crew??=i;
+        else if(['sailno','sail','sailnumber'].includes(h)) colIdx.sail??=i;
+        else if(['nat','nationality','country'].includes(h)) colIdx.nat??=i;
+        else if(['division','div','fleet'].includes(h)) colIdx.div??=i;
+        else if(['nett','net','netpts'].includes(h)) colIdx.net??=i;
+        else if(['total','totalpts'].includes(h)) colIdx.total??=i;
+      });
+      // Race columns: look for col class="race" or headers matching F1,R1,F2...
+      const raceCols=[];
+      headers.forEach((h,i)=>{
+        if(/^[rfq]\d{1,2}$/.test(h)||/^race\s*\d+$/i.test(h)) raceCols.push(i);
+      });
+      // Also check colgroup
+      if(!raceCols.length){
+        const cols=[...tbl.querySelectorAll('col')];
+        cols.forEach((col,i)=>{if(col.className==='race') raceCols.push(i);});
+      }
+
+      if(!colIdx.helm&&!colIdx.sail) return;
+      if(!raceCols.length) return;
+
+      const entries=[];
+      tbody.querySelectorAll('tr.summaryrow,tr').forEach(tr=>{
+        const cells=[...tr.querySelectorAll('td')];
+        if(cells.length<3) return;
+        const get=idx=>(idx!=null&&idx<cells.length)?cells[idx].textContent.trim():'';
+
+        // nat from flag image title attribute
+        let nat='';
+        if(colIdx.nat!=null){
+          const img=cells[colIdx.nat]?.querySelector('img');
+          nat=img?.title||img?.alt||get(colIdx.nat);
+          nat=nat.trim().toUpperCase();
+          if(!/^[A-Z]{3}$/.test(nat)) nat='';
+        }
+
+        const sail=get(colIdx.sail)||'—';
+        const helm=get(colIdx.helm)||'';
+        if(!helm) return;
+        const crew=get(colIdx.crew)||'';
+        const div=get(colIdx.div)||'';
+
+        let pdfRank=null;
+        const rankRaw=get(colIdx.rank).replace(/(st|nd|rd|th)$/i,'');
+        if(rankRaw) pdfRank=parseInt(rankRaw)||null;
+
+        let pdfNet=null;
+        const netRaw=get(colIdx.net);
+        if(netRaw){const n=parseFloat(netRaw);if(!isNaN(n))pdfNet=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}
+
+        const races=raceCols.map(ci=>parseHtmlScore(cells[ci]?.textContent)).filter(v=>v!==null);
+        if(!races.length) return;
+
+        entries.push({helm,crew,sail,nat,div,races,pdf_rank:pdfRank,pdf_net:pdfNet});
+      });
+
+      if(entries.length) fleetGroups.push({name:fleetName,entries,discards});
+    });
+
+    if(!fleetGroups.length) return{ok:false,error:'No results table found in this HTML file.'};
+
+    // Merge Gold/Silver/Bronze fleets
+    const gsb=fleetGroups.filter(g=>/gold|silver|bronze|emerald/i.test(g.name));
+    const other=fleetGroups.filter(g=>!/gold|silver|bronze|emerald/i.test(g.name));
+    if(gsb.length&&!other.length){
+      const merged=[];const seen=new Set();
+      for(const g of gsb){for(const e of g.entries){const k=e.helm.toLowerCase()+e.sail;if(!seen.has(k)){seen.add(k);merged.push(e);}}}
+      return{ok:true,multi:false,name:title,discards,date:evDate,entries:merged};
+    }
+    if(fleetGroups.length===1) return{ok:true,multi:false,name:title,discards:fleetGroups[0].discards,date:evDate,entries:fleetGroups[0].entries};
+    return{ok:true,multi:true,name:title,date:evDate,fleets:fleetGroups.map(g=>({name:g.name,entries:g.entries,discards:g.discards,count:g.entries.length}))};
+  }catch(err){
+    return{ok:false,error:'HTML parse error: '+err.message};
+  }
+}
+
 
 /* ═════════════════════════════════════════════════════════════════════ */
 export default function AthLinkMVP(){
@@ -329,6 +472,7 @@ export default function AthLinkMVP(){
   const[previewEditVal,setPreviewEditVal]=useState("");
   const[editCell,setEditCell]=useState(null);
   const[editVal,setEditVal]=useState("");
+  const[editEvMeta,setEditEvMeta]=useState(null);
 
   useEffect(()=>{
     (async()=>{
@@ -370,7 +514,7 @@ export default function AthLinkMVP(){
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
   const athleteTitle=isGlobal?"All Athletes":`${cls?.short||""} Athletes`;
-  const evLoc=ev=>[ev.venue,ev.country].filter(Boolean).join(" · ");
+  const evLoc=ev=>[ev.country].filter(Boolean).join(" · ");
   const manualReady=!!mf.rows.filter(r=>r.helm.trim()).length;
 
   /* ── navigation ───────────────────────────────────────────── */
@@ -390,6 +534,14 @@ export default function AthLinkMVP(){
     setEvents(p=>p.map(ev=>ev.id===evId?{...ev,status:"Final"}:ev));
     setNote({name:"Results confirmed",matched:0,created:0,msg:"Event is now official."});
     setTimeout(()=>setNote(null),4000);
+  };
+
+  const saveEvMeta=async()=>{
+    if(!editEvMeta) return;
+    const{id,name,date,country,discards}=editEvMeta;
+    await sbPatch("events",`id=eq.${id}`,{name,date,country:country||null,discards:parseInt(discards)||1});
+    setEvents(p=>p.map(ev=>ev.id===id?{...ev,name,date,country,discards:parseInt(discards)||1}:ev));
+    setEditEvMeta(null);
   };
 
   /* ── PDF / import flow ────────────────────────────────────── */
@@ -415,7 +567,7 @@ export default function AthLinkMVP(){
         sail:e.sail||"—",nat:e.nat||"",div:e.div||"",
         helm:e.helm||"",crew:e.crew||"",
         races:(e.races||[]),
-        pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
+        race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
       })),
     };
     setPreviewEv(ev);setImportStep("preview");
@@ -424,6 +576,21 @@ export default function AthLinkMVP(){
   const handlePdf=async file=>{
     if(!file) return;
     setPdfLoading(true);setPdfError("");
+    // If HTML file, parse in-browser via parseHtml; otherwise send to api
+    if(file.name.toLowerCase().endsWith(".html")||file.type==="text/html"){
+      try{
+        const html=await file.text();
+        const data=parseHtml(html);
+        if(!data.ok){setPdfError(data.error||"Could not parse this HTML file.");setPdfLoading(false);return;}
+        if(data.multi){
+          setFleetChoices(data.fleets);setPdfMeta({name:data.name,date:data.date||""});setImportStep("picker");
+        }else{
+          buildPreviewFromFleet(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards});
+        }
+      }catch(err){setPdfError("HTML parse failed: "+err.message);}
+      finally{setPdfLoading(false);}
+      return;
+    }
     try{
       const res=await fetch("/api/parse_pdf",{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const data=await res.json();
@@ -834,12 +1001,16 @@ export default function AthLinkMVP(){
           <button className="btn green" onClick={()=>confirmDraft(ev.id)}><CheckCircle size={16}/>Confirm Results</button>
         </div>
       )}
-      <h1 className="disp" style={{fontSize:24,margin:"0 0 6px"}}>{ev.name}</h1>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
+        <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
+        <button className="btn ghost" style={{fontSize:12,padding:"5px 10px"}} onClick={()=>setEditEvMeta({id:ev.id,name:ev.name,date:ev.date,country:ev.country||"",discards:ev.discards})}>
+          <Pencil size={13}/>Edit
+        </button>
+      </div>
       <div className="evmeta" style={{marginBottom:16}}>
         <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
         <span><Calendar size={13}/>{formatDate(ev.date)}</span>
-        <span><Flag size={13}/>{ev.cls} · {ev.scoring}</span>
-        <span className="vchip" style={{marginLeft:"auto"}}><BadgeCheck size={13}/>Source: {ev.source}</span>
+        <span><Flag size={13}/>{ev.cls}</span>
         <span style={{fontSize:12,color:"var(--mut)",display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span>
       </div>
       <div className="panel"><table>
@@ -854,8 +1025,8 @@ export default function AthLinkMVP(){
             <td className="l"><div className="boat">
               <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
               <div>
-                <div className="namelink" onClick={()=>go({name:"profile",id:r.helm})}>{r.helm}</div>
-                <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew})}>{r.crew}</span></>:"single-handed"}{r.div?<span className="divtag" style={{marginLeft:8}}>{r.div}</span>:null}</div>
+                <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
+                <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{r.div?<span className="divtag" style={{marginLeft:8}}>{r.div}</span>:null}</div>
               </div>
             </div></td>
             <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
@@ -864,7 +1035,13 @@ export default function AthLinkMVP(){
               const isE=editCell?.evId===ev.id&&editCell?.sail===r.sail&&editCell?.helm===r.helm&&editCell?.raceIdx===i;
               if(isE) return<td key={i}><input className="cellinput" autoFocus value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={commitEdit} onKeyDown={e=>{if(e.key==="Enter")commitEdit();if(e.key==="Escape")setEditCell(null);}}/></td>;
               if(c===undefined) return<td key={i} className="disc">–</td>;
-              return<td key={i} className={"editable "+(isCode(c)?"code":r.discardSet.has(i)?"disc":"")} onClick={()=>startEdit(ev.id,r.sail,r.helm,i,c)}>{isCode(c)?c:r.discardSet.has(i)?`(${c})`:c}</td>;
+              const codeLabel=r.race_codes?.[i]||null;
+              const displayNum=isCode(c)?c:r.discardSet.has(i)?`(${c})`:c;
+              return<td key={i} className={"editable "+(isCode(c)?"code":r.discardSet.has(i)?"disc":"")} onClick={()=>startEdit(ev.id,r.sail,r.helm,i,c)}>
+                {codeLabel&&!isCode(c)
+                  ?<div className="scorecell"><span className="snum">{displayNum}</span><span className="scode">{codeLabel}</span></div>
+                  :displayNum}
+              </td>;
             })}
             <td className="net">{r.net}</td>
           </tr>
@@ -923,7 +1100,10 @@ export default function AthLinkMVP(){
     const nat=athleteNat(name,events);
     const isV=verified[name];
     return(<div className="wrap sec" style={{paddingTop:22}}>
-      <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
+      {view.fromEvent
+        ? (()=>{const fev=events.find(e=>e.id===view.fromEvent);return fev?<button className="back" onClick={()=>go({name:"event",id:view.fromEvent})}><ArrowLeft size={16}/>{fev.name}</button>:null;})()
+        : <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
+      }
       <div className="phead">
         <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
         <div style={{flex:1,minWidth:200}}>
@@ -982,15 +1162,15 @@ export default function AthLinkMVP(){
 
         {importStep==="upload"&&(<>
           <div className="mtabs">
-            <button className={tab==="pdf"?"on":""} onClick={()=>setTab("pdf")}><FileText size={15}/>Upload PDF</button>
+            <button className={tab==="pdf"?"on":""} onClick={()=>setTab("pdf")}><FileText size={15}/>Upload PDF / HTML</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
           </div>
           <div className="mbody">
             {tab==="pdf"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload a results PDF from any source — Sailwave, Manage2sail, SailingResults.net, and more. Multi-fleet PDFs (e.g. Southside) will show a fleet picker first.</p>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload a results PDF or Sailwave HTML file — supports Sailwave, Manage2sail, SailingResults.net and more. Multi-fleet files will show a fleet picker.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose PDF file</>}
-                <input type="file" accept="application/pdf" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handlePdf(e.target.files?.[0])}/>
+                <input type="file" accept="application/pdf,.html,text/html" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handlePdf(e.target.files?.[0])}/>
               </label>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
@@ -1000,7 +1180,7 @@ export default function AthLinkMVP(){
                 <input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="2025 29er Asian Championship" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
               </div>
               <div className="meta-grid three">
-                <div><label>Host Club</label><input value={mf.club} onChange={e=>updMeta("club",e.target.value)} placeholder="RHKYC"/></div>
+                <div><label>Host Country</label><input value={mf.club} onChange={e=>updMeta("club",e.target.value)} placeholder="HKG"/></div>
                 <div><label>Country</label><input value={mf.country} onChange={e=>updMeta("country",e.target.value)} placeholder="HKG"/></div>
                 <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
               </div>
@@ -1086,7 +1266,7 @@ export default function AthLinkMVP(){
             <div className="preview-meta wide" style={{marginBottom:8}}>
               <div><label>Event name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Event name"/></div>
               <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updPMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
-              <div><label>Host Club</label><input value={previewEv.venue||""} onChange={e=>updPMeta("venue",e.target.value)} className={!previewEv.venue?"pmissing":""} placeholder="RHKYC"/></div>
+              <div><label>Host Country</label><input value={previewEv.venue||""} onChange={e=>updPMeta("venue",e.target.value)} className={!previewEv.venue?"pmissing":""} placeholder="HKG"/></div>
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}
@@ -1152,6 +1332,32 @@ export default function AthLinkMVP(){
             </div>
           </div>);
         })()}
+      </div>
+    </div>
+  )}
+
+  {editEvMeta&&(
+    <div className="ov" onClick={()=>setEditEvMeta(null)}>
+      <div className="modal" style={{maxWidth:480}} onClick={e=>e.stopPropagation()}>
+        <div className="mhead"><Pencil size={17}/><h3>Edit event details</h3><button className="x" onClick={()=>setEditEvMeta(null)}><X size={16}/></button></div>
+        <div className="mbody">
+          <div className="meta-grid" style={{gridTemplateColumns:"1fr"}}>
+            <div><label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Event name</label>
+            <input value={editEvMeta.name} onChange={e=>setEditEvMeta(m=>({...m,name:e.target.value}))} style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/></div>
+          </div>
+          <div className="meta-grid three" style={{marginTop:10}}>
+            <div><label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Date</label>
+            <input value={editEvMeta.date} onChange={e=>setEditEvMeta(m=>({...m,date:e.target.value}))} placeholder="dd/mm/yyyy" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/></div>
+            <div><label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Host Country</label>
+            <input value={editEvMeta.country} onChange={e=>setEditEvMeta(m=>({...m,country:e.target.value.toUpperCase()}))} placeholder="HKG" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/></div>
+            <div><label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Discards</label>
+            <input type="number" min="0" max="20" value={editEvMeta.discards} onChange={e=>setEditEvMeta(m=>({...m,discards:e.target.value}))} style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/></div>
+          </div>
+          <div className="mfoot" style={{marginTop:16}}>
+            <button className="btn ghost" onClick={()=>setEditEvMeta(null)}>Cancel</button>
+            <button className="btn cta" onClick={saveEvMeta}><CheckCircle size={15}/>Save changes</button>
+          </div>
+        </div>
       </div>
     </div>
   )}
