@@ -329,21 +329,6 @@ function parseHtmlScoreWithCode(raw){
   if(code) return [code,null];
   return [null,null];
 }
-  if(!raw) return null;
-  const s=raw.trim().replace(/\xa0/g,' ').replace(/&nbsp;/g,' ').trim();
-  if(!s||s==='-'||s==='—') return null;
-  const inner=s.replace(/^\(|\)$/g,'');
-  const parts=inner.split(/[\s\[\]]+/).filter(Boolean);
-  let num=null,code=null;
-  for(const p of parts){
-    const up=p.replace(/[^A-Z]/g,'').toUpperCase();
-    if(SCORE_CODES_SET.has(up)){code=up;}
-    else{const ns=p.replace(/[^\d.]/g,'');if(ns){const n=parseFloat(ns);if(!isNaN(n))num=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}}
-  }
-  if(num!==null) return num;
-  if(code) return code;
-  return null;
-}
 
 function parseHtmlDate(text){
   const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
