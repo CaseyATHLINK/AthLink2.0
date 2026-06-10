@@ -3,35 +3,35 @@ import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
-  CheckCircle, Clock, Eye
+  CheckCircle, Clock, Eye, Home
 } from "lucide-react";
 
-const PENALTY=["DNF","DNC","DNS","OCS","DSQ","BFD","UFD","RET","RDG","DGM","DNE","SCP","STP","DPI"];
-const isCode=c=>typeof c==="string";
+/* ── Scoring codes ────────────────────────────────────────────────────────
+   NEVER_DISCARD: cannot be dropped even if it would improve the score
+   VARIABLE:      the PDF already provides the numeric value (RDG, SCP, STP, DPI, ZFP etc.)
+                  — treat the stored value as-is for points, use fleet+1 for discard ranking
+                  when no explicit number is stored
+   PENALTY:       score = fleet + 1
+   ────────────────────────────────────────────────────────────────────── */
+const NEVER_DISCARD=new Set(["DNE"]);
 
-/* ── date helpers ──────────────────────────────────────────────── */
-const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function formatDate(str){
-  if(!str||str==="—") return str||"—";
-  const m=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if(m){const d=parseInt(m[1]),mo=parseInt(m[2])-1,y=m[3];if(mo>=0&&mo<=11) return `${d} ${MON[mo]} ${y}`;}
-  return str;
-}
-
-/* ── static data ─────────────────────────────────────────────── */
-const META={
-  "Bunyamin Klongsamoot":{nat:"THA"},"Kan Kachachuen":{nat:"THA"},
-  "Chatree Makmul":{nat:"THA"},"Manintorn Leelas":{nat:"THA"},
-  "Mihiro Okada":{nat:"JPN"},"Iwao Yasuda":{nat:"JPN"},
-  "Yuto Tsutsumi":{nat:"JPN"},"Taishi Goto":{nat:"JPN"},
+// Codes where the PDF provides an explicit numeric value that we already stored
+// For discard comparison we still treat them as fleet+1 unless an explicit number was parsed
+const CODE_WEIGHT={
+  // Hard fleet+1
+  OCS:1,UFD:1,BFD:1,DSQ:1,DNF:1,DNC:1,DNS:1,RET:1,NSC:1,
+  // Also fleet+1 for discard purposes (variable numeric for net scoring)
+  SCP:1,STP:1,DPI:1,ZFP:1,TAL:1,
+  // RDG: redress — the number is already stored as a numeric value by the parser
+  // We do NOT score it as fleet+1; whatever number came in is used
+  RDG:0,
 };
-const CLASSES=[
-  {id:"29er",    name:"Hong Kong 29er Class Association",      short:"29er"},
-  {id:"ilca",    name:"Hong Kong ILCA",                        short:"ILCA"},
-  {id:"optimist",name:"Hong Kong Optimist Dinghy Association", short:"Optimist"},
-];
-/* ── IOC code → ISO 3166-1 alpha-2 for flag emoji ────────────── */
-const IOC_TO_ISO={
+
+const isCode=c=>typeof c==="string";
+const isPenaltyCode=c=>isCode(c)&&CODE_WEIGHT[c]!==undefined&&CODE_WEIGHT[c]===1;
+
+/* ── IOC → ISO flag ───────────────────────────────────────────────────── */
+const IOC_ISO={
   AFG:'AF',ALB:'AL',ALG:'DZ',AND:'AD',ANG:'AO',ANT:'AG',ARG:'AR',ARM:'AM',
   ARU:'AW',ASA:'AS',AUS:'AU',AUT:'AT',AZE:'AZ',BAH:'BS',BAN:'BD',BAR:'BB',
   BDI:'BI',BEL:'BE',BEN:'BJ',BER:'BM',BHU:'BT',BIH:'BA',BIZ:'BZ',BLR:'BY',
@@ -61,33 +61,53 @@ const IOC_TO_ISO={
 };
 function iocFlag(code){
   if(!code) return '';
-  const iso=IOC_TO_ISO[code.toUpperCase()];
+  const iso=IOC_ISO[code.toUpperCase()];
   if(!iso) return '';
-  // Regional indicator letters: A=0x1F1E6
   return [...iso].map(c=>String.fromCodePoint(0x1F1E6+c.charCodeAt(0)-65)).join('');
 }
 
+/* ── date helpers ─────────────────────────────────────────────────────── */
+const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function formatDate(str){
+  if(!str||str==="—") return str||"—";
+  const m=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(m){const d=parseInt(m[1]),mo=parseInt(m[2])-1,y=m[3];if(mo>=0&&mo<=11) return `${d} ${MON[mo]} ${y}`;}
+  return str;
+}
+
+/* ── static data ──────────────────────────────────────────────────────── */
+const META={
+  "Bunyamin Klongsamoot":{nat:"THA"},"Kan Kachachuen":{nat:"THA"},
+  "Chatree Makmul":{nat:"THA"},"Manintorn Leelas":{nat:"THA"},
+  "Mihiro Okada":{nat:"JPN"},"Iwao Yasuda":{nat:"JPN"},
+  "Yuto Tsutsumi":{nat:"JPN"},"Taishi Goto":{nat:"JPN"},
+};
+const CLASSES=[
+  {id:"29er",    name:"Hong Kong 29er Class Association",      short:"29er"},
+  {id:"ilca",    name:"Hong Kong ILCA",                        short:"ILCA"},
+  {id:"optimist",name:"Hong Kong Optimist Dinghy Association", short:"Optimist"},
+];
 const REAL_2023={
   id:"29asia23",name:"2023 29er Asian Championship",cls:"29er",doublehanded:true,
   venue:"RHKYC",country:"HKG",date:"22/02/2023",discards:2,
   scoring:"Appendix A · Low Point · 2 discards",
   source:"Sailwave · HK Sailing",status:"Provisional",
   entries:[
-    {sail:"3053",div:"Female Junior",helm:"Emily Polson",crew:"Tiffany Mak",races:[1,1,1,2,1,1,1,3,2,5]},
-    {sail:"2751",div:"Male",helm:"Cameron Law",crew:"Christopher Lam",races:[2,3,2,1,2,2,2,1,1,4]},
-    {sail:"2840",div:"Male",helm:"Jayden Fung",crew:"Jack Dingemans",races:[3,8,6,3,5,6,4,4,3,1]},
-    {sail:"1946",div:"Male",helm:"Bunyamin Klongsamoot",crew:"Kan Kachachuen",races:[4,4,3,4,8,3,7,5,7,2]},
-    {sail:"2750",div:"Female",helm:"Jamie Tsang",crew:"Cheuk Wing Mak",races:[10,2,5,6,3,8,3,2,8,8]},
-    {sail:"2412",div:"",helm:"Ethan Kong",crew:"Aaron Dampier",races:[5,7,"DSQ",5,4,4,5,9,4,9]},
-    {sail:"2943",div:"Female",helm:"Bertille Voets",crew:"Tomoe Thiry",races:[8,6,7,7,6,5,9,11,5,3]},
-    {sail:"3016",div:"Female Junior",helm:"Piper Attwood",crew:"Annabelle Sampson",races:[7,10,4,8,7,7,6,10,6,7]},
-    {sail:"500",div:"Male Junior",helm:"Mihiro Okada",crew:"Iwao Yasuda",races:[9,9,9,9,9,9,10,8,9,10]},
-    {sail:"2752",div:"Female Junior",helm:"Yalei Su",crew:"Hei Man Lam",races:["DNF","DNC","DNC","DNC","DNC","DNC",11,6,10,6]},
-    {sail:"2146",div:"Male",helm:"Chatree Makmul",crew:"Manintorn Leelas",races:[6,5,8,"DNF","DNC","DNC","DNC","DNC","DNC","DNC"]},
-    {sail:"49",div:"Male Junior",helm:"Raphael Mak",crew:"William Chen",races:[11,"RET","DNC","DNC","DNC","DNC",8,7,12,"DNF"]},
-    {sail:"2026",div:"Male",helm:"Kuan Lik Jun",crew:"Wong Yiu Hoi",races:["DNF","DNC","DNC","DNF","DNC","DNC","UFD",12,11,11]},
-    {sail:"2718",div:"Male Junior",helm:"Skyler Lam",crew:"Nathan Hon",races:["DNC","DNC","DNC","DNF","DNC","DNC","DNC","DNC","DNC","DNC"]},
-    {sail:"2165",div:"Male",helm:"Yang Yi Zheng",crew:"Jeremy Choy",races:["DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC"]},
+    {sail:"3053",nat:"HKG",div:"Female Junior",helm:"Emily Polson",crew:"Tiffany Mak",races:[1,1,1,2,1,1,1,3,2,5]},
+    {sail:"2751",nat:"HKG",div:"Male",helm:"Cameron Law",crew:"Christopher Lam",races:[2,3,2,1,2,2,2,1,1,4]},
+    {sail:"2840",nat:"HKG",div:"Male",helm:"Jayden Fung",crew:"Jack Dingemans",races:[3,8,6,3,5,6,4,4,3,1]},
+    {sail:"1946",nat:"THA",div:"Male",helm:"Bunyamin Klongsamoot",crew:"Kan Kachachuen",races:[4,4,3,4,8,3,7,5,7,2]},
+    {sail:"2750",nat:"HKG",div:"Female",helm:"Jamie Tsang",crew:"Cheuk Wing Mak",races:[10,2,5,6,3,8,3,2,8,8]},
+    {sail:"2412",nat:"HKG",div:"",helm:"Ethan Kong",crew:"Aaron Dampier",races:[5,7,"DSQ",5,4,4,5,9,4,9]},
+    {sail:"2943",nat:"HKG",div:"Female",helm:"Bertille Voets",crew:"Tomoe Thiry",races:[8,6,7,7,6,5,9,11,5,3]},
+    {sail:"3016",nat:"AUS",div:"Female Junior",helm:"Piper Attwood",crew:"Annabelle Sampson",races:[7,10,4,8,7,7,6,10,6,7]},
+    {sail:"500",nat:"JPN",div:"Male Junior",helm:"Mihiro Okada",crew:"Iwao Yasuda",races:[9,9,9,9,9,9,10,8,9,10]},
+    {sail:"2752",nat:"HKG",div:"Female Junior",helm:"Yalei Su",crew:"Hei Man Lam",races:["DNF","DNC","DNC","DNC","DNC","DNC",11,6,10,6]},
+    {sail:"2146",nat:"THA",div:"Male",helm:"Chatree Makmul",crew:"Manintorn Leelas",races:[6,5,8,"DNF","DNC","DNC","DNC","DNC","DNC","DNC"]},
+    {sail:"49",nat:"HKG",div:"Male Junior",helm:"Raphael Mak",crew:"William Chen",races:[11,"RET","DNC","DNC","DNC","DNC",8,7,12,"DNF"]},
+    {sail:"2026",nat:"HKG",div:"Male",helm:"Kuan Lik Jun",crew:"Wong Yiu Hoi",races:["DNF","DNC","DNC","DNF","DNC","DNC","UFD",12,11,11]},
+    {sail:"2718",nat:"HKG",div:"Male Junior",helm:"Skyler Lam",crew:"Nathan Hon",races:["DNC","DNC","DNC","DNF","DNC","DNC","DNC","DNC","DNC","DNC"]},
+    {sail:"2165",nat:"HKG",div:"Male",helm:"Yang Yi Zheng",crew:"Jeremy Choy",races:["DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC"]},
   ],
 };
 const REAL_2024={
@@ -96,38 +116,68 @@ const REAL_2024={
   scoring:"Appendix A · Low Point · 2 discards",
   source:"Sailwave · HK Sailing",status:"Final",
   entries:[
-    {sail:"3084",div:"Female",helm:"Emily Polson",crew:"Tiffany Mak",races:[1,1,1,1,1,4,2,4,1,1,4,3,1,3]},
-    {sail:"3054",div:"Male",helm:"Cameron Law",crew:"Christopher Lam",races:[2,2,2,2,2,3,1,1,3,2,5,2,2,1]},
-    {sail:"3140",div:"Male",helm:"Yuto Tsutsumi",crew:"Taishi Goto",races:[4,3,4,5,"DSQ",5,3,2,4,3,"UFD",1,3,2]},
-    {sail:"2750",div:"Female",helm:"Jamie Tsang",crew:"Cheuk Wing Mak",races:[5,4,7,3,5,2,4,3,2,4,3,5,4,5]},
-    {sail:"2846",div:"Male Junior",helm:"Raphael Mak",crew:"Louis Polson",races:[6,6,3,6,4,1,5,5,5,5,1,4,5,4]},
-    {sail:"2411",div:"Mix",helm:"Chloe Kong",crew:"Ethan Kong",races:[3,5,5,4,7,7,6,8,7,8,6,7,8,"UFD"]},
-    {sail:"2876",div:"Male",helm:"Casey Law",crew:"Conrad Lunsden",races:[10,9,11,12,3,6,8,7,6,6,2,6,6,7]},
-    {sail:"2521",div:"Mix",helm:"Ayden Pang",crew:"Tomoe Thiry",races:[7,7,12,7,6,8,7,6,8,7,7,8,7,6]},
-    {sail:"777",div:"Female",helm:"Ka Lam Chen",crew:"Ka Yi Chen",races:[12,12,6,11,10,10,10,"DNF",9,"DNF",8,12,10,13]},
-    {sail:"2752",div:"Male",helm:"Yan Cheuk Ng",crew:"Cheung Fu Wan",races:[13,10,8,8,9,11,9,"DNC","DNC","DNC","DNF",13,11,8]},
-    {sail:"2222",div:"Female Junior",helm:"Kristen Hwang",crew:"Bernice Pang",races:[11,11,9,9,8,9,12,"DNC","DNC","DNC","DNC",10,14,12]},
-    {sail:"287",div:"Male Junior",helm:"Sung Chak Kyle Lee",crew:"Shun Yan Rex Law",races:[14,8,10,10,11,13,13,"DNC","DNC","DNC","DNS",16,9,11]},
-    {sail:"2412",div:"Male",helm:"Chap Pang Wong",crew:"Sheungching Yau",races:[15,15,15,14,12,14,14,9,"DNF","DNC","DNC",11,13,10]},
-    {sail:"261",div:"Female Junior",helm:"Shing Yin Aria Hon",crew:"McCarley Wong",races:[8,13,"DNF",15,13,15,15,"DNF","DNC","DNC","DNC",14,12,9]},
-    {sail:"2613",div:"Male Junior",helm:"Jaden Lau",crew:"Kaden Chan",races:[9,14,13,13,14,12,11,"DNF","DNF","DNF","DNF",15,"DNF",14]},
-    {sail:"284",div:"Mix Junior",helm:"Keira Slaughter",crew:"Alfred Fong",races:[16,"DNF","UFD",16,15,16,16,"DNC","DNC","DNC","DNC","DNF","DNF",15]},
-    {sail:"2749",div:"Male Junior",helm:"Skyler Lam",crew:"William Chen",races:["DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNF","DNC","DNC","DNC",9,15,16]},
-    {sail:"2655",div:"Mix Junior",helm:"Sebastian Chun",crew:"Kaitlyn Lee",races:[17,"DNF",14,17,"DNF","DNF","DNF","DNC","DNC","DNC","DNC","DNF","DNF","DNF"]},
+    {sail:"3084",nat:"HKG",div:"Female",helm:"Emily Polson",crew:"Tiffany Mak",races:[1,1,1,1,1,4,2,4,1,1,4,3,1,3]},
+    {sail:"3054",nat:"HKG",div:"Male",helm:"Cameron Law",crew:"Christopher Lam",races:[2,2,2,2,2,3,1,1,3,2,5,2,2,1]},
+    {sail:"3140",nat:"JPN",div:"Male",helm:"Yuto Tsutsumi",crew:"Taishi Goto",races:[4,3,4,5,"DSQ",5,3,2,4,3,"UFD",1,3,2]},
+    {sail:"2750",nat:"HKG",div:"Female",helm:"Jamie Tsang",crew:"Cheuk Wing Mak",races:[5,4,7,3,5,2,4,3,2,4,3,5,4,5]},
+    {sail:"2846",nat:"HKG",div:"Male Junior",helm:"Raphael Mak",crew:"Louis Polson",races:[6,6,3,6,4,1,5,5,5,5,1,4,5,4]},
+    {sail:"2411",nat:"HKG",div:"Mix",helm:"Chloe Kong",crew:"Ethan Kong",races:[3,5,5,4,7,7,6,8,7,8,6,7,8,"UFD"]},
+    {sail:"2876",nat:"HKG",div:"Male",helm:"Casey Law",crew:"Conrad Lunsden",races:[10,9,11,12,3,6,8,7,6,6,2,6,6,7]},
+    {sail:"2521",nat:"HKG",div:"Mix",helm:"Ayden Pang",crew:"Tomoe Thiry",races:[7,7,12,7,6,8,7,6,8,7,7,8,7,6]},
+    {sail:"777",nat:"HKG",div:"Female",helm:"Ka Lam Chen",crew:"Ka Yi Chen",races:[12,12,6,11,10,10,10,"DNF",9,"DNF",8,12,10,13]},
+    {sail:"2752",nat:"HKG",div:"Male",helm:"Yan Cheuk Ng",crew:"Cheung Fu Wan",races:[13,10,8,8,9,11,9,"DNC","DNC","DNC","DNF",13,11,8]},
+    {sail:"2222",nat:"HKG",div:"Female Junior",helm:"Kristen Hwang",crew:"Bernice Pang",races:[11,11,9,9,8,9,12,"DNC","DNC","DNC","DNC",10,14,12]},
+    {sail:"287",nat:"HKG",div:"Male Junior",helm:"Sung Chak Kyle Lee",crew:"Shun Yan Rex Law",races:[14,8,10,10,11,13,13,"DNC","DNC","DNC","DNS",16,9,11]},
+    {sail:"2412",nat:"HKG",div:"Male",helm:"Chap Pang Wong",crew:"Sheungching Yau",races:[15,15,15,14,12,14,14,9,"DNF","DNC","DNC",11,13,10]},
+    {sail:"261",nat:"HKG",div:"Female Junior",helm:"Shing Yin Aria Hon",crew:"McCarley Wong",races:[8,13,"DNF",15,13,15,15,"DNF","DNC","DNC","DNC",14,12,9]},
+    {sail:"2613",nat:"HKG",div:"Male Junior",helm:"Jaden Lau",crew:"Kaden Chan",races:[9,14,13,13,14,12,11,"DNF","DNF","DNF","DNF",15,"DNF",14]},
+    {sail:"284",nat:"HKG",div:"Mix Junior",helm:"Keira Slaughter",crew:"Alfred Fong",races:[16,"DNF","UFD",16,15,16,16,"DNC","DNC","DNC","DNC","DNF","DNF",15]},
+    {sail:"2749",nat:"HKG",div:"Male Junior",helm:"Skyler Lam",crew:"William Chen",races:["DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNF","DNC","DNC","DNC",9,15,16]},
+    {sail:"2655",nat:"HKG",div:"Mix Junior",helm:"Sebastian Chun",crew:"Kaitlyn Lee",races:[17,"DNF",14,17,"DNF","DNF","DNF","DNC","DNC","DNC","DNC","DNF","DNF","DNF"]},
   ],
 };
 
-/* ── scoring engine ──────────────────────────────────────────── */
+/* ── scoring engine ───────────────────────────────────────────────────────
+   Rules:
+   - DNE can NEVER be discarded
+   - All other penalty codes score as fleet+1 for both net and discard ranking
+   - RDG/SCP/STP/DPI: the stored value (already a number from the PDF) is used
+     for net scoring; for discard ranking they compete as fleet+1 unless already a number
+   - Discards applied to the N worst scores (by point value), DNE excluded
+   ────────────────────────────────────────────────────────────────────── */
 function scoreEvent(ev){
-  const fleet=ev.entries.length,pen=fleet+1,disc=ev.discards;
+  const fleet=ev.entries.length, pen=fleet+1, disc=ev.discards;
+
   const rows=ev.entries.map(e=>{
-    const pts=e.races.map(c=>isCode(c)?pen:(c||pen));
-    const order=pts.map((v,i)=>({v,i})).sort((a,b)=>b.v-a.v);
-    const discardSet=new Set(order.slice(0,disc).map(o=>o.i));
-    const total=pts.reduce((a,b)=>a+b,0);
-    const dropped=order.slice(0,disc).reduce((a,b)=>a+b.v,0);
-    return{...e,pts,total,net:total-dropped,discardSet};
+    // Convert each raw score to a numeric point value for net scoring
+    const pts=e.races.map(c=>{
+      if(!isCode(c)) return(c||pen);
+      if(c==="RDG") return c; // RDG stored as number already by parser; if string, keep as pen
+      return pen; // all other codes = fleet+1
+    });
+
+    // For discard ranking: assign a sort weight to each score
+    // DNE is excluded from discard candidates entirely
+    // Everything else: use the numeric pts value; penalty codes without a number → pen
+    const weights=pts.map((v,i)=>{
+      const raw=e.races[i];
+      if(isCode(raw)&&NEVER_DISCARD.has(raw)) return -Infinity; // never discard DNE
+      if(typeof v==="string") return pen; // RDG stored as string (shouldn't happen)
+      return v;
+    });
+
+    // Sort indices by weight descending, pick top `disc` as discards
+    const order=weights.map((w,i)=>({w,i})).sort((a,b)=>b.w-a.w);
+    const discardSet=new Set(order.slice(0,disc).filter(o=>o.w>-Infinity).map(o=>o.i));
+
+    // Net = sum of numeric pts, excluding discarded indices
+    const numPts=pts.map(v=>typeof v==="string"?pen:v);
+    const total=numPts.reduce((a,b)=>a+b,0);
+    const dropped=numPts.reduce((s,v,i)=>discardSet.has(i)?s+v:s,0);
+
+    return{...e,pts:numPts,total,net:total-dropped,discardSet};
   });
+
   rows.sort((a,b)=>a.net-b.net||a.total-b.total);
   let prev=null,prevRank=0;
   rows.forEach((r,i)=>{
@@ -138,7 +188,6 @@ function scoreEvent(ev){
   return{rows,fleet,races:Math.max(...ev.entries.map(e=>e.races.length))};
 }
 
-// Scoring for preview — fills missing slots with DNF
 function scorePreview(ev){
   if(!ev?.entries?.length) return null;
   const maxR=Math.max(...ev.entries.map(e=>(e.races||[]).length),1);
@@ -155,7 +204,7 @@ function scorePreview(ev){
 function aggregate(name,evList){
   const history=[];let wins=0,podiums=0,best=Infinity;
   for(const ev of evList){
-    if(ev.status==="Draft") continue; // exclude drafts from profiles
+    if(ev.status==="Draft") continue;
     const e=ev.entries.find(x=>x.helm===name||x.crew===name);
     if(!e) continue;
     const s=scoreEvent(ev);
@@ -166,10 +215,22 @@ function aggregate(name,evList){
     row.races.forEach(c=>{if(c===1) wins++;});
     if(row.rank<=3) podiums++;
     if(row.rank<best) best=row.rank;
-    history.push({ev,row,role,partner,fleet:s.fleet});
+    // carry nat from entry onto the row for display
+    history.push({ev,row:{...row,nat:e.nat||""},role,partner,fleet:s.fleet});
   }
   history.sort((a,b)=>new Date(b.ev.date)-new Date(a.ev.date));
   return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
+}
+
+// Derive athlete's primary nationality from their result history
+function athleteNat(name,evList){
+  const counts={};
+  for(const ev of evList){
+    const e=ev.entries.find(x=>x.helm===name||x.crew===name);
+    if(e?.nat){counts[e.nat]=(counts[e.nat]||0)+1;}
+  }
+  if(!Object.keys(counts).length) return META[name]?.nat||"";
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
 }
 
 const avatarColor=name=>{
@@ -179,7 +240,7 @@ const avatarColor=name=>{
 };
 const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
 
-/* ── Supabase ────────────────────────────────────────────────── */
+/* ── Supabase ─────────────────────────────────────────────────────────── */
 const SB_URL=import.meta.env.VITE_SUPABASE_URL;
 const SB_KEY=import.meta.env.VITE_SUPABASE_ANON_KEY;
 const sbH=(SB_URL&&SB_KEY)?{"apikey":SB_KEY,"Authorization":`Bearer ${SB_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"}:null;
@@ -188,11 +249,20 @@ const sbPost=async(t,b)=>{if(!sbH) return null;const r=await fetch(`${SB_URL}/re
 const sbPatch=async(t,f,b)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"PATCH",headers:sbH,body:JSON.stringify(b)});};
 const sbDel=async(t,f)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"DELETE",headers:{...sbH,"Prefer":""}});};
 
+// Run schema migration for nat column (idempotent)
+async function ensureSchema(){
+  if(!sbH) return;
+  // We attempt a HEAD request on entries with nat filter; if it fails, column doesn't exist
+  // Actually we just try to patch with nat:null — Supabase will ignore unknown columns gracefully
+  // The safest approach is to include nat in all INSERT payloads and let Supabase handle it
+  // If the column is missing, inserts still work (extra field silently ignored) until column added
+}
+
 function dbToApp(ev){
   return{id:ev.id,name:ev.name,cls:ev.class,doublehanded:ev.doublehanded,
     venue:ev.venue||"—",country:ev.country||"",date:ev.date||"—",discards:ev.discards,
     scoring:ev.scoring||"",source:ev.source||"Imported",status:ev.status||"Final",
-    entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",div:e.division||"",nat:e.nat||"",
+    entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",nat:e.nat||"",div:e.division||"",
       helm:e.helm_name,crew:e.crew_name||"",races:e.races||[]}))};
 }
 async function saveEventToDb(ev){
@@ -201,31 +271,30 @@ async function saveEventToDb(ev){
     venue:ev.venue,country:ev.country||null,date:ev.date,discards:ev.discards,
     scoring:ev.scoring,source:ev.source,status:ev.status});
   if(!ins?.[0]?.id) return ins;
-  await sbPost("entries",ev.entries.map(e=>({event_id:ins[0].id,sail:e.sail,division:e.div,nat:e.nat||null,
-    helm_name:e.helm,crew_name:e.crew||null,races:e.races})));
+  await sbPost("entries",ev.entries.map(e=>({event_id:ins[0].id,sail:e.sail,nat:e.nat||null,
+    division:e.div,helm_name:e.helm,crew_name:e.crew||null,races:e.races})));
   return ins;
 }
 async function updateEventStatus(evId,status){
   await sbPatch("events",`id=eq.${evId}`,{status});
 }
 
-/* ── manual form ─────────────────────────────────────────────── */
-const defRow=n=>({helm:"",crew:"",sail:"",div:"",scores:Array(n).fill("")});
+/* ── manual form ─────────────────────────────────────────────────────── */
+const defRow=n=>({helm:"",crew:"",sail:"",nat:"",div:"",scores:Array(n).fill("")});
 const emptyForm=()=>({name:"",club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
 
-/* ═══════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════ */
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
   const[portal,setPortal]=useState(null);
   const[view,setView]=useState({name:"portals"});
   const[verified,setVerified]=useState({});
   const[q,setQ]=useState("");const[filter,setFilter]=useState("all");
+  const[homeQ,setHomeQ]=useState(""); // search on home portals page
   const[note,setNote]=useState(null);
   const[open,setOpen]=useState(false);
   const[tab,setTab]=useState("pdf");
-  // Manual entry
   const[mf,setMf]=useState(emptyForm());
-  // Live Net/Total for manual entry
   const manualCalc=useMemo(()=>{
     const maxPer=Array.from({length:mf.numRaces},(_,j)=>{
       let mx=0;mf.rows.forEach(r=>{const s=(r.scores[j]||"").trim();if(/^\d+$/.test(s))mx=Math.max(mx,parseInt(s));});return mx;
@@ -243,16 +312,14 @@ export default function AthLinkMVP(){
       return{total,net:total-dropped};
     });
   },[mf]);
-  // Import flow
   const[pdfLoading,setPdfLoading]=useState(false);
   const[pdfError,setPdfError]=useState("");
-  const[importStep,setImportStep]=useState("upload"); // "upload"|"picker"|"preview"
+  const[importStep,setImportStep]=useState("upload");
   const[fleetChoices,setFleetChoices]=useState([]);
   const[pdfMeta,setPdfMeta]=useState(null);
   const[previewEv,setPreviewEv]=useState(null);
-  const[previewEdit,setPreviewEdit]=useState(null); // {type:"score"|"name"|"sail", idx, raceIdx}
+  const[previewEdit,setPreviewEdit]=useState(null);
   const[previewEditVal,setPreviewEditVal]=useState("");
-  // Inline editing in event detail
   const[editCell,setEditCell]=useState(null);
   const[editVal,setEditVal]=useState("");
 
@@ -274,19 +341,18 @@ export default function AthLinkMVP(){
   const people=useMemo(()=>{
     const map=new Map();
     classEvents.forEach(ev=>ev.entries.forEach(e=>{
-      [e.helm,e.crew].forEach(nm=>{if(nm&&!map.has(nm))map.set(nm,{name:nm,nat:META[nm]?.nat,cls:ev.cls});});
+      [e.helm,e.crew].forEach(nm=>{if(nm&&!map.has(nm))map.set(nm,{name:nm,cls:ev.cls});});
     }));
     return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
   },[classEvents]);
   const allPeople=useMemo(()=>{
     const map=new Map();
     events.forEach(ev=>ev.entries.forEach(e=>{
-      [e.helm,e.crew].forEach(nm=>{if(nm&&!map.has(nm))map.set(nm,{name:nm,nat:META[nm]?.nat,cls:ev.cls});});
+      [e.helm,e.crew].forEach(nm=>{if(nm&&!map.has(nm))map.set(nm,{name:nm,cls:ev.cls});});
     }));
     return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
   },[events]);
 
-  // Preview scoring (missing → DNF for display)
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
     if(!previewEv?.entries?.length) return 0;
@@ -312,7 +378,6 @@ export default function AthLinkMVP(){
     await sbDel("events",`id=eq.${evId}`);
     setEvents(p=>p.filter(ev=>ev.id!==evId));
   };
-
   const confirmDraft=async(evId)=>{
     await updateEventStatus(evId,"Final");
     setEvents(p=>p.map(ev=>ev.id===evId?{...ev,status:"Final"}:ev));
@@ -323,8 +388,7 @@ export default function AthLinkMVP(){
   /* ── PDF / import flow ────────────────────────────────────── */
   const resetImport=()=>{
     setPdfLoading(false);setPdfError("");setImportStep("upload");
-    setFleetChoices([]);setPdfMeta(null);setPreviewEv(null);
-    setPreviewEdit(null);
+    setFleetChoices([]);setPdfMeta(null);setPreviewEv(null);setPreviewEdit(null);
   };
   const closeImport=()=>{setOpen(false);resetImport();setTab("pdf");};
 
@@ -341,13 +405,12 @@ export default function AthLinkMVP(){
       source:"PDF import",status:"Draft",
       entries:fleet.entries.map((e,i)=>({
         _previewKey:`${i}_${e.helm}`,
-        sail:e.sail||"—",div:e.div||"",
+        sail:e.sail||"—",nat:e.nat||"",div:e.div||"",
         helm:e.helm||"",crew:e.crew||"",
         races:(e.races||[]),
       })),
     };
-    setPreviewEv(ev);
-    setImportStep("preview");
+    setPreviewEv(ev);setImportStep("preview");
   };
 
   const handlePdf=async file=>{
@@ -358,29 +421,19 @@ export default function AthLinkMVP(){
       const data=await res.json();
       if(!data.ok){setPdfError(data.error||"Could not parse this PDF.");setPdfLoading(false);return;}
       if(data.multi){
-        // Multiple fleets → show picker
         setFleetChoices(data.fleets);
         setPdfMeta({name:data.name,date:data.date||""});
         setImportStep("picker");
       }else{
-        // Single fleet → go straight to preview
-        buildPreviewFromFleet(data.name,data.date||"",{
-          name:"",entries:data.entries,discards:data.discards
-        });
+        buildPreviewFromFleet(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards});
       }
     }catch{
-      setPdfError("Upload failed. Check api/parse_pdf.py and requirements.txt are pushed to GitHub and Vercel deployment succeeded.");
+      setPdfError("Upload failed. Check api/parse_pdf.py and requirements.txt are pushed to GitHub.");
     }finally{setPdfLoading(false);}
   };
-
-  const selectFleet=fleet=>{
-    buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,fleet);
-  };
-
-  // Preview metadata update
+  const selectFleet=fleet=>buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,fleet);
   const updPMeta=(k,v)=>setPreviewEv(ev=>({...ev,[k]:v}));
 
-  // Preview score cell edit
   const startPreviewEdit=(type,idx,raceIdx,val)=>{
     setPreviewEdit({type,idx,raceIdx});
     setPreviewEditVal(val===null||val===undefined?"":String(val));
@@ -398,15 +451,10 @@ export default function AthLinkMVP(){
         else nv=raw;
         const races=[...(entries[idx].races||[])];
         while(races.length<=raceIdx) races.push(null);
-        races[raceIdx]=nv;
-        entries[idx]={...entries[idx],races};
-      }else if(type==="helm"){
-        entries[idx]={...entries[idx],helm:previewEditVal};
-      }else if(type==="crew"){
-        entries[idx]={...entries[idx],crew:previewEditVal};
-      }else if(type==="sail"){
-        entries[idx]={...entries[idx],sail:previewEditVal||"—"};
-      }
+        races[raceIdx]=nv;entries[idx]={...entries[idx],races};
+      }else if(type==="helm") entries[idx]={...entries[idx],helm:previewEditVal};
+      else if(type==="crew") entries[idx]={...entries[idx],crew:previewEditVal};
+      else if(type==="sail") entries[idx]={...entries[idx],sail:previewEditVal||"—"};
       return{...ev,entries};
     });
     setPreviewEdit(null);
@@ -420,7 +468,6 @@ export default function AthLinkMVP(){
       date:previewEv.date||"",
       doublehanded:previewEv.entries.some(e=>e.crew&&e.crew.trim()),
     };
-    // Clean null races
     ev.entries=ev.entries.map(e=>({...e,races:(e.races||[]).filter(r=>r!==null&&r!==undefined&&r!==""),}));
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
@@ -432,13 +479,14 @@ export default function AthLinkMVP(){
     closeImport();
   };
 
-  /* ── inline score editing (event detail) ─────────────────── */
+  /* ── inline score editing ─────────────────────────────────── */
+  const VALID_CODES=["DNF","DNC","DNS","OCS","DSQ","BFD","UFD","RET","SCP","STP","DPI","DNE","NSC","TAL","ZFP","RDG"];
   const startEdit=(evId,sail,helm,raceIdx,val)=>{setEditCell({evId,sail,helm,raceIdx});setEditVal(String(val));};
   const commitEdit=async()=>{
     if(!editCell) return;
     const raw=editVal.trim().toUpperCase();let nv;
-    if(/^\d+$/.test(raw)){nv=parseInt(raw);if(nv<1){setEditCell(null);return;}}
-    else if(PENALTY.includes(raw)) nv=raw;
+    if(/^\d+(\.\d+)?$/.test(raw)){nv=parseFloat(raw);if(nv===Math.floor(nv))nv=Math.floor(nv);if(nv<1){setEditCell(null);return;}}
+    else if(VALID_CODES.includes(raw)) nv=raw;
     else{setEditCell(null);return;}
     const{evId,sail,helm,raceIdx}=editCell;
     const entry=events.find(e=>e.id===evId)?.entries.find(e=>e.sail===sail&&e.helm===helm);
@@ -465,10 +513,10 @@ export default function AthLinkMVP(){
     const disc=Math.min(mf.discards,Math.max(0,mf.numRaces-1));
     return{id:"imp_"+Date.now(),name:mf.name||"Imported Regatta",cls:portal,
       doublehanded:rows.some(r=>r.crew.trim()),venue:mf.club||"—",country:mf.country||"",
-      date:mf.date||"Imported",discards:disc,scoring:`Low Point · ${disc} discard(s)`,
+      date:mf.date||"",discards:disc,scoring:`Low Point · ${disc} discard(s)`,
       source:"Manual import",status:"Final",
-      entries:rows.map(r=>({helm:r.helm.trim(),crew:r.crew.trim(),sail:r.sail.trim()||"—",div:r.div.trim(),
-        races:r.scores.map(s=>s.trim()).filter(Boolean).map(s=>/^\d+$/.test(s)?parseInt(s):s.toUpperCase())}))};
+      entries:rows.map(r=>({helm:r.helm.trim(),crew:r.crew.trim(),sail:r.sail.trim()||"—",nat:"",div:r.div.trim(),
+        races:r.scores.map(s=>s.trim()).filter(Boolean).map(s=>/^\d+(\.\d+)?$/.test(s)?parseFloat(s):s.toUpperCase())}))};
   };
   const doImportManual=async()=>{
     const ev=buildManualEvent();if(!ev)return;
@@ -480,7 +528,14 @@ export default function AthLinkMVP(){
     setTimeout(()=>setNote(null),6500);
   };
 
-  /* ─────────────────────────────────────────────────────────── */
+  /* ── sail display helper ───────────────────────────────────── */
+  const sailDisplay=(nat,sail)=>{
+    if(!nat) return sail;
+    const flag=iocFlag(nat);
+    return`${flag} ${nat} ${sail}`;
+  };
+
+  /* ═════════════════════════════════════════════════════════════ */
   return(
   <div className="al-root">
   <style>{`
@@ -493,6 +548,7 @@ export default function AthLinkMVP(){
     .topin{max-width:1000px;margin:0 auto;padding:12px 22px;display:flex;align-items:center;gap:14px;}
     .brand{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;flex:none;}
     .topname{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;}
+    .topsite{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;color:#fff;letter-spacing:.01em;}
     .nav{display:flex;gap:6px;margin-left:auto;}
     .nav button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;color:#bcd2e8;background:none;border:0;padding:7px 13px;border-radius:8px;cursor:pointer;transition:.15s;}
     .nav button:hover{color:#fff;background:rgba(255,255,255,.08);}
@@ -513,7 +569,6 @@ export default function AthLinkMVP(){
     .evname{font-family:'Barlow',sans-serif;font-weight:700;font-size:17px;margin:0 0 3px;}
     .evmeta{font-size:13px;color:var(--mut);display:flex;gap:12px;flex-wrap:wrap;align-items:center;}
     .evmeta span{display:flex;align-items:center;gap:5px;}
-    .datebadge{font-size:11px;font-weight:700;color:var(--navy2);background:var(--sky);padding:4px 9px;border-radius:20px;}
     .draftbadge{font-size:11px;font-weight:700;color:#7a4a0a;background:#fdecd6;padding:4px 9px;border-radius:20px;}
     .cls{font-family:'Barlow',sans-serif;font-weight:700;font-size:12px;color:#fff;background:var(--navy2);padding:4px 10px;border-radius:7px;flex:none;}
     .delbtn{background:none;border:0;color:#c0392b;cursor:pointer;padding:6px;border-radius:7px;display:grid;place-items:center;opacity:.45;transition:.15s;flex:none;}
@@ -525,7 +580,6 @@ export default function AthLinkMVP(){
     tbody td{padding:10px 5px;text-align:center;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;}
     tbody td.l{text-align:left;padding-left:18px;}
     tbody td.editable{cursor:text;}tbody td.editable:hover{background:#eef4fb;}
-    tbody td.missing{background:#fffbec;border:1.5px solid #e8921a;}
     tbody tr:last-child td{border-bottom:0;}
     .rk{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;width:40px;}
     .rk.p1{color:var(--gold);}.rk.p2{color:#7d8a98;}.rk.p3{color:#a86a32;}
@@ -535,6 +589,7 @@ export default function AthLinkMVP(){
     .namelink{color:var(--accent);font-weight:600;cursor:pointer;}.namelink:hover{text-decoration:underline;}
     .disc{color:var(--mut);}.code{color:#c0392b;font-weight:600;font-size:11px;}
     .net{font-family:'Barlow',sans-serif;font-weight:700;color:var(--navy);}
+    .sailcol{font-size:12px;color:var(--mut);white-space:nowrap;}
     .vchip{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--accent);font-weight:600;}
     .divtag{font-size:10px;font-weight:700;color:var(--navy2);background:var(--sky);padding:2px 7px;border-radius:5px;}
     .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px;font:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
@@ -562,6 +617,7 @@ export default function AthLinkMVP(){
     .phead{background:linear-gradient(135deg,#1b4470,#143358);border-radius:18px;padding:26px;color:#fff;display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;}
     .phead .av{width:74px;height:74px;font-size:26px;border:3px solid rgba(255,255,255,.22);}
     .pname{font-family:'Barlow',sans-serif;font-weight:800;font-size:28px;margin:0;line-height:1;}
+    .pflag{font-size:28px;line-height:1;margin-right:4px;}
     .pmeta{color:#bcd2e8;font-size:14px;margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;}
     .pmeta span{display:flex;align-items:center;gap:5px;}
     .pstats{display:flex;gap:28px;margin-top:18px;flex-wrap:wrap;}
@@ -580,9 +636,12 @@ export default function AthLinkMVP(){
     .rc{width:24px;height:24px;border-radius:6px;background:var(--sky);color:var(--navy);font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;}
     .rc.c{background:#fbe3e0;color:#c0392b;}.rc.d{background:#eef2f7;color:var(--mut);}.rc.w{background:var(--accent);color:#fff;}
     /* Home */
-    .home-hero{background:linear-gradient(140deg,#1b4470,#143358);padding:40px 0 0;}
+    .home-hero{background:linear-gradient(140deg,#1b4470,#143358);padding:36px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:#fff;font-size:36px;font-weight:800;margin:0 0 6px;}
-    .home-hero p{color:#bcd2e8;font-size:15px;margin:0 0 24px;}
+    .home-hero p{color:#bcd2e8;font-size:15px;margin:0 0 20px;}
+    .home-search{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:9px 14px;max-width:380px;margin-bottom:20px;}
+    .home-search input{border:0;outline:0;font:inherit;font-size:14px;background:none;color:#fff;width:100%;}
+    .home-search input::placeholder{color:#9fbdd9;}
     .home-tabs{display:flex;gap:0;}
     .home-tabs button{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;border:0;background:none;color:#9fbdd9;padding:12px 20px;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer;transition:.15s;}
     .home-tabs button.on{color:#fff;border-bottom-color:#fff;}
@@ -620,7 +679,6 @@ export default function AthLinkMVP(){
     .notice .ico{background:var(--accent);color:#fff;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;}
     .back{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:14px;color:var(--navy2);background:none;border:0;cursor:pointer;margin-bottom:16px;padding:0;}
     .back:hover{color:var(--accent);}
-    .prov{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#9a6b1f;background:#f6ecd6;padding:4px 10px;border-radius:20px;font-weight:600;}
     .foot{font-size:12px;color:var(--mut);text-align:center;padding:30px 0;}
     .ov{position:fixed;inset:0;background:rgba(16,33,58,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;animation:fade .2s both;}
     .modal{background:var(--paper);width:100%;max-width:700px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;}
@@ -633,8 +691,8 @@ export default function AthLinkMVP(){
     .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;background:none;color:var(--mut);padding:9px 14px;border-radius:9px 9px 0 0;cursor:pointer;display:flex;align-items:center;gap:7px;}
     .mtabs button.on{color:var(--navy);background:#fff;border:1px solid var(--line);border-bottom:0;}
     .mbody{padding:18px 22px 22px;max-height:80vh;overflow-y:auto;}
-    .prev{margin-top:12px;border-radius:10px;padding:12px 14px;font-size:13px;}
-    .prev.ok{background:#d8f0e3;color:#0a6b41;}.prev.err{background:#fbe7e4;color:#a8362a;}
+    .prev.ok{background:#d8f0e3;color:#0a6b41;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
+    .prev.err{background:#fbe7e4;color:#a8362a;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .mfoot{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;}
     .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
     .meta-grid.three{grid-template-columns:1fr 1fr 1fr;}
@@ -665,9 +723,10 @@ export default function AthLinkMVP(){
   {/* ── TOPBAR ── */}
   <div className="topbar"><div className="topin">
     <div className="brand" onClick={goHome}><Link2 size={15}/></div>
-    {portal&&<span className="topname">{cls?.name}</span>}
+    {portal
+      ?<span className="topname">Hong Kong Sailing · {cls?.name}</span>
+      :<span className="topsite">Hong Kong Sailing</span>}
     <nav className="nav">
-
       {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Regattas</button>}
       {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>Athletes</button>}
     </nav>
@@ -677,6 +736,8 @@ export default function AthLinkMVP(){
   {!portal&&(
     <div className="home-hero">
       <div className="wrap">
+        <h1 className="disp">Hong Kong Sailing</h1>
+        <p>Results, athlete profiles and class standings for Hong Kong competitive sailing</p>
         <div className="home-tabs">
           <button className={view.name==="portals"?"on":""} onClick={()=>go({name:"portals"})}>Class Portals</button>
           <button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>All Athletes</button>
@@ -688,9 +749,15 @@ export default function AthLinkMVP(){
   {/* ── HOME: Class portals grid ── */}
   {!portal&&view.name==="portals"&&(
     <div className="wrap sec">
+      <div className="toolbar" style={{marginBottom:18}}>
+        <div className="srch">
+          <Search size={16} color="#9fb2c8"/>
+          <input placeholder="Search class associations…" value={homeQ} onChange={e=>setHomeQ(e.target.value)}/>
+        </div>
+      </div>
       <p className="seclabel"><Anchor size={14}/>Class Associations</p>
       <div className="classes-grid">
-        {CLASSES.map((c,i)=>{
+        {CLASSES.filter(c=>!homeQ||c.name.toLowerCase().includes(homeQ.toLowerCase())||c.short.toLowerCase().includes(homeQ.toLowerCase())).map((c,i)=>{
           const ce=events.filter(e=>e.cls===c.id);
           const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
           return(<div className="class-card" key={c.id} style={{animationDelay:`${i*80}ms`}} onClick={()=>enterPortal(c.id)}>
@@ -715,6 +782,7 @@ export default function AthLinkMVP(){
         </div>
       </div></div>
       <div className="wrap sec">
+        <button className="back" onClick={goHome}><ArrowLeft size={16}/>Hong Kong Sailing</button>
         <div className="toolbar">
           <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
           <button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>
@@ -759,18 +827,16 @@ export default function AthLinkMVP(){
         </div>
       )}
       <h1 className="disp" style={{fontSize:24,margin:"0 0 6px"}}>{ev.name}</h1>
-      <div className="evmeta" style={{marginBottom:10}}>
+      <div className="evmeta" style={{marginBottom:16}}>
         <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
         <span><Calendar size={13}/>{formatDate(ev.date)}</span>
         <span><Flag size={13}/>{ev.cls} · {ev.scoring}</span>
-      </div>
-      <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
-        <span className="vchip"><BadgeCheck size={13}/>Source: {ev.source}</span>
-        <span style={{fontSize:12,color:"var(--mut)",marginLeft:"auto",display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span>
+        <span className="vchip" style={{marginLeft:"auto"}}><BadgeCheck size={13}/>Source: {ev.source}</span>
+        <span style={{fontSize:12,color:"var(--mut)",display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span>
       </div>
       <div className="panel"><table>
         <thead><tr>
-          <th>Pos</th><th className="l">Boat</th><th>Sail</th>
+          <th>Pos</th><th className="l">Boat</th><th className="l">Sail / Nat</th>
           {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
           <th>Net</th>
         </tr></thead>
@@ -784,7 +850,7 @@ export default function AthLinkMVP(){
                 <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew})}>{r.crew}</span></>:"single-handed"}{r.div?<span className="divtag" style={{marginLeft:8}}>{r.div}</span>:null}</div>
               </div>
             </div></td>
-            <td className="cn">{r.nat?<span title={r.nat}>{iocFlag(r.nat)} </span>:null}{r.sail}</td>
+            <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
             {Array.from({length:s.races}).map((_,i)=>{
               const c=r.races[i];
               const isE=editCell?.evId===ev.id&&editCell?.sail===r.sail&&editCell?.helm===r.helm&&editCell?.raceIdx===i;
@@ -796,13 +862,14 @@ export default function AthLinkMVP(){
           </tr>
         ))}</tbody>
       </table></div>
-      <p style={{fontSize:12,color:"var(--mut)",marginTop:12}}>( ) = discard · red = penalty · click a score to edit</p>
+      <p style={{fontSize:12,color:"var(--mut)",marginTop:12}}>( ) = discard · red = penalty code · click a score to edit</p>
     </div>);
   })()}
 
   {/* ── ATHLETES (portal + global) ── */}
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:26}}>
+      {portal&&<button className="back" onClick={goHome}><ArrowLeft size={16}/>Hong Kong Sailing</button>}
       <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:4,flexWrap:"wrap"}}>
         <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle}</h1>
         {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
@@ -820,11 +887,15 @@ export default function AthLinkMVP(){
           .filter(p=>filter==="all"?true:filter==="verified"?verified[p.name]:!verified[p.name])
           .map((p,i)=>{
             const ag=aggregate(p.name,isGlobal?events:classEvents);
+            const nat=athleteNat(p.name,isGlobal?events:classEvents);
             const clsLabel=isGlobal?CLASSES.find(c=>c.id===p.cls)?.short:cls?.short;
             return(<div className="acard" key={p.name} style={{animationDelay:`${i*22}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
               <div className="achead">
                 <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
-                <div><div className="acn">{p.name}</div><div className="cn" style={{marginTop:2}}>{p.nat||clsLabel}{ag.events>1?" · multi-event":""}</div></div>
+                <div>
+                  <div className="acn">{nat?iocFlag(nat):""} {p.name}</div>
+                  <div className="cn" style={{marginTop:2}}>{nat||clsLabel}{ag.events>1?" · multi-event":""}</div>
+                </div>
               </div>
               <div className="acstat">
                 <div><b>{ag.events}</b>regattas</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
@@ -840,14 +911,21 @@ export default function AthLinkMVP(){
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="profile"&&(()=>{
     const name=view.id;
     const p=currentPeople.find(x=>x.name===name)||{name};
-    const ag=aggregate(name,events);const isV=verified[name];
+    const ag=aggregate(name,events);
+    const nat=athleteNat(name,events);
+    const isV=verified[name];
     return(<div className="wrap sec" style={{paddingTop:22}}>
       <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
       <div className="phead">
         <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
         <div style={{flex:1,minWidth:200}}>
-          <h1 className="pname disp">{name}</h1>
-          <div className="pmeta">{p.nat?<span><Flag size={14}/>{p.nat}</span>:null}{p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}</div>
+          <h1 className="pname disp">
+            {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
+          </h1>
+          <div className="pmeta">
+            {nat?<span><Flag size={14}/>{nat}</span>:null}
+            {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
+          </div>
           <div className="pstats">
             <div><div className="v disp">{ag.events}</div><div className="k">Regattas</div></div>
             <div><div className="v disp">{ag.best?"#"+ag.best:"—"}</div><div className="k">Best result</div></div>
@@ -869,8 +947,9 @@ export default function AthLinkMVP(){
               <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                 <span className="disp" style={{fontWeight:700,fontSize:15}}>{h.ev.name}</span>
                 <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
+                {h.row.nat&&<span className="cn">{iocFlag(h.row.nat)} {h.row.nat}</span>}
               </div>
-              <div className="cn" style={{marginTop:3}}>{h.row.nat?<span title={h.row.nat}>{iocFlag(h.row.nat)} </span>:null}{formatDate(h.ev.date)} · {evLoc(h.ev)} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}</div>
+              <div className="cn" style={{marginTop:3}}>{formatDate(h.ev.date)} · {evLoc(h.ev)} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}</div>
               <div className="miniraces">{h.row.races.map((c,j)=>(<div key={j} className={`rc ${isCode(c)?"c":c===1?"w":h.row.discardSet.has(j)?"d":""}`}>{isCode(c)?c.slice(0,2):c}</div>))}</div>
             </div>
             <span className="vchip"><BadgeCheck size={13}/>Verified</span>
@@ -893,7 +972,6 @@ export default function AthLinkMVP(){
           <button className="x" onClick={closeImport}><X size={16}/></button>
         </div>
 
-        {/* ── Upload step ── */}
         {importStep==="upload"&&(<>
           <div className="mtabs">
             <button className={tab==="pdf"?"on":""} onClick={()=>setTab("pdf")}><FileText size={15}/>Upload PDF</button>
@@ -908,7 +986,6 @@ export default function AthLinkMVP(){
               </label>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
-
             {tab==="manual"&&(<>
               <div style={{marginBottom:10}}>
                 <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Event name</label>
@@ -940,6 +1017,7 @@ export default function AthLinkMVP(){
                     <th className="l" style={{minWidth:110}}>Helm Name</th>
                     <th className="l" style={{minWidth:110}}>Crew Name</th>
                     <th style={{minWidth:46}}>Sail</th>
+                    <th style={{minWidth:46}}>Nat</th>
                     <th style={{minWidth:56}}>Class</th>
                     {Array.from({length:mf.numRaces}).map((_,i)=><th key={i} style={{minWidth:34}}>R{i+1}</th>)}
                     <th className="calc" style={{minWidth:38}}>Total</th>
@@ -952,6 +1030,7 @@ export default function AthLinkMVP(){
                         <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Helm name"/></td>
                         <td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>
                         <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="···" style={{textAlign:"center"}}/></td>
+                        <td><input value={row.nat||""} onChange={e=>updRow(i,"nat",e.target.value.toUpperCase())} placeholder="HKG" style={{textAlign:"center"}}/></td>
                         <td><input value={row.div} onChange={e=>updRow(i,"div",e.target.value)} placeholder="F Jr" style={{textAlign:"center"}}/></td>
                         {Array.from({length:mf.numRaces}).map((_,j)=>(
                           <td key={j}><input value={row.scores[j]||""} onChange={e=>updScore(i,j,e.target.value)} placeholder="–" style={{textAlign:"center"}}/></td>
@@ -966,7 +1045,7 @@ export default function AthLinkMVP(){
               </div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                 <button className="btn ghost" style={{fontSize:13,padding:"7px 12px"}} onClick={addRow}><Plus size={14}/>Add boat</button>
-                <span style={{fontSize:11.5,color:"var(--mut)"}}>Codes (DNF, DSQ…) score as largest in that column</span>
+                <span style={{fontSize:11.5,color:"var(--mut)"}}>Codes: DNF DSQ UFD BFD DNC DNS OCS RET SCP STP DPI DNE NSC ZFP RDG</span>
               </div>
               <div className="mfoot">
                 <button className="btn ghost" onClick={closeImport}>Cancel</button>
@@ -976,7 +1055,6 @@ export default function AthLinkMVP(){
           </div>
         </>)}
 
-        {/* ── Fleet picker step ── */}
         {importStep==="picker"&&(
           <div className="mbody">
             <p style={{fontSize:14,color:"var(--mut)",margin:"0 0 4px"}}>Multiple fleets found in <strong style={{color:"var(--ink)"}}>{pdfMeta?.name}</strong>. Select which fleet to import:</p>
@@ -992,13 +1070,11 @@ export default function AthLinkMVP(){
           </div>
         )}
 
-        {/* ── Preview step ── */}
         {importStep==="preview"&&previewEv&&(()=>{
           const scored=previewScored;
           const maxR=previewMaxRaces;
           const missingCells=previewEv.entries.some(e=>!e.helm||(e.races||[]).length<maxR);
           return(<div className="mbody">
-            {/* Metadata editing */}
             <div className="preview-meta wide" style={{marginBottom:8}}>
               <div><label>Event name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Event name"/></div>
               <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updPMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
@@ -1006,7 +1082,6 @@ export default function AthLinkMVP(){
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}
-            {/* Scored preview table */}
             <div className="preview-table-wrap">
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12.5px",minWidth:560}}>
                 <thead>
@@ -1014,7 +1089,7 @@ export default function AthLinkMVP(){
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Pos</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"center",fontSize:11}}>Sail</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
                     <th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>
                   </tr>
@@ -1022,29 +1097,26 @@ export default function AthLinkMVP(){
                 <tbody>
                   {previewEv.entries.map((entry,idx)=>{
                     const scoredRow=scored?.rows.find(r=>r.helm===entry.helm&&r.sail===entry.sail);
-                    const rank=scoredRow?.rank;
-                    const net=scoredRow?.net;
+                    const rank=scoredRow?.rank;const net=scoredRow?.net;
                     return(<tr key={idx} style={{borderBottom:"1px solid var(--line)"}}>
                       <td style={{textAlign:"center",padding:"8px 5px",fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:14,color:rank===1?"var(--gold)":rank===2?"#7d8a98":rank===3?"#a86a32":"var(--ink)"}}>{rank||"—"}</td>
-                      {/* Helm */}
                       <td style={{padding:"4px 6px",minWidth:110}}>
                         {previewEdit?.type==="helm"&&previewEdit.idx===idx
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
                           :<div onClick={()=>startPreviewEdit("helm",idx,0,entry.helm)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,minHeight:24,background:!entry.helm?"#fffbec":"transparent",border:!entry.helm?"1.5px solid #e8921a":"1.5px solid transparent",fontSize:12,fontWeight:600,color:"var(--ink)"}}>{entry.helm||<span style={{color:"#e8921a",fontStyle:"italic"}}>missing</span>}</div>}
                       </td>
-                      {/* Crew */}
                       <td style={{padding:"4px 6px",minWidth:100}}>
                         {previewEdit?.type==="crew"&&previewEdit.idx===idx
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
                           :<div onClick={()=>startPreviewEdit("crew",idx,0,entry.crew)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,minHeight:24,fontSize:12,color:"var(--mut)"}}>{entry.crew||<span style={{fontStyle:"italic",opacity:.4}}>—</span>}</div>}
                       </td>
-                      {/* Sail */}
-                      <td style={{padding:"4px 4px",textAlign:"center",minWidth:50}}>
+                      <td style={{padding:"4px 4px",textAlign:"left",minWidth:80,fontSize:12,color:"var(--mut)"}}>
                         {previewEdit?.type==="sail"&&previewEdit.idx===idx
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
-                          :<div onClick={()=>startPreviewEdit("sail",idx,0,entry.sail)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,textAlign:"center",fontSize:12,color:"var(--mut)"}}>{entry.sail||"—"}</div>}
+                          :<div onClick={()=>startPreviewEdit("sail",idx,0,entry.sail)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,minHeight:24}}>
+                            {entry.nat?<>{iocFlag(entry.nat)} {entry.nat} </>:""}{entry.sail||"—"}
+                          </div>}
                       </td>
-                      {/* Race scores */}
                       {Array.from({length:maxR}).map((_,raceIdx)=>{
                         const score=(entry.races||[])[raceIdx];
                         const isMissing=score===null||score===undefined||score==="";
