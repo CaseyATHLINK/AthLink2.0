@@ -90,8 +90,8 @@ const CLASSES=[
 const REAL_2023={
   id:"29asia23",name:"2023 29er Asian Championship",cls:"29er",doublehanded:true,
   venue:"RHKYC",country:"HKG",date:"22/02/2023",discards:2,
-  scoring:"Appendix A · Low Point · 2 discards",
-  source:"Sailwave · HK Sailing",status:"Provisional",
+  scoring:"Appendix A",
+  source:"",status:"Provisional",
   entries:[
     {sail:"3053",nat:"HKG",div:"Female Junior",helm:"Emily Polson",crew:"Tiffany Mak",races:[1,1,1,2,1,1,1,3,2,5]},
     {sail:"2751",nat:"HKG",div:"Male",helm:"Cameron Law",crew:"Christopher Lam",races:[2,3,2,1,2,2,2,1,1,4]},
@@ -113,8 +113,8 @@ const REAL_2023={
 const REAL_2024={
   id:"29asia24",name:"2024 29er Asian Championship",cls:"29er",doublehanded:true,
   venue:"RHKYC",country:"HKG",date:"08/02/2024",discards:2,
-  scoring:"Appendix A · Low Point · 2 discards",
-  source:"Sailwave · HK Sailing",status:"Final",
+  scoring:"Appendix A",
+  source:"",status:"Final",
   entries:[
     {sail:"3084",nat:"HKG",div:"Female",helm:"Emily Polson",crew:"Tiffany Mak",races:[1,1,1,1,1,4,2,4,1,1,4,3,1,3]},
     {sail:"3054",nat:"HKG",div:"Male",helm:"Cameron Law",crew:"Christopher Lam",races:[2,2,2,2,2,3,1,1,3,2,5,2,2,1]},
@@ -597,7 +597,7 @@ export default function AthLinkMVP(){
       venue:"",country:"",
       date:pdfDate||"",
       discards:fleet.discards||1,
-      scoring:`Low Point · ${fleet.discards||1} discard(s)`,
+      scoring:'Appendix A',
       source:"PDF import",status:"Draft",
       entries:fleet.entries.map((e,i)=>({
         _previewKey:`${i}_${e.helm}`,
@@ -678,7 +678,8 @@ export default function AthLinkMVP(){
     if(!previewEv) return;
     const status=asDraft?"Draft":"Final";
     const ev={...previewEv,status,
-      venue:previewEv.venue||"—",
+      venue:previewEv.venue||"",
+      country:(previewEv.venue||"").toUpperCase()||previewEv.country||"",
       date:previewEv.date||"",
       doublehanded:previewEv.entries.some(e=>e.crew&&e.crew.trim()),
     };
@@ -727,7 +728,7 @@ export default function AthLinkMVP(){
     const disc=Math.min(mf.discards,Math.max(0,mf.numRaces-1));
     return{id:"imp_"+Date.now(),name:mf.name||"Imported Regatta",cls:portal,
       doublehanded:rows.some(r=>r.crew.trim()),venue:mf.club||"—",country:mf.country||"",
-      date:mf.date||"",discards:disc,scoring:`Low Point · ${disc} discard(s)`,
+      date:mf.date||"",discards:disc,scoring:'Appendix A',
       source:"Manual import",status:"Final",
       entries:rows.map(r=>({helm:r.helm.trim(),crew:r.crew.trim(),sail:r.sail.trim()||"—",nat:"",div:r.div.trim(),
         races:r.scores.map(s=>s.trim()).filter(Boolean).map(s=>/^\d+(\.\d+)?$/.test(s)?parseFloat(s):s.toUpperCase())}))};
@@ -805,7 +806,11 @@ export default function AthLinkMVP(){
     .net{font-family:'Barlow',sans-serif;font-weight:700;color:var(--navy);}
     .sailcol{font-size:12px;color:var(--mut);white-space:nowrap;}
     .vchip{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--accent);font-weight:600;}
-    .divtag{font-size:10px;font-weight:700;color:var(--navy2);background:var(--sky);padding:2px 7px;border-radius:5px;}
+    .divtag{font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px;white-space:nowrap;}
+    .divtag.male{color:#1a5e8a;background:#d9edf7;}
+    .divtag.female{color:#8a1a3c;background:#f7d9e3;}
+    .divtag.mixed{color:#5a1a8a;background:#ead9f7;}
+    .divtag.junior{color:#1a5e8a;background:#e8f4ff;}
     .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px;font:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
     .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px;}
     .acard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;}
@@ -847,12 +852,12 @@ export default function AthLinkMVP(){
     .rolechip{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:5px;text-transform:uppercase;font-family:'Barlow',sans-serif;}
     .rolechip.helm{color:#fff;background:var(--navy2);}.rolechip.crew{color:var(--navy2);background:var(--sky);}
     .miniraces{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;}
-    .rc{width:24px;height:24px;border-radius:6px;background:var(--sky);color:var(--navy);font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;}
+    .rc{width:24px;height:24px;border-radius:6px;background:#dce8f5;color:#2a6aa0;font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;}
     .rc.c{background:#fbe3e0;color:#c0392b;}
-    .rc.d{background:#eef2f7;color:var(--mut);text-decoration:line-through;}
-    .rc.g1{background:#c8920b;color:#fff;}
-    .rc.g2{background:#8a9bb0;color:#fff;}
-    .rc.g3{background:#a86a32;color:#fff;}
+    .rc.d{background:#f0f2f5;color:#8a99aa;}
+    .rc.g1{background:#f5e8b4;color:#8a6200;}
+    .rc.g2{background:#d4e8f5;color:#1a5e8a;}
+    .rc.g3{background:#f5d4d4;color:#8a1a1a;}
     /* Home */
     .home-hero{background:linear-gradient(140deg,#1b4470,#143358);padding:36px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:#fff;font-size:36px;font-weight:800;margin:0 0 6px;}
@@ -945,12 +950,10 @@ export default function AthLinkMVP(){
   {/* ── TOPBAR ── */}
   <div className="topbar"><div className="topin">
     <div className="brand" onClick={goHome}><Link2 size={15}/></div>
-    {portal
-      ?<span className="topname">Hong Kong Sailing · {cls?.name}</span>
-      :<span className="topsite">Hong Kong Sailing</span>}
+    <span className="topsite">Hong Kong Sailing</span>
     <nav className="nav">
       {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Regattas</button>}
-      {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>Athletes</button>}
+      {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>{cls?.short||"Class"} Athletes</button>}
     </nav>
   </div></div>
 
@@ -1058,7 +1061,6 @@ export default function AthLinkMVP(){
         <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
         <span><Calendar size={13}/>{formatDate(ev.date)}</span>
         <span><Anchor size={13}/>{ev.cls}</span>
-        <span style={{fontSize:12,color:"var(--mut)",display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span>
       </div>
       <div className="panel"><table>
         <thead><tr>
@@ -1077,12 +1079,12 @@ export default function AthLinkMVP(){
   if(!r.div) return null;
   const d=r.div.replace(/\d+-(?:Gold|Silver|Bronze|Emerald|Sapphire)\s*/i,'').trim();
   const isJunior=/junior|u17|u18|u19|u20/i.test(d);
-  const gRaw=d.replace(/junior|u\d+/gi,'').trim();
-  const gMap={'m':'Male','male':'Male','f':'Female','female':'Female',
-    'mixed':'Mixed','mix':'Mixed','w':'Female','women':'Female','men':'Male'};
-  const gender=gMap[gRaw.toLowerCase()]||gRaw;
-  return(<>{gender&&<span className="divtag" style={{marginLeft:8}}>{gender}</span>}
-    {isJunior&&<span className="divtag" style={{marginLeft:4,background:'#e8f4ff',color:'#1a5e8a'}}>Junior</span>}
+  const gRaw=d.replace(/junior|u\d+/gi,'').trim().toLowerCase();
+  const gMap={m:'Male',male:'Male',men:'Male',f:'Female',female:'Female',women:'Female',w:'Female',mixed:'Mixed',mix:'Mixed'};
+  const gender=gMap[gRaw]||(gRaw?gRaw[0].toUpperCase()+gRaw.slice(1):'');
+  const gCls=gender==='Male'?'male':gender==='Female'?'female':gender==='Mixed'?'mixed':'';
+  return(<>{gender&&<span className={`divtag ${gCls}`} style={{marginLeft:8}}>{gender}</span>}
+    {isJunior&&<span className="divtag junior" style={{marginLeft:4}}>Junior</span>}
   </>);
 })()}</div>
               </div>
@@ -1105,14 +1107,14 @@ export default function AthLinkMVP(){
           </tr>
         ))}</tbody>
       </table></div>
-      <p style={{fontSize:12,color:"var(--mut)",marginTop:12}}>( ) = discard · red = penalty code · click a score to edit</p>
+      <p style={{fontSize:12,color:"var(--mut)",marginTop:12,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}><span>( ) = discard · red = penalty code</span><span style={{display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span></p>
     </div>);
   })()}
 
   {/* ── ATHLETES (portal + global) ── */}
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:26}}>
-      {portal&&<button className="back" onClick={goHome}><ArrowLeft size={16}/>Hong Kong Sailing</button>}
+      {portal&&<button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>{cls?.name}</button>}
       <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:4,flexWrap:"wrap"}}>
         <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle}</h1>
         {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
@@ -1327,7 +1329,7 @@ export default function AthLinkMVP(){
             <div className="preview-meta wide" style={{marginBottom:8}}>
               <div><label>Event name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Event name"/></div>
               <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updPMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
-              <div><label>Host Country</label><input value={previewEv.venue||""} onChange={e=>updPMeta("venue",e.target.value)} className={!previewEv.venue?"pmissing":""} placeholder="HKG"/></div>
+              <div><label>Host Country</label><input value={previewEv.venue||""} onChange={e=>updPMeta("venue",e.target.value.toUpperCase())} className={!previewEv.venue?"pmissing":""} placeholder="HKG" style={{textTransform:"uppercase"}}/></div>
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}
