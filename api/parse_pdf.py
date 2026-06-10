@@ -34,25 +34,62 @@ def fix_doubled(s):
 
 # ── score parsing ──────────────────────────────────────────────────────────
 def clean_score(raw):
+    """
+    Parse any score cell into a number or code string.
+
+    KEY RULE (from RRS / Sailwave / Manage2sail):
+      "NUMBER CODE"  e.g. "3 STP", "7\nSTP", "11.9\nSCP", "(33)\nDNC"
+        → the NUMBER is the actual points value; the CODE is just a label
+        → return the number
+
+      "(NUMBER)"     e.g. "(16)", "(18)"
+        → discarded score; return the number
+
+      "CODE" alone   e.g. "DNF", "DNC", "UFD", "BFD"
+        → no explicit number; score = fleet+1 in the engine
+        → return the code string so the engine can assign fleet+1
+
+    This means STP/SCP/DPI etc. with an attached number are treated as
+    plain numeric scores — the organiser's software already calculated the
+    penalty into the number shown.
+    """
     if raw is None:
         return None
     s = str(raw).strip().replace('\n', ' ')
     if not s or s in ('-', '—', '–', '*', ''):
         return None
+
+    # Strip outer discard parens: (5.0) → 5.0 | (33) DNC → 33 DNC | (DNF) → DNF
     inner = re.sub(r'^\(|\)$', '', s.strip())
+
+    # Split into tokens
     parts = re.split(r'[\s\[\]]+', inner.strip())
     parts = [p for p in parts if p]
+
+    num = None
+    code = None
     for p in parts:
         up = re.sub(r'[^A-Z]', '', p.upper())
         if up in CODES:
-            return up
-    num_str = re.sub(r'[^\d.]', '', parts[0]) if parts else ''
-    if num_str:
-        try:
-            n = float(num_str)
-            return int(n) if n == int(n) else round(n, 2)
-        except ValueError:
-            pass
+            code = up
+        else:
+            ns = re.sub(r'[^\d.]', '', p)
+            if ns:
+                try:
+                    n = float(ns)
+                    num = int(n) if n == int(n) else round(n, 2)
+                except ValueError:
+                    pass
+
+    # If both a number and a code are present, the number IS the score.
+    # The code is just an annotation (STP/SCP/DPI etc. already factored in).
+    if num is not None:
+        return num
+
+    # Code only (no number) → engine will assign fleet+1
+    if code is not None:
+        return code
+
     return None
 
 # ── header helpers ─────────────────────────────────────────────────────────
@@ -220,8 +257,15 @@ def detect_cols(header_rows):
         n = max(len(r) for r in header_rows)
         merged = []
         for i in range(n):
-            cells = [str(r[i] or '') if i < len(r) else '' for r in header_rows]
-            merged.append(' '.join(c for c in cells if c.strip()))
+            cells = [str(r[i] or '').strip() if i < len(r) else '' for r in header_rows]
+            non_empty = [c for c in cells if c]
+            # If any single cell is already a race header on its own, use it directly
+            # (avoids 'Points per Race O1' swallowing the O1 race column identity)
+            race_cells = [c for c in non_empty if is_race_hdr(c)]
+            if race_cells:
+                merged.append(race_cells[0])
+            else:
+                merged.append(' '.join(non_empty))
     else:
         merged = header_rows
 
