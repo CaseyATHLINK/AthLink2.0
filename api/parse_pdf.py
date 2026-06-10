@@ -343,13 +343,44 @@ def parse_row_with_cols(row, cols):
             if sc is not None:
                 races.append(sc)
 
+    # Extract PDF rank (first column) and net score (last meaningful column)
+    # Get rank from dedicated column, or fall back to first column
+    if 'rank' in cols:
+        rank_raw = get('rank')
+    else:
+        rank_raw = str(row[0] or '').strip() if row else ''
+
+    # Strip ordinal suffixes ("1st" → "1", "42nd" → "42") then parse
+    rank_raw = re.sub(r'(st|nd|rd|th)$', '', rank_raw.strip(), flags=re.IGNORECASE)
+
+    pdf_rank = None
+    if rank_raw:
+        try:
+            pdf_rank = int(rank_raw)
+        except ValueError:
+            pass
+
+    # Extract net score from the net column if present
+    pdf_net = None
+    if 'net' in cols:
+        net_raw = get('net')
+        if net_raw:
+            try:
+                pdf_net = float(net_raw)
+                if pdf_net == int(pdf_net):
+                    pdf_net = int(pdf_net)
+            except ValueError:
+                pass
+
     return {
-        'helm':  clean_name(helm_raw),
-        'crew':  clean_name(crew_raw),
-        'sail':  clean_sail or '—',
-        'nat':   flag_from_ioc(nat_raw),
-        'div':   div_raw,
-        'races': races,
+        'helm':     clean_name(helm_raw),
+        'crew':     clean_name(crew_raw),
+        'sail':     clean_sail or '—',
+        'nat':      flag_from_ioc(nat_raw),
+        'div':      div_raw,
+        'races':    races,
+        'pdf_rank': pdf_rank,
+        'pdf_net':  pdf_net,
     }
 
 # ── table parser ───────────────────────────────────────────────────────────
@@ -455,7 +486,7 @@ def try_clubspot(full_text):
         helm = sailors[i2*2]     if i2*2 < len(sailors) else ''
         crew = sailors[i2*2+1]   if i2*2+1 < len(sailors) else ''
         if score_vals:
-            entries.append({'helm':helm,'crew':crew,'sail':sail,'nat':nat,'div':'','races':score_vals})
+            entries.append({'helm':helm,'crew':crew,'sail':sail,'nat':nat,'div':'','races':score_vals,'pdf_rank':i2+1,'pdf_net':None})
 
     return entries if entries else None
 
