@@ -649,8 +649,7 @@ Query: "${query}"`;
         body:JSON.stringify({
           model:"claude-sonnet-4-20250514",max_tokens:300,
           messages:[{role:"user",content:buildFilterPrompt(profileFilter,
-            "Each item has: h.ev (event object with .name,.date,.country), h.row.rank (number), h.row.net (number), h.fleet (total boats), h.role ('Helm' or 'Crew'), h.partner (string name).
-The function takes 'h' not 'ev'. Return code that uses 'h'."
+            "Each item has: h.ev (event with .name,.date,.country), h.row.rank, h.row.net, h.fleet, h.role ('Helm' or 'Crew'), h.partner. The function takes 'h' not 'ev'. Return code using 'h'."
           )}]
         })
       });
