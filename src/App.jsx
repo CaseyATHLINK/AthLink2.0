@@ -1122,7 +1122,7 @@ Query: "${query}"`;
         <div style={{marginBottom:12}}>
           <div className="ai-srch">
             <input
-              placeholder="Smart filter — e.g. "more than 30 boats" or "Emily Polson and Casey Law""
+              placeholder="Smart filter — e.g. more than 30 boats, or Emily Polson and Casey Law"
               value={evFilter}
               onChange={e=>setEvFilter(e.target.value)}
               onKeyDown={e=>{if(e.key==="Enter")runEvFilter();}}
@@ -1327,7 +1327,7 @@ Query: "${query}"`;
           <p className="seclabel" style={{margin:0}}><Trophy size={14}/>Result history</p>
           <div className="ai-srch" style={{flex:1,minWidth:220,maxWidth:400}}>
             <input
-              placeholder="Filter — e.g. "top 3 finishes" or "2023 events""
+              placeholder="Filter — e.g. top 3 finishes, or 2023 events"
               value={profileFilter}
               onChange={e=>setProfileFilter(e.target.value)}
               onKeyDown={e=>{if(e.key==="Enter")runProfileFilter(ag.history);}}
