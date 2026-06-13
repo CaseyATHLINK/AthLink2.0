@@ -98,7 +98,7 @@ const REAL_2023={
     {sail:"2840",nat:"HKG",div:"Male",helm:"Jayden Fung",crew:"Jack Dingemans",races:[3,8,6,3,5,6,4,4,3,1]},
     {sail:"1946",nat:"THA",div:"Male",helm:"Bunyamin Klongsamoot",crew:"Kan Kachachuen",races:[4,4,3,4,8,3,7,5,7,2]},
     {sail:"2750",nat:"HKG",div:"Female",helm:"Jamie Tsang",crew:"Cheuk Wing Mak",races:[10,2,5,6,3,8,3,2,8,8]},
-    {sail:"2412",nat:"HKG",div:"",helm:"Ethan Kong",crew:"Aaron Dampier",races:[5,7,"DSQ",5,4,4,5,9,4,9]},
+    {sail:"2412",nat:"HKG",div:"Mixed",helm:"Ethan Kong",crew:"Aaron Dampier",races:[5,7,"DSQ",5,4,4,5,9,4,9]},
     {sail:"2943",nat:"HKG",div:"Female",helm:"Bertille Voets",crew:"Tomoe Thiry",races:[8,6,7,7,6,5,9,11,5,3]},
     {sail:"3016",nat:"AUS",div:"Female Junior",helm:"Piper Attwood",crew:"Annabelle Sampson",races:[7,10,4,8,7,7,6,10,6,7]},
     {sail:"500",nat:"JPN",div:"Male Junior",helm:"Mihiro Okada",crew:"Iwao Yasuda",races:[9,9,9,9,9,9,10,8,9,10]},
@@ -121,9 +121,9 @@ const REAL_2024={
     {sail:"3140",nat:"JPN",div:"Male",helm:"Yuto Tsutsumi",crew:"Taishi Goto",races:[4,3,4,5,"DSQ",5,3,2,4,3,"UFD",1,3,2]},
     {sail:"2750",nat:"HKG",div:"Female",helm:"Jamie Tsang",crew:"Cheuk Wing Mak",races:[5,4,7,3,5,2,4,3,2,4,3,5,4,5]},
     {sail:"2846",nat:"HKG",div:"Male Junior",helm:"Raphael Mak",crew:"Louis Polson",races:[6,6,3,6,4,1,5,5,5,5,1,4,5,4]},
-    {sail:"2411",nat:"HKG",div:"Mix",helm:"Chloe Kong",crew:"Ethan Kong",races:[3,5,5,4,7,7,6,8,7,8,6,7,8,"UFD"]},
+    {sail:"2411",nat:"HKG",div:"Mixed",helm:"Chloe Kong",crew:"Ethan Kong",races:[3,5,5,4,7,7,6,8,7,8,6,7,8,"UFD"]},
     {sail:"2876",nat:"HKG",div:"Male",helm:"Casey Law",crew:"Conrad Lunsden",races:[10,9,11,12,3,6,8,7,6,6,2,6,6,7]},
-    {sail:"2521",nat:"HKG",div:"Mix",helm:"Ayden Pang",crew:"Tomoe Thiry",races:[7,7,12,7,6,8,7,6,8,7,7,8,7,6]},
+    {sail:"2521",nat:"HKG",div:"Mixed",helm:"Ayden Pang",crew:"Tomoe Thiry",races:[7,7,12,7,6,8,7,6,8,7,7,8,7,6]},
     {sail:"777",nat:"HKG",div:"Female",helm:"Ka Lam Chen",crew:"Ka Yi Chen",races:[12,12,6,11,10,10,10,"DNF",9,"DNF",8,12,10,13]},
     {sail:"2752",nat:"HKG",div:"Male",helm:"Yan Cheuk Ng",crew:"Cheung Fu Wan",races:[13,10,8,8,9,11,9,"DNC","DNC","DNC","DNF",13,11,8]},
     {sail:"2222",nat:"HKG",div:"Female Junior",helm:"Kristen Hwang",crew:"Bernice Pang",races:[11,11,9,9,8,9,12,"DNC","DNC","DNC","DNC",10,14,12]},
@@ -131,9 +131,9 @@ const REAL_2024={
     {sail:"2412",nat:"HKG",div:"Male",helm:"Chap Pang Wong",crew:"Sheungching Yau",races:[15,15,15,14,12,14,14,9,"DNF","DNC","DNC",11,13,10]},
     {sail:"261",nat:"HKG",div:"Female Junior",helm:"Shing Yin Aria Hon",crew:"McCarley Wong",races:[8,13,"DNF",15,13,15,15,"DNF","DNC","DNC","DNC",14,12,9]},
     {sail:"2613",nat:"HKG",div:"Male Junior",helm:"Jaden Lau",crew:"Kaden Chan",races:[9,14,13,13,14,12,11,"DNF","DNF","DNF","DNF",15,"DNF",14]},
-    {sail:"284",nat:"HKG",div:"Mix Junior",helm:"Keira Slaughter",crew:"Alfred Fong",races:[16,"DNF","UFD",16,15,16,16,"DNC","DNC","DNC","DNC","DNF","DNF",15]},
+    {sail:"284",nat:"HKG",div:"Mixed Junior",helm:"Keira Slaughter",crew:"Alfred Fong",races:[16,"DNF","UFD",16,15,16,16,"DNC","DNC","DNC","DNC","DNF","DNF",15]},
     {sail:"2749",nat:"HKG",div:"Male Junior",helm:"Skyler Lam",crew:"William Chen",races:["DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNF","DNC","DNC","DNC",9,15,16]},
-    {sail:"2655",nat:"HKG",div:"Mix Junior",helm:"Sebastian Chun",crew:"Kaitlyn Lee",races:[17,"DNF",14,17,"DNF","DNF","DNF","DNC","DNC","DNC","DNC","DNF","DNF","DNF"]},
+    {sail:"2655",nat:"HKG",div:"Mixed Junior",helm:"Sebastian Chun",crew:"Kaitlyn Lee",races:[17,"DNF",14,17,"DNF","DNF","DNF","DNC","DNC","DNC","DNC","DNF","DNF","DNF"]},
   ],
 };
 
@@ -544,6 +544,14 @@ export default function AthLinkMVP(){
   const[profileSugTimer,setProfileSugTimer]=useState(null);
   // Global search
   const[gSearch,setGSearch]=useState("");
+  // Calendar
+  const[showCalendar,setShowCalendar]=useState(false);
+  const[calCls,setCalCls]=useState("all");
+  const[calQ,setCalQ]=useState("");
+  const[calAthleteFilter,setCalAthleteFilter]=useState(null); // name string or null
+  const[showSailorCal,setShowSailorCal]=useState(false);
+  const[sailorCalName,setSailorCalName]=useState("");
+  const[sailorCalAll,setSailorCalAll]=useState(false);
   const[gSearchOpen,setGSearchOpen]=useState(false);
   const[gSearchResults,setGSearchResults]=useState([]);
 
@@ -1110,8 +1118,23 @@ Partial query: "${q}"`;
     .scorecell .scode{font-size:8px;font-weight:800;color:#e74c3c;letter-spacing:.04em;text-transform:uppercase;}
 
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
+    /* Calendar */
+    .cal-modal{background:var(--paper);width:100%;max-width:820px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;max-height:90vh;display:flex;flex-direction:column;}
+    .cal-head{background:var(--navy);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;flex:none;}
+    .cal-head h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
+    .cal-body{padding:18px 22px;overflow-y:auto;flex:1;}
+    .cal-filters{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap;}
+    .cal-month{margin-bottom:24px;}
+    .cal-month-label{font-family:'Barlow',sans-serif;font-weight:700;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--line);}
+    .cal-ev{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 16px;margin-bottom:8px;cursor:pointer;transition:.15s;display:flex;align-items:center;gap:14px;}
+    .cal-ev:hover{border-color:#b9cee4;box-shadow:0 6px 20px -10px rgba(22,58,99,.4);transform:translateY(-1px);}
+    .cal-ev-date{min-width:44px;text-align:center;background:var(--sky);border-radius:8px;padding:6px 4px;}
+    .cal-ev-date .ced{font-family:'Barlow',sans-serif;font-weight:800;font-size:20px;color:var(--navy);line-height:1;}
+    .cal-ev-date .cem{font-size:10px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;}
+    .cal-ev-name{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;color:var(--ink);}
+    .cal-ev-meta{font-size:12px;color:var(--mut);margin-top:2px;}
     /* Global search */
-    .gsrch-wrap{flex:1;max-width:340px;position:relative;}
+    .gsrch-wrap{flex:1;position:relative;}
     .gsrch{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.18);border-radius:10px;padding:7px 12px;transition:.2s;}
     .gsrch:focus-within{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.4);}
     .gsrch input{border:0;outline:0;font:inherit;font-size:13px;background:none;color:#fff;width:100%;}
@@ -1135,9 +1158,9 @@ Partial query: "${q}"`;
     .del-confirm .del-name{color:var(--navy);font-family:'Barlow',sans-serif;}
     .del-confirm-btns{display:flex;gap:8px;}
     /* AI search */
-    .ai-srch{display:flex;align-items:center;gap:0;background:#fff;border:1.5px solid var(--line);border-radius:10px;overflow:hidden;transition:.2s;}
+    .ai-srch{display:flex;align-items:center;gap:8px;background:#fff;border:1.5px solid var(--line);border-radius:10px;overflow:hidden;padding-left:12px;transition:.2s;}
     .ai-srch:focus-within{border-color:var(--accent);}
-    .ai-srch input{flex:1;border:0;outline:0;font:inherit;font-size:13px;padding:9px 13px;background:none;color:var(--ink);}
+    .ai-srch input{flex:1;border:0;outline:0;font:inherit;font-size:13px;padding:9px 10px 9px 0;background:none;color:var(--ink);}
     .ai-srch input::placeholder{color:#9fb2c8;}
     .filter-chip{display:inline-flex;align-items:center;gap:6px;background:#eef4fb;border:1px solid #b9cee4;border-radius:20px;padding:4px 10px 4px 12px;font-size:12px;font-weight:600;color:var(--navy);margin-bottom:12px;}
     .filter-chip button{border:0;background:none;cursor:pointer;color:var(--mut);padding:0;display:flex;align-items:center;line-height:1;}
@@ -1229,7 +1252,12 @@ Partial query: "${q}"`;
   {portal&&view.name==="events"&&(
     <>
       <div className="strip"><div className="wrap">
-        <h1 className="disp">{cls?.name}</h1>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+          <h1 className="disp">{cls?.name}</h1>
+          <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalCls(portal||"all");setShowCalendar(true);}}>
+            <Calendar size={15}/>Race Calendar
+          </button>
+        </div>
         <div className="pillbar">
           <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> regattas</div>
           <div className="pill"><Users size={16}/><b>{people.length}</b> athletes</div>
@@ -1241,6 +1269,14 @@ Partial query: "${q}"`;
           <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
           <button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>
         </div>
+        {evFilterActive&&(
+          <div style={{marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div className="filter-chip">
+              <Sparkles size={11}/>{evFilterActive.label}
+              <button onClick={()=>{setEvFilterActive(null);setEvFilter("");}}><X size={13}/></button>
+            </div>
+          </div>
+        )}
         <div style={{marginBottom:12}}>
           <div className="ai-srch-wrap">
             <div className="ai-srch">
@@ -1272,13 +1308,7 @@ Partial query: "${q}"`;
               </div>
             )}
           </div>
-          {evFilterActive&&(
-            <div className="filter-chip" style={{marginTop:8}}>
-              <Sparkles size={11}/>
-              {evFilterActive.label}
-              <button onClick={()=>{setEvFilterActive(null);setEvFilter("");}}><X size={13}/></button>
-            </div>
-          )}
+
         </div>
         {(()=>{
           const filtered=evFilterActive
@@ -1443,8 +1473,11 @@ Partial query: "${q}"`;
       <div className="phead">
         <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
         <div style={{flex:1,minWidth:200}}>
-          <h1 className="pname disp">
-            {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
+          <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <span>{nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}</span>
+            <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalAll(false);setShowSailorCal(true);}}>
+              <Calendar size={13}/>Calendar
+            </button>
           </h1>
           <div className="pmeta">
             {nat?<span><Flag size={14}/>{nat}</span>:null}
@@ -1710,6 +1743,180 @@ Partial query: "${q}"`;
       </div>
     </div>
   )}
+
+  {/* ── RACE CALENDAR MODAL ── */}
+  {showCalendar&&(()=>{
+    // Build sorted events list with filters
+    const calEvs=events
+      .filter(ev=>calCls==="all"||ev.cls===calCls)
+      .filter(ev=>{
+        if(!calQ.trim()) return true;
+        const ql=calQ.toLowerCase();
+        if(ev.name.toLowerCase().includes(ql)) return true;
+        const s=scoreEvent(ev);
+        if(String(s.fleet).includes(ql)) return true;
+        // athlete name search
+        return ev.entries.some(e=>e.helm.toLowerCase().includes(ql)||e.crew.toLowerCase().includes(ql));
+      })
+      .sort((a,b)=>{
+        const da=a.date.split('/').reverse().join('');
+        const db=b.date.split('/').reverse().join('');
+        return db.localeCompare(da);
+      });
+
+    // Group by year-month
+    const grouped={};
+    calEvs.forEach(ev=>{
+      const parts=ev.date.split('/');
+      if(parts.length===3){
+        const key=`${parts[2]}-${parts[1].padStart(2,'0')}`;
+        if(!grouped[key]) grouped[key]=[];
+        grouped[key].push(ev);
+      } else {
+        if(!grouped['Unknown']) grouped['Unknown']=[];
+        grouped['Unknown'].push(ev);
+      }
+    });
+    const months=Object.keys(grouped).sort().reverse();
+
+    return(
+      <div className="ov" onClick={()=>setShowCalendar(false)}>
+        <div className="cal-modal" onClick={e=>e.stopPropagation()}>
+          <div className="cal-head">
+            <Calendar size={18}/>
+            <h3>Race Calendar</h3>
+            <button className="x" onClick={()=>setShowCalendar(false)}><X size={16}/></button>
+          </div>
+          <div className="cal-body">
+            <div className="cal-filters">
+              <div className="seg">
+                {[["all","All Classes"],...CLASSES.map(cl=>[cl.id,cl.short])].map(([id,label])=>(
+                  <button key={id} className={calCls===id?"on":""} onClick={()=>setCalCls(id)}>{label}</button>
+                ))}
+              </div>
+              <div className="srch" style={{flex:1,minWidth:200}}>
+                <Search size={14} color="#9fb2c8"/>
+                <input placeholder="Search regattas, athletes, boat counts..." value={calQ} onChange={e=>setCalQ(e.target.value)}/>
+              </div>
+            </div>
+            {months.length===0&&<p style={{color:"var(--mut)",fontSize:14}}>No events match your filter.</p>}
+            {months.map(monthKey=>{
+              const [yr,mo]=monthKey==="Unknown"?["","Unknown"]:monthKey.split('-');
+              const label=monthKey==="Unknown"?"Date unknown":`${MON[parseInt(mo)-1]} ${yr}`;
+              return(
+                <div key={monthKey} className="cal-month">
+                  <div className="cal-month-label">{label}</div>
+                  {grouped[monthKey].map(ev=>{
+                    const s=scoreEvent(ev);
+                    const parts=ev.date.split('/');
+                    const day=parts[0]||"?";
+                    const monStr=parts[1]?MON[parseInt(parts[1])-1]:"";
+                    const clsObj=CLASSES.find(cl=>cl.id===ev.cls);
+                    return(
+                      <div key={ev.id} className="cal-ev" onClick={()=>{setShowCalendar(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}>
+                        <div className="cal-ev-date">
+                          <div className="ced">{day}</div>
+                          <div className="cem">{monStr}</div>
+                        </div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div className="cal-ev-name">{ev.name}</div>
+                          <div className="cal-ev-meta">{ev.country||"—"} · {s.fleet} boats · {s.races} races {clsObj?<span className="cls" style={{fontSize:10,padding:"1px 7px",marginLeft:6}}>{clsObj.short}</span>:null}</div>
+                        </div>
+                        <ChevronRight size={16} color="#9fb2c8"/>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  })()}
+
+  {/* ── SAILOR CALENDAR MODAL ── */}
+  {showSailorCal&&(()=>{
+    const sailorEvs=events
+      .filter(ev=>{
+        if(sailorCalAll) return true;
+        return ev.entries.some(e=>e.helm===sailorCalName||e.crew===sailorCalName);
+      })
+      .sort((a,b)=>{
+        const da=a.date.split('/').reverse().join('');
+        const db=b.date.split('/').reverse().join('');
+        return db.localeCompare(da);
+      });
+
+    const grouped={};
+    sailorEvs.forEach(ev=>{
+      const parts=ev.date.split('/');
+      if(parts.length===3){
+        const key=`${parts[2]}-${parts[1].padStart(2,'0')}`;
+        if(!grouped[key]) grouped[key]=[];
+        grouped[key].push(ev);
+      } else {
+        if(!grouped['Unknown']) grouped['Unknown']=[];
+        grouped['Unknown'].push(ev);
+      }
+    });
+    const months=Object.keys(grouped).sort().reverse();
+
+    return(
+      <div className="ov" onClick={()=>setShowSailorCal(false)}>
+        <div className="cal-modal" onClick={e=>e.stopPropagation()}>
+          <div className="cal-head">
+            <Calendar size={18}/>
+            <h3>{sailorCalName} — Calendar</h3>
+            <button className="x" onClick={()=>setShowSailorCal(false)}><X size={16}/></button>
+          </div>
+          <div className="cal-body">
+            <div className="cal-filters">
+              <div className="seg">
+                <button className={!sailorCalAll?"on":""} onClick={()=>setSailorCalAll(false)}>My regattas</button>
+                <button className={sailorCalAll?"on":""} onClick={()=>setSailorCalAll(true)}>All regattas</button>
+              </div>
+            </div>
+            {months.length===0&&<p style={{color:"var(--mut)",fontSize:14}}>No events found.</p>}
+            {months.map(monthKey=>{
+              const [yr,mo]=monthKey==="Unknown"?["","Unknown"]:monthKey.split('-');
+              const label=monthKey==="Unknown"?"Date unknown":`${MON[parseInt(mo)-1]} ${yr}`;
+              return(
+                <div key={monthKey} className="cal-month">
+                  <div className="cal-month-label">{label}</div>
+                  {grouped[monthKey].map(ev=>{
+                    const s=scoreEvent(ev);
+                    const parts=ev.date.split('/');
+                    const day=parts[0]||"?";
+                    const monStr=parts[1]?MON[parseInt(parts[1])-1]:"";
+                    const entry=ev.entries.find(e=>e.helm===sailorCalName||e.crew===sailorCalName);
+                    const row=entry?s.rows.find(r=>r.helm===entry.helm&&r.sail===entry.sail):null;
+                    return(
+                      <div key={ev.id} className="cal-ev" onClick={()=>{setShowSailorCal(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}>
+                        <div className="cal-ev-date">
+                          <div className="ced">{day}</div>
+                          <div className="cem">{monStr}</div>
+                        </div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div className="cal-ev-name">{ev.name}</div>
+                          <div className="cal-ev-meta">
+                            {ev.country||"—"} · {s.fleet} boats
+                            {row?<> · <b style={{color:row.rank<=3?"var(--gold)":"var(--ink)"}}>#{row.rank}</b> of {s.fleet}</>:null}
+                            {entry?<> · as {entry.helm===sailorCalName?"Helm":"Crew"}</>:null}
+                          </div>
+                        </div>
+                        <ChevronRight size={16} color="#9fb2c8"/>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  })()}
 
   {deleteConfirm&&(
     <div style={{position:"fixed",inset:0,zIndex:75}} onClick={()=>setDeleteConfirm(null)}>
