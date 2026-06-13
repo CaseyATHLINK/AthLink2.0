@@ -947,6 +947,7 @@ Partial query: "${q}"`;
   const[editResultsEv,setEditResultsEv]=useState(null); // full edit mode for existing event
   const[hoverRow,setHoverRow]=useState(null); // {evId,helm} currently hovered
   const[hoverSummaries,setHoverSummaries]=useState({}); // key=helm → summary text
+  const[profileSummaries,setProfileSummaries]=useState({}); // key=name → full profile blurb
   useEffect(()=>{
     if(!pendingNav) return;
     const n=pendingNav;setPendingNav(null);
@@ -969,18 +970,51 @@ Partial query: "${q}"`;
     else if(n.type==="athletes"){setPortal(null);go({name:"athletes"});}
   };
 
-  const fetchHoverSummary=async(name,ag)=>{
-    if(hoverSummaries[name]) return; // cached
+  const fetchHoverSummary=async(name,ag,crew)=>{
+    const key=crew?`${name}+${crew}`:name;
+    if(hoverSummaries[key]!==undefined) return; // cached
+    // Immediately set loading state so we don't double-fetch
+    setHoverSummaries(h=>({...h,[key]:null}));
     try{
       const best=ag.best?"#"+ag.best:"unknown";
       const evs=ag.events;const pods=ag.podiums;const wins=ag.wins;
-      const prompt=`Write exactly 2 short sentences (max 25 words total) summarising this sailor's achievements. Be factual and concise. No fluff.
+      let prompt;
+      if(crew){
+        const agCrew=aggregate(crew,events);
+        prompt=`Write 2 short sentences (max 35 words total) about this sailing team's combined achievements. Be specific and factual.
+Helm: ${name} (${evs} regattas, best: ${best}, ${pods} podiums, ${wins} race wins).
+Crew: ${crew} (${agCrew.events} regattas, best: ${agCrew.best?"#"+agCrew.best:"unknown"}).`;
+      } else {
+        prompt=`Write 2 short sentences (max 30 words total) about this sailor. Be specific and factual.
 Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race wins: ${wins}.`;
+      }
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt,max_tokens:60})});
+        body:JSON.stringify({prompt,max_tokens:80})});
       const data=await res.json();
-      if(data.ok) setHoverSummaries(h=>({...h,[name]:data.text.trim()}));
-    }catch{setHoverSummaries(h=>({...h,[name]:""}));}
+      if(data.ok) setHoverSummaries(h=>({...h,[key]:data.text.trim()}));
+      else setHoverSummaries(h=>({...h,[key]:""}));
+    }catch{setHoverSummaries(h=>({...h,[key]:""}));}
+  };
+
+  const fetchFullProfileSummary=async(name,ag)=>{
+    if(profileSummaries[name]!==undefined) return;
+    setProfileSummaries(h=>({...h,[name]:null})); // loading
+    try{
+      const countries=new Set(ag.history.map(h=>h.ev.country).filter(Boolean));
+      const years=new Set(ag.history.map(h=>h.ev.date?.split('/')?.[2]).filter(Boolean));
+      const partners=[...new Set(ag.history.map(h=>h.partner).filter(Boolean))].slice(0,3);
+      const prompt=`Write 2-3 concise sentences summarising this competitive sailor for a sponsorship profile. Use only the data provided. Be specific.
+Name: ${name}.
+Regattas: ${ag.events}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. Race wins: ${ag.wins}.
+Countries competed in: ${[...countries].join(', ')||'unknown'}.
+Active years: ${[...years].sort().join(', ')||'unknown'}.
+Regular partners: ${partners.join(', ')||'unknown'}.`;
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt,max_tokens:120})});
+      const data=await res.json();
+      if(data.ok) setProfileSummaries(h=>({...h,[name]:data.text.trim()}));
+      else setProfileSummaries(h=>({...h,[name]:""}));
+    }catch{setProfileSummaries(h=>({...h,[name]:""}));}
   };
 
 
@@ -1721,7 +1755,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
       </div>
       <div className="panel"><table>
         <thead><tr>
-          <th>Pos</th><th className="l">Boat</th><th className="l">Sail / Nat</th>
+          <th>Pos</th><th className="l">Boat</th><th className="l">Sail #</th>
           {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
           <th>Net</th>
         </tr></thead>
@@ -1730,7 +1764,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
             onMouseEnter={()=>{
               setHoverRow({evId:ev.id,helm:r.helm});
               const ag=aggregate(r.helm,events);
-              fetchHoverSummary(r.helm,ag);
+              fetchHoverSummary(r.helm,ag,r.crew||null);
             }}
             onMouseLeave={()=>setHoverRow(null)}>
             <td className={`rk ${r.rank<=3?"p"+r.rank:""}`}>{r.rank}</td>
@@ -1738,9 +1772,10 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
               <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
               <div>
                 <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
-                {hoverRow?.evId===ev.id&&hoverRow?.helm===r.helm&&(
-                  <div className={`hover-summary${hoverSummaries[r.helm]===undefined?" loading":""}`}>
-                    {hoverSummaries[r.helm]||"Loading profile…"}
+{hoverRow?.evId===ev.id&&hoverRow?.helm===r.helm&&(
+                  <div className={`hover-summary${hoverSummaries[r.crew?`${r.helm}+${r.crew}`:r.helm]===null?" loading":""}`}>
+                    {hoverSummaries[r.crew?`${r.helm}+${r.crew}`:r.helm]||
+                      (hoverSummaries[r.crew?`${r.helm}+${r.crew}`:r.helm]===null?"Generating…":"")}
                   </div>
                 )}
                 <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{(()=>{
@@ -1749,7 +1784,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
   const isJunior=/junior|u17|u18|u19|u20/i.test(d);
   const gRaw=d.replace(/junior|u\d+/gi,'').trim().toLowerCase();
   const gMap={m:'Male',male:'Male',men:'Male',f:'Female',female:'Female',women:'Female',w:'Female',mixed:'Mixed',mix:'Mixed'};
-  const gender=gMap[gRaw]||(gRaw?gRaw[0].toUpperCase()+gRaw.slice(1):'');
+  const gender=gMap[gRaw]||''; // blank if not a recognised gender word
   const gCls=gender==='Male'?'male':gender==='Female'?'female':gender==='Mixed'?'mixed':'';
   return(<>{gender&&<span className={`divtag ${gCls}`} style={{marginLeft:8}}>{gender}</span>}
     {isJunior&&<span className="divtag junior" style={{marginLeft:4}}>Jr</span>}
@@ -1842,6 +1877,13 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
           <div className="pmeta">
             {nat?<span><Flag size={14}/>{nat}</span>:null}
             {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
+            {(()=>{
+              // Most recent sail number from history
+              const recent=ag.history[0]?.row;
+              if(!recent?.sail||recent.sail==="—") return null;
+              const sailNat=ag.history[0]?.row?.nat||nat;
+              return<span style={{fontWeight:600}}>{sailNat?<>{iocFlag(sailNat)} {sailNat} </>:""}{recent.sail}</span>;
+            })()}
           </div>
           <div className="pstats">
             <div><div className="v disp">{ag.events}</div><div className="k">Regattas</div></div>
@@ -1849,19 +1891,35 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
             <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
             <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
           </div>
-          {/* Globe teaser in profile header */}
-          {(()=>{
+          {/* AI summary + globe */}
+          {ag.events>0&&(()=>{
+            // Trigger fetch on first render
+            if(profileSummaries[name]===undefined) fetchFullProfileSummary(name,ag);
+            const summary=profileSummaries[name];
             const countryCounts={};
             ag.history.forEach(h=>{
               const country=h.ev.country;
               if(country){const iso=IOC_ISO[country];if(iso)countryCounts[iso]=(countryCounts[iso]||0)+1;}
             });
-            return Object.keys(countryCounts).length>0?(
+            return(
               <div style={{marginTop:18,width:"100%"}}>
-                <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 10px",fontSize:11}}><Flag size={12}/>Competition footprint</p>
-                <SailingGlobe countryData={countryCounts}/>
+                <div style={{background:"rgba(255,255,255,.1)",borderRadius:10,padding:"12px 14px",marginBottom:12}}>
+                  <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 6px",fontSize:11}}><Sparkles size={12}/>Athlete overview</p>
+                  {summary===null
+                    ?<div style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",opacity:.7,display:"flex",alignItems:"center",gap:6}}><Loader2 size={13} className="spin"/>Generating overview…</div>
+                    :summary
+                      ?<p style={{color:"#dce8f8",fontSize:13,lineHeight:1.55,margin:0}}>{summary}</p>
+                      :<p style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",margin:0}}>No data available yet.</p>
+                  }
+                </div>
+                {Object.keys(countryCounts).length>0&&(
+                  <div>
+                    <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 10px",fontSize:11}}><Flag size={12}/>Competition footprint</p>
+                    <SailingGlobe countryData={countryCounts}/>
+                  </div>
+                )}
               </div>
-            ):null;
+            );
           })()}
         </div>
         <div className="claimbox">
