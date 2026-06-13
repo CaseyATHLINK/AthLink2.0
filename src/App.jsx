@@ -251,8 +251,22 @@ const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
 const SB_URL=import.meta.env.VITE_SUPABASE_URL;
 const SB_KEY=import.meta.env.VITE_SUPABASE_ANON_KEY;
 const sbH=(SB_URL&&SB_KEY)?{"apikey":SB_KEY,"Authorization":`Bearer ${SB_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"}:null;
-const sbGet=async p=>{if(!sbH) return null;const r=await fetch(`${SB_URL}/rest/v1/${p}`,{headers:sbH});return r.ok?r.json():null;};
-const sbPost=async(t,b)=>{if(!sbH) return null;const r=await fetch(`${SB_URL}/rest/v1/${t}`,{method:"POST",headers:sbH,body:JSON.stringify(b)});return r.ok?r.json():null;};
+const sbGet=async p=>{
+  if(!sbH) return null;
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${p}`,{headers:sbH});
+    if(!r.ok){const err=await r.text();console.error("Supabase GET error",r.status,err);return null;}
+    return r.json();
+  }catch(e){console.error("Supabase GET network error",e);return null;}
+};
+const sbPost=async(t,b)=>{
+  if(!sbH) return null;
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${t}`,{method:"POST",headers:sbH,body:JSON.stringify(b)});
+    if(!r.ok){const err=await r.text();console.error("Supabase POST error",r.status,err,JSON.stringify(b).slice(0,200));return null;}
+    return r.json();
+  }catch(e){console.error("Supabase POST network error",e);return null;}
+};
 const sbPatch=async(t,f,b)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"PATCH",headers:sbH,body:JSON.stringify(b)});};
 const sbDel=async(t,f)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"DELETE",headers:{...sbH,"Prefer":""}});};
 
@@ -273,13 +287,39 @@ function dbToApp(ev){
       helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null}))};
 }
 async function saveEventToDb(ev){
-  if(!sbH) return;
-  const ins=await sbPost("events",{name:ev.name,class:ev.cls,doublehanded:ev.doublehanded,
-    venue:ev.venue,country:ev.country||null,date:ev.date,discards:ev.discards,
-    scoring:ev.scoring,source:ev.source,status:ev.status});
-  if(!ins?.[0]?.id) return ins;
-  await sbPost("entries",ev.entries.map(e=>({event_id:ins[0].id,sail:e.sail,nat:e.nat||null,
-    division:e.div,helm_name:e.helm,crew_name:e.crew||null,races:e.races,race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null})));
+  if(!sbH){console.warn("saveEventToDb: no Supabase connection");return null;}
+  const evPayload={
+    name:ev.name, class:ev.cls, doublehanded:!!ev.doublehanded,
+    venue:ev.venue||null, country:ev.country||null, date:ev.date||null,
+    discards:ev.discards||1, scoring:ev.scoring||null,
+    source:ev.source||null, status:ev.status||"Final",
+  };
+  const ins=await sbPost("events",evPayload);
+  if(!ins?.[0]?.id){
+    console.error("saveEventToDb: event insert failed for",ev.name);
+    return null;
+  }
+  const eventId=ins[0].id;
+  // Insert entries one by one so a single bad row doesn't kill the whole batch
+  const entryErrors=[];
+  for(const e of ev.entries){
+    const entryPayload={
+      event_id:eventId,
+      sail:e.sail||"—",
+      nat:e.nat||null,
+      division:e.div||null,
+      helm_name:e.helm||"",
+      crew_name:e.crew||null,
+      races:Array.isArray(e.races)?e.races:[],
+      race_codes:e.race_codes||null,
+      pdf_rank:e.pdf_rank||null,
+      pdf_net:e.pdf_net||null,
+    };
+    const r=await sbPost("entries",entryPayload);
+    if(!r?.[0]?.id) entryErrors.push(e.helm);
+  }
+  if(entryErrors.length) console.warn("saveEventToDb: failed entries:",entryErrors);
+  else console.log("saveEventToDb: saved",ev.entries.length,"entries for",ev.name);
   return ins;
 }
 async function updateEventStatus(evId,status){
@@ -820,14 +860,29 @@ export default function AthLinkMVP(){
 
   useEffect(()=>{
     (async()=>{
-      if(!sbH){setEvents([REAL_2024,REAL_2023]);return;}
+      if(!sbH){
+        console.warn("No Supabase credentials — using hardcoded events");
+        setEvents([REAL_2024,REAL_2023]);
+        return;
+      }
+      console.log("Loading from Supabase:", SB_URL);
       const data=await sbGet("events?select=*,entries(*)&order=created_at.desc");
-      if(!data){setEvents([REAL_2024,REAL_2023]);return;}
+      if(data===null){
+        // Supabase request failed — keep hardcoded so app is usable
+        console.error("Supabase load failed — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY");
+        setEvents([REAL_2024,REAL_2023]);
+        return;
+      }
+      // Use DB events only — never try to auto-seed hardcoded events
+      // (hardcoded event IDs are not valid UUIDs and would cause 400 errors)
+      console.log("Loaded",data.length,"events from Supabase");
       if(data.length===0){
-        await saveEventToDb(REAL_2023);await saveEventToDb(REAL_2024);
-        const s=await sbGet("events?select=*,entries(*)&order=created_at.desc");
-        setEvents((s||[]).map(dbToApp));
-      }else setEvents(data.map(dbToApp));
+        // Empty DB — show hardcoded events in memory only (not saved to DB)
+        console.log("Empty DB — showing hardcoded events in memory");
+        setEvents([REAL_2024,REAL_2023]);
+      }else{
+        setEvents(data.map(dbToApp));
+      }
     })();
   },[]);
 
@@ -1264,8 +1319,23 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
-    await saveEventToDb(ev);
-    setEvents(p=>[ev,...p]);
+    const saved=await saveEventToDb(ev);
+    if(saved?.[0]?.id){
+      console.log("Event saved to Supabase with id:", saved[0].id);
+      // Reload from DB to get proper ids
+      const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
+      if(fresh?.[0]){
+        console.log("Reloaded event from DB:", fresh[0].name, "with", fresh[0].entries?.length, "entries");
+        setEvents(p=>[dbToApp(fresh[0]),...p.filter(x=>x.id!==ev.id)]);
+      } else {
+        console.warn("Could not reload from DB, using in-memory event");
+        setEvents(p=>[ev,...p]);
+      }
+    } else {
+      // Supabase save failed — keep in memory only
+      setEvents(p=>[ev,...p]);
+      console.error("importPreview: save to Supabase failed — event is in memory only (will not persist on reload)");
+    }
     setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":null});
     setTimeout(()=>setNote(null),7000);
     closeImport();
