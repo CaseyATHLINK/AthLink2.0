@@ -536,6 +536,16 @@ export default function AthLinkMVP(){
   const[profileFilter,setProfileFilter]=useState("");  // AI filter for profile history
   const[profileFilterActive,setProfileFilterActive]=useState(null);
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
+  const[evSuggestions,setEvSuggestions]=useState([]);
+  const[evSugLoading,setEvSugLoading]=useState(false);
+  const[evSugTimer,setEvSugTimer]=useState(null);
+  const[profileSuggestions,setProfileSuggestions]=useState([]);
+  const[profileSugLoading,setProfileSugLoading]=useState(false);
+  const[profileSugTimer,setProfileSugTimer]=useState(null);
+  // Global search
+  const[gSearch,setGSearch]=useState("");
+  const[gSearchOpen,setGSearchOpen]=useState(false);
+  const[gSearchResults,setGSearchResults]=useState([]);
 
   useEffect(()=>{
     (async()=>{
@@ -620,16 +630,14 @@ Query: "${query}"`;
     if(!evFilter.trim()){setEvFilterActive(null);return;}
     setEvFilterLoading(true);
     try{
-      const res=await fetch("https://api.anthropic.com/v1/messages",{
+      const res=await fetch("/api/ai_filter",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",max_tokens:300,
-          messages:[{role:"user",content:buildFilterPrompt(evFilter,`Class: ${cls?.name||"unknown"}, Events: ${classEvents.length}`)}]
-        })
+        body:JSON.stringify({prompt:buildFilterPrompt(evFilter,`Class: ${cls?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
       });
       const data=await res.json();
-      const text=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      if(!data.ok) throw new Error(data.error||"API error");
+      const text=data.text;
       const clean=text.replace(/```json|```/g,"").trim();
       const parsed=JSON.parse(clean);
       const fn=new Function("ev","scoreEvent","return "+parsed.code);
@@ -643,18 +651,17 @@ Query: "${query}"`;
     if(!profileFilter.trim()){setProfileFilterActive(null);return;}
     setProfileFilterLoading(true);
     try{
-      const res=await fetch("https://api.anthropic.com/v1/messages",{
+      const res=await fetch("/api/ai_filter",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",max_tokens:300,
-          messages:[{role:"user",content:buildFilterPrompt(profileFilter,
-            "Each item has: h.ev (event with .name,.date,.country), h.row.rank, h.row.net, h.fleet, h.role ('Helm' or 'Crew'), h.partner. The function takes 'h' not 'ev'. Return code using 'h'."
-          )}]
+          prompt:buildFilterPrompt(profileFilter,"Each item has: h.ev (event with .name,.date,.country), h.row.rank, h.row.net, h.fleet, h.role ('Helm' or 'Crew'), h.partner. The function takes 'h' not 'ev'. Return code using 'h'."),
+          max_tokens:300
         })
       });
       const data=await res.json();
-      const text=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      if(!data.ok) throw new Error(data.error||"API error");
+      const text=data.text;
       const clean=text.replace(/```json|```/g,"").trim();
       const parsed=JSON.parse(clean);
       const fn=new Function("h","scoreEvent","return "+parsed.code);
@@ -662,6 +669,73 @@ Query: "${query}"`;
     }catch(err){
       setProfileFilterActive({label:"Filter error",fn:()=>true});
     }finally{setProfileFilterLoading(false);}
+  };
+
+  /* ── AI suggestions (debounced) ─────────────────────────── */
+  const fetchEvSuggestions=async(q)=>{
+    if(!q.trim()||q.length<3){setEvSuggestions([]);return;}
+    setEvSugLoading(true);
+    try{
+      const eventCtx=classEvents.slice(0,5).map(e=>`"${e.name}" (${scoreEvent(e).fleet} boats)`).join(", ");
+      const prompt=`You are a sailing results filter suggestion engine. Given a partial query, suggest 4 short filter query completions.
+Return ONLY a JSON array of 4 strings (no markdown). Each string is a complete natural-language filter query.
+Context: class=${cls?.name||"unknown"}, recent events: ${eventCtx}
+Partial query: "${q}"`;
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt,max_tokens:200})});
+      const data=await res.json();
+      if(data.ok){
+        const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
+        const arr=JSON.parse(clean);
+        setEvSuggestions(Array.isArray(arr)?arr.slice(0,4):[]);
+      }
+    }catch{setEvSuggestions([]);}
+    finally{setEvSugLoading(false);}
+  };
+
+  const fetchProfileSuggestions=async(q)=>{
+    if(!q.trim()||q.length<3){setProfileSuggestions([]);return;}
+    setProfileSugLoading(true);
+    try{
+      const prompt=`Suggest 4 short sailing result filter queries for an athlete profile.
+Return ONLY a JSON array of 4 strings. Each is a complete filter query.
+Partial query: "${q}"`;
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt,max_tokens:150})});
+      const data=await res.json();
+      if(data.ok){
+        const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
+        const arr=JSON.parse(clean);
+        setProfileSuggestions(Array.isArray(arr)?arr.slice(0,4):[]);
+      }
+    }catch{setProfileSuggestions([]);}
+    finally{setProfileSugLoading(false);}
+  };
+
+  /* ── Global search ───────────────────────────────────────── */
+  const runGlobalSearch=(q)=>{
+    if(!q.trim()){setGSearchResults([]);return;}
+    const ql=q.toLowerCase();
+    const results=[];
+    // Athletes
+    allPeople.filter(p=>p.name.toLowerCase().includes(ql)).slice(0,5).forEach(p=>{
+      results.push({type:"athlete",label:p.name,sub:CLASSES.find(c=>c.id===p.cls)?.short||"",action:()=>{setGSearch("");setGSearchOpen(false);if(p.cls){setPortal(p.cls);}go({name:"profile",id:p.name});}});
+    });
+    // Events
+    events.filter(e=>e.name.toLowerCase().includes(ql)).slice(0,4).forEach(e=>{
+      results.push({type:"event",label:e.name,sub:formatDate(e.date),action:()=>{setGSearch("");setGSearchOpen(false);setPortal(e.cls);go({name:"event",id:e.id});}});
+    });
+    // Class portals
+    CLASSES.filter(c=>c.name.toLowerCase().includes(ql)||c.short.toLowerCase().includes(ql)).forEach(cl=>{
+      results.push({type:"portal",label:cl.name,sub:"Class portal",action:()=>{setGSearch("");setGSearchOpen(false);enterPortal(cl.id);}});
+    });
+    // Navigation shortcuts
+    const navMap=[
+      {kw:["home","all classes","portals"],label:"Hong Kong Sailing — Home",action:()=>{setGSearch("");setGSearchOpen(false);goHome();}},
+      {kw:["all athletes","athletes","global"],label:"All Athletes",action:()=>{setGSearch("");setGSearchOpen(false);setPortal(null);go({name:"athletes"});}},
+    ];
+    navMap.forEach(n=>{if(n.kw.some(k=>k.includes(ql)||ql.includes(k)))results.push({type:"nav",label:n.label,sub:"Navigate",action:n.action});});
+    setGSearchResults(results.slice(0,10));
   };
 
   const saveEvMeta=async()=>{
@@ -1036,6 +1110,25 @@ Query: "${query}"`;
     .scorecell .scode{font-size:8px;font-weight:800;color:#e74c3c;letter-spacing:.04em;text-transform:uppercase;}
 
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
+    /* Global search */
+    .gsrch-wrap{flex:1;max-width:340px;position:relative;}
+    .gsrch{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.18);border-radius:10px;padding:7px 12px;transition:.2s;}
+    .gsrch:focus-within{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.4);}
+    .gsrch input{border:0;outline:0;font:inherit;font-size:13px;background:none;color:#fff;width:100%;}
+    .gsrch input::placeholder{color:#9fbdd9;}
+    .gsrch-drop{position:absolute;top:calc(100% + 6px);left:0;right:0;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 16px 40px -12px rgba(0,0,0,.28);z-index:50;overflow:hidden;animation:rise .15s both;}
+    .gsrch-item{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;transition:.12s;}
+    .gsrch-item:hover{background:var(--sky);}
+    .gsrch-item:not(:last-child){border-bottom:1px solid #f0f4f8;}
+    .gsrch-item .gi-icon{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none;}
+    .gsrch-item .gi-label{font-weight:600;font-size:13px;color:var(--ink);}
+    .gsrch-item .gi-sub{font-size:11px;color:var(--mut);}
+    /* Suggestions dropdown */
+    .sug-drop{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 30px -10px rgba(0,0,0,.18);z-index:40;overflow:hidden;animation:rise .12s both;}
+    .sug-item{padding:9px 14px;cursor:pointer;font-size:13px;color:var(--ink);display:flex;align-items:center;gap:8px;transition:.1s;}
+    .sug-item:hover{background:var(--sky);}
+    .sug-item:not(:last-child){border-bottom:1px solid #f5f7fa;}
+    .ai-srch-wrap{position:relative;flex:1;}
     /* Delete confirm */
     .del-confirm{position:fixed;z-index:80;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:0 12px 32px -10px rgba(0,0,0,.3);min-width:220px;animation:rise .15s both;}
     .del-confirm p{margin:0 0 10px;font-size:13px;color:var(--ink);font-weight:600;}
@@ -1046,9 +1139,6 @@ Query: "${query}"`;
     .ai-srch:focus-within{border-color:var(--accent);}
     .ai-srch input{flex:1;border:0;outline:0;font:inherit;font-size:13px;padding:9px 13px;background:none;color:var(--ink);}
     .ai-srch input::placeholder{color:#9fb2c8;}
-    .ai-srch-btn{border:0;background:var(--accent);color:#fff;padding:0 14px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;height:100%;display:flex;align-items:center;gap:6px;white-space:nowrap;transition:.15s;}
-    .ai-srch-btn:hover{background:var(--accent2);}
-    .ai-srch-btn:disabled{opacity:.6;cursor:default;}
     .filter-chip{display:inline-flex;align-items:center;gap:6px;background:#eef4fb;border:1px solid #b9cee4;border-radius:20px;padding:4px 10px 4px 12px;font-size:12px;font-weight:600;color:var(--navy);margin-bottom:12px;}
     .filter-chip button{border:0;background:none;cursor:pointer;color:var(--mut);padding:0;display:flex;align-items:center;line-height:1;}
     .filter-chip button:hover{color:#c0392b;}
@@ -1057,12 +1147,44 @@ Query: "${query}"`;
   {/* ── TOPBAR ── */}
   <div className="topbar"><div className="topin">
     <div className="brand" onClick={goHome}><Link2 size={15}/></div>
-    <span className="topsite">Hong Kong Sailing</span>
+    <span className="topsite" style={{cursor:"pointer"}} onClick={goHome}>Hong Kong Sailing</span>
+    <div className="gsrch-wrap" onClick={e=>e.stopPropagation()}>
+      <div className="gsrch">
+        <Search size={14} color="#9fbdd9"/>
+        <input
+          placeholder="Search athletes, events, pages..."
+          value={gSearch}
+          onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
+          onFocus={()=>setGSearchOpen(true)}
+          onKeyDown={e=>{
+            if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}
+            if(e.key==="Enter"&&gSearchResults.length){gSearchResults[0].action();}
+          }}
+        />
+        {gSearch&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fbdd9",padding:0,display:"flex"}} onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={14}/></button>}
+      </div>
+      {gSearchOpen&&gSearchResults.length>0&&(
+        <div className="gsrch-drop">
+          {gSearchResults.map((r,i)=>(
+            <div key={i} className="gsrch-item" onClick={r.action}>
+              <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
+                {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
+              </div>
+              <div>
+                <div className="gi-label">{r.label}</div>
+                <div className="gi-sub">{r.sub}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
     <nav className="nav">
       {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Regattas</button>}
       {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>{cls?.short||"Class"} Athletes</button>}
     </nav>
   </div></div>
+  {gSearchOpen&&<div style={{position:"fixed",inset:0,zIndex:45}} onClick={()=>setGSearchOpen(false)}/>}
 
   {/* ── HOME HERO (no portal) ── */}
   {!portal&&(
@@ -1120,17 +1242,35 @@ Query: "${query}"`;
           <button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>
         </div>
         <div style={{marginBottom:12}}>
-          <div className="ai-srch">
-            <input
-              placeholder="Smart filter — e.g. more than 30 boats, or Emily Polson and Casey Law"
-              value={evFilter}
-              onChange={e=>setEvFilter(e.target.value)}
-              onKeyDown={e=>{if(e.key==="Enter")runEvFilter();}}
-            />
-            <button className="ai-srch-btn" disabled={evFilterLoading||!evFilter.trim()} onClick={runEvFilter}>
-              {evFilterLoading?<Loader2 size={13} className="spin"/>:<Sparkles size={13}/>}
-              {evFilterLoading?"Filtering…":"Filter"}
-            </button>
+          <div className="ai-srch-wrap">
+            <div className="ai-srch">
+              <Sparkles size={13} color={evFilterLoading?"#0d8ecf":"#9fb2c8"}/>
+              <input
+                placeholder="Smart filter — e.g. more than 30 boats, or Emily Polson"
+                value={evFilter}
+                onChange={e=>{
+                  setEvFilter(e.target.value);
+                  clearTimeout(evSugTimer);
+                  setEvSugTimer(setTimeout(()=>fetchEvSuggestions(e.target.value),500));
+                }}
+                onKeyDown={e=>{
+                  if(e.key==="Enter"){setEvSuggestions([]);runEvFilter();}
+                  if(e.key==="Escape"){setEvFilter("");setEvSuggestions([]);setEvFilterActive(null);}
+                }}
+                onFocus={()=>{if(evFilter.length>=3)fetchEvSuggestions(evFilter);}}
+              />
+              {evFilterLoading&&<Loader2 size={13} className="spin" color="#0d8ecf"/>}
+              {evFilter&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setEvFilter("");setEvSuggestions([]);setEvFilterActive(null);}}><X size={13}/></button>}
+            </div>
+            {evSuggestions.length>0&&(
+              <div className="sug-drop">
+                {evSuggestions.map((s,i)=>(
+                  <div key={i} className="sug-item" onClick={()=>{setEvFilter(s);setEvSuggestions([]);setTimeout(runEvFilter,50);}}>
+                    <Sparkles size={11} color="#0d8ecf"/>{s}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           {evFilterActive&&(
             <div className="filter-chip" style={{marginTop:8}}>
@@ -1325,17 +1465,34 @@ Query: "${query}"`;
       <div style={{marginTop:22}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
           <p className="seclabel" style={{margin:0}}><Trophy size={14}/>Result history</p>
-          <div className="ai-srch" style={{flex:1,minWidth:220,maxWidth:400}}>
-            <input
-              placeholder="Filter — e.g. top 3 finishes, or 2023 events"
-              value={profileFilter}
-              onChange={e=>setProfileFilter(e.target.value)}
-              onKeyDown={e=>{if(e.key==="Enter")runProfileFilter(ag.history);}}
-            />
-            <button className="ai-srch-btn" disabled={profileFilterLoading||!profileFilter.trim()} onClick={()=>runProfileFilter(ag.history)}>
-              {profileFilterLoading?<Loader2 size={13} className="spin"/>:<Sparkles size={13}/>}
-              {profileFilterLoading?"…":"Filter"}
-            </button>
+          <div className="ai-srch-wrap" style={{flex:1,minWidth:220,maxWidth:420}}>
+            <div className="ai-srch">
+              <Sparkles size={13} color={profileFilterLoading?"#0d8ecf":"#9fb2c8"}/>
+              <input
+                placeholder="Filter results — e.g. top 3 finishes, or 2023 events"
+                value={profileFilter}
+                onChange={e=>{
+                  setProfileFilter(e.target.value);
+                  clearTimeout(profileSugTimer);
+                  setProfileSugTimer(setTimeout(()=>fetchProfileSuggestions(e.target.value),500));
+                }}
+                onKeyDown={e=>{
+                  if(e.key==="Enter"){setProfileSuggestions([]);runProfileFilter(ag.history);}
+                  if(e.key==="Escape"){setProfileFilter("");setProfileSuggestions([]);setProfileFilterActive(null);}
+                }}
+              />
+              {profileFilterLoading&&<Loader2 size={13} className="spin" color="#0d8ecf"/>}
+              {profileFilter&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setProfileFilter("");setProfileSuggestions([]);setProfileFilterActive(null);}}><X size={13}/></button>}
+            </div>
+            {profileSuggestions.length>0&&(
+              <div className="sug-drop">
+                {profileSuggestions.map((s,i)=>(
+                  <div key={i} className="sug-item" onClick={()=>{setProfileFilter(s);setProfileSuggestions([]);setTimeout(()=>runProfileFilter(ag.history),50);}}>
+                    <Sparkles size={11} color="#0d8ecf"/>{s}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           {profileFilterActive&&(
             <div className="filter-chip">
