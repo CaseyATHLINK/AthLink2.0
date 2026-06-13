@@ -520,6 +520,82 @@ function buildCalGrid(year, month, evList){
 }
 
 
+/* ── World SVG map fallback (no API key required) ───────────────────── */
+function WorldSVGMap({countryData}){
+  // Uses a simple SVG world map with country ISO codes
+  // Country outlines via Natural Earth embedded as simplified paths
+  // We use a data-viz approach: colored circles on lat/lon positions
+  const COUNTRY_COORDS={
+    HK:[114.1,22.3],GB:[-1.5,52.4],AU:[133.8,-25.3],NZ:[172.5,-40.9],
+    FR:[2.2,46.2],DE:[10.4,51.2],IT:[12.6,42.5],ES:[-3.7,40.4],
+    NL:[5.3,52.1],DK:[9.6,56.3],SE:[15.2,59.3],NO:[8.5,60.5],
+    FI:[25.7,61.9],JP:[138.3,36.2],CN:[104.2,35.9],KR:[127.8,36.5],
+    SG:[103.8,1.4],TH:[100.5,13.7],AR:[-64.0,-34.0],BR:[-51.9,-14.2],
+    CL:[-71.5,-35.7],US:[-95.7,37.1],CA:[-96.8,60.1],MX:[-102.5,23.6],
+    IE:[-8.2,53.4],PT:[-8.2,39.4],BE:[4.5,50.5],CH:[8.2,46.8],
+    AT:[14.5,47.5],PL:[19.1,52.1],CZ:[15.5,49.8],HU:[19.5,47.2],
+    HR:[15.2,45.1],SI:[14.9,46.1],GR:[21.8,38.7],TR:[35.2,39.0],
+    IL:[34.9,31.0],ZA:[25.1,-29.0],EG:[30.0,26.8],NG:[8.7,9.1],
+    RU:[105.3,61.5],UA:[31.4,49.0],EE:[25.0,58.7],LV:[24.9,57.0],
+    LT:[23.9,55.9],SK:[19.5,48.7],RS:[21.0,44.0],ME:[19.3,42.8],
+    CY:[33.1,35.1],MT:[14.4,35.9],IS:[-18.1,65.0],NOR:[8.5,60.5],
+    BRA:[-51.9,-14.2],ARG:[-64.0,-34.0],
+  };
+  const maxCount=Math.max(...Object.values(countryData),1);
+  // Simple equirectangular projection
+  const W=640,H=320;
+  const toXY=(lng,lat)=>[(lng+180)*(W/360),(90-lat)*(H/180)];
+  return(
+    <div style={{background:"#0d1b2a",borderRadius:14,overflow:"hidden",position:"relative"}}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto",display:"block"}}>
+        {/* Ocean background */}
+        <rect width={W} height={H} fill="#0d1b2a"/>
+        {/* Grid lines */}
+        {[-60,-30,0,30,60].map(lat=>{
+          const y=(90-lat)*(H/180);
+          return<line key={lat} x1={0} y1={y} x2={W} y2={y} stroke="#1a2e44" strokeWidth={0.5}/>;
+        })}
+        {[-120,-60,0,60,120].map(lng=>{
+          const x=(lng+180)*(W/360);
+          return<line key={lng} x1={x} y1={0} x2={x} y2={H} stroke="#1a2e44" strokeWidth={0.5}/>;
+        })}
+        {/* Country dots */}
+        {Object.entries(countryData).map(([iso,count])=>{
+          const coords=COUNTRY_COORDS[iso];
+          if(!coords) return null;
+          const [x,y]=toXY(coords[0],coords[1]);
+          const intensity=count/maxCount;
+          const r=8+intensity*14;
+          const opacity=0.5+intensity*0.5;
+          return(
+            <g key={iso}>
+              <circle cx={x} cy={y} r={r+4} fill={`rgba(220,50,50,${opacity*0.3})`}/>
+              <circle cx={x} cy={y} r={r} fill={`rgba(220,50,50,${opacity})`}/>
+              <title>{iso}: {count} regatta{count!==1?"s":""}</title>
+            </g>
+          );
+        })}
+        {/* Labels for competed countries */}
+        {Object.entries(countryData).map(([iso,count])=>{
+          const coords=COUNTRY_COORDS[iso];
+          if(!coords) return null;
+          const [x,y]=toXY(coords[0],coords[1]);
+          return<text key={iso+"l"} x={x} y={y+24} textAnchor="middle" fill="#9fbdd9" fontSize={9} fontWeight={700}>{iso}</text>;
+        })}
+      </svg>
+      <div style={{padding:"8px 14px 10px",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
+        {Object.entries(countryData).sort((a,b)=>b[1]-a[1]).map(([iso,count])=>(
+          <span key={iso} style={{fontSize:11,color:"#9fbdd9",display:"flex",alignItems:"center",gap:4}}>
+            <span style={{width:8,height:8,borderRadius:"50%",background:`rgba(220,50,50,${0.5+count/Math.max(...Object.values(countryData),1)*0.5})`,display:"inline-block"}}/>
+            {iso} ({count})
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 /* ── Mapbox sailing globe ─────────────────────────────────────────────── */
 const MAPBOX_TOKEN=import.meta.env.VITE_MAPBOX_TOKEN||"";
 
@@ -589,12 +665,7 @@ function SailingGlobe({countryData}){
     document.head.appendChild(script);
     return()=>{if(mapInst.current){mapInst.current.remove();mapInst.current=null;}};
   },[]);
-  if(!MAPBOX_TOKEN) return(
-    <div style={{background:"#1a2a3a",borderRadius:14,padding:"20px 24px",color:"#9fbdd9",fontSize:13,textAlign:"center"}}>
-      <div style={{fontSize:22,marginBottom:8}}>🌍</div>
-      <div>Add <code>VITE_MAPBOX_TOKEN</code> to Vercel env vars to enable the interactive globe.</div>
-    </div>
-  );
+  if(!MAPBOX_TOKEN) return<WorldSVGMap countryData={countryData}/>;
   return<div ref={mapRef} style={{width:"100%",height:320,borderRadius:14,overflow:"hidden"}}/>;
 }
 
@@ -942,32 +1013,40 @@ Partial query: "${q}"`;
     setGSearchResults(results.slice(0,10));
   };
 
-  // pendingNav: queued navigation that needs portal set first
-  const[pendingNav,setPendingNav]=useState(null);
   const[editResultsEv,setEditResultsEv]=useState(null); // full edit mode for existing event
   const[hoverRow,setHoverRow]=useState(null); // {evId,helm} currently hovered
   const[hoverSummaries,setHoverSummaries]=useState({}); // key=helm → summary text
   const[profileSummaries,setProfileSummaries]=useState({}); // key=name → full profile blurb
-  useEffect(()=>{
-    if(!pendingNav) return;
-    const n=pendingNav;setPendingNav(null);
-    if(n.view) go(n.view);
-  },[portal]); // eslint-disable-line
 
   const execGSearch=(r)=>{
+    // Close search UI immediately
     setGSearch("");setGSearchOpen(false);setGSearchResults([]);
     const n=r.nav;
-    if(n.type==="profile"){
-      if(n.cls&&n.cls!==portal){setPortal(n.cls);setPendingNav({view:{name:"profile",id:n.id}});}
-      else go({name:"profile",id:n.id});
+    if(n.type==="portal"){
+      // enterPortal sets portal+view in one batch — no defer needed
+      enterPortal(n.cls);
+    } else if(n.type==="home"){
+      goHome();
+    } else if(n.type==="athletes"){
+      setPortal(null);
+      // Defer view change so portal state settles first
+      setTimeout(()=>setView({name:"athletes"}),0);
+    } else if(n.type==="profile"){
+      if(n.cls&&n.cls!==portal){
+        setPortal(n.cls);
+        setTimeout(()=>setView({name:"profile",id:n.id}),0);
+      } else {
+        go({name:"profile",id:n.id});
+      }
+    } else if(n.type==="event"){
+      if(n.cls!==portal){
+        setPortal(n.cls);
+        setTimeout(()=>setView({name:"event",id:n.id}),0);
+      } else {
+        go({name:"event",id:n.id});
+      }
     }
-    else if(n.type==="event"){
-      if(n.cls!==portal){setPortal(n.cls);setPendingNav({view:{name:"event",id:n.id}});}
-      else go({name:"event",id:n.id});
-    }
-    else if(n.type==="portal"){enterPortal(n.cls);}
-    else if(n.type==="home"){goHome();}
-    else if(n.type==="athletes"){setPortal(null);go({name:"athletes"});}
+    window.scrollTo(0,0);
   };
 
   const fetchHoverSummary=async(name,ag,crew)=>{
@@ -1774,8 +1853,8 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                 <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
 {hoverRow?.evId===ev.id&&hoverRow?.helm===r.helm&&(
                   <div className={`hover-summary${hoverSummaries[r.crew?`${r.helm}+${r.crew}`:r.helm]===null?" loading":""}`}>
-                    {hoverSummaries[r.crew?`${r.helm}+${r.crew}`:r.helm]||
-                      (hoverSummaries[r.crew?`${r.helm}+${r.crew}`:r.helm]===null?"Generating…":"")}
+                    {(()=>{const k=r.crew?`${r.helm}+${r.crew}`:r.helm;const v=hoverSummaries[k];
+                      return v===null?"Generating…":v===undefined||v===""?"Add ANTHROPIC_API_KEY to enable.":v;})()}
                   </div>
                 )}
                 <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{(()=>{
@@ -1909,7 +1988,9 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                     ?<div style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",opacity:.7,display:"flex",alignItems:"center",gap:6}}><Loader2 size={13} className="spin"/>Generating overview…</div>
                     :summary
                       ?<p style={{color:"#dce8f8",fontSize:13,lineHeight:1.55,margin:0}}>{summary}</p>
-                      :<p style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",margin:0}}>No data available yet.</p>
+                      :<p style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",margin:0}}>
+                        {profileSummaries[name]===""?"Add ANTHROPIC_API_KEY to Vercel env vars to enable AI overview.":"No data available yet."}
+                      </p>
                   }
                 </div>
                 {Object.keys(countryCounts).length>0&&(
@@ -1973,7 +2054,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
               <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                 <span className="disp" style={{fontWeight:700,fontSize:15}}>{h.ev.name}</span>
                 <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
-
+                {(()=>{const cl=CLASSES.find(cl=>cl.id===h.ev.cls);return cl?<span className="cls" style={{fontSize:10,padding:"2px 8px",marginLeft:2}}>{cl.short}</span>:null;})()}
               </div>
               <div className="cn" style={{marginTop:3}}><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} onClick={()=>openSailorCalAt(h.ev.date,name)}>{formatDate(h.ev.date)}</span> · {evLoc(h.ev)} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}</div>
               <div className="miniraces">{h.row.races.map((rc2,j)=>{
