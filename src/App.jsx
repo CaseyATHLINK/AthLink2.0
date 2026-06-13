@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
@@ -520,6 +520,164 @@ function buildCalGrid(year, month, evList){
 }
 
 
+/* ── Mapbox sailing globe ─────────────────────────────────────────────── */
+const MAPBOX_TOKEN=import.meta.env.VITE_MAPBOX_TOKEN||"";
+
+function SailingGlobe({countryData}){
+  // countryData: {ISO2_CODE: count} e.g. {HK:3, ES:1}
+  const mapRef=React.useRef(null);
+  const mapInst=React.useRef(null);
+  React.useEffect(()=>{
+    if(!MAPBOX_TOKEN||!mapRef.current||mapInst.current) return;
+    const script=document.createElement('script');
+    script.src='https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js';
+    script.onload=()=>{
+      const link=document.createElement('link');
+      link.rel='stylesheet';
+      link.href='https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css';
+      document.head.appendChild(link);
+      const mapboxgl=window.mapboxgl;
+      mapboxgl.accessToken=MAPBOX_TOKEN;
+      const map=new mapboxgl.Map({
+        container:mapRef.current,
+        style:'mapbox://styles/mapbox/dark-v11',
+        projection:'globe',
+        center:[0,20],zoom:0.8,
+        interactive:true,
+        attributionControl:false,
+      });
+      mapInst.current=map;
+      map.on('style.load',()=>{
+        map.setFog({color:'rgb(186,210,235)',highColor:'#add8e6','horizon-blend':0.02,'star-intensity':0.6});
+        // Add country fill layer
+        map.addSource('countries',{type:'vector',url:'mapbox://mapbox.country-boundaries-v1'});
+        const codes=Object.keys(countryData);
+        const maxCount=Math.max(...Object.values(countryData),1);
+        // Build match expression for colour
+        const matchExpr=['match',['get','iso_3166_1_alpha_2']];
+        codes.forEach(iso=>{
+          const intensity=countryData[iso]/maxCount;
+          const r=Math.round(180+75*intensity);
+          const g=Math.round(50-40*intensity);
+          const b=Math.round(50-40*intensity);
+          matchExpr.push(iso,`rgb(${r},${g},${b})`);
+        });
+        matchExpr.push('rgba(0,0,0,0)');
+        map.addLayer({
+          id:'country-fills',
+          type:'fill',
+          source:'countries',
+          'source-layer':'country_boundaries',
+          paint:{'fill-color':matchExpr,'fill-opacity':0.85},
+          filter:['==',['get','disputed'],'false'],
+        });
+        // Add hover popup
+        const popup=new mapboxgl.Popup({closeButton:false,closeOnClick:false});
+        map.on('mousemove','country-fills',(e)=>{
+          if(!e.features.length){popup.remove();return;}
+          const iso=e.features[0].properties.iso_3166_1_alpha_2;
+          const count=countryData[iso];
+          if(!count){popup.remove();return;}
+          const name=e.features[0].properties.name_en||iso;
+          popup.setLngLat(e.lngLat)
+            .setHTML(`<strong>${name}</strong><br/>${count} regatta${count!==1?'s':''} competed`)
+            .addTo(map);
+        });
+        map.on('mouseleave','country-fills',()=>popup.remove());
+      });
+    };
+    document.head.appendChild(script);
+    return()=>{if(mapInst.current){mapInst.current.remove();mapInst.current=null;}};
+  },[]);
+  if(!MAPBOX_TOKEN) return(
+    <div style={{background:"#1a2a3a",borderRadius:14,padding:"20px 24px",color:"#9fbdd9",fontSize:13,textAlign:"center"}}>
+      <div style={{fontSize:22,marginBottom:8}}>🌍</div>
+      <div>Add <code>VITE_MAPBOX_TOKEN</code> to Vercel env vars to enable the interactive globe.</div>
+    </div>
+  );
+  return<div ref={mapRef} style={{width:"100%",height:320,borderRadius:14,overflow:"hidden"}}/>;
+}
+
+
+/* ── IOC country list for dropdown ───────────────────────────────────── */
+const COUNTRIES=[
+  {code:"HKG",name:"Hong Kong"},{code:"NZL",name:"New Zealand"},{code:"GBR",name:"Great Britain"},
+  {code:"AUS",name:"Australia"},{code:"USA",name:"United States"},{code:"FRA",name:"France"},
+  {code:"GER",name:"Germany"},{code:"ITA",name:"Italy"},{code:"ESP",name:"Spain"},
+  {code:"NED",name:"Netherlands"},{code:"DEN",name:"Denmark"},{code:"SWE",name:"Sweden"},
+  {code:"NOR",name:"Norway"},{code:"FIN",name:"Finland"},{code:"JPN",name:"Japan"},
+  {code:"CHN",name:"China"},{code:"KOR",name:"South Korea"},{code:"SGP",name:"Singapore"},
+  {code:"THA",name:"Thailand"},{code:"MAS",name:"Malaysia"},{code:"INA",name:"Indonesia"},
+  {code:"PHI",name:"Philippines"},{code:"IND",name:"India"},{code:"PAK",name:"Pakistan"},
+  {code:"SRI",name:"Sri Lanka"},{code:"BAN","name":"Bangladesh"},{code:"ARG",name:"Argentina"},
+  {code:"BRA",name:"Brazil"},{code:"CHI",name:"Chile"},{code:"COL",name:"Colombia"},
+  {code:"URU",name:"Uruguay"},{code:"PER",name:"Peru"},{code:"ECU",name:"Ecuador"},
+  {code:"CAN",name:"Canada"},{code:"MEX",name:"Mexico"},{code:"CRC",name:"Costa Rica"},
+  {code:"IRL",name:"Ireland"},{code:"POR",name:"Portugal"},{code:"BEL",name:"Belgium"},
+  {code:"SUI",name:"Switzerland"},{code:"AUT",name:"Austria"},{code:"POL",name:"Poland"},
+  {code:"CZE",name:"Czech Republic"},{code:"HUN",name:"Hungary"},{code:"CRO",name:"Croatia"},
+  {code:"SLO",name:"Slovenia"},{code:"ROU",name:"Romania"},{code:"BUL",name:"Bulgaria"},
+  {code:"GRE",name:"Greece"},{code:"TUR",name:"Turkey"},{code:"ISR",name:"Israel"},
+  {code:"RSA",name:"South Africa"},{code:"MAR",name:"Morocco"},{code:"EGY",name:"Egypt"},
+  {code:"KEN",name:"Kenya"},{code:"NGR",name:"Nigeria"},{code:"GHA",name:"Ghana"},
+  {code:"UAE",name:"United Arab Emirates"},{code:"KSA",name:"Saudi Arabia"},{code:"QAT",name:"Qatar"},
+  {code:"BRN",name:"Bahrain"},{code:"OMA",name:"Oman"},{code:"KUW",name:"Kuwait"},
+  {code:"IRI",name:"Iran"},{code:"IRQ",name:"Iraq"},{code:"SYR",name:"Syria"},
+  {code:"RUS",name:"Russia"},{code:"UKR",name:"Ukraine"},{code:"EST",name:"Estonia"},
+  {code:"LAT",name:"Latvia"},{code:"LTU",name:"Lithuania"},{code:"SVK",name:"Slovakia"},
+  {code:"SRB",name:"Serbia"},{code:"MNE",name:"Montenegro"},{code:"BIH",name:"Bosnia"},
+  {code:"MKD",name:"North Macedonia"},{code:"ALB",name:"Albania"},{code:"CYP",name:"Cyprus"},
+  {code:"MLT",name:"Malta"},{code:"ISL",name:"Iceland"},{code:"LIE",name:"Liechtenstein"},
+  {code:"LUX",name:"Luxembourg"},{code:"AND",name:"Andorra"},{code:"MON",name:"Monaco"},
+  {code:"SMR",name:"San Marino"},{code:"IVB",name:"British Virgin Islands"},
+  {code:"ANT",name:"Antigua & Barbuda"},{code:"BAR",name:"Barbados"},{code:"JAM",name:"Jamaica"},
+  {code:"TTO",name:"Trinidad & Tobago"},{code:"CUB",name:"Cuba"},{code:"DOM",name:"Dominican Republic"},
+  {code:"PUR",name:"Puerto Rico"},{code:"CAY",name:"Cayman Islands"},{code:"BER",name:"Bermuda"},
+  {code:"ISV",name:"US Virgin Islands"},{code:"FIJ",name:"Fiji"},{code:"PNG",name:"Papua New Guinea"},
+  {code:"SAM",name:"Samoa"},{code:"TGA",name:"Tonga"},{code:"ASA",name:"American Samoa"},
+  {code:"NZL",name:"New Zealand"},{code:"NRU",name:"Nauru"},
+];
+
+function CountrySelect({value,onChange,placeholder="Select country..."}){
+  const[open,setOpen]=React.useState(false);
+  const[q,setQ]=React.useState("");
+  const sel=COUNTRIES.find(c=>c.code===value);
+  const filtered=q?COUNTRIES.filter(c=>c.code.includes(q.toUpperCase())||c.name.toLowerCase().includes(q.toLowerCase())):COUNTRIES;
+  const ref=React.useRef();
+  React.useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+  return(
+    <div style={{position:"relative"}} ref={ref}>
+      <div onClick={()=>setOpen(o=>!o)} style={{border:"1px solid var(--line)",borderRadius:7,padding:"7px 10px",fontSize:13,background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"}}>
+        {sel?<>{iocFlag(sel.code)} <b>{sel.code}</b> {sel.name}</>:<span style={{color:"var(--mut)"}}>{placeholder}</span>}
+        <ChevronRight size={12} style={{marginLeft:"auto",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
+      </div>
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:90,background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.2)",maxHeight:220,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+          <div style={{padding:"8px 10px",borderBottom:"1px solid var(--line)"}}>
+            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search country..." style={{width:"100%",border:0,outline:0,font:"inherit",fontSize:13,color:"var(--ink)"}}/>
+          </div>
+          <div style={{overflowY:"auto",flex:1}}>
+            {filtered.slice(0,80).map(co=>(
+              <div key={co.code} onClick={()=>{onChange(co.code);setOpen(false);setQ("");}}
+                style={{padding:"8px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:8,fontSize:13,background:co.code===value?"var(--sky)":"#fff",transition:".1s"}}
+                onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+                onMouseLeave={e=>e.currentTarget.style.background=co.code===value?"var(--sky)":"#fff"}>
+                <span>{iocFlag(co.code)}</span>
+                <b style={{color:"var(--navy)",minWidth:36}}>{co.code}</b>
+                <span style={{color:"var(--mut)"}}>{co.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 /* ═════════════════════════════════════════════════════════════════════ */
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
@@ -825,6 +983,21 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
     }catch{setHoverSummaries(h=>({...h,[name]:""}));}
   };
 
+
+  const openCalendarAt=(dateStr)=>{
+    const p=dateStr?.split('/');
+    if(!p||p.length!==3) return;
+    const mo=parseInt(p[1])-1;const yr=parseInt(p[2]);
+    if(isNaN(mo)||isNaN(yr)) return;
+    setCalMonth(mo);setCalYear(yr);setShowCalendar(true);
+  };
+  const openSailorCalAt=(dateStr,name)=>{
+    const p=dateStr?.split('/');
+    if(!p||p.length!==3) return;
+    setSailorCalMonth(parseInt(p[1])-1);setSailorCalYear(parseInt(p[2]));
+    setSailorCalName(name);setSailorCalAll(false);setShowSailorCal(true);
+  };
+
   const saveEvMeta=async()=>{
     if(!editEvMeta) return;
     const{id,name,date,country,discards}=editEvMeta;
@@ -1075,6 +1248,8 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
     .evicon-date{width:48px;height:48px;border-radius:11px;background:var(--sky);display:flex;flex-direction:column;align-items:center;justify-content:center;flex:none;gap:0;}
     .evicon-date .eid{font-family:'Barlow',sans-serif;font-weight:800;font-size:20px;color:var(--navy);line-height:1;}
     .evicon-date .eim{font-size:9px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;line-height:1.2;}
+    .evicon-year{display:flex;flex-direction:column;align-items:center;gap:0;}
+    .evicon-year span{font-size:9px;font-weight:700;color:var(--mut);letter-spacing:.02em;line-height:1.3;font-family:'Barlow',sans-serif;}
     .evname{font-family:'Barlow',sans-serif;font-weight:700;font-size:17px;margin:0 0 3px;}
     .evmeta{font-size:13px;color:var(--mut);display:flex;gap:12px;flex-wrap:wrap;align-items:center;}
     .evmeta span{display:flex;align-items:center;gap:5px;}
@@ -1402,7 +1577,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
         </div>
         <div className="pillbar">
           <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> regattas</div>
-          <div className="pill"><Users size={16}/><b>{people.length}</b> athletes</div>
+          <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
         </div>
       </div></div>
       <div className="wrap sec">
@@ -1453,28 +1628,53 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
 
         </div>
         {(()=>{
-          const filtered=evFilterActive
+          const allFiltered=(evFilterActive
             ?classEvents.filter(ev=>{try{return evFilterActive.fn(ev,scoreEvent);}catch{return true;}})
-            :classEvents;
+            :classEvents)
+            .slice().sort((a,b)=>{
+              const da=a.date?.split('/').reverse().join('')||'';
+              const db=b.date?.split('/').reverse().join('')||'';
+              return db.localeCompare(da);
+            });
+          // Build items with year dividers
+          const evItems=[];let lastYear=null;
+          allFiltered.forEach((ev,i)=>{
+            const yr=ev.date?.split('/')?.[2]||null;
+            if(yr&&yr!==lastYear){evItems.push({type:'divider',year:yr});lastYear=yr;}
+            evItems.push({type:'ev',ev,i});
+          });
+          const filtered=allFiltered;
           return(<>
-            {filtered.map((ev,i)=>{
+            {evItems.map((item,idx)=>{
+              if(item.type==='divider') return(
+                <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+                  <span style={{fontSize:12,fontWeight:700,color:"var(--mut)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}>{item.year}</span>
+                  <div style={{flex:1,height:1,background:"var(--line)"}}/>
+                </div>
+              );
+              const{ev,i}=item;
               const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
               return(<div className={`ev${isDraft?" draft":""}`} key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
 {(()=>{
                   const dp=ev.date?.split('/');
                   const hasDate=dp&&dp.length===3&&dp[0]&&dp[2];
-                  return hasDate
-                    ?<div className="evicon-date">
-                        <span className="eid">{dp[0]}</span>
-                        <span className="eim">{MON[parseInt(dp[1])-1]||""}</span>
-                      </div>
-                    :<div className="evicon"><Anchor size={20}/></div>;
+                  return(<div style={{display:"flex",alignItems:"center",gap:6}}>
+                    {hasDate&&<div className="evicon-year">
+                      {dp[2].split('').map((ch,ci)=><span key={ci}>{ch}</span>)}
+                    </div>}
+                    {hasDate
+                      ?<div className="evicon-date">
+                          <span className="eid">{dp[0]}</span>
+                          <span className="eim">{MON[parseInt(dp[1])-1]||""}</span>
+                        </div>
+                      :<div className="evicon"><Anchor size={20}/></div>}
+                  </div>);
                 })()}
                 <div style={{flex:1,minWidth:0}}>
                   <p className="evname">{ev.name}</p>
                   <div className="evmeta">
                     <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
-                    <span><Calendar size={13}/>{formatDate(ev.date)}</span>
+                    <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
                     <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
                   </div>
                 </div>
@@ -1516,7 +1716,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
       </div>
       <div className="evmeta" style={{marginBottom:16}}>
         <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
-        <span><Calendar size={13}/>{formatDate(ev.date)}</span>
+        <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
         <span><Anchor size={13}/>{ev.cls}</span>
       </div>
       <div className="panel"><table>
@@ -1582,7 +1782,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
     <div className="wrap sec" style={{paddingTop:26}}>
       {portal&&<button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>{cls?.name}</button>}
       <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:4,flexWrap:"wrap"}}>
-        <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle}</h1>
+        <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle} <span style={{fontSize:17,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
         {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
           <Users size={14}/>All Athletes</button>}
       </div>
@@ -1649,6 +1849,20 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
             <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
             <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
           </div>
+          {/* Globe teaser in profile header */}
+          {(()=>{
+            const countryCounts={};
+            ag.history.forEach(h=>{
+              const country=h.ev.country;
+              if(country){const iso=IOC_ISO[country];if(iso)countryCounts[iso]=(countryCounts[iso]||0)+1;}
+            });
+            return Object.keys(countryCounts).length>0?(
+              <div style={{marginTop:18,width:"100%"}}>
+                <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 10px",fontSize:11}}><Flag size={12}/>Competition footprint</p>
+                <SailingGlobe countryData={countryCounts}/>
+              </div>
+            ):null;
+          })()}
         </div>
         <div className="claimbox">
           {isV?(<div className="vbox"><b><BadgeCheck size={16}/>Verified profile</b><div style={{marginTop:5}}>Tracking {ag.events} regatta{ag.events!==1?"s":""} in one record.</div></div>)
@@ -1703,7 +1917,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
                 <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
 
               </div>
-              <div className="cn" style={{marginTop:3}}>{formatDate(h.ev.date)} · {evLoc(h.ev)} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}</div>
+              <div className="cn" style={{marginTop:3}}><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} onClick={()=>openSailorCalAt(h.ev.date,name)}>{formatDate(h.ev.date)}</span> · {evLoc(h.ev)} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}</div>
               <div className="miniraces">{h.row.races.map((rc2,j)=>{
                 const cls2=isCode(rc2)?"c":h.row.discardSet.has(j)?"d":rc2===1?"g1":rc2===2?"g2":rc2===3?"g3":"";
                 return<div key={j} className={`rc ${cls2}`}>{isCode(rc2)?rc2.slice(0,2):rc2}</div>;
@@ -1749,7 +1963,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
                 <input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="2025 29er Asian Championship" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
               </div>
               <div className="meta-grid">
-                <div><label>Host Country</label><input value={mf.club} onChange={e=>updMeta("club",e.target.value.toUpperCase())} placeholder="HKG" style={{textTransform:"uppercase"}}/></div>
+                <div><label>Host Country</label><CountrySelect value={mf.club||""} onChange={v=>updMeta("club",v)}/></div>
                 <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
               </div>
               <div style={{marginBottom:14}}>
@@ -1849,7 +2063,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
             <div className="preview-meta wide" style={{marginBottom:8}}>
               <div><label>Event name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Event name"/></div>
               <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updPMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
-              <div><label>Host Country</label><input value={previewEv.venue||""} onChange={e=>updPMeta("venue",e.target.value.toUpperCase())} className={!previewEv.venue?"pmissing":""} placeholder="HKG" style={{textTransform:"uppercase"}}/></div>
+              <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updPMeta("venue",v)}/></div>
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}
@@ -2069,7 +2283,7 @@ Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race 
             <div><label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Date</label>
             <input value={editEvMeta.date} onChange={e=>setEditEvMeta(m=>({...m,date:e.target.value}))} placeholder="dd/mm/yyyy" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/></div>
             <div><label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Host Country</label>
-            <input value={editEvMeta.country} onChange={e=>setEditEvMeta(m=>({...m,country:e.target.value.toUpperCase()}))} placeholder="HKG" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/></div>
+            <CountrySelect value={editEvMeta.country||""} onChange={v=>setEditEvMeta(m=>({...m,country:v}))}/></div>
             <div><label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Discards</label>
             <input type="number" min="0" max="20" value={editEvMeta.discards} onChange={e=>setEditEvMeta(m=>({...m,discards:e.target.value}))} style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/></div>
           </div>
