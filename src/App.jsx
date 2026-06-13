@@ -685,7 +685,12 @@ Query: "${query}"`;
       const fn=new Function("ev","scoreEvent","return "+parsed.code);
       setEvFilterActive({label:parsed.label,fn});
     }catch(err){
-      setEvFilterActive({label:"Filter error",fn:()=>true});
+      // Fallback: simple client-side text search
+      const ql=evFilter.toLowerCase();
+      const fn=(ev)=>ev.name.toLowerCase().includes(ql)||
+        ev.entries.some(e=>e.helm.toLowerCase().includes(ql)||e.crew.toLowerCase().includes(ql))||
+        (ev.country||"").toLowerCase().includes(ql);
+      setEvFilterActive({label:`"${evFilter}"`,fn});
     }finally{setEvFilterLoading(false);}
   };
 
@@ -779,14 +784,45 @@ Partial query: "${q}"`;
     setGSearchResults(results.slice(0,10));
   };
 
+  // pendingNav: queued navigation that needs portal set first
+  const[pendingNav,setPendingNav]=useState(null);
+  const[editResultsEv,setEditResultsEv]=useState(null); // full edit mode for existing event
+  const[hoverRow,setHoverRow]=useState(null); // {evId,helm} currently hovered
+  const[hoverSummaries,setHoverSummaries]=useState({}); // key=helm → summary text
+  useEffect(()=>{
+    if(!pendingNav) return;
+    const n=pendingNav;setPendingNav(null);
+    if(n.view) go(n.view);
+  },[portal]); // eslint-disable-line
+
   const execGSearch=(r)=>{
     setGSearch("");setGSearchOpen(false);setGSearchResults([]);
     const n=r.nav;
-    if(n.type==="profile"){if(n.cls)setPortal(n.cls);go({name:"profile",id:n.id});}
-    else if(n.type==="event"){setPortal(n.cls);go({name:"event",id:n.id});}
+    if(n.type==="profile"){
+      if(n.cls&&n.cls!==portal){setPortal(n.cls);setPendingNav({view:{name:"profile",id:n.id}});}
+      else go({name:"profile",id:n.id});
+    }
+    else if(n.type==="event"){
+      if(n.cls!==portal){setPortal(n.cls);setPendingNav({view:{name:"event",id:n.id}});}
+      else go({name:"event",id:n.id});
+    }
     else if(n.type==="portal"){enterPortal(n.cls);}
     else if(n.type==="home"){goHome();}
     else if(n.type==="athletes"){setPortal(null);go({name:"athletes"});}
+  };
+
+  const fetchHoverSummary=async(name,ag)=>{
+    if(hoverSummaries[name]) return; // cached
+    try{
+      const best=ag.best?"#"+ag.best:"unknown";
+      const evs=ag.events;const pods=ag.podiums;const wins=ag.wins;
+      const prompt=`Write exactly 2 short sentences (max 25 words total) summarising this sailor's achievements. Be factual and concise. No fluff.
+Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race wins: ${wins}.`;
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt,max_tokens:60})});
+      const data=await res.json();
+      if(data.ok) setHoverSummaries(h=>({...h,[name]:data.text.trim()}));
+    }catch{setHoverSummaries(h=>({...h,[name]:""}));}
   };
 
   const saveEvMeta=async()=>{
@@ -795,6 +831,45 @@ Partial query: "${q}"`;
     await sbPatch("events",`id=eq.${id}`,{name,date,country:country||null,discards:parseInt(discards)||1});
     setEvents(p=>p.map(ev=>ev.id===id?{...ev,name,date,country,discards:parseInt(discards)||1}:ev));
     setEditEvMeta(null);
+  };
+
+  const openEditResults=(ev)=>{
+    // Load existing event into the previewEv state for full editing
+    const prev={
+      ...ev,
+      venue:ev.country||"",
+      entries:ev.entries.map(e=>({...e})),
+    };
+    setPreviewEv(prev);
+    setEditResultsEv(ev.id); // flag: this is an edit, not a new import
+    setOpen(true);
+    setImportStep("preview");
+  };
+
+  const saveEditedResults=async(asDraft)=>{
+    if(!previewEv||!editResultsEv) return;
+    const status=asDraft?"Draft":"Final";
+    const ev={...previewEv,status,country:(previewEv.venue||"").toUpperCase()||previewEv.country||""};
+    // Update event metadata
+    await sbPatch("events",`id=eq.${editResultsEv}`,{
+      name:ev.name,date:ev.date,country:ev.country||null,
+      discards:ev.discards,status,
+    });
+    // Update entries (delete old, insert new)
+    if(sbH){
+      await sbDel("entries",`event_id=eq.${editResultsEv}`);
+      await sbPost("entries",ev.entries.map(e=>({
+        event_id:editResultsEv,sail:e.sail,nat:e.nat||null,
+        division:e.div,helm_name:e.helm,crew_name:e.crew||null,
+        races:e.races,race_codes:e.race_codes||null,
+        pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
+      })));
+    }
+    setEvents(p=>p.map(existing=>existing.id===editResultsEv?{...ev,id:editResultsEv}:existing));
+    setEditResultsEv(null);
+    closeImport();
+    setNote({name:ev.name,matched:0,created:0,msg:status==="Draft"?"Saved as draft.":"Results updated."});
+    setTimeout(()=>setNote(null),4000);
   };
 
   /* ── PDF / import flow ────────────────────────────────────── */
@@ -997,6 +1072,9 @@ Partial query: "${q}"`;
     .ev:hover{border-color:#b9cee4;transform:translateY(-2px);box-shadow:0 12px 30px -16px rgba(22,58,99,.55);}
     .ev.draft{opacity:.75;border-style:dashed;}
     .evicon{width:44px;height:44px;border-radius:11px;background:var(--sky);color:var(--navy);display:grid;place-items:center;flex:none;}
+    .evicon-date{width:48px;height:48px;border-radius:11px;background:var(--sky);display:flex;flex-direction:column;align-items:center;justify-content:center;flex:none;gap:0;}
+    .evicon-date .eid{font-family:'Barlow',sans-serif;font-weight:800;font-size:20px;color:var(--navy);line-height:1;}
+    .evicon-date .eim{font-size:9px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;line-height:1.2;}
     .evname{font-family:'Barlow',sans-serif;font-weight:700;font-size:17px;margin:0 0 3px;}
     .evmeta{font-size:13px;color:var(--mut);display:flex;gap:12px;flex-wrap:wrap;align-items:center;}
     .evmeta span{display:flex;align-items:center;gap:5px;}
@@ -1013,6 +1091,9 @@ Partial query: "${q}"`;
     tbody td.editable{cursor:text;}tbody td.editable:hover{background:#eef4fb;}
     tbody tr:last-child td{border-bottom:0;}
     .rk{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;width:40px;}
+    tbody tr.row-hover{background:#f0f6fc;transition:background .2s;}
+    .hover-summary{font-size:11.5px;color:var(--mut);font-style:italic;margin-top:3px;max-width:340px;animation:rise .2s both;}
+    .hover-summary.loading{opacity:.6;}
     .rk.p1{color:var(--gold);}.rk.p2{color:#7d8a98;}.rk.p3{color:#a86a32;}
     .boat{display:flex;align-items:center;gap:10px;}
     .av{width:30px;height:30px;border-radius:50%;color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none;font-family:'Barlow',sans-serif;}
@@ -1379,9 +1460,16 @@ Partial query: "${q}"`;
             {filtered.map((ev,i)=>{
               const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
               return(<div className={`ev${isDraft?" draft":""}`} key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
-                <div className="evicon" style={{fontSize:22,display:"grid",placeItems:"center"}}>
-                  {ev.country?iocFlag(ev.country):<Anchor size={20}/>}
-                </div>
+{(()=>{
+                  const dp=ev.date?.split('/');
+                  const hasDate=dp&&dp.length===3&&dp[0]&&dp[2];
+                  return hasDate
+                    ?<div className="evicon-date">
+                        <span className="eid">{dp[0]}</span>
+                        <span className="eim">{MON[parseInt(dp[1])-1]||""}</span>
+                      </div>
+                    :<div className="evicon"><Anchor size={20}/></div>;
+                })()}
                 <div style={{flex:1,minWidth:0}}>
                   <p className="evname">{ev.name}</p>
                   <div className="evmeta">
@@ -1422,8 +1510,8 @@ Partial query: "${q}"`;
       )}
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
         <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
-        <button className="btn ghost" style={{fontSize:12,padding:"5px 10px"}} onClick={()=>setEditEvMeta({id:ev.id,name:ev.name,date:ev.date,country:ev.country||"",discards:ev.discards})}>
-          <Pencil size={13}/>Edit details
+        <button className="btn ghost" style={{fontSize:12,padding:"5px 10px"}} onClick={()=>openEditResults(ev)}>
+          <Pencil size={13}/>Edit results
         </button>
       </div>
       <div className="evmeta" style={{marginBottom:16}}>
@@ -1438,12 +1526,23 @@ Partial query: "${q}"`;
           <th>Net</th>
         </tr></thead>
         <tbody>{s.rows.map(r=>(
-          <tr key={r.sail+r.helm}>
+          <tr key={r.sail+r.helm} className={hoverRow?.evId===ev.id&&hoverRow?.helm===r.helm?"row-hover":""}
+            onMouseEnter={()=>{
+              setHoverRow({evId:ev.id,helm:r.helm});
+              const ag=aggregate(r.helm,events);
+              fetchHoverSummary(r.helm,ag);
+            }}
+            onMouseLeave={()=>setHoverRow(null)}>
             <td className={`rk ${r.rank<=3?"p"+r.rank:""}`}>{r.rank}</td>
             <td className="l"><div className="boat">
               <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
               <div>
                 <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
+                {hoverRow?.evId===ev.id&&hoverRow?.helm===r.helm&&(
+                  <div className={`hover-summary${hoverSummaries[r.helm]===undefined?" loading":""}`}>
+                    {hoverSummaries[r.helm]||"Loading profile…"}
+                  </div>
+                )}
                 <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{(()=>{
   if(!r.div) return null;
   const d=r.div.replace(/\d+-(?:Gold|Silver|Bronze|Emerald|Sapphire)\s*/i,'').trim();
@@ -1810,9 +1909,9 @@ Partial query: "${q}"`;
             </div>
             <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
             <div className="mfoot" style={{marginTop:14}}>
-              <button className="btn ghost" onClick={closeImport}>Cancel</button>
-              <button className="btn amber" onClick={()=>importPreview(true)}><Clock size={16}/>Save as Draft</button>
-              <button className="btn cta" onClick={()=>importPreview(false)}><CheckCircle size={16}/>Confirm & Publish</button>
+              <button className="btn ghost" onClick={()=>{closeImport();setEditResultsEv(null);}}>Cancel</button>
+              <button className="btn amber" onClick={()=>editResultsEv?saveEditedResults(true):importPreview(true)}><Clock size={16}/>Save as Draft</button>
+              <button className="btn cta" onClick={()=>editResultsEv?saveEditedResults(false):importPreview(false)}><CheckCircle size={16}/>{editResultsEv?"Save changes":"Confirm & Publish"}</button>
             </div>
           </div>);
         })()}
