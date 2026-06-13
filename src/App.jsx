@@ -489,6 +489,37 @@ function parseHtml(htmlString){
 }
 
 
+/* ── Calendar grid helper ─────────────────────────────────────────────── */
+function buildCalGrid(year, month, evList){
+  // Returns 6 rows × 7 cols of {date, isCurrentMonth, isToday, events[]}
+  const today=new Date();
+  const firstDay=new Date(year,month,1).getDay(); // 0=Sun
+  const daysInMonth=new Date(year,month+1,0).getDate();
+  const cells=[];
+  // Previous month fill
+  const prevDays=new Date(year,month,0).getDate();
+  for(let i=firstDay-1;i>=0;i--){
+    cells.push({day:prevDays-i,month:month-1<0?11:month-1,year:month-1<0?year-1:year,other:true,events:[]});
+  }
+  // Current month
+  for(let d=1;d<=daysInMonth;d++){
+    const isToday=today.getFullYear()===year&&today.getMonth()===month&&today.getDate()===d;
+    const dayEvs=evList.filter(ev=>{
+      const p=ev.date.split('/');
+      if(p.length!==3) return false;
+      return parseInt(p[0])===d&&parseInt(p[1])-1===month&&parseInt(p[2])===year;
+    });
+    cells.push({day:d,month,year,other:false,today:isToday,events:dayEvs});
+  }
+  // Next month fill
+  let next=1;
+  while(cells.length%7!==0) cells.push({day:next++,month:month+1>11?0:month+1,year:month+1>11?year+1:year,other:true,events:[]});
+  // Split into rows
+  const rows=[];for(let i=0;i<cells.length;i+=7)rows.push(cells.slice(i,i+7));
+  return rows;
+}
+
+
 /* ═════════════════════════════════════════════════════════════════════ */
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
@@ -548,10 +579,13 @@ export default function AthLinkMVP(){
   const[showCalendar,setShowCalendar]=useState(false);
   const[calCls,setCalCls]=useState("all");
   const[calQ,setCalQ]=useState("");
-  const[calAthleteFilter,setCalAthleteFilter]=useState(null); // name string or null
+  const[calYear,setCalYear]=useState(new Date().getFullYear());
+  const[calMonth,setCalMonth]=useState(new Date().getMonth()); // 0-indexed
   const[showSailorCal,setShowSailorCal]=useState(false);
   const[sailorCalName,setSailorCalName]=useState("");
   const[sailorCalAll,setSailorCalAll]=useState(false);
+  const[sailorCalYear,setSailorCalYear]=useState(new Date().getFullYear());
+  const[sailorCalMonth,setSailorCalMonth]=useState(new Date().getMonth());
   const[gSearchOpen,setGSearchOpen]=useState(false);
   const[gSearchResults,setGSearchResults]=useState([]);
 
@@ -727,23 +761,32 @@ Partial query: "${q}"`;
     const results=[];
     // Athletes
     allPeople.filter(p=>p.name.toLowerCase().includes(ql)).slice(0,5).forEach(p=>{
-      results.push({type:"athlete",label:p.name,sub:CLASSES.find(c=>c.id===p.cls)?.short||"",action:()=>{setGSearch("");setGSearchOpen(false);if(p.cls){setPortal(p.cls);}go({name:"profile",id:p.name});}});
+      results.push({type:"athlete",label:p.name,sub:CLASSES.find(cl=>cl.id===p.cls)?.short||"",nav:{type:"profile",cls:p.cls,id:p.name}});
     });
     // Events
-    events.filter(e=>e.name.toLowerCase().includes(ql)).slice(0,4).forEach(e=>{
-      results.push({type:"event",label:e.name,sub:formatDate(e.date),action:()=>{setGSearch("");setGSearchOpen(false);setPortal(e.cls);go({name:"event",id:e.id});}});
+    events.filter(ev=>ev.name.toLowerCase().includes(ql)).slice(0,4).forEach(ev=>{
+      results.push({type:"event",label:ev.name,sub:formatDate(ev.date),nav:{type:"event",cls:ev.cls,id:ev.id}});
     });
     // Class portals
-    CLASSES.filter(c=>c.name.toLowerCase().includes(ql)||c.short.toLowerCase().includes(ql)).forEach(cl=>{
-      results.push({type:"portal",label:cl.name,sub:"Class portal",action:()=>{setGSearch("");setGSearchOpen(false);enterPortal(cl.id);}});
+    CLASSES.filter(cl=>cl.name.toLowerCase().includes(ql)||cl.short.toLowerCase().includes(ql)).forEach(cl=>{
+      results.push({type:"portal",label:cl.name,sub:"Class portal",nav:{type:"portal",cls:cl.id}});
     });
-    // Navigation shortcuts
-    const navMap=[
-      {kw:["home","all classes","portals"],label:"Hong Kong Sailing — Home",action:()=>{setGSearch("");setGSearchOpen(false);goHome();}},
-      {kw:["all athletes","athletes","global"],label:"All Athletes",action:()=>{setGSearch("");setGSearchOpen(false);setPortal(null);go({name:"athletes"});}},
-    ];
-    navMap.forEach(n=>{if(n.kw.some(k=>k.includes(ql)||ql.includes(k)))results.push({type:"nav",label:n.label,sub:"Navigate",action:n.action});});
+    // Nav shortcuts
+    if("home all classes portals hong kong sailing".includes(ql))
+      results.push({type:"nav",label:"Hong Kong Sailing — Home",sub:"Navigate",nav:{type:"home"}});
+    if("all athletes".includes(ql)||ql.includes("athlete"))
+      results.push({type:"nav",label:"All Athletes",sub:"Navigate",nav:{type:"athletes"}});
     setGSearchResults(results.slice(0,10));
+  };
+
+  const execGSearch=(r)=>{
+    setGSearch("");setGSearchOpen(false);setGSearchResults([]);
+    const n=r.nav;
+    if(n.type==="profile"){if(n.cls)setPortal(n.cls);go({name:"profile",id:n.id});}
+    else if(n.type==="event"){setPortal(n.cls);go({name:"event",id:n.id});}
+    else if(n.type==="portal"){enterPortal(n.cls);}
+    else if(n.type==="home"){goHome();}
+    else if(n.type==="athletes"){setPortal(null);go({name:"athletes"});}
   };
 
   const saveEvMeta=async()=>{
@@ -1118,14 +1161,32 @@ Partial query: "${q}"`;
     .scorecell .scode{font-size:8px;font-weight:800;color:#e74c3c;letter-spacing:.04em;text-transform:uppercase;}
 
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
-    /* Calendar */
-    .cal-modal{background:var(--paper);width:100%;max-width:820px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;max-height:90vh;display:flex;flex-direction:column;}
-    .cal-head{background:var(--navy);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;flex:none;}
-    .cal-head h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
-    .cal-body{padding:18px 22px;overflow-y:auto;flex:1;}
-    .cal-filters{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap;}
-    .cal-month{margin-bottom:24px;}
-    .cal-month-label{font-family:'Barlow',sans-serif;font-weight:700;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--line);}
+    /* Calendar — Apple Calendar style */
+    .cal-modal{background:var(--paper);width:100%;max-width:1020px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;max-height:92vh;display:flex;flex-direction:column;}
+    .cal-head{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:10px;flex:none;}
+    .cal-head h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:18px;margin:0;flex:1;}
+    .cal-body{padding:0;overflow-y:auto;flex:1;display:flex;flex-direction:column;}
+    .cal-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap;}
+    .cal-nav{display:flex;align-items:center;gap:4px;}
+    .cal-nav button{border:1px solid var(--line);background:#fff;border-radius:7px;width:30px;height:30px;cursor:pointer;display:grid;place-items:center;color:var(--navy);transition:.1s;}
+    .cal-nav button:hover{background:var(--sky);}
+    .cal-month-title{font-family:'Barlow',sans-serif;font-weight:700;font-size:18px;color:var(--navy);min-width:160px;text-align:center;}
+    .cal-today-btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 13px;font:inherit;font-size:12px;font-weight:600;color:var(--navy);cursor:pointer;transition:.1s;}
+    .cal-today-btn:hover{background:var(--sky);}
+    .cal-grid-wrap{flex:1;overflow-y:auto;}
+    .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);border-left:1px solid var(--line);}
+    .cal-dow{background:var(--navy);color:#bcd2e8;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;text-align:center;padding:8px 4px;border-right:1px solid rgba(255,255,255,.1);}
+    .cal-cell{border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-height:100px;padding:6px;position:relative;background:#fff;transition:.1s;}
+    .cal-cell.other-month{background:#f8fafc;}
+    .cal-cell.today{background:#f0f7ff;}
+    .cal-cell-num{font-family:'Barlow',sans-serif;font-weight:700;font-size:13px;color:var(--mut);margin-bottom:4px;width:24px;height:24px;display:grid;place-items:center;border-radius:50%;}
+    .cal-cell-num.today-circle{background:var(--accent);color:#fff;}
+    .cal-cell-ev{background:var(--accent);color:#fff;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:.1s;}
+    .cal-cell-ev:hover{opacity:.85;transform:translateY(-1px);}
+    .cal-cell-ev.cls-29er{background:#163a63;}
+    .cal-cell-ev.cls-ilca{background:#1a7a4a;}
+    .cal-cell-ev.cls-optimist{background:#7a4a1a;}
+    .cal-filters{display:flex;gap:8px;align-items:center;flex:1;flex-wrap:wrap;}
     .cal-ev{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 16px;margin-bottom:8px;cursor:pointer;transition:.15s;display:flex;align-items:center;gap:14px;}
     .cal-ev:hover{border-color:#b9cee4;box-shadow:0 6px 20px -10px rgba(22,58,99,.4);transform:translateY(-1px);}
     .cal-ev-date{min-width:44px;text-align:center;background:var(--sky);border-radius:8px;padding:6px 4px;}
@@ -1181,7 +1242,7 @@ Partial query: "${q}"`;
           onFocus={()=>setGSearchOpen(true)}
           onKeyDown={e=>{
             if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}
-            if(e.key==="Enter"&&gSearchResults.length){gSearchResults[0].action();}
+            if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}
           }}
         />
         {gSearch&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fbdd9",padding:0,display:"flex"}} onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={14}/></button>}
@@ -1189,7 +1250,7 @@ Partial query: "${q}"`;
       {gSearchOpen&&gSearchResults.length>0&&(
         <div className="gsrch-drop">
           {gSearchResults.map((r,i)=>(
-            <div key={i} className="gsrch-item" onClick={r.action}>
+            <div key={i} className="gsrch-item" onClick={()=>execGSearch(r)}>
               <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
                 {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
               </div>
@@ -1318,7 +1379,9 @@ Partial query: "${q}"`;
             {filtered.map((ev,i)=>{
               const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
               return(<div className={`ev${isDraft?" draft":""}`} key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
-                <div className="evicon"><Anchor size={20}/></div>
+                <div className="evicon" style={{fontSize:22,display:"grid",placeItems:"center"}}>
+                  {ev.country?iocFlag(ev.country):<Anchor size={20}/>}
+                </div>
                 <div style={{flex:1,minWidth:0}}>
                   <p className="evname">{ev.name}</p>
                   <div className="evmeta">
@@ -1360,7 +1423,7 @@ Partial query: "${q}"`;
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
         <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
         <button className="btn ghost" style={{fontSize:12,padding:"5px 10px"}} onClick={()=>setEditEvMeta({id:ev.id,name:ev.name,date:ev.date,country:ev.country||"",discards:ev.discards})}>
-          <Pencil size={13}/>Edit
+          <Pencil size={13}/>Edit details
         </button>
       </div>
       <div className="evmeta" style={{marginBottom:16}}>
@@ -1398,12 +1461,10 @@ Partial query: "${q}"`;
             <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
             {Array.from({length:s.races}).map((_,i)=>{
               const c=r.races[i];
-              const isE=editCell?.evId===ev.id&&editCell?.sail===r.sail&&editCell?.helm===r.helm&&editCell?.raceIdx===i;
-              if(isE) return<td key={i}><input className="cellinput" autoFocus value={editVal} onChange={e=>setEditVal(e.target.value)} onBlur={commitEdit} onKeyDown={e=>{if(e.key==="Enter")commitEdit();if(e.key==="Escape")setEditCell(null);}}/></td>;
               if(c===undefined) return<td key={i} className="disc">–</td>;
               const codeLabel=r.race_codes?.[i]||null;
               const displayNum=isCode(c)?c:r.discardSet.has(i)?`(${c})`:c;
-              return<td key={i} className={"editable "+(isCode(c)?"code":r.discardSet.has(i)?"disc":"")} onClick={()=>startEdit(ev.id,r.sail,r.helm,i,c)}>
+              return<td key={i} className={isCode(c)?"code":r.discardSet.has(i)?"disc":""}>
                 {codeLabel&&!isCode(c)
                   ?<div className="scorecell"><span className="snum">{displayNum}</span><span className="scode">{codeLabel}</span></div>
                   :displayNum}
@@ -1413,7 +1474,7 @@ Partial query: "${q}"`;
           </tr>
         ))}</tbody>
       </table></div>
-      <p style={{fontSize:12,color:"var(--mut)",marginTop:12,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}><span>( ) = discard · red = penalty code</span><span style={{display:"flex",alignItems:"center",gap:5}}><Pencil size={12}/>Click a score to edit</span></p>
+      <p style={{fontSize:12,color:"var(--mut)",marginTop:12,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}><span>( ) = discard · red = penalty code</span></p>
     </div>);
   })()}
 
@@ -1578,7 +1639,7 @@ Partial query: "${q}"`;
             {tab==="pdf"&&(<>
               <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload a results PDF or Sailwave HTML file (preferred) — supports Sailwave, Manage2sail and more. Multi-fleet files will show a fleet picker.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
-                {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose PDF file</>}
+                {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose File</>}
                 <input type="file" accept="application/pdf,.html,text/html" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handlePdf(e.target.files?.[0])}/>
               </label>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
@@ -1653,8 +1714,23 @@ Partial query: "${q}"`;
 
         {importStep==="picker"&&(
           <div className="mbody">
-            <p style={{fontSize:14,color:"var(--mut)",margin:"0 0 4px"}}>Multiple fleets found in <strong style={{color:"var(--ink)"}}>{pdfMeta?.name}</strong>. Select which fleet to import:</p>
+            <p style={{fontSize:14,color:"var(--mut)",margin:"0 0 4px"}}>Multiple fleets found in <strong style={{color:"var(--ink)"}}>{pdfMeta?.name}</strong>. Select which fleet to import, or combine all into one overall results page:</p>
             <div className="fleet-grid">
+              {/* Overall Results option — merges all fleets, preserves PDF ranks */}
+              <div className="fleet-card" style={{borderColor:"var(--accent)",background:"#f0f8ff"}} onClick={()=>{
+                // Merge all fleets: combine entries, sort by pdf_rank if available
+                const allEntries=[...fleetChoices.flatMap(f=>f.entries)];
+                // Deduplicate by helm+sail
+                const seen=new Set();
+                const merged=allEntries.filter(e=>{const k=e.helm.toLowerCase()+e.sail;if(seen.has(k))return false;seen.add(k);return true;});
+                // Sort by pdf_rank if available
+                merged.sort((a,b)=>(a.pdf_rank??9999)-(b.pdf_rank??9999));
+                const maxDisc=Math.max(...fleetChoices.map(f=>f.discards||1));
+                buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,{name:"",entries:merged,discards:maxDisc});
+              }}>
+                <div className="fname" style={{color:"var(--accent)"}}>🏆 Overall Results</div>
+                <div className="fcount">{fleetChoices.reduce((s,f)=>s+f.count,0)} boats total · all {fleetChoices.length} fleets combined</div>
+              </div>
               {fleetChoices.map((fleet,i)=>(
                 <div key={i} className="fleet-card" onClick={()=>selectFleet(fleet)}>
                   <div className="fname">{fleet.name||"Unnamed fleet"}</div>
@@ -1746,39 +1822,19 @@ Partial query: "${q}"`;
 
   {/* ── RACE CALENDAR MODAL ── */}
   {showCalendar&&(()=>{
-    // Build sorted events list with filters
     const calEvs=events
       .filter(ev=>calCls==="all"||ev.cls===calCls)
       .filter(ev=>{
         if(!calQ.trim()) return true;
         const ql=calQ.toLowerCase();
-        if(ev.name.toLowerCase().includes(ql)) return true;
-        const s=scoreEvent(ev);
-        if(String(s.fleet).includes(ql)) return true;
-        // athlete name search
-        return ev.entries.some(e=>e.helm.toLowerCase().includes(ql)||e.crew.toLowerCase().includes(ql));
-      })
-      .sort((a,b)=>{
-        const da=a.date.split('/').reverse().join('');
-        const db=b.date.split('/').reverse().join('');
-        return db.localeCompare(da);
+        return ev.name.toLowerCase().includes(ql)||
+          ev.entries.some(e=>e.helm.toLowerCase().includes(ql)||e.crew.toLowerCase().includes(ql));
       });
-
-    // Group by year-month
-    const grouped={};
-    calEvs.forEach(ev=>{
-      const parts=ev.date.split('/');
-      if(parts.length===3){
-        const key=`${parts[2]}-${parts[1].padStart(2,'0')}`;
-        if(!grouped[key]) grouped[key]=[];
-        grouped[key].push(ev);
-      } else {
-        if(!grouped['Unknown']) grouped['Unknown']=[];
-        grouped['Unknown'].push(ev);
-      }
-    });
-    const months=Object.keys(grouped).sort().reverse();
-
+    const gridRows=buildCalGrid(calYear,calMonth,calEvs);
+    const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+    const prevMonth=()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);};
+    const nextMonth=()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);};
+    const goToday=()=>{const n=new Date();setCalYear(n.getFullYear());setCalMonth(n.getMonth());};
     return(
       <div className="ov" onClick={()=>setShowCalendar(false)}>
         <div className="cal-modal" onClick={e=>e.stopPropagation()}>
@@ -1787,48 +1843,41 @@ Partial query: "${q}"`;
             <h3>Race Calendar</h3>
             <button className="x" onClick={()=>setShowCalendar(false)}><X size={16}/></button>
           </div>
-          <div className="cal-body">
+          <div className="cal-toolbar">
+            <div className="cal-nav">
+              <button onClick={prevMonth}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
+              <span className="cal-month-title">{MON[calMonth]} {calYear}</span>
+              <button onClick={nextMonth}><ChevronRight size={14}/></button>
+            </div>
+            <button className="cal-today-btn" onClick={goToday}>Today</button>
             <div className="cal-filters">
               <div className="seg">
-                {[["all","All Classes"],...CLASSES.map(cl=>[cl.id,cl.short])].map(([id,label])=>(
+                {[["all","All"],...CLASSES.map(cl=>[cl.id,cl.short])].map(([id,label])=>(
                   <button key={id} className={calCls===id?"on":""} onClick={()=>setCalCls(id)}>{label}</button>
                 ))}
               </div>
-              <div className="srch" style={{flex:1,minWidth:200}}>
-                <Search size={14} color="#9fb2c8"/>
-                <input placeholder="Search regattas, athletes, boat counts..." value={calQ} onChange={e=>setCalQ(e.target.value)}/>
+              <div className="srch" style={{flex:1,minWidth:180,maxWidth:280}}>
+                <Search size={13} color="#9fb2c8"/>
+                <input placeholder="Search events or athletes..." value={calQ} onChange={e=>setCalQ(e.target.value)}/>
               </div>
             </div>
-            {months.length===0&&<p style={{color:"var(--mut)",fontSize:14}}>No events match your filter.</p>}
-            {months.map(monthKey=>{
-              const [yr,mo]=monthKey==="Unknown"?["","Unknown"]:monthKey.split('-');
-              const label=monthKey==="Unknown"?"Date unknown":`${MON[parseInt(mo)-1]} ${yr}`;
-              return(
-                <div key={monthKey} className="cal-month">
-                  <div className="cal-month-label">{label}</div>
-                  {grouped[monthKey].map(ev=>{
-                    const s=scoreEvent(ev);
-                    const parts=ev.date.split('/');
-                    const day=parts[0]||"?";
-                    const monStr=parts[1]?MON[parseInt(parts[1])-1]:"";
-                    const clsObj=CLASSES.find(cl=>cl.id===ev.cls);
-                    return(
-                      <div key={ev.id} className="cal-ev" onClick={()=>{setShowCalendar(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}>
-                        <div className="cal-ev-date">
-                          <div className="ced">{day}</div>
-                          <div className="cem">{monStr}</div>
-                        </div>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div className="cal-ev-name">{ev.name}</div>
-                          <div className="cal-ev-meta">{ev.country||"—"} · {s.fleet} boats · {s.races} races {clsObj?<span className="cls" style={{fontSize:10,padding:"1px 7px",marginLeft:6}}>{clsObj.short}</span>:null}</div>
-                        </div>
-                        <ChevronRight size={16} color="#9fb2c8"/>
-                      </div>
-                    );
-                  })}
+          </div>
+          <div className="cal-grid-wrap">
+            <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
+            <div className="cal-grid">
+              {gridRows.flat().map((cell,i)=>(
+                <div key={i} className={`cal-cell${cell.other?" other-month":""}${cell.today?" today":""}`}>
+                  <div className={`cal-cell-num${cell.today?" today-circle":""}`}>{cell.day}</div>
+                  {cell.events.map(ev=>(
+                    <div key={ev.id} className={`cal-cell-ev cls-${ev.cls}`}
+                      title={ev.name}
+                      onClick={()=>{setShowCalendar(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}>
+                      {ev.name}
+                    </div>
+                  ))}
                 </div>
-              );
-            })}
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -1837,31 +1886,15 @@ Partial query: "${q}"`;
 
   {/* ── SAILOR CALENDAR MODAL ── */}
   {showSailorCal&&(()=>{
-    const sailorEvs=events
-      .filter(ev=>{
-        if(sailorCalAll) return true;
-        return ev.entries.some(e=>e.helm===sailorCalName||e.crew===sailorCalName);
-      })
-      .sort((a,b)=>{
-        const da=a.date.split('/').reverse().join('');
-        const db=b.date.split('/').reverse().join('');
-        return db.localeCompare(da);
-      });
-
-    const grouped={};
-    sailorEvs.forEach(ev=>{
-      const parts=ev.date.split('/');
-      if(parts.length===3){
-        const key=`${parts[2]}-${parts[1].padStart(2,'0')}`;
-        if(!grouped[key]) grouped[key]=[];
-        grouped[key].push(ev);
-      } else {
-        if(!grouped['Unknown']) grouped['Unknown']=[];
-        grouped['Unknown'].push(ev);
-      }
+    const sailorEvs=events.filter(ev=>{
+      if(sailorCalAll) return true;
+      return ev.entries.some(e=>e.helm===sailorCalName||e.crew===sailorCalName);
     });
-    const months=Object.keys(grouped).sort().reverse();
-
+    const gridRows=buildCalGrid(sailorCalYear,sailorCalMonth,sailorEvs);
+    const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+    const prevM=()=>{if(sailorCalMonth===0){setSailorCalMonth(11);setSailorCalYear(y=>y-1);}else setSailorCalMonth(m=>m-1);};
+    const nextM=()=>{if(sailorCalMonth===11){setSailorCalMonth(0);setSailorCalYear(y=>y+1);}else setSailorCalMonth(m=>m+1);};
+    const goTodayS=()=>{const n=new Date();setSailorCalYear(n.getFullYear());setSailorCalMonth(n.getMonth());};
     return(
       <div className="ov" onClick={()=>setShowSailorCal(false)}>
         <div className="cal-modal" onClick={e=>e.stopPropagation()}>
@@ -1870,48 +1903,42 @@ Partial query: "${q}"`;
             <h3>{sailorCalName} — Calendar</h3>
             <button className="x" onClick={()=>setShowSailorCal(false)}><X size={16}/></button>
           </div>
-          <div className="cal-body">
-            <div className="cal-filters">
-              <div className="seg">
-                <button className={!sailorCalAll?"on":""} onClick={()=>setSailorCalAll(false)}>My regattas</button>
-                <button className={sailorCalAll?"on":""} onClick={()=>setSailorCalAll(true)}>All regattas</button>
-              </div>
+          <div className="cal-toolbar">
+            <div className="cal-nav">
+              <button onClick={prevM}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
+              <span className="cal-month-title">{MON[sailorCalMonth]} {sailorCalYear}</span>
+              <button onClick={nextM}><ChevronRight size={14}/></button>
             </div>
-            {months.length===0&&<p style={{color:"var(--mut)",fontSize:14}}>No events found.</p>}
-            {months.map(monthKey=>{
-              const [yr,mo]=monthKey==="Unknown"?["","Unknown"]:monthKey.split('-');
-              const label=monthKey==="Unknown"?"Date unknown":`${MON[parseInt(mo)-1]} ${yr}`;
-              return(
-                <div key={monthKey} className="cal-month">
-                  <div className="cal-month-label">{label}</div>
-                  {grouped[monthKey].map(ev=>{
-                    const s=scoreEvent(ev);
-                    const parts=ev.date.split('/');
-                    const day=parts[0]||"?";
-                    const monStr=parts[1]?MON[parseInt(parts[1])-1]:"";
-                    const entry=ev.entries.find(e=>e.helm===sailorCalName||e.crew===sailorCalName);
-                    const row=entry?s.rows.find(r=>r.helm===entry.helm&&r.sail===entry.sail):null;
-                    return(
-                      <div key={ev.id} className="cal-ev" onClick={()=>{setShowSailorCal(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}>
-                        <div className="cal-ev-date">
-                          <div className="ced">{day}</div>
-                          <div className="cem">{monStr}</div>
-                        </div>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div className="cal-ev-name">{ev.name}</div>
-                          <div className="cal-ev-meta">
-                            {ev.country||"—"} · {s.fleet} boats
-                            {row?<> · <b style={{color:row.rank<=3?"var(--gold)":"var(--ink)"}}>#{row.rank}</b> of {s.fleet}</>:null}
-                            {entry?<> · as {entry.helm===sailorCalName?"Helm":"Crew"}</>:null}
-                          </div>
-                        </div>
-                        <ChevronRight size={16} color="#9fb2c8"/>
+            <button className="cal-today-btn" onClick={goTodayS}>Today</button>
+            <div className="seg">
+              <button className={!sailorCalAll?"on":""} onClick={()=>setSailorCalAll(false)}>My regattas</button>
+              <button className={sailorCalAll?"on":""} onClick={()=>setSailorCalAll(true)}>All regattas</button>
+            </div>
+          </div>
+          <div className="cal-grid-wrap">
+            <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
+            <div className="cal-grid">
+              {gridRows.flat().map((cell,i)=>{
+                const entry=cell.events.length>0?cell.events.map(ev=>{
+                  const e=ev.entries.find(e=>e.helm===sailorCalName||e.crew===sailorCalName);
+                  const s=scoreEvent(ev);
+                  const row=e?s.rows.find(r=>r.helm===e.helm&&r.sail===e.sail):null;
+                  return{ev,row,role:e?(e.helm===sailorCalName?"Helm":"Crew"):""};
+                }):[];
+                return(
+                  <div key={i} className={`cal-cell${cell.other?" other-month":""}${cell.today?" today":""}`}>
+                    <div className={`cal-cell-num${cell.today?" today-circle":""}`}>{cell.day}</div>
+                    {entry.map(({ev,row,role})=>(
+                      <div key={ev.id} className={`cal-cell-ev cls-${ev.cls}`}
+                        title={`${ev.name}${row?" · #"+row.rank:""}`}
+                        onClick={()=>{setShowSailorCal(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}>
+                        {row?`#${row.rank} `:""}{ev.name}
                       </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
