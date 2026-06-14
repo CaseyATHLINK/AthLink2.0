@@ -89,6 +89,51 @@ function VerifyBadge({verified,size=14,title}){
     title={title||(verified?"Verified athlete":"Unverified")} style={{flex:"none"}}/>;
 }
 
+// Toggleable M / F / Mix / Jr selector. value = "F Jr" style string; onChange(string).
+// Rules: at most one gender (M/F/Mix); Jr is an independent add-on.
+function DivisionToggle({value,onChange,size="sm"}){
+  const tokens=divTokens(value);
+  const gender=tokens.find(t=>t!=="Jr")||null;
+  const jr=tokens.includes("Jr");
+  const set=(g,j)=>onChange(divToString([g,j?"Jr":null].filter(Boolean)));
+  const btn=(key,label)=>{
+    const isJr=key==="Jr";
+    const on=isJr?jr:gender===key;
+    const col=DIV_COLOR[key];
+    return <button key={key} type="button"
+      onClick={e=>{e.stopPropagation();isJr?set(gender,!jr):set(gender===key?null:key,jr);}}
+      style={{border:"1px solid "+(on?col:"var(--line)"),background:on?col:"transparent",color:on?"#fff":"var(--mut)",
+        borderRadius:6,fontSize:size==="sm"?10:11.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",
+        padding:size==="sm"?"2px 6px":"3px 8px",cursor:"pointer",lineHeight:1.3,transition:".12s"}}>{label}</button>;
+  };
+  return <div style={{display:"inline-flex",gap:4,flexWrap:"wrap"}}>
+    {btn("M","M")}{btn("F","F")}{btn("Mix","Mix")}{btn("Jr","Jr")}</div>;
+}
+
+// Small read-only division nugget(s) for the results page.
+function DivNugget({div}){
+  const tokens=divTokens(div);
+  if(!tokens.length) return null;
+  return <span style={{display:"inline-flex",gap:3}}>
+    {tokens.map(t=><span key={t} style={{background:DIV_COLOR[t],color:"#fff",borderRadius:4,fontSize:9.5,fontWeight:700,
+      fontFamily:"'Barlow',sans-serif",padding:"1px 5px",letterSpacing:".02em"}} title={DIV_LABEL[t]}>{t}</span>)}
+  </span>;
+}
+
+// Class nugget dropdown for manual import (looks like the class nuggets used elsewhere).
+function ClassPicker({value,onChange}){
+  const opts=[["29er","29er"],["ilca","ILCA"],["optimist","Optimist"],["49er","49er"]];
+  return <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
+    {opts.map(([id,label])=>{
+      const on=value===id;
+      return <button key={id} type="button" onClick={()=>onChange(id)}
+        style={{border:"1px solid "+(on?classColor(id):"var(--line)"),background:on?classColor(id):"transparent",
+          color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
+          padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{label}</button>;
+    })}
+  </div>;
+}
+
 /* ── date helpers ─────────────────────────────────────────────────────── */
 const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function formatDate(str){
@@ -112,8 +157,38 @@ const CLASSES=[
 ];
 
 // Global class colour coding (used by calendar circles)
-const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#1B4965","optimist":"#3D3D3D"};
+// Canonical class colours (refer to them by these names):
+//   29er  -> "29er red"      (#E84855)
+//   ILCA  -> "ILCA blue"     (#2E78C8, lightened so it's distinct from Optimist black)
+//   Optimist -> "Optimist black" (#3D3D3D)
+//   49er  -> "49er green"    (#5FAF4E)
+const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#2E78C8","optimist":"#3D3D3D"};
 const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||"#5b6b80";
+
+// ── Division (gender / age) helpers — shared by manual import, edit results,
+//    and the results page. Stored as a normalized token set on entry.div. ──
+const DIV_COLOR={M:"#1f6fd6",F:"#e8455f",Mix:"#8b5cf6",Jr:"#4caf50"};
+const DIV_LABEL={M:"Male",F:"Female",Mix:"Mixed",Jr:"Junior"};
+// Allowed gender bases (one of) plus optional Jr.
+function parseDiv(div){
+  // returns {gender:"M"|"F"|"Mix"|null, jr:bool}
+  const t=(div||"").toString();
+  let gender=null;
+  if(/\bmix/i.test(t)||/\bX\b/i.test(t)) gender="Mix";
+  else if(/\bf(emale)?\b/i.test(t)||/\bgirl/i.test(t)||/\bwomen/i.test(t)) gender="F";
+  else if(/\bm(ale)?\b/i.test(t)||/\bboy/i.test(t)||/\bmen\b/i.test(t)) gender="M";
+  const jr=/\bjr\b|\bjun/i.test(t)||/junior/i.test(t)||/youth/i.test(t)||/\bU1[0-9]\b/i.test(t);
+  return {gender,jr};
+}
+function divTokens(div){
+  const {gender,jr}=parseDiv(div);
+  const out=[]; if(gender)out.push(gender); if(jr)out.push("Jr"); return out;
+}
+function divToString(tokens){
+  // canonical storage e.g. "F Jr"
+  const g=tokens.find(t=>t!=="Jr"); const jr=tokens.includes("Jr");
+  return [g,jr?"Jr":null].filter(Boolean).join(" ");
+}
 
 // Strip stray markdown / leading heading / duplicated name from AI summaries
 const cleanAISummary=(t)=>{
@@ -390,7 +465,7 @@ async function updateEventStatus(evId,status){
 
 /* ── manual form ─────────────────────────────────────────────────────── */
 const defRow=n=>({helm:"",crew:"",sail:"",nat:"",div:"",scores:Array(n).fill("")});
-const emptyForm=()=>({name:"",club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
+const emptyForm=()=>({name:"",cls:"29er",club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
 
 /* ── HTML (Sailwave) parser ────────────────────────────────────────────────
    Parses the standard Sailwave HTML results format directly in the browser.
@@ -621,16 +696,32 @@ function buildCalGrid(year, month, evList){
   return rows;
 }
 
-/* ── CalendarBody: Apple-style month grid + scrollable year overview ───────── */
+/* ── CalendarBody: month-grid day view + year overview, with pie-split circles ── */
+// Build a conic-gradient style for a day circle split by class (pie).
+function classPie(comps){
+  if(!comps||!comps.length) return null;
+  // count per class, preserve order of first appearance
+  const order=[]; const counts={};
+  comps.forEach(ev=>{const c=ev.cls;if(!(c in counts)){counts[c]=0;order.push(c);}counts[c]++;});
+  const total=comps.length;
+  if(order.length===1) return {background:classColor(order[0])};
+  let acc=0; const segs=[];
+  order.forEach(c=>{const start=acc/total*360;acc+=counts[c];const endd=acc/total*360;segs.push(`${classColor(c)} ${start}deg ${endd}deg`);});
+  return {background:`conic-gradient(${segs.join(",")})`};
+}
+
 function CalendarBody({events,year,month,setYear,setMonth,viewMode,setViewMode,onPick,eventLabel}){
   const today=new Date();
   const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const [morph,setMorph]=React.useState(false); // play enlarge animation on enter day view
+
   if(viewMode==="year"){
     const yrs=events.map(e=>parseInt(e.date?.split('/')[2])).filter(Boolean);
     let lo=year,hi=year;
     if(yrs.length){lo=Math.min(lo,...yrs);hi=Math.max(hi,...yrs);}
     lo=Math.min(lo,today.getFullYear())-1; hi=Math.max(hi,today.getFullYear())+1;
     const years=[];for(let y=lo;y<=hi;y++)years.push(y);
+    const openMonth=(y,mi)=>{setYear(y);setMonth(mi);setMorph(true);setViewMode("month");};
     return(
       <div className="cal-year-scroll">
         {years.map(y=>(
@@ -638,14 +729,15 @@ function CalendarBody({events,year,month,setYear,setMonth,viewMode,setViewMode,o
             <div className="cal-year-label">{y}</div>
             <div className="cal-year-grid">
               {MON.map((mn,mi)=>(
-                <div key={mi} className="cal-mini" onClick={()=>{setYear(y);setMonth(mi);setViewMode("month");}}>
+                <div key={mi} className="cal-mini" onClick={()=>openMonth(y,mi)}>
                   <div className="cal-mini-name">{mn}</div>
                   <div className="cal-mini-dow">{["S","M","T","W","T","F","S"].map((d,k)=><span key={k}>{d}</span>)}</div>
                   <div className="cal-mini-grid">
                     {buildCalGrid(y,mi,events).flat().map((c,ci)=>{
                       const comps=c.other?[]:c.events;
                       const isT=!c.other&&today.getFullYear()===y&&today.getMonth()===mi&&today.getDate()===c.day;
-                      const st=comps.length?{background:classColor(comps[0].cls),color:"#fff",fontWeight:700}
+                      const pie=comps.length?classPie(comps):null;
+                      const st=pie?{...pie,color:"#fff",fontWeight:700}
                               :isT?{background:"var(--accent)",color:"#fff",fontWeight:700}:{};
                       return<span key={ci} className={"cal-mini-day"+(c.other?" o":"")} style={st}>{c.day}</span>;
                     })}
@@ -658,74 +750,32 @@ function CalendarBody({events,year,month,setYear,setMonth,viewMode,setViewMode,o
       </div>
     );
   }
-  // ── continuous scrolling months (Apple-style) ──────────────────────────
-  const scrollRef=React.useRef(null);
-  const monthRefs=React.useRef({});
-  const programmatic=React.useRef(false);
-  // build the full month range: from earliest event year-1 to latest+1
-  const months=React.useMemo(()=>{
-    const yrs=events.map(e=>parseInt(e.date?.split('/')[2])).filter(Boolean);
-    let lo=year,hi=year;
-    if(yrs.length){lo=Math.min(lo,...yrs);hi=Math.max(hi,...yrs);}
-    lo=Math.min(lo,today.getFullYear())-1; hi=Math.max(hi,today.getFullYear())+1;
-    const list=[];for(let y=lo;y<=hi;y++)for(let mi=0;mi<12;mi++)list.push({y,mi,key:y+"-"+mi});
-    return list;
-  },[events,year,today]);
 
-  // scroll to the active month when year/month change via the arrows / title.
-  // Skip when the change originated from the user scrolling (no snap-back).
-  const fromScroll=React.useRef(false);
-  React.useEffect(()=>{
-    if(fromScroll.current){fromScroll.current=false;return;}
-    const el=monthRefs.current[year+"-"+month];
-    if(el&&scrollRef.current){
-      programmatic.current=true;
-      el.scrollIntoView({block:"start"});
-      setTimeout(()=>{programmatic.current=false;},220);
-    }
-  },[year,month]);
-
-  // report the top-most visible month back to the toolbar label
-  const onScroll=React.useCallback(()=>{
-    if(programmatic.current)return;
-    const cont=scrollRef.current;if(!cont)return;
-    const top=cont.scrollTop+8;let best=null,bd=Infinity;
-    for(const m of months){const el=monthRefs.current[m.key];if(!el)continue;
-      const d=Math.abs(el.offsetTop-top);if(d<bd){bd=d;best=m;}}
-    if(best&&(best.y!==year||best.mi!==month)){fromScroll.current=true;setYear(best.y);setMonth(best.mi);}
-  },[months,year,month,setYear,setMonth]);
-
+  // ── single-month day view (with enlarge/morph-in animation) ──────────────
+  const grid=buildCalGrid(year,month,events);
   return(
-    <div className="cal-scroll" ref={scrollRef} onScroll={onScroll}>
-      {months.map(m=>{
-        const grid=buildCalGrid(m.y,m.mi,events);
-        return(
-          <div key={m.key} className="cal-month-block" ref={el=>{if(el)monthRefs.current[m.key]=el;}}>
-            <div className="cal-month-sticky">{MON[m.mi]} {m.y}</div>
-            <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
-            <div className="cal-grid">
-              {grid.flat().map((cell,i)=>{
-                const comps=cell.other?[]:cell.events;
-                const circle=comps.length?classColor(comps[0].cls):null;
-                return(
-                  <div key={i} className={`cal-cell${cell.other?" other-month":""}${cell.today?" today":""}`}>
-                    <div className="cal-cell-num" style={circle?{background:circle,color:"#fff"}:cell.today?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
-                    {comps.map(ev=>(
-                      <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>onPick(ev)}>
-                        {eventLabel?eventLabel(ev):ev.name}
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
+    <div className="cal-grid-wrap" key={year+"-"+month} style={morph?{animation:"calMorph .34s cubic-bezier(.22,1,.36,1) both"}:undefined}
+         onAnimationEnd={()=>setMorph(false)}>
+      <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
+      <div className="cal-grid">
+        {grid.flat().map((cell,i)=>{
+          const comps=cell.other?[]:cell.events;
+          const pie=comps.length?classPie(comps):null;
+          return(
+            <div key={i} className={`cal-cell${cell.other?" other-month":""}${cell.today?" today":""}`}>
+              <div className="cal-cell-num" style={pie?{...pie,color:"#fff"}:cell.today?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
+              {comps.map(ev=>(
+                <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>onPick(ev)}>
+                  {eventLabel?eventLabel(ev):ev.name}
+                </div>
+              ))}
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
-
 
 /* ── World SVG map fallback (no API key required) ───────────────────── */
 function WorldSVGMap({countryData}){
@@ -1867,6 +1917,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   };
   const selectFleet=fleet=>buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,fleet);
   const updPMeta=(k,v)=>setPreviewEv(ev=>({...ev,[k]:v}));
+  const updPEntry=(idx,k,v)=>setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>i===idx?{...e,[k]:v}:e)}));
 
   const startPreviewEdit=(type,idx,raceIdx,val)=>{
     setPreviewEdit({type,idx,raceIdx});
@@ -1956,11 +2007,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   const buildManualEvent=()=>{
     const rows=mf.rows.filter(r=>r.helm.trim());if(!rows.length)return null;
     const disc=Math.min(mf.discards,Math.max(0,mf.numRaces-1));
-    return{id:"imp_"+Date.now(),name:mf.name||"Imported Regatta",cls:portal,
-      doublehanded:rows.some(r=>r.crew.trim()),venue:mf.club||"—",country:mf.country||"",
+    const sh=mf.cls==="ilca"||mf.cls==="optimist";
+    return{id:"imp_"+Date.now(),name:mf.name||"Imported Regatta",cls:mf.cls||portal||"29er",
+      doublehanded:!sh&&rows.some(r=>r.crew.trim()),venue:mf.club||"—",country:mf.club||mf.country||"",
       date:mf.date||"",discards:disc,scoring:'Appendix A',
       source:"Manual import",status:"Final",
-      entries:rows.map(r=>({helm:r.helm.trim(),crew:r.crew.trim(),sail:r.sail.trim()||"—",nat:"",div:r.div.trim(),
+      entries:rows.map(r=>({helm:r.helm.trim(),crew:sh?"":r.crew.trim(),sail:r.sail.trim()||"—",nat:(r.nat||"").trim(),div:(r.div||"").trim(),
         races:r.scores.map(s=>s.trim()).filter(Boolean).map(s=>/^\d+(\.\d+)?$/.test(s)?parseFloat(s):s.toUpperCase())}))};
   };
   const doImportManual=async()=>{
@@ -2047,6 +2099,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .cal-title-btn:hover{background:var(--sky);}
     .cal-fade{animation:calFade .26s ease both;}
     @keyframes calFade{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+    @keyframes calMorph{0%{opacity:0;transform:scale(.55);transform-origin:center top;}60%{opacity:1;}100%{opacity:1;transform:scale(1);}}
     .cal-year-scroll{flex:1;overflow-y:auto;padding:16px 18px;animation:calFade .26s ease both;}
     .cal-year-block{margin-bottom:28px;}
     .cal-year-label{font-family:'Barlow',sans-serif;font-weight:800;font-size:23px;color:var(--navy);margin:0 0 14px;}
@@ -2552,7 +2605,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         </button>
         {eventSummaryOpen[ev.id]&&(
           <div style={{marginTop:10,background:"var(--navy)",borderRadius:12,padding:"14px 16px",animation:"calFade .26s both"}}>
-            <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 6px",fontSize:11}}><Sparkles size={12}/>Competition overview · for sponsors</p>
+            <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 6px",fontSize:11}}><Sparkles size={12}/>Competition overview</p>
             {eventSummaries[ev.id]===null
               ? <div style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",opacity:.75,display:"flex",alignItems:"center",gap:6}}><Loader2 size={13} className="spin"/>Researching this competition…</div>
               : eventSummaries[ev.id]
@@ -2582,18 +2635,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
               <div>
                 <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
-                <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{(()=>{
-  if(!r.div) return null;
-  const d=r.div.replace(/\d+-(?:Gold|Silver|Bronze|Emerald|Sapphire)\s*/i,'').trim();
-  const isJunior=/junior|u17|u18|u19|u20/i.test(d);
-  const gRaw=d.replace(/junior|u\d+/gi,'').trim().toLowerCase();
-  const gMap={m:'Male',male:'Male',men:'Male',f:'Female',female:'Female',women:'Female',w:'Female',mixed:'Mixed',mix:'Mixed'};
-  const gender=gMap[gRaw]||''; // blank if not a recognised gender word
-  const gCls=gender==='Male'?'male':gender==='Female'?'female':gender==='Mixed'?'mixed':'';
-  return(<>{gender&&<span className={`divtag ${gCls}`} style={{marginLeft:8}}>{gender}</span>}
-    {isJunior&&<span className="divtag junior" style={{marginLeft:4}}>Jr</span>}
-  </>);
-})()}</div>
+                <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{r.div&&<span style={{marginLeft:8,display:"inline-flex",verticalAlign:"middle"}}><DivNugget div={r.div}/></span>}</div>
               </div>
             </div></td>
             <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
@@ -2927,20 +2969,24 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
             {tab==="manual"&&(<>
-              <div style={{marginBottom:10}}>
-                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Event name</label>
-                <input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="2025 29er Asian Championship" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
-              </div>
-              <div className="meta-grid">
-                <div><label>Host Country</label><CountrySelect value={mf.club||""} onChange={v=>updMeta("club",v)}/></div>
-                <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
-              </div>
-              <div style={{marginBottom:14}}>
-                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:3,fontWeight:600}}>Date</label>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <input value={mf.date} onChange={e=>updMeta("date",e.target.value)} placeholder="dd/mm/yyyy" maxLength={10} style={{width:140,border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
-                  {mf.date?.match(/^\d{1,2}\/\d{1,2}\/\d{4}$/)&&<span style={{fontSize:13,color:"var(--accent)",fontWeight:600}}>{formatDate(mf.date)}</span>}
+              <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:10,flexWrap:"wrap"}}>
+                <div>
+                  <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class</label>
+                  <ClassPicker value={mf.cls} onChange={v=>updMeta("cls",v)}/>
                 </div>
+                <div style={{flex:1,minWidth:200}}>
+                  <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Event name</label>
+                  <input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="2025 29er Asian Championship" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
+                </div>
+              </div>
+              {/* Host country, date and discards on one row */}
+              <div className="meta-grid three" style={{marginBottom:14}}>
+                <div><label>Host Country</label><CountrySelect value={mf.club||""} onChange={v=>updMeta("club",v)}/></div>
+                <div><label>Date</label>
+                  <input value={mf.date} onChange={e=>updMeta("date",e.target.value)} placeholder="dd/mm/yyyy" maxLength={10}/>
+                  {mf.date?.match(/^\d{1,2}\/\d{1,2}\/\d{4}$/)&&<span style={{fontSize:11.5,color:"var(--accent)",fontWeight:600,display:"block",marginTop:3}}>{formatDate(mf.date)}</span>}
+                </div>
+                <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
               </div>
               <div className="race-ctrl">
                 <span>Number of races</span>
@@ -2954,10 +3000,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 <table className="rtable">
                   <thead><tr>
                     <th className="l" style={{minWidth:110}}>Helm Name</th>
-                    <th className="l" style={{minWidth:110}}>Crew Name</th>
-                    <th style={{minWidth:46}}>Sail</th>
+                    {!(mf.cls==="ilca"||mf.cls==="optimist")&&<th className="l" style={{minWidth:110}}>Crew Name</th>}
                     <th style={{minWidth:46}}>Nat</th>
-                    <th style={{minWidth:56}}>Class</th>
+                    <th style={{minWidth:46}}>Sail</th>
+                    <th style={{minWidth:140}}>Div</th>
                     {Array.from({length:mf.numRaces}).map((_,i)=><th key={i} style={{minWidth:34}}>R{i+1}</th>)}
                     <th className="calc" style={{minWidth:38}}>Total</th>
                     <th className="calc" style={{minWidth:38}}>Net</th>
@@ -2967,10 +3013,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                     {mf.rows.map((row,i)=>(
                       <tr key={i}>
                         <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Helm name"/></td>
-                        <td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>
-                        <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="···" style={{textAlign:"center"}}/></td>
+                        {!(mf.cls==="ilca"||mf.cls==="optimist")&&<td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>}
                         <td><input value={row.nat||""} onChange={e=>updRow(i,"nat",e.target.value.toUpperCase())} placeholder="HKG" style={{textAlign:"center"}}/></td>
-                        <td><input value={row.div} onChange={e=>updRow(i,"div",e.target.value)} placeholder="F Jr" style={{textAlign:"center"}}/></td>
+                        <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="···" style={{textAlign:"center"}}/></td>
+                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)}/></td>
                         {Array.from({length:mf.numRaces}).map((_,j)=>(
                           <td key={j}><input value={row.scores[j]||""} onChange={e=>updScore(i,j,e.target.value)} placeholder="–" style={{textAlign:"center"}}/></td>
                         ))}
@@ -3044,6 +3090,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:150}}>Div</th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
                     <th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>
                   </tr>
@@ -3070,6 +3117,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                           :<div onClick={()=>startPreviewEdit("sail",idx,0,entry.sail)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,minHeight:24}}>
                             {entry.nat?<>{iocFlag(entry.nat)} {entry.nat} </>:""}{entry.sail||"—"}
                           </div>}
+                      </td>
+                      <td style={{padding:"4px 6px",textAlign:"center"}}>
+                        <DivisionToggle value={entry.div} onChange={v=>updPEntry(idx,"div",v)}/>
                       </td>
                       {Array.from({length:maxR}).map((_,raceIdx)=>{
                         const score=(entry.races||[])[raceIdx];
@@ -3127,9 +3177,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
             <div className="cal-filters">
               <div className="seg">
-                {[["all","All"],...CLASSES.map(cl=>[cl.id,cl.short]),["49er","49er"]].map(([id,label])=>(
-                  <button key={id} className={calCls===id?"on":""} onClick={()=>setCalCls(id)}>{label}</button>
-                ))}
+                {[["all","All"],["29er","29er"],["ilca","ILCA"],["optimist","Optimist"],["49er","49er"]].map(([id,label])=>{
+                  const on=calCls===id;
+                  const col=id==="all"?"var(--navy)":classColor(id);
+                  return <button key={id} className={on?"on":""} onClick={()=>setCalCls(id)}
+                    style={on?{background:col,color:"#fff"}:{color:id==="all"?undefined:classColor(id)}}>{label}</button>;
+                })}
               </div>
             </div>
           </div>
