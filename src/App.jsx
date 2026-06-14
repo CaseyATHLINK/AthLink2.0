@@ -74,6 +74,21 @@ function iocFlag(code){
   return [...iso].map(c=>String.fromCodePoint(0x1F1E6+c.charCodeAt(0)-65)).join('');
 }
 
+/* ── Shared display helpers ───────────────────────────────────────────────
+   CountryTag: flag + code shown together (global standard).
+   VerifyBadge: blue badge if verified, grey badge if not — icon only.        */
+function CountryTag({code,size=14,style={}}){
+  if(!code) return null;
+  const fl=iocFlag(code);
+  return <span style={{display:"inline-flex",alignItems:"center",gap:5,...style}}>{fl&&<span style={{fontSize:size+2,lineHeight:1}}>{fl}</span>}{code}</span>;
+}
+function VerifyBadge({verified,size=14,title}){
+  // verified -> blue, unverified -> grey. Badge icon only.
+  const col=verified?"#0d8ecf":"#9fb2c8";
+  return <BadgeCheck size={size} color={col} aria-label={verified?"Verified":"Unverified"}
+    title={title||(verified?"Verified athlete":"Unverified")} style={{flex:"none"}}/>;
+}
+
 /* ── date helpers ─────────────────────────────────────────────────────── */
 const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function formatDate(str){
@@ -1107,7 +1122,7 @@ function FootprintModal({name,ag,countryCounts,onClose}){
 
 
 /* ── RegattaFootprintModal: who's racing — countries → # of sailors ───────── */
-function RegattaFootprintModal({event,onClose,homeCountry={}}){
+function RegattaFootprintModal({event,onClose,homeCountry={},onPickAthlete}){
   const [sel,setSel]=React.useState(null);            // spotlit ISO (globe)
   const [openSet,setOpenSet]=React.useState(()=>new Set());  // expanded country keys
   const hostIso=React.useMemo(()=>IOC_ISO[event.country]||(event.country&&event.country.length===2?event.country.toUpperCase():""),[event]);
@@ -1128,6 +1143,8 @@ function RegattaFootprintModal({event,onClose,homeCountry={}}){
       add(e.helm,"Helm");
       add(e.crew,"Crew");
     });
+    // names alphabetical within each country
+    Object.values(gmap).forEach(g=>g.sailors.sort((x,y)=>x.name.localeCompare(y.name)));
     // alphabetical by country name, Unknown last
     const groups=Object.values(gmap).sort((a,b)=>{
       if(a.key==="ZZ")return 1; if(b.key==="ZZ")return -1;
@@ -1183,7 +1200,11 @@ function RegattaFootprintModal({event,onClose,homeCountry={}}){
                 </div>
                 {isOpen&&g.sailors.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:"5px 7px",padding:"0 14px 12px 32px"}}>
                   {g.sailors.map((sa,i)=>(
-                    <span key={i} style={{fontSize:12,color:"#cfe0f2",background:"rgba(120,160,210,.13)",borderRadius:6,padding:"2px 8px"}}>
+                    <span key={i} role="button" tabIndex={0}
+                      onClick={e=>{e.stopPropagation();onPickAthlete&&onPickAthlete(sa.name);}}
+                      style={{fontSize:12,color:"#cfe0f2",background:"rgba(120,160,210,.13)",borderRadius:6,padding:"2px 8px",cursor:"pointer",transition:"background .12s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="rgba(120,180,235,.32)"}
+                      onMouseLeave={e=>e.currentTarget.style.background="rgba(120,160,210,.13)"}>
                       {sa.name}{sa.role==="Crew"?<span style={{color:"#8aa8cc"}}> · crew</span>:null}</span>
                   ))}
                 </div>}
@@ -1284,6 +1305,8 @@ export default function AthLinkMVP(){
   const[view,setView]=useState({name:"portals"});
   const[verified,setVerified]=useState({});
   const[q,setQ]=useState("");const[filter,setFilter]=useState("all");
+  const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
+  const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
   const[note,setNote]=useState(null);
   const[open,setOpen]=useState(false);
@@ -1321,8 +1344,8 @@ export default function AthLinkMVP(){
   const[evFilter,setEvFilter]=useState("");     // AI filter query for events list
   const[evFilterActive,setEvFilterActive]=useState(null); // parsed filter fn + label
   const[evFilterLoading,setEvFilterLoading]=useState(false);
-  const[profileFilter,setProfileFilter]=useState("");  // AI filter for profile history
-  const[profileFilterActive,setProfileFilterActive]=useState(null);
+  const[profileFilter,setProfileFilter]=useState("");  // AI filter input for profile history
+  const[profileFilterChips,setProfileFilterChips]=useState([]); // cumulative AND-ed filters
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
   const[footprintOpen,setFootprintOpen]=useState(false);
   const[regattaFootprint,setRegattaFootprint]=useState(null);
@@ -1340,13 +1363,13 @@ export default function AthLinkMVP(){
   const[calQ,setCalQ]=useState("");
   const[calYear,setCalYear]=useState(new Date().getFullYear());
   const[calMonth,setCalMonth]=useState(new Date().getMonth()); // 0-indexed
-  const[calViewMode,setCalViewMode]=useState("month");
+  const[calViewMode,setCalViewMode]=useState("year");
   const[showSailorCal,setShowSailorCal]=useState(false);
   const[sailorCalName,setSailorCalName]=useState("");
   const[sailorCalAll,setSailorCalAll]=useState(false);
   const[sailorCalYear,setSailorCalYear]=useState(new Date().getFullYear());
   const[sailorCalMonth,setSailorCalMonth]=useState(new Date().getMonth());
-  const[sailorCalViewMode,setSailorCalViewMode]=useState("month");
+  const[sailorCalViewMode,setSailorCalViewMode]=useState("year");
   const[gSearchOpen,setGSearchOpen]=useState(false);
   const[gSearchResults,setGSearchResults]=useState([]);
 
@@ -1410,7 +1433,7 @@ export default function AthLinkMVP(){
   const manualReady=!!mf.rows.filter(r=>r.helm.trim()).length;
 
   /* ── navigation ───────────────────────────────────────────── */
-  const go=v=>{setView(v);setQ("");window.scrollTo(0,0);};
+  const go=v=>{setView(v);setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
   const goHome=()=>{setPortal(null);go({name:"portals"});};
   const enterPortal=id=>{setPortal(id);go({name:"events"});};
 
@@ -1471,28 +1494,76 @@ Query: "${query}"`;
     }finally{setEvFilterLoading(false);}
   };
 
-  const runProfileFilter=async(historyItems)=>{
-    if(!profileFilter.trim()){setProfileFilterActive(null);return;}
+  const runProfileFilter=async()=>{
+    const q=profileFilter.trim();
+    if(!q){return;}
     setProfileFilterLoading(true);
     try{
       const res=await fetch("/api/ai_filter",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
-          prompt:buildFilterPrompt(profileFilter,"Each item has: h.ev (event with .name,.date,.country), h.row.rank, h.row.net, h.fleet, h.role ('Helm' or 'Crew'), h.partner. The function takes 'h' not 'ev'. Return code using 'h'."),
-          max_tokens:300
+          prompt:`You convert a natural-language sailing-results filter into one or more conditions.
+A query may contain SEVERAL conditions (e.g. "finished top 15 in the world championships" = a placing condition AND an event-type condition). Split them.
+Return ONLY a JSON array (no markdown). Each element: {"label": short human label (max 6 words), "code": a JS arrow-function BODY string operating on item "h"}.
+"h" has: h.ev (event with .name string, .date "dd/mm/yyyy", .country), h.row.rank (number), h.row.net, h.fleet (number), h.role ('Helm'|'Crew'), h.partner.
+Code must be valid for new Function("h","scoreEvent","return "+code). Match event types by checking h.ev.name (case-insensitive). Example: "top 15 in worlds" => [{"label":"Top 15","code":"h.row.rank<=15"},{"label":"World Championship","code":"/world/i.test(h.ev.name)"}].
+Query: "${q}"`,
+          max_tokens:400
         })
       });
       const data=await res.json();
       if(!data.ok) throw new Error(data.error||"API error");
-      const text=data.text;
-      const clean=text.replace(/```json|```/g,"").trim();
-      const parsed=JSON.parse(clean);
-      const fn=new Function("h","scoreEvent","return "+parsed.code);
-      setProfileFilterActive({label:parsed.label,fn});
+      const clean=data.text.replace(/```json|```/g,"").trim();
+      let parsed=JSON.parse(clean);
+      if(!Array.isArray(parsed)) parsed=[parsed];
+      const chips=parsed.filter(x=>x&&x.code).map(x=>({label:x.label||"Filter",fn:new Function("h","scoreEvent","return "+x.code)}));
+      if(chips.length) setProfileFilterChips(prev=>[...prev,...chips]);
+      setProfileFilter("");
     }catch(err){
-      setProfileFilterActive({label:"Filter error",fn:()=>true});
+      setProfileFilterChips(prev=>[...prev,{label:"Filter error",fn:()=>true}]);
     }finally{setProfileFilterLoading(false);}
+  };
+
+  // Smart athlete search: NL query -> predicate over an athlete summary object.
+  const runAthleteSmart=async(query,peopleList,evList)=>{
+    const qq=(query||"").trim();
+    if(!qq){setAthleteSmart(null);return;}
+    // Plain country/name terms don't need AI — let the substring filter handle them.
+    setAthleteSmartLoading(true);
+    try{
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          prompt:`You convert a natural-language athlete search into a JS predicate.
+Return ONLY a JSON object (no markdown): {"label": short label (max 7 words), "code": arrow-function BODY operating on athlete "a"}.
+"a" has: a.name (string), a.iso (ISO-2 country like "GB","HK"), a.country (full country name), a.events (number of regattas), a.best (best finish rank number or null), a.podiums, a.wins, and a.results = array of {name (event name), rank, fleet, year}.
+Code must be valid for new Function("a","return "+code) and return true/false.
+Examples:
+"Hong Kong" => {"label":"Hong Kong athletes","code":"a.country==='Hong Kong'||a.iso==='HK'"}
+"top 15 in the world championships" => {"label":"Top 15 at a Worlds","code":"a.results.some(r=>/world/i.test(r.name)&&r.rank<=15)"}
+"won a national championship" => {"label":"National title","code":"a.results.some(r=>/national/i.test(r.name)&&r.rank===1)"}
+Query: "${qq}"`,
+          max_tokens:300})});
+      const data=await res.json();
+      if(!data.ok) throw new Error(data.error||"API error");
+      const clean=data.text.replace(/```json|```/g,"").trim();
+      const parsed=JSON.parse(clean);
+      const fn=new Function("a","return "+parsed.code);
+      setAthleteSmart({label:parsed.label||qq,fn});
+    }catch(err){
+      setAthleteSmart(null);
+    }finally{setAthleteSmartLoading(false);}
+  };
+
+  // Build the athlete summary object the predicate runs against.
+  const athleteSummaryFor=(name,evList)=>{
+    const ag=aggregate(name,evList);
+    const iso=IOC_ISO[athleteNat(name,evList)]||"";
+    return {
+      name, iso, country: GLOBE_NAMES[iso]||"",
+      events: ag.events, best: ag.best||null, podiums: ag.podiums, wins: ag.wins,
+      results: ag.history.map(h=>({name:h.ev.name,rank:h.row.rank,fleet:h.fleet,year:parseInt(h.ev.date?.split('/')?.[2])||null}))
+    };
   };
 
   /* ── AI suggestions (debounced) ─────────────────────────── */
@@ -1565,6 +1636,27 @@ Partial query: "${q}"`;
   const[hoverRow,setHoverRow]=useState(null); // {evId,helm} currently hovered
   const[hoverSummaries,setHoverSummaries]=useState({}); // key=helm → summary text
   const[profileSummaries,setProfileSummaries]=useState({}); // key=name → full profile blurb
+  const[eventSummaries,setEventSummaries]=useState({}); // key=event.id → competition blurb
+  const[eventSummaryOpen,setEventSummaryOpen]=useState({}); // key=event.id → revealed?
+
+  const SPONSOR_LENS=`Write for a prospective SPONSOR/INVESTOR evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-fleet finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the fleet, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
+
+  const fetchEventSummary=async(ev)=>{
+    if(eventSummaries[ev.id]!==undefined) return;
+    setEventSummaries(m=>({...m,[ev.id]:null}));
+    try{
+      const sc=scoreEvent(ev);
+      const yr=ev.date?.split('/')?.[2]||"";
+      const prompt=`${SPONSOR_LENS}
+In 2-4 sentences, summarize this sailing competition for a sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical fleet strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club regatta) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
+Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev.country||"unknown"}. Fleet size: ${sc.fleet} boats. Races sailed: ${sc.races}.`;
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt,max_tokens:220})});
+      const data=await res.json();
+      if(data.ok) setEventSummaries(m=>({...m,[ev.id]:cleanAISummary(data.text)}));
+      else setEventSummaries(m=>({...m,[ev.id]:""}));
+    }catch{setEventSummaries(m=>({...m,[ev.id]:""}));}
+  };
 
   const execGSearch=(r)=>{
     // Close search UI immediately
@@ -1630,13 +1722,15 @@ Athlete: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race
       const countries=new Set(ag.history.map(h=>h.ev.country).filter(Boolean));
       const years=new Set(ag.history.map(h=>h.ev.date?.split('/')?.[2]).filter(Boolean));
       const partners=[...new Set(ag.history.map(h=>h.partner).filter(Boolean))].slice(0,3);
-      const prompt=`Write a 2-3 sentence athlete bio for a sponsorship profile, in third person.
-STRICT RULES: Do NOT output any title, heading, markdown, or "#". Do NOT begin with the athlete's name. Mention the name at most once, naturally inside a sentence. Plain prose only — no bullet points, no bold. Use only the data provided. Be specific and factual.
+      const prompt=`${SPONSOR_LENS}
+Write a 2-3 sentence athlete bio for a sponsorship profile, in third person.
+STRICT RULES: Do NOT output any title, heading, markdown, or "#". Do NOT begin with the athlete's name. Mention the name at most once, naturally inside a sentence. Plain prose only — no bullet points, no bold. Use only the data provided. Be specific and factual. Where possible, frame results by the level of the events (e.g. a strong finish at an international championship vs a regional one).
 Name: ${name}.
 Regattas: ${ag.events}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. Race wins: ${ag.wins}.
 Countries competed in: ${[...countries].join(', ')||'unknown'}.
 Active years: ${[...years].sort().join(', ')||'unknown'}.
-Regular partners: ${partners.join(', ')||'unknown'}.`;
+Regular partners: ${partners.join(', ')||'unknown'}.
+Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join('; ')||'unknown'}.`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({prompt,max_tokens:120})});
       const data=await res.json();
@@ -1987,10 +2081,12 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     .acard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;}
     .acard:hover{border-color:#b9cee4;transform:translateY(-2px);box-shadow:0 12px 28px -16px rgba(22,58,99,.55);}
     .achead{display:flex;align-items:center;gap:11px;margin-bottom:12px;}
+    .achead>.av{flex:none;}
+    .achead .vb-spacer{margin-left:auto;}
     .achead .av{width:42px;height:42px;font-size:14px;}
-    .acn{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;line-height:1.1;}
-    .acstat{display:flex;gap:16px;font-size:12px;color:var(--mut);border-top:1px solid var(--line);padding-top:11px;align-items:center;}
-    .acstat b{display:block;font-family:'Barlow',sans-serif;font-size:17px;color:var(--ink);font-weight:700;}
+    .acn{font-family:'Barlow',sans-serif;font-weight:800;font-size:16.5px;line-height:1.12;color:var(--ink);}
+    .acstat{display:flex;gap:16px;font-size:10.5px;color:var(--mut);border-top:1px solid var(--line);padding-top:11px;align-items:center;opacity:.72;}
+    .acstat b{display:block;font-family:'Barlow',sans-serif;font-size:14px;color:var(--mut);font-weight:700;}
     .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
     .srch{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 13px;}
     .srch input{border:0;outline:0;font:inherit;font-size:14px;width:100%;background:none;color:var(--ink);}
@@ -2382,7 +2478,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                 <div style={{flex:1,minWidth:0}}>
                   <p className="evname">{ev.name}</p>
                   <div className="evmeta">
-                    <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
+                    <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
                     <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
                     <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
                   </div>
@@ -2430,9 +2526,9 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
           <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",justifyContent:"center"}}>
             <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
             <div className="evmeta" style={{marginTop:8}}>
-              <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
+              <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
               <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-              <span><Anchor size={13}/>{ev.cls}</span>
+              {(()=>{const cl=CLASSES.find(c=>c.id===ev.cls);return <span className="cls" style={{background:classColor(ev.cls)}}>{cl?.short||ev.cls}</span>;})()}
             </div>
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
@@ -2446,6 +2542,26 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
           </div>
         </div>);
       })()}
+      {/* Revealable, sponsor-focused competition summary */}
+      <div style={{marginBottom:16}}>
+        <button onClick={()=>{const open=!eventSummaryOpen[ev.id];setEventSummaryOpen(m=>({...m,[ev.id]:open}));if(open)fetchEventSummary(ev);}}
+          style={{display:"inline-flex",alignItems:"center",gap:7,background:"var(--sky)",color:"var(--navy)",border:"0",borderRadius:9,
+            fontSize:12.5,fontWeight:600,fontFamily:"'Barlow',sans-serif",padding:"7px 13px",cursor:"pointer"}}>
+          <Sparkles size={14}/>About this competition
+          <ChevronRight size={14} style={{transform:eventSummaryOpen[ev.id]?"rotate(90deg)":"none",transition:".15s"}}/>
+        </button>
+        {eventSummaryOpen[ev.id]&&(
+          <div style={{marginTop:10,background:"var(--navy)",borderRadius:12,padding:"14px 16px",animation:"calFade .26s both"}}>
+            <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 6px",fontSize:11}}><Sparkles size={12}/>Competition overview · for sponsors</p>
+            {eventSummaries[ev.id]===null
+              ? <div style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",opacity:.75,display:"flex",alignItems:"center",gap:6}}><Loader2 size={13} className="spin"/>Researching this competition…</div>
+              : eventSummaries[ev.id]
+                ? <p style={{color:"#dce8f8",fontSize:13.5,lineHeight:1.55,margin:0}}>{eventSummaries[ev.id]}</p>
+                : <p style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",margin:0}}>Add ANTHROPIC_API_KEY to Vercel env vars to enable AI summaries.</p>}
+            <p style={{color:"#6f93b8",fontSize:10.5,margin:"9px 0 0",fontStyle:"italic"}}>AI-generated from the event's level and fleet; verify specifics independently.</p>
+          </div>
+        )}
+      </div>
       <div className="panel"><table>
         <thead><tr>
           <th>Pos</th><th className="l">Boat</th><th className="l">Sail #</th>
@@ -2520,7 +2636,16 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
       </div>
       <p style={{color:"var(--mut)",fontSize:14,margin:"0 0 18px"}}>One profile per athlete, built automatically from results.</p>
       <div className="toolbar">
-        <div className="srch"><Search size={16} color="#9fb2c8"/><input placeholder="Search athletes…" value={q} onChange={e=>setQ(e.target.value)}/></div>
+        <div className="srch" style={{position:"relative"}}>
+          {athleteSmartLoading?<Loader2 size={16} className="spin" color="#0d8ecf"/>:<Search size={16} color="#9fb2c8"/>}
+          <input placeholder="Search athletes — name, country, or e.g. top 15 in the world championships"
+            value={q} onChange={e=>setQ(e.target.value)}
+            onKeyDown={e=>{
+              if(e.key==="Enter"&&q.trim()) runAthleteSmart(q,currentPeople,isGlobal?events:classEvents);
+              if(e.key==="Escape"){setQ("");setAthleteSmart(null);}
+            }}/>
+          {(q||athleteSmart)&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setQ("");setAthleteSmart(null);}}><X size={15}/></button>}
+        </div>
         <div className="seg">{(()=>{
           const vCount=currentPeople.filter(p=>verified[p.name]).length;
           const counts={all:currentPeople.length,verified:vCount,unverified:currentPeople.length-vCount};
@@ -2534,10 +2659,28 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
           ));
         })()}</div>
       </div>
+      {athleteSmart&&(
+        <div className="filter-chip" style={{marginBottom:14}}>
+          <Sparkles size={11}/>{athleteSmart.label}
+          <button onClick={()=>{setAthleteSmart(null);setQ("");}}><X size={13}/></button>
+        </div>
+      )}
       {(()=>{
+        const evScope=isGlobal?events:classEvents;
+        const qlc=q.trim().toLowerCase();
         const shown=currentPeople
-          .filter(p=>q?p.name.toLowerCase().includes(q.toLowerCase()):true)
-          .filter(p=>filter==="all"?true:filter==="verified"?verified[p.name]:!verified[p.name]);
+          .filter(p=>filter==="all"?true:filter==="verified"?verified[p.name]:!verified[p.name])
+          .filter(p=>{
+            if(athleteSmart){
+              try{ if(!athleteSmart.fn(athleteSummaryFor(p.name,evScope))) return false; }catch{}
+            } else if(qlc){
+              // live substring match on name OR country while no smart filter is set
+              const nat=athleteNat(p.name,evScope);
+              const cname=(GLOBE_NAMES[IOC_ISO[nat]]||nat||"").toLowerCase();
+              if(!p.name.toLowerCase().includes(qlc)&&!cname.includes(qlc)) return false;
+            }
+            return true;
+          });
         // group by nationality, country groups alphabetical, names alphabetical within
         const byCountry={};
         shown.forEach(p=>{
@@ -2566,14 +2709,14 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                 return(<div className="acard" key={p.name} style={{animationDelay:`${(gi++)*16}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
                   <div className="achead">
                     <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
-                    <div>
-                      <div className="acn">{nat?iocFlag(nat):""} {p.name}</div>
-                      <div className="cn" style={{marginTop:2}}>{nat||clsLabel}{ag.events>1?" · multi-event":""}</div>
+                    <div style={{minWidth:0}}>
+                      <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {p.name}</div>
+                      <div className="cn" style={{marginTop:2}}>{nat?(ag.events>1?"Multi-event":(clsLabel||"")):(clsLabel||"")}{!nat&&ag.events>1?" · multi-event":""}</div>
                     </div>
+                    <span style={{marginLeft:"auto",display:"flex",alignItems:"center"}}><VerifyBadge verified={verified[p.name]} size={18}/></span>
                   </div>
                   <div className="acstat">
                     <div><b>{ag.events}</b>regattas</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
-                    <div style={{marginLeft:"auto",alignSelf:"center"}}>{verified[p.name]?<span className="vchip"><BadgeCheck size={13}/>Verified</span>:<span style={{fontSize:11.5,color:"var(--mut)"}}>Unverified</span>}</div>
                   </div>
                 </div>);
               })}
@@ -2592,7 +2735,9 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     const nat=athleteNat(name,events);
     const isV=verified[name];
     return(<div className="wrap sec" style={{paddingTop:22}}>
-      {view.fromEvent
+      {view.fromRegatta
+        ? (()=>{const rev=events.find(e=>e.id===view.fromRegatta);return rev?<button className="back" onClick={()=>{go({name:"event",id:view.fromRegatta});setTimeout(()=>setRegattaFootprint(rev),0);}}><ArrowLeft size={16}/>{rev.name} — Who's racing</button>:null;})()
+        : view.fromEvent
         ? (()=>{const fev=events.find(e=>e.id===view.fromEvent);return fev?<button className="back" onClick={()=>go({name:"event",id:view.fromEvent})}><ArrowLeft size={16}/>{fev.name}</button>:null;})()
         : <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
       }
@@ -2617,7 +2762,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                     <Calendar size={13}/>Calendar
                   </button>
                   {isV
-                    ? <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:700,color:"#7fe0b0",background:"rgba(46,204,113,.16)",border:"1px solid rgba(46,204,113,.45)",borderRadius:8,padding:"5px 10px",fontFamily:"'Barlow',sans-serif"}}><BadgeCheck size={14}/>Verified</span>
+                    ? <VerifyBadge verified size={22}/>
                     : <button className="btn cta" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>setVerified({...verified,[name]:true})}><BadgeCheck size={14}/>Verify this profile</button>}
                 </h1>
                 <div className="pmeta">
@@ -2626,7 +2771,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                     const recent=ag.history[0]?.row;
                     if(!recent?.sail||recent.sail==="—") return null;
                     const sailNat=ag.history[0]?.row?.nat||nat;
-                    return<span style={{fontWeight:600}}>{sailNat?<>{iocFlag(sailNat)} {sailNat} </>:""}{recent.sail}</span>;
+                    return<span style={{fontWeight:600}}>{sailNat?<>{sailNat} </>:""}{recent.sail}</span>;
                   })()}
                 </div>
                 <div className="pstats">
@@ -2684,33 +2829,38 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                   setProfileSugTimer(setTimeout(()=>fetchProfileSuggestions(e.target.value),500));
                 }}
                 onKeyDown={e=>{
-                  if(e.key==="Enter"){setProfileSuggestions([]);runProfileFilter(ag.history);}
-                  if(e.key==="Escape"){setProfileFilter("");setProfileSuggestions([]);setProfileFilterActive(null);}
+                  if(e.key==="Enter"){setProfileSuggestions([]);runProfileFilter();}
+                  if(e.key==="Escape"){setProfileFilter("");setProfileSuggestions([]);}
                 }}
               />
               {profileFilterLoading&&<Loader2 size={13} className="spin" color="#0d8ecf"/>}
-              {profileFilter&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setProfileFilter("");setProfileSuggestions([]);setProfileFilterActive(null);}}><X size={13}/></button>}
+              {profileFilter&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setProfileFilter("");setProfileSuggestions([]);}}><X size={13}/></button>}
             </div>
             {profileSuggestions.length>0&&(
               <div className="sug-drop">
                 {profileSuggestions.map((s,i)=>(
-                  <div key={i} className="sug-item" onClick={()=>{setProfileFilter(s);setProfileSuggestions([]);setTimeout(()=>runProfileFilter(ag.history),50);}}>
+                  <div key={i} className="sug-item" onClick={()=>{setProfileFilter(s);setProfileSuggestions([]);setTimeout(()=>runProfileFilter(),50);}}>
                     <Sparkles size={11} color="#0d8ecf"/>{s}
                   </div>
                 ))}
               </div>
             )}
           </div>
-          {profileFilterActive&&(
-            <div className="filter-chip">
-              <Sparkles size={11}/>{profileFilterActive.label}
-              <button onClick={()=>{setProfileFilterActive(null);setProfileFilter("");}}><X size={13}/></button>
+          {profileFilterChips.map((c,ci)=>(
+            <div className="filter-chip" key={ci}>
+              <Sparkles size={11}/>{c.label}
+              <button onClick={()=>setProfileFilterChips(prev=>prev.filter((_,j)=>j!==ci))}><X size={13}/></button>
             </div>
+          ))}
+          {profileFilterChips.length>1&&(
+            <button onClick={()=>setProfileFilterChips([])} style={{border:0,background:"none",color:"var(--mut)",fontSize:11.5,cursor:"pointer",textDecoration:"underline"}}>Clear all</button>
           )}
         </div>
         {(()=>{
           // recency order (newest first), mirroring the class-association layout
-          const rows=(profileFilterActive?ag.history.filter(h=>{try{return profileFilterActive.fn(h,scoreEvent);}catch{return true;}}):ag.history)
+          const rows=(profileFilterChips.length
+              ? ag.history.filter(h=>profileFilterChips.every(c=>{try{return c.fn(h,scoreEvent);}catch{return true;}}))
+              : ag.history)
             .slice().sort((a,b)=>{
               const da=a.ev.date?.split('/').reverse().join('')||'';
               const db=b.ev.date?.split('/').reverse().join('')||'';
@@ -2732,7 +2882,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                 </div>
                 <div className="evmeta" style={{marginTop:3}}>
                   <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} onClick={(e)=>{e.stopPropagation();openSailorCalAt(h.ev.date,name);}}>{formatDate(h.ev.date)}</span></span>
-                  <span><MapPin size={13}/>{evLoc(h.ev)}</span>
+                  <span><MapPin size={13}/>{h.ev.country?<CountryTag code={h.ev.country}/>:evLoc(h.ev)}</span>
                   {h.partner?<span><Users size={13}/>with <span className="namelink" onClick={(e)=>{e.stopPropagation();go({name:"profile",id:h.partner});}}>{h.partner}</span></span>:null}
                 </div>
                 <div className="miniraces">{h.row.races.map((rc2,j)=>{
@@ -3044,7 +3194,8 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
   {regattaFootprint&&(
     <ErrorBoundary resetKey={regattaFootprint.id}
       fallback={<div className="ov" onClick={()=>setRegattaFootprint(null)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",color:"var(--ink)",fontWeight:600}}>Couldn't open this regatta's map.</p><button className="btn cta" onClick={()=>setRegattaFootprint(null)}>Close</button></div></div>}>
-      <RegattaFootprintModal event={regattaFootprint} homeCountry={homeCountry} onClose={()=>setRegattaFootprint(null)}/>
+      <RegattaFootprintModal event={regattaFootprint} homeCountry={homeCountry} onClose={()=>setRegattaFootprint(null)}
+        onPickAthlete={(nm)=>{const evId=regattaFootprint.id;setRegattaFootprint(null);setPortal(regattaFootprint.cls);go({name:"profile",id:nm,fromRegatta:evId});}}/>
     </ErrorBoundary>
   )}
 
