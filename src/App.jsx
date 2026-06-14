@@ -91,9 +91,10 @@ function VerifyBadge({verified,size=14,title}){
 
 // Toggleable M / F / Mix / Jr selector. value = "F Jr" style string; onChange(string).
 // Rules: at most one gender (M/F/Mix); Jr is an independent add-on.
-function DivisionToggle({value,onChange,size="sm"}){
+function DivisionToggle({value,onChange,size="sm",noMix=false}){
   const tokens=divTokens(value);
-  const gender=tokens.find(t=>t!=="Jr")||null;
+  let gender=tokens.find(t=>t!=="Jr")||null;
+  if(noMix&&gender==="Mix") gender=null; // single-handed: Mix not applicable
   const jr=tokens.includes("Jr");
   const set=(g,j)=>onChange(divToString([g,j?"Jr":null].filter(Boolean)));
   const btn=(key,label)=>{
@@ -107,7 +108,43 @@ function DivisionToggle({value,onChange,size="sm"}){
         padding:size==="sm"?"2px 6px":"3px 8px",cursor:"pointer",lineHeight:1.3,transition:".12s"}}>{label}</button>;
   };
   return <div style={{display:"inline-flex",gap:4,flexWrap:"wrap"}}>
-    {btn("M","M")}{btn("F","F")}{btn("Mix","Mix")}{btn("Jr","Jr")}</div>;
+    {btn("M","M")}{btn("F","F")}{!noMix&&btn("Mix","Mix")}{btn("Jr","Jr")}</div>;
+}
+
+// Compact inline nationality input: type an IOC code (e.g. HKG); once valid it
+// confirms with the flag + country name. Suggests matches as you type.
+function NatInput({value,onChange}){
+  const [open,setOpen]=React.useState(false);
+  const ref=React.useRef();
+  React.useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+  const v=(value||"").toUpperCase();
+  const valid=!!IOC_ISO[v];
+  const matches=v?COUNTRIES.filter(c=>c.code.startsWith(v)||c.name.toUpperCase().startsWith(v)).slice(0,6):[];
+  return(
+    <div style={{position:"relative"}} ref={ref}>
+      <input value={value||""} onChange={e=>{onChange(e.target.value.toUpperCase());setOpen(true);}}
+        onFocus={()=>setOpen(true)} placeholder="HKG" maxLength={3}
+        style={{textAlign:"center",width:"100%"}}/>
+      {valid&&!open&&<span style={{position:"absolute",right:4,top:"50%",transform:"translateY(-50%)",fontSize:13,pointerEvents:"none"}}>{iocFlag(v)}</span>}
+      {open&&matches.length>0&&(
+        <div style={{position:"absolute",top:"calc(100% + 3px)",left:0,zIndex:95,background:"#fff",border:"1px solid var(--line)",
+          borderRadius:8,boxShadow:"0 10px 24px -10px rgba(0,0,0,.25)",minWidth:170,overflow:"hidden"}}>
+          {matches.map(c=>(
+            <div key={c.code} onMouseDown={()=>{onChange(c.code);setOpen(false);}}
+              style={{padding:"6px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:7,fontSize:12.5}}
+              onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+              onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+              <span>{iocFlag(c.code)}</span><b style={{color:"var(--navy)",minWidth:32}}>{c.code}</b>
+              <span style={{color:"var(--mut)"}}>{c.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Small read-only division nugget(s) for the results page.
@@ -406,6 +443,37 @@ const sbPost=async(t,b)=>{
 };
 const sbPatch=async(t,f,b)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"PATCH",headers:sbH,body:JSON.stringify(b)});};
 const sbDel=async(t,f)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"DELETE",headers:{...sbH,"Prefer":""}});};
+
+/* ── Auth (Supabase GoTrue) — minimal, no extra deps ─────────────────────── */
+const AUTH_BASE=SB_URL?`${SB_URL}/auth/v1`:null;
+const authHeaders=tok=>({"apikey":SB_KEY,"Content-Type":"application/json",...(tok?{"Authorization":`Bearer ${tok}`}:{})});
+async function authSignUp(email,password){
+  const r=await fetch(`${AUTH_BASE}/signup`,{method:"POST",headers:authHeaders(),body:JSON.stringify({email,password})});
+  const d=await r.json(); if(!r.ok) throw new Error(d.msg||d.error_description||d.error||"Sign-up failed"); return d;
+}
+async function authSignIn(email,password){
+  const r=await fetch(`${AUTH_BASE}/token?grant_type=password`,{method:"POST",headers:authHeaders(),body:JSON.stringify({email,password})});
+  const d=await r.json(); if(!r.ok) throw new Error(d.msg||d.error_description||d.error||"Sign-in failed"); return d;
+}
+async function authUser(tok){
+  const r=await fetch(`${AUTH_BASE}/user`,{headers:authHeaders(tok)});
+  if(!r.ok) return null; return r.json();
+}
+// profiles table: {user_id (uuid, pk), role, display_name, class_id, athlete_name}
+async function fetchProfile(userId,tok){
+  if(!sbH) return null;
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/profiles?user_id=eq.${userId}&select=*`,{headers:authHeaders(tok)});
+    if(!r.ok) return null; const rows=await r.json(); return rows[0]||null;
+  }catch{return null;}
+}
+async function upsertProfile(profile,tok){
+  if(!sbH) return null;
+  const r=await fetch(`${SB_URL}/rest/v1/profiles`,{method:"POST",
+    headers:{...authHeaders(tok),"Prefer":"resolution=merge-duplicates,return=representation"},
+    body:JSON.stringify(profile)});
+  if(!r.ok) return null; const rows=await r.json(); return rows[0]||null;
+}
 
 // Run schema migration for nat column (idempotent)
 async function ensureSchema(){
@@ -1349,8 +1417,105 @@ function CountrySelect({value,onChange,placeholder="Select country..."}){
 
 
 /* ═════════════════════════════════════════════════════════════════════ */
+/* -- Sign-in / sign-up modal -- */
+function SignInModal({onClose,onAuthed}){
+  const [mode,setMode]=React.useState("signin");
+  const [email,setEmail]=React.useState("");
+  const [pw,setPw]=React.useState("");
+  const [role,setRole]=React.useState("athlete");
+  const [classId,setClassId]=React.useState("29er");
+  const [name,setName]=React.useState("");
+  const [busy,setBusy]=React.useState(false);
+  const [err,setErr]=React.useState("");
+  const [info,setInfo]=React.useState("");
+  const submit=async()=>{
+    setErr("");setInfo("");setBusy(true);
+    try{
+      if(!AUTH_BASE) throw new Error("Auth not configured (missing Supabase env vars).");
+      if(mode==="signup"){
+        const d=await authSignUp(email.trim(),pw);
+        const tok=d.access_token||d.session?.access_token;
+        const user=d.user||d;
+        if(!tok){ setInfo("Account created. Check your email to confirm, then sign in."); setMode("signin"); setBusy(false); return; }
+        await upsertProfile({user_id:user.id,role,display_name:name||email.split("@")[0],
+          class_id:role==="association"?classId:null,athlete_name:role==="athlete"?(name||null):null},tok);
+        onAuthed({token:tok,user,profile:{role,display_name:name,class_id:role==="association"?classId:null,athlete_name:role==="athlete"?name:null}});
+      } else {
+        const d=await authSignIn(email.trim(),pw);
+        const tok=d.access_token;const user=d.user;
+        const prof=await fetchProfile(user.id,tok)||{role:"guest"};
+        onAuthed({token:tok,user,profile:prof});
+      }
+    }catch(e){ setErr(e.message||"Something went wrong."); }
+    finally{ setBusy(false); }
+  };
+  const F={width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"9px 11px",font:"inherit",fontSize:13.5,background:"#fff",outline:"none",marginBottom:10};
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:400}}>
+        <div className="mhead"><Link2 size={17}/><h3>{mode==="signin"?"Sign in":"Create account"}</h3>
+          <button className="x" onClick={onClose}><X size={16}/></button></div>
+        <div style={{padding:"18px 20px"}}>
+          {mode==="signup"&&(
+            <>
+              <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:6}}>I am a...</label>
+              <div style={{display:"flex",gap:8,marginBottom:12}}>
+                {[["athlete","Athlete"],["association","Association"]].map(([id,lab])=>(
+                  <button key={id} onClick={()=>setRole(id)}
+                    style={{flex:1,border:"1px solid "+(role===id?"var(--accent)":"var(--line)"),background:role===id?"var(--sky)":"#fff",
+                      color:role===id?"var(--navy)":"var(--mut)",borderRadius:8,padding:"8px",fontWeight:600,fontSize:13,cursor:"pointer"}}>{lab}</button>
+                ))}
+              </div>
+              {role==="association"&&(
+                <div style={{marginBottom:10}}>
+                  <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:6}}>Class you manage</label>
+                  <ClassPicker value={classId} onChange={setClassId}/>
+                </div>
+              )}
+              <input style={F} placeholder={role==="association"?"Association / your name":"Your full name (as in results)"} value={name} onChange={e=>setName(e.target.value)}/>
+            </>
+          )}
+          <input style={F} type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)}/>
+          <input style={F} type="password" placeholder="Password" value={pw} onChange={e=>setPw(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter")submit();}}/>
+          {err&&<div style={{color:"#c0392b",fontSize:12.5,marginBottom:10}}>{err}</div>}
+          {info&&<div style={{color:"var(--accent)",fontSize:12.5,marginBottom:10}}>{info}</div>}
+          <button className="btn cta" style={{width:"100%",justifyContent:"center"}} disabled={busy||!email||!pw} onClick={submit}>
+            {busy?<Loader2 size={15} className="spin"/>:null}{mode==="signin"?"Sign in":"Create account"}</button>
+          <p style={{fontSize:12.5,color:"var(--mut)",textAlign:"center",marginTop:12}}>
+            {mode==="signin"?<>No account? <button onClick={()=>{setMode("signup");setErr("");}} style={{border:0,background:"none",color:"var(--accent)",fontWeight:600,cursor:"pointer"}}>Create one</button></>
+              :<>Have an account? <button onClick={()=>{setMode("signin");setErr("");}} style={{border:0,background:"none",color:"var(--accent)",fontWeight:600,cursor:"pointer"}}>Sign in</button></>}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
+  const[auth,setAuth]=useState(null);
+  const[showSignIn,setShowSignIn]=useState(false);
+  const[accountOpen,setAccountOpen]=useState(false);
+  const role=auth?.profile?.role||"guest";
+  const canEdit=role==="association";
+  const canEditProfileOf=(nm)=>role==="athlete"&&auth?.profile?.athlete_name&&auth.profile.athlete_name.toLowerCase()===String(nm||"").toLowerCase();
+  useEffect(()=>{
+    if(!AUTH_BASE) return;
+    try{
+      const raw=localStorage.getItem("athlink_auth");
+      if(!raw) return;
+      const saved=JSON.parse(raw);
+      (async()=>{
+        const u=await authUser(saved.token);
+        if(u){ const prof=await fetchProfile(u.id,saved.token)||saved.profile||{role:"guest"}; setAuth({token:saved.token,user:u,profile:prof}); }
+        else localStorage.removeItem("athlink_auth");
+      })();
+    }catch{}
+  },[]);
+  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false);
+    try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{} };
+  const signOut=()=>{ setAuth(null); setAccountOpen(false); try{localStorage.removeItem("athlink_auth");}catch{} };
   const[portal,setPortal]=useState(null);
   const[view,setView]=useState({name:"portals"});
   const[verified,setVerified]=useState({});
@@ -2375,8 +2540,22 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     <nav className="nav">
       {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Regattas</button>}
       {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>{cls?.short||"Class"} Athletes</button>}
+      {auth
+        ? <div style={{position:"relative"}}>
+            <button onClick={()=>setAccountOpen(o=>!o)} style={{display:"inline-flex",alignItems:"center",gap:6}}>
+              <span style={{width:24,height:24,borderRadius:"50%",background:"var(--accent)",color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{(auth.profile?.display_name||auth.user?.email||"?").slice(0,1).toUpperCase()}</span>
+              <span style={{textTransform:"capitalize"}}>{role}</span>
+            </button>
+            {accountOpen&&(<div style={{position:"absolute",right:0,top:"calc(100% + 6px)",background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.25)",padding:8,minWidth:180,zIndex:80}}>
+              <div style={{padding:"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>
+              {role==="association"&&auth.profile?.class_id&&<div style={{padding:"2px 10px 8px",fontSize:12,color:"var(--mut)"}}>Manages: <b style={{color:"var(--navy)"}}>{(CLASSES.find(c=>c.id===auth.profile.class_id)?.short)||auth.profile.class_id}</b></div>}
+              <button onClick={signOut} style={{width:"100%",textAlign:"left",border:0,background:"none",padding:"8px 10px",fontSize:13,cursor:"pointer",color:"var(--ink)",borderRadius:6}}>Sign out</button>
+            </div>)}
+          </div>
+        : <button onClick={()=>setShowSignIn(true)}>Sign in</button>}
     </nav>
   </div></div>
+  {showSignIn&&<SignInModal onClose={()=>setShowSignIn(false)} onAuthed={onAuthed}/>}
   {gSearchOpen&&<div style={{position:"fixed",inset:0,zIndex:45}} onClick={()=>setGSearchOpen(false)}/>}
 
   {/* ── HOME HERO (no portal) ── */}
@@ -2442,7 +2621,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <button className="back" onClick={goHome}><ArrowLeft size={16}/>Hong Kong Sailing</button>
         <div className="toolbar" style={{marginBottom:8}}>
           <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
-          <button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>
+          {canEdit&&<button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>}
         </div>
         {evFilterActive&&(
           <div style={{marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -2585,13 +2764,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </div>
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
-            <button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>
-            <button className="btn cta" style={{fontSize:12,padding:"6px 12px",fontWeight:600,justifyContent:"flex-start"}} onClick={()=>{
+            {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
+            {canEdit&&<button className="btn cta" style={{fontSize:12,padding:"6px 12px",fontWeight:600,justifyContent:"flex-start"}} onClick={()=>{
               const names={};ev.entries.forEach(e=>{if(e.helm)names[e.helm]=true;if(e.crew)names[e.crew]=true;});
               setVerified(v=>({...v,...names}));
               setNote({name:ev.name,matched:0,created:0,msg:`Verified ${Object.keys(names).length} athletes from this regatta.`});
               setTimeout(()=>setNote(null),4500);
-            }}><BadgeCheck size={14}/>Verify all athletes</button>
+            }}><BadgeCheck size={14}/>Verify all athletes</button>}
           </div>
         </div>);
       })()}
@@ -2635,7 +2814,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
               <div>
                 <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
-                <div className="cn">{r.crew?<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>:"single-handed"}{r.div&&<span style={{marginLeft:8,display:"inline-flex",verticalAlign:"middle"}}><DivNugget div={r.div}/></span>}</div>
+                <div className="cn">{r.crew&&<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>}{r.div&&<span style={{marginLeft:r.crew?8:0,display:"inline-flex",verticalAlign:"middle"}}><DivNugget div={r.div}/></span>}</div>
               </div>
             </div></td>
             <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
@@ -2805,7 +2984,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   </button>
                   {isV
                     ? <VerifyBadge verified size={22}/>
-                    : <button className="btn cta" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>setVerified({...verified,[name]:true})}><BadgeCheck size={14}/>Verify this profile</button>}
+                    : (canEdit?<button className="btn cta" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>setVerified({...verified,[name]:true})}><BadgeCheck size={14}/>Verify this profile</button>:<VerifyBadge verified={false} size={22}/>)}
                 </h1>
                 <div className="pmeta">
                   {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
@@ -3014,9 +3193,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                       <tr key={i}>
                         <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Helm name"/></td>
                         {!(mf.cls==="ilca"||mf.cls==="optimist")&&<td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>}
-                        <td><input value={row.nat||""} onChange={e=>updRow(i,"nat",e.target.value.toUpperCase())} placeholder="HKG" style={{textAlign:"center"}}/></td>
+                        <td><NatInput value={row.nat||""} onChange={v=>updRow(i,"nat",v)}/></td>
                         <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="···" style={{textAlign:"center"}}/></td>
-                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)}/></td>
+                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)} noMix={mf.cls==="ilca"||mf.cls==="optimist"}/></td>
                         {Array.from({length:mf.numRaces}).map((_,j)=>(
                           <td key={j}><input value={row.scores[j]||""} onChange={e=>updScore(i,j,e.target.value)} placeholder="–" style={{textAlign:"center"}}/></td>
                         ))}
@@ -3088,7 +3267,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   <tr>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Pos</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>
+                    {!(previewEv.cls==="ilca"||previewEv.cls==="optimist")&&<th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>}
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:150}}>Div</th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
@@ -3106,11 +3285,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
                           :<div onClick={()=>startPreviewEdit("helm",idx,0,entry.helm)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,minHeight:24,background:!entry.helm?"#fffbec":"transparent",border:!entry.helm?"1.5px solid #e8921a":"1.5px solid transparent",fontSize:12,fontWeight:600,color:"var(--ink)"}}>{entry.helm||<span style={{color:"#e8921a",fontStyle:"italic"}}>missing</span>}</div>}
                       </td>
-                      <td style={{padding:"4px 6px",minWidth:100}}>
+                      {!(previewEv.cls==="ilca"||previewEv.cls==="optimist")&&<td style={{padding:"4px 6px",minWidth:100}}>
                         {previewEdit?.type==="crew"&&previewEdit.idx===idx
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
                           :<div onClick={()=>startPreviewEdit("crew",idx,0,entry.crew)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,minHeight:24,fontSize:12,color:"var(--mut)"}}>{entry.crew||<span style={{fontStyle:"italic",opacity:.4}}>—</span>}</div>}
-                      </td>
+                      </td>}
                       <td style={{padding:"4px 4px",textAlign:"left",minWidth:80,fontSize:12,color:"var(--mut)"}}>
                         {previewEdit?.type==="sail"&&previewEdit.idx===idx
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
@@ -3119,7 +3298,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                           </div>}
                       </td>
                       <td style={{padding:"4px 6px",textAlign:"center"}}>
-                        <DivisionToggle value={entry.div} onChange={v=>updPEntry(idx,"div",v)}/>
+                        <DivisionToggle value={entry.div} onChange={v=>updPEntry(idx,"div",v)} noMix={previewEv.cls==="ilca"||previewEv.cls==="optimist"}/>
                       </td>
                       {Array.from({length:maxR}).map((_,raceIdx)=>{
                         const score=(entry.races||[])[raceIdx];
