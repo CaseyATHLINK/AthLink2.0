@@ -721,7 +721,7 @@ const TIER_COLORS=["#f0a79e","#d24a3e","#921508"];
 function tierColor(count){return count>=4?TIER_COLORS[2]:count>=2?TIER_COLORS[1]:TIER_COLORS[0];}
 function tierLabel(count){return count>=4?"4+":count>=2?"2–3":"1";}
 
-function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false}){
+function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="regatta",hostIso=null}){
   const canvasRef=React.useRef(null);
   const wrapRef=React.useRef(null);
   const stateRef=React.useRef({lon:0,lat:-12,zoom:1,auto:true,drag:false,px:0,py:0,vlon:0.16,pinch:0,tlon:null,tlat:null,lastPulse:undefined});
@@ -784,20 +784,21 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
       for(let lon=-180;lon<180;lon+=30){ctx.beginPath();let st=false;for(let lat=-90;lat<=90;lat+=4){const p=project(lon,lat,s);if(!p.vis){st=false;continue;}st?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);st=true;}ctx.stroke();}
 
       for(const c of GLOBE_COUNTRIES){
+        const isHost=hostIso&&c.i===hostIso;
         const competing=data[c.i]>0;
-        ctx.fillStyle=competing?tierColor(data[c.i]):land;
+        ctx.fillStyle=isHost?'#f2c037':(competing?tierColor(data[c.i]):land);
         ctx.beginPath();let any=false;
         for(const ring of c.r)for(const run of runs(ring,s)){any=true;ctx.moveTo(run[0].x,run[0].y);for(let i=1;i<run.length;i++)ctx.lineTo(run[i].x,run[i].y);ctx.closePath();}
         if(any)ctx.fill();
-        ctx.strokeStyle=competing?'rgba(120,20,12,0.55)':(dark?'rgba(150,185,225,0.30)':'rgba(20,58,99,0.45)');
-        ctx.lineWidth=competing?0.9:0.7;
+        ctx.strokeStyle=isHost?'rgba(150,110,10,0.7)':(competing?'rgba(120,20,12,0.55)':(dark?'rgba(150,185,225,0.30)':'rgba(20,58,99,0.45)'));
+        ctx.lineWidth=(isHost||competing)?0.9:0.7;
         for(const ring of c.r)for(const run of runs(ring,s)){ctx.beginPath();ctx.moveTo(run[0].x,run[0].y);for(let i=1;i<run.length;i++)ctx.lineTo(run[i].x,run[i].y);ctx.stroke();}
       }
 
       // tiny competing territories: soft shaded blob (no pin), tier-coloured
       tinyEntries.forEach(e=>{
         const p=project(e.lon,e.lat,s);if(!p.vis){e._sx=null;return;}
-        const col=tierColor(e.count);const r=7;
+        const col=(hostIso&&e.iso===hostIso)?'#f2c037':tierColor(e.count);const r=7;
         const g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,r*2.4);
         g.addColorStop(0,col);g.addColorStop(0.55,col);g.addColorStop(1,col+'00');
         ctx.fillStyle=g;ctx.beginPath();ctx.arc(p.x,p.y,r*2.4,0,7);ctx.fill();
@@ -856,22 +857,23 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
   const total=Object.values(data).reduce((a,b)=>a+b,0);
   const nC=Object.keys(data).length;
   return(
-    <div ref={wrapRef} style={{position:'relative',width:'100%',borderRadius:14,overflow:'hidden',
+    <div ref={wrapRef} style={bare?{position:'relative',width:'100%'}:{position:'relative',width:'100%',borderRadius:14,overflow:'hidden',
          background:dark?'radial-gradient(120% 120% at 30% 18%,#0d2745 0%,#06122a 75%)':'radial-gradient(120% 120% at 30% 18%,#163a63 0%,#0a1f3a 72%)',
          border:'1px solid rgba(160,195,230,0.14)'}}>
       <canvas ref={canvasRef} style={{display:'block',cursor:'grab',touchAction:'none'}}/>
       {tip&&(<div style={{position:'absolute',left:tip.x,top:tip.y-14,transform:'translate(-50%,-100%)',
              background:'rgba(8,24,45,0.95)',color:'#ffe9e6',padding:'6px 10px',borderRadius:8,fontSize:12,fontWeight:600,
              whiteSpace:'nowrap',pointerEvents:'none',border:'1px solid rgba(220,90,80,0.5)',boxShadow:'0 4px 14px rgba(0,0,0,0.4)'}}>
-          {tip.name} · {tip.count} regatta{tip.count!==1?'s':''}</div>)}
-      {!mini&&<div style={{position:'absolute',left:12,bottom:10,color:'#9fbdd9',fontSize:11,letterSpacing:0.3,pointerEvents:'none'}}>
-        {nC} countr{nC!==1?'ies':'y'} · {total} regatta{total!==1?'s':''} · scroll to zoom · drag to spin</div>}
+          {tip.name} · {tip.count} {countLabel}{tip.count!==1?'s':''}</div>)}
+      {!mini&&!bare&&<div style={{position:'absolute',left:12,bottom:10,color:'#9fbdd9',fontSize:11,letterSpacing:0.3,pointerEvents:'none'}}>
+        {nC} countr{nC!==1?'ies':'y'} · {total} {countLabel}{total!==1?'s':''} · scroll to zoom · drag to spin</div>}
     </div>
   );
 }
 
-function FootprintLegend({label="Regattas / country"}={}){
+function FootprintLegend({label="Regattas / country",showHost=false}={}){
   const items=[["1",TIER_COLORS[0]],["2–3",TIER_COLORS[1]],["4+",TIER_COLORS[2]]];
+  if(showHost)items.push(["Host country","#f2c037"]);
   return(<div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",fontSize:11.5,color:"#9fbdd9",padding:"10px 4px 2px"}}>
     <span style={{fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",fontSize:10.5}}>{label}</span>
     {items.map(([lab,col])=>(<span key={lab} style={{display:"flex",alignItems:"center",gap:6}}>
@@ -948,21 +950,27 @@ function FootprintModal({name,ag,countryCounts,onClose}){
 
 /* ── RegattaFootprintModal: who's racing — countries → # of sailors ───────── */
 function RegattaFootprintModal({event,onClose}){
-  const [sel,setSel]=React.useState(null);
+  const [sel,setSel]=React.useState(null);            // spotlit ISO (globe)
+  const [openSet,setOpenSet]=React.useState(()=>new Set());  // expanded country keys
+  const hostIso=React.useMemo(()=>IOC_ISO[event.country]||(event.country&&event.country.length===2?event.country.toUpperCase():""),[event]);
   const {natCounts,groups}=React.useMemo(()=>{
     const counts={},gmap={};
     (event.entries||[]).forEach(e=>{
       const ioc=e.nat||"";const iso=IOC_ISO[ioc]||"";const key=iso||ioc||"ZZ";
       const cname=GLOBE_NAMES[iso]||ioc||"Unknown";
-      if(!gmap[key])gmap[key]={iso,cname,sailors:[]};
+      if(!gmap[key])gmap[key]={key,iso,cname,sailors:[]};
       if(e.helm)gmap[key].sailors.push({name:e.helm,role:"Helm"});
       if(e.crew)gmap[key].sailors.push({name:e.crew,role:"Crew"});
       if(iso){const n=(e.helm?1:0)+(e.crew?1:0);counts[iso]=(counts[iso]||0)+n;}
     });
-    const groups=Object.values(gmap).sort((a,b)=>b.sailors.length-a.sailors.length||a.cname.localeCompare(b.cname));
+    // alphabetical by country name
+    const groups=Object.values(gmap).sort((a,b)=>a.cname.localeCompare(b.cname));
     return{natCounts:counts,groups};
   },[event]);
   const totalSailors=groups.reduce((a,g)=>a+g.sailors.length,0);
+  const toggle=key=>setOpenSet(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);return n;});
+  const allOpen=groups.length>0&&groups.every(g=>openSet.has(g.key));
+  const toggleAll=()=>setOpenSet(allOpen?new Set():new Set(groups.map(g=>g.key)));
   return(
     <div className="ov" onClick={onClose}>
       <div className="modal wide" onClick={e=>e.stopPropagation()}
@@ -974,31 +982,40 @@ function RegattaFootprintModal({event,onClose}){
         </div>
         <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
           <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
-            <SailingGlobe countryData={natCounts} height={460} pulseIso={sel} dark/>
-            <FootprintLegend label="Sailors / country"/>
+            <SailingGlobe countryData={natCounts} height={460} pulseIso={sel} dark countLabel="sailor" hostIso={hostIso}/>
+            <FootprintLegend label="Sailors / country" showHost={!!hostIso}/>
           </div>
           <div style={{flex:"1 1 360px",minWidth:280,maxHeight:520,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)",padding:"8px 0"}}
                onClick={e=>{if(e.target===e.currentTarget)setSel(null);}}>
-            <div style={{padding:"6px 18px 10px",color:"#9fbdd9",fontSize:12.5,fontWeight:600}}>
-              {groups.length} countr{groups.length!==1?"ies":"y"} · {totalSailors} sailor{totalSailors!==1?"s":""}</div>
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"6px 18px 10px"}}>
+              <span style={{color:"#9fbdd9",fontSize:12.5,fontWeight:600}}>{groups.length} countr{groups.length!==1?"ies":"y"} · {totalSailors} sailor{totalSailors!==1?"s":""}</span>
+              {groups.length>0&&<button onClick={e=>{e.stopPropagation();toggleAll();}}
+                style={{marginLeft:"auto",background:"rgba(120,160,210,.14)",color:"#cfe0f2",border:"1px solid rgba(120,160,210,.28)",borderRadius:7,fontSize:11.5,fontWeight:600,padding:"4px 10px",cursor:"pointer"}}>
+                {allOpen?"Collapse all":"Expand all"}</button>}
+            </div>
             {groups.map(g=>{
               const active=sel&&sel===g.iso;
+              const isOpen=openSet.has(g.key);
+              const isHost=hostIso&&g.iso===hostIso;
               return(
-              <div key={g.cname}
-                onMouseEnter={()=>setSel(g.iso||null)}
-                onClick={e=>{e.stopPropagation();setSel(g.iso||null);}}
-                style={{margin:"7px 12px",padding:"11px 14px",borderRadius:11,cursor:"pointer",transition:"all .15s",
+              <div key={g.key}
+                style={{margin:"7px 12px",borderRadius:11,transition:"all .15s",overflow:"hidden",
                   background:active?"rgba(90,150,215,.22)":"rgba(120,160,210,.08)",
-                  border:"1px solid "+(active?"rgba(120,180,235,.55)":"rgba(120,160,210,.16)")}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:g.sailors.length?7:0}}>
+                  border:"1px solid "+(active?"rgba(120,180,235,.55)":isHost?"rgba(242,192,55,.5)":"rgba(120,160,210,.16)")}}>
+                <div
+                  onMouseEnter={()=>setSel(g.iso||null)}
+                  onClick={e=>{e.stopPropagation();setSel(g.iso||null);toggle(g.key);}}
+                  style={{display:"flex",alignItems:"center",gap:8,padding:"11px 14px",cursor:"pointer"}}>
+                  <ChevronRight size={14} color="#9fbdd9" style={{flex:"none",transform:isOpen?"rotate(90deg)":"none",transition:".15s"}}/>
                   <span style={{fontSize:17}}>{g.iso?[...g.iso].map(ch=>String.fromCodePoint(0x1F1E6+ch.charCodeAt(0)-65)).join(""):""}</span>
                   <span style={{fontWeight:700,color:"#eaf3fc",fontSize:14,fontFamily:"'Barlow',sans-serif"}}>{g.cname}</span>
+                  {isHost&&<span style={{fontSize:9.5,fontWeight:700,color:"#f2c037",background:"rgba(242,192,55,.14)",border:"1px solid rgba(242,192,55,.4)",borderRadius:5,padding:"1px 6px",letterSpacing:".03em"}}>HOST</span>}
                   <span style={{marginLeft:"auto",color:"#7fa8d4",fontWeight:700,fontSize:13}}>{g.sailors.length} sailor{g.sailors.length!==1?"s":""}</span>
                 </div>
-                {g.sailors.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:"5px 7px"}}>
-                  {g.sailors.map((s,i)=>(
+                {isOpen&&g.sailors.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:"5px 7px",padding:"0 14px 12px 32px"}}>
+                  {g.sailors.map((sa,i)=>(
                     <span key={i} style={{fontSize:12,color:"#cfe0f2",background:"rgba(120,160,210,.13)",borderRadius:6,padding:"2px 8px"}}>
-                      {s.name}{s.role==="Crew"?<span style={{color:"#8aa8cc"}}> · crew</span>:null}</span>
+                      {sa.name}{sa.role==="Crew"?<span style={{color:"#8aa8cc"}}> · crew</span>:null}</span>
                   ))}
                 </div>}
               </div>);
@@ -1806,6 +1823,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
     .srch{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 13px;}
     .srch input{border:0;outline:0;font:inherit;font-size:14px;width:100%;background:none;color:var(--ink);}
+    .calicon{padding:6px;width:auto;aspect-ratio:1/1;justify-content:center;align-items:center;line-height:0;}
     .seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:10px;padding:3px;}
     .seg button{font:inherit;font-size:13px;font-weight:600;border:0;background:none;color:var(--mut);padding:6px 12px;border-radius:7px;cursor:pointer;}
     .seg button.on{background:var(--navy);color:#fff;}
@@ -2043,8 +2061,13 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
   {!portal&&(
     <div className="home-hero">
       <div className="wrap">
-        <h1 className="disp">Hong Kong Sailing</h1>
-        <p>Results, athlete profiles and class standings for Hong Kong competitive sailing</p>
+        <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+          <h1 className="disp" style={{margin:0}}>Hong Kong Sailing</h1>
+          <button className="btn sky calicon" title="Race calendar" aria-label="Race calendar" onClick={()=>{setCalCls("all");setShowCalendar(true);}}>
+            <Calendar size={26}/>
+          </button>
+        </div>
+        <p style={{marginTop:6}}>Results, athlete profiles and class standings for Hong Kong competitive sailing</p>
         <div className="home-tabs">
           <button className={view.name==="portals"?"on":""} onClick={()=>go({name:"portals"})}>Class Portals</button>
           <button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>All Athletes</button>
@@ -2084,8 +2107,8 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
       <div className="strip"><div className="wrap">
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
           <h1 className="disp">{cls?.name}</h1>
-          <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalCls(portal||"all");setShowCalendar(true);}}>
-            <Calendar size={15}/>Race Calendar
+          <button className="btn sky calicon" title="Race calendar" aria-label="Race calendar" onClick={()=>{setCalCls(portal||"all");setShowCalendar(true);}}>
+            <Calendar size={22}/>
           </button>
         </div>
         <div className="pillbar">
@@ -2221,32 +2244,35 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
           <button className="btn green" onClick={()=>confirmDraft(ev.id)}><CheckCircle size={16}/>Confirm Results</button>
         </div>
       )}
-      <div style={{display:"flex",alignItems:"flex-start",gap:18,marginBottom:16,flexWrap:"wrap"}}>
-        <div style={{flex:1,minWidth:260}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+      {(()=>{
+        const hostIso=IOC_ISO[ev.country]||(ev.country&&ev.country.length===2?ev.country.toUpperCase():"");
+        return(
+        <div style={{display:"flex",alignItems:"stretch",gap:16,marginBottom:16}}>
+          {hostIso&&(
+            <div onClick={()=>setRegattaFootprint(ev)} title="Who's racing — click to expand"
+              style={{width:118,flex:"none",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center"}}>
+              <SailingGlobe countryData={{[hostIso]:1}} height={118} dark mini bare hostIso={hostIso}/>
+            </div>
+          )}
+          <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",justifyContent:"center"}}>
             <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
-            <button className="btn ghost" style={{fontSize:12,padding:"5px 10px"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>
-            <button className="btn cta" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{
+            <div className="evmeta" style={{marginTop:8}}>
+              <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
+              <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
+              <span><Anchor size={13}/>{ev.cls}</span>
+            </div>
+          </div>
+          <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
+            <button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>
+            <button className="btn cta" style={{fontSize:12,padding:"6px 12px",fontWeight:600,justifyContent:"flex-start"}} onClick={()=>{
               const names={};ev.entries.forEach(e=>{if(e.helm)names[e.helm]=true;if(e.crew)names[e.crew]=true;});
               setVerified(v=>({...v,...names}));
               setNote({name:ev.name,matched:0,created:0,msg:`Verified ${Object.keys(names).length} athletes from this regatta.`});
               setTimeout(()=>setNote(null),4500);
             }}><BadgeCheck size={14}/>Verify all athletes</button>
           </div>
-          <div className="evmeta">
-            <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
-            <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-            <span><Anchor size={13}/>{ev.cls}</span>
-          </div>
-        </div>
-        {(()=>{const hostIso=IOC_ISO[ev.country]||(ev.country&&ev.country.length===2?ev.country.toUpperCase():"");return hostIso?(
-          <div onClick={()=>setRegattaFootprint(ev)} title="Who's racing — click to expand"
-            style={{width:138,flex:"none",cursor:"pointer",position:"relative"}}>
-            <SailingGlobe countryData={{[hostIso]:1}} height={138} dark mini/>
-            <span style={{position:"absolute",bottom:7,left:0,right:0,textAlign:"center",fontSize:9.5,color:"#bcd4ee",pointerEvents:"none",letterSpacing:".02em"}}>who's racing ↗</span>
-          </div>
-        ):null;})()}
-      </div>
+        </div>);
+      })()}
       <div className="panel"><table>
         <thead><tr>
           <th>Pos</th><th className="l">Boat</th><th className="l">Sail #</th>
@@ -2322,9 +2348,18 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
       <p style={{color:"var(--mut)",fontSize:14,margin:"0 0 18px"}}>One profile per sailor, built automatically from results.</p>
       <div className="toolbar">
         <div className="srch"><Search size={16} color="#9fb2c8"/><input placeholder="Search athletes…" value={q} onChange={e=>setQ(e.target.value)}/></div>
-        <div className="seg">{["all","verified","unverified"].map(f=>(
-          <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>{f[0].toUpperCase()+f.slice(1)}</button>
-        ))}</div>
+        <div className="seg">{(()=>{
+          const vCount=currentPeople.filter(p=>verified[p.name]).length;
+          const counts={all:currentPeople.length,verified:vCount,unverified:currentPeople.length-vCount};
+          return ["all","verified","unverified"].map(f=>(
+            <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
+              <span style={{display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15}}>
+                <span>{f[0].toUpperCase()+f.slice(1)}</span>
+                <span style={{fontSize:11,fontWeight:700,opacity:.75}}>{counts[f]}</span>
+              </span>
+            </button>
+          ));
+        })()}</div>
       </div>
       <div className="agrid">
         {currentPeople.filter(p=>q?p.name.toLowerCase().includes(q.toLowerCase()):true)
@@ -2379,8 +2414,8 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
             <div style={{flex:1,minWidth:200}}>
               <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                 <span>{nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}</span>
-                <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalAll(false);setShowSailorCal(true);}}>
-                  <Calendar size={13}/>Calendar
+                <button className="btn sky calicon" title="Race calendar" aria-label="Race calendar" onClick={()=>{setSailorCalName(name);setSailorCalAll(false);setShowSailorCal(true);}}>
+                  <Calendar size={20}/>
                 </button>
                 {isV
                   ? <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:700,color:"#7fe0b0",background:"rgba(46,204,113,.16)",border:"1px solid rgba(46,204,113,.45)",borderRadius:8,padding:"5px 10px",fontFamily:"'Barlow',sans-serif"}}><BadgeCheck size={14}/>Verified</span>
