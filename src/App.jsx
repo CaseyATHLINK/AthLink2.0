@@ -721,7 +721,7 @@ const TIER_COLORS=["#f0a79e","#d24a3e","#921508"];
 function tierColor(count){return count>=4?TIER_COLORS[2]:count>=2?TIER_COLORS[1]:TIER_COLORS[0];}
 function tierLabel(count){return count>=4?"4+":count>=2?"2–3":"1";}
 
-function SailingGlobe({countryData,height=330,pulseIso=null,dark=false}){
+function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false}){
   const canvasRef=React.useRef(null);
   const wrapRef=React.useRef(null);
   const stateRef=React.useRef({lon:0,lat:-12,zoom:1,auto:true,drag:false,px:0,py:0,vlon:0.16,pinch:0,tlon:null,tlat:null,lastPulse:undefined});
@@ -845,13 +845,13 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false}){
     const tend=()=>{const s=stateRef.current;s.pinch=0;up();};
     const ro=new ResizeObserver(size);ro.observe(wrapRef.current);
     canvas.addEventListener('mousedown',down);window.addEventListener('mousemove',move);window.addEventListener('mouseup',up);
-    canvas.addEventListener('wheel',wheel,{passive:false});
+    if(!mini)canvas.addEventListener('wheel',wheel,{passive:false});
     canvas.addEventListener('touchstart',tstart,{passive:true});canvas.addEventListener('touchmove',tmove,{passive:true});canvas.addEventListener('touchend',tend);
     return()=>{cancelAnimationFrame(raf);ro.disconnect();
       canvas.removeEventListener('mousedown',down);window.removeEventListener('mousemove',move);window.removeEventListener('mouseup',up);
       canvas.removeEventListener('wheel',wheel);
       canvas.removeEventListener('touchstart',tstart);canvas.removeEventListener('touchmove',tmove);canvas.removeEventListener('touchend',tend);};
-  },[data,tinyEntries,height,dark]);
+  },[data,tinyEntries,height,dark,mini]);
 
   const total=Object.values(data).reduce((a,b)=>a+b,0);
   const nC=Object.keys(data).length;
@@ -864,16 +864,16 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false}){
              background:'rgba(8,24,45,0.95)',color:'#ffe9e6',padding:'6px 10px',borderRadius:8,fontSize:12,fontWeight:600,
              whiteSpace:'nowrap',pointerEvents:'none',border:'1px solid rgba(220,90,80,0.5)',boxShadow:'0 4px 14px rgba(0,0,0,0.4)'}}>
           {tip.name} · {tip.count} regatta{tip.count!==1?'s':''}</div>)}
-      <div style={{position:'absolute',left:12,bottom:10,color:'#9fbdd9',fontSize:11,letterSpacing:0.3,pointerEvents:'none'}}>
-        {nC} countr{nC!==1?'ies':'y'} · {total} regatta{total!==1?'s':''} · scroll to zoom · drag to spin</div>
+      {!mini&&<div style={{position:'absolute',left:12,bottom:10,color:'#9fbdd9',fontSize:11,letterSpacing:0.3,pointerEvents:'none'}}>
+        {nC} countr{nC!==1?'ies':'y'} · {total} regatta{total!==1?'s':''} · scroll to zoom · drag to spin</div>}
     </div>
   );
 }
 
-function FootprintLegend(){
+function FootprintLegend({label="Regattas / country"}={}){
   const items=[["1",TIER_COLORS[0]],["2–3",TIER_COLORS[1]],["4+",TIER_COLORS[2]]];
   return(<div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",fontSize:11.5,color:"#9fbdd9",padding:"10px 4px 2px"}}>
-    <span style={{fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",fontSize:10.5}}>Regattas / country</span>
+    <span style={{fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",fontSize:10.5}}>{label}</span>
     {items.map(([lab,col])=>(<span key={lab} style={{display:"flex",alignItems:"center",gap:6}}>
       <span style={{width:13,height:13,borderRadius:"50%",background:col,boxShadow:"0 0 0 1px rgba(255,255,255,.15)"}}/>{lab}</span>))}
   </div>);
@@ -945,6 +945,71 @@ function FootprintModal({name,ag,countryCounts,onClose}){
   );
 }
 
+
+/* ── RegattaFootprintModal: who's racing — countries → # of sailors ───────── */
+function RegattaFootprintModal({event,onClose}){
+  const [sel,setSel]=React.useState(null);
+  const {natCounts,groups}=React.useMemo(()=>{
+    const counts={},gmap={};
+    (event.entries||[]).forEach(e=>{
+      const ioc=e.nat||"";const iso=IOC_ISO[ioc]||"";const key=iso||ioc||"ZZ";
+      const cname=GLOBE_NAMES[iso]||ioc||"Unknown";
+      if(!gmap[key])gmap[key]={iso,cname,sailors:[]};
+      if(e.helm)gmap[key].sailors.push({name:e.helm,role:"Helm"});
+      if(e.crew)gmap[key].sailors.push({name:e.crew,role:"Crew"});
+      if(iso){const n=(e.helm?1:0)+(e.crew?1:0);counts[iso]=(counts[iso]||0)+n;}
+    });
+    const groups=Object.values(gmap).sort((a,b)=>b.sailors.length-a.sailors.length||a.cname.localeCompare(b.cname));
+    return{natCounts:counts,groups};
+  },[event]);
+  const totalSailors=groups.reduce((a,g)=>a+g.sailors.length,0);
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal wide" onClick={e=>e.stopPropagation()}
+        style={{maxWidth:1000,background:"linear-gradient(160deg,#0d2340,#091a31)",border:"1px solid rgba(120,160,210,.22)"}}>
+        <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
+          <Flag size={18}/><h3>{event.name} — Who's racing</h3>
+          {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
+          <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
+            <SailingGlobe countryData={natCounts} height={460} pulseIso={sel} dark/>
+            <FootprintLegend label="Sailors / country"/>
+          </div>
+          <div style={{flex:"1 1 360px",minWidth:280,maxHeight:520,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)",padding:"8px 0"}}
+               onClick={e=>{if(e.target===e.currentTarget)setSel(null);}}>
+            <div style={{padding:"6px 18px 10px",color:"#9fbdd9",fontSize:12.5,fontWeight:600}}>
+              {groups.length} countr{groups.length!==1?"ies":"y"} · {totalSailors} sailor{totalSailors!==1?"s":""}</div>
+            {groups.map(g=>{
+              const active=sel&&sel===g.iso;
+              return(
+              <div key={g.cname}
+                onMouseEnter={()=>setSel(g.iso||null)}
+                onClick={e=>{e.stopPropagation();setSel(g.iso||null);}}
+                style={{margin:"7px 12px",padding:"11px 14px",borderRadius:11,cursor:"pointer",transition:"all .15s",
+                  background:active?"rgba(90,150,215,.22)":"rgba(120,160,210,.08)",
+                  border:"1px solid "+(active?"rgba(120,180,235,.55)":"rgba(120,160,210,.16)")}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:g.sailors.length?7:0}}>
+                  <span style={{fontSize:17}}>{g.iso?[...g.iso].map(ch=>String.fromCodePoint(0x1F1E6+ch.charCodeAt(0)-65)).join(""):""}</span>
+                  <span style={{fontWeight:700,color:"#eaf3fc",fontSize:14,fontFamily:"'Barlow',sans-serif"}}>{g.cname}</span>
+                  <span style={{marginLeft:"auto",color:"#7fa8d4",fontWeight:700,fontSize:13}}>{g.sailors.length} sailor{g.sailors.length!==1?"s":""}</span>
+                </div>
+                {g.sailors.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:"5px 7px"}}>
+                  {g.sailors.map((s,i)=>(
+                    <span key={i} style={{fontSize:12,color:"#cfe0f2",background:"rgba(120,160,210,.13)",borderRadius:6,padding:"2px 8px"}}>
+                      {s.name}{s.role==="Crew"?<span style={{color:"#8aa8cc"}}> · crew</span>:null}</span>
+                  ))}
+                </div>}
+              </div>);
+            })}
+            {groups.length===0&&<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>No entries recorded.</div>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ── IOC country list for dropdown ───────────────────────────────────── */
 const COUNTRIES=[
@@ -1073,6 +1138,7 @@ export default function AthLinkMVP(){
   const[profileFilterActive,setProfileFilterActive]=useState(null);
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
   const[footprintOpen,setFootprintOpen]=useState(false);
+  const[regattaFootprint,setRegattaFootprint]=useState(null);
   const[evSuggestions,setEvSuggestions]=useState([]);
   const[evSugLoading,setEvSugLoading]=useState(false);
   const[evSugTimer,setEvSugTimer]=useState(null);
@@ -1559,26 +1625,21 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
-    const saved=await saveEventToDb(ev);
-    if(saved?.[0]?.id){
-      console.log("Event saved to Supabase with id:", saved[0].id);
-      // Reload from DB to get proper ids
-      const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
-      if(fresh?.[0]){
-        console.log("Reloaded event from DB:", fresh[0].name, "with", fresh[0].entries?.length, "entries");
-        setEvents(p=>[dbToApp(fresh[0]),...p.filter(x=>x.id!==ev.id)]);
-      } else {
-        console.warn("Could not reload from DB, using in-memory event");
-        setEvents(p=>[ev,...p]);
-      }
-    } else {
-      // Supabase save failed — keep in memory only
-      setEvents(p=>[ev,...p]);
-      console.error("importPreview: save to Supabase failed — event is in memory only (will not persist on reload)");
-    }
+    // Optimistic: drop the event into the list and close the popup immediately
+    setEvents(p=>[ev,...p.filter(x=>x.id!==ev.id)]);
     setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":null});
     setTimeout(()=>setNote(null),7000);
     closeImport();
+    // Persist in the background; swap in the DB copy (with real ids) once saved
+    try{
+      const saved=await saveEventToDb(ev);
+      if(saved?.[0]?.id){
+        const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
+        if(fresh?.[0]) setEvents(p=>p.map(x=>x.id===ev.id?dbToApp(fresh[0]):x));
+      } else {
+        console.error("importPreview: Supabase save failed — kept in memory only (will not persist on reload)");
+      }
+    }catch(err){console.error("importPreview: background save error",err);}
   };
 
   /* ── inline score editing ─────────────────────────────────── */
@@ -2160,16 +2221,31 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
           <button className="btn green" onClick={()=>confirmDraft(ev.id)}><CheckCircle size={16}/>Confirm Results</button>
         </div>
       )}
-      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
-        <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
-        <button className="btn ghost" style={{fontSize:12,padding:"5px 10px"}} onClick={()=>openEditResults(ev)}>
-          <Pencil size={13}/>Edit results
-        </button>
-      </div>
-      <div className="evmeta" style={{marginBottom:16}}>
-        <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
-        <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-        <span><Anchor size={13}/>{ev.cls}</span>
+      <div style={{display:"flex",alignItems:"flex-start",gap:18,marginBottom:16,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:260}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+            <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
+            <button className="btn ghost" style={{fontSize:12,padding:"5px 10px"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>
+            <button className="btn cta" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{
+              const names={};ev.entries.forEach(e=>{if(e.helm)names[e.helm]=true;if(e.crew)names[e.crew]=true;});
+              setVerified(v=>({...v,...names}));
+              setNote({name:ev.name,matched:0,created:0,msg:`Verified ${Object.keys(names).length} athletes from this regatta.`});
+              setTimeout(()=>setNote(null),4500);
+            }}><BadgeCheck size={14}/>Verify all athletes</button>
+          </div>
+          <div className="evmeta">
+            <span><MapPin size={13}/>{evLoc(ev)||"—"}</span>
+            <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
+            <span><Anchor size={13}/>{ev.cls}</span>
+          </div>
+        </div>
+        {(()=>{const hostIso=IOC_ISO[ev.country]||(ev.country&&ev.country.length===2?ev.country.toUpperCase():"");return hostIso?(
+          <div onClick={()=>setRegattaFootprint(ev)} title="Who's racing — click to expand"
+            style={{width:138,flex:"none",cursor:"pointer",position:"relative"}}>
+            <SailingGlobe countryData={{[hostIso]:1}} height={138} dark mini/>
+            <span style={{position:"absolute",bottom:7,left:0,right:0,textAlign:"center",fontSize:9.5,color:"#bcd4ee",pointerEvents:"none",letterSpacing:".02em"}}>who's racing ↗</span>
+          </div>
+        ):null;})()}
       </div>
       <div className="panel"><table>
         <thead><tr>
@@ -2409,7 +2485,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                 <span className="disp" style={{fontWeight:700,fontSize:15}}>{h.ev.name}</span>
                 <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
               </div>
-              <div className="cn" style={{marginTop:3}}><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} onClick={()=>openSailorCalAt(h.ev.date,name)}>{formatDate(h.ev.date)}</span> · {evLoc(h.ev)} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={()=>go({name:"profile",id:h.partner})}>{h.partner}</span></>:""}</div>
+              <div className="cn" style={{marginTop:3}}><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} onClick={(e)=>{e.stopPropagation();openSailorCalAt(h.ev.date,name);}}>{formatDate(h.ev.date)}</span> · {evLoc(h.ev)} · net {h.row.net}{h.partner?<> · with <span className="namelink" onClick={(e)=>{e.stopPropagation();go({name:"profile",id:h.partner});}}>{h.partner}</span></>:""}</div>
               <div className="miniraces">{h.row.races.map((rc2,j)=>{
                 const cls2=isCode(rc2)?"c":h.row.discardSet.has(j)?"d":rc2===1?"g1":rc2===2?"g2":rc2===3?"g3":"";
                 return<div key={j} className={`rc ${cls2}`}>{isCode(rc2)?rc2.slice(0,2):rc2}</div>;
@@ -2727,6 +2803,8 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
       </div>
     );
   })()}
+
+  {regattaFootprint&&<RegattaFootprintModal event={regattaFootprint} onClose={()=>setRegattaFootprint(null)}/>}
 
   {deleteConfirm&&(
     <div style={{position:"fixed",inset:0,zIndex:75}} onClick={()=>setDeleteConfirm(null)}>
