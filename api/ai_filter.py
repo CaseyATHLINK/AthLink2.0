@@ -9,11 +9,15 @@ import json, os
 
 try:
     import urllib.request as urlreq
+    import urllib.error as urlerr
 except ImportError:
     urlreq = None
+    urlerr = None
 
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL   = "claude-sonnet-4-20250514"
+# Haiku 4.5: fast + cheap, ideal for short summaries fired on every hover.
+# For richer full-profile prose you could swap to "claude-sonnet-4-6".
+CLAUDE_MODEL = "claude-haiku-4-5"
 
 
 class handler(BaseHTTPRequestHandler):
@@ -62,8 +66,16 @@ class handler(BaseHTTPRequestHandler):
         try:
             with urlreq.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read())
+        except urlerr.HTTPError as exc:
+            # Surface Anthropic's actual error message, not just the status line.
+            try:
+                detail = json.loads(exc.read())
+                msg = detail.get("error", {}).get("message", str(detail))
+            except Exception:
+                msg = exc.reason or str(exc)
+            return self._respond(502, {"ok": False, "error": f"Anthropic {exc.code}: {msg}", "model": CLAUDE_MODEL})
         except Exception as exc:
-            return self._respond(502, {"ok": False, "error": str(exc)})
+            return self._respond(502, {"ok": False, "error": str(exc), "model": CLAUDE_MODEL})
 
         text = "".join(
             b.get("text", "") for b in data.get("content", [])
