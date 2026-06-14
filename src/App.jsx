@@ -824,11 +824,12 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
   const shadeFor=React.useCallback((count)=>{
     if(!rankShade) return tierColor(count);
     if(!count||maxCount<=0) return TIER_COLORS[0];
-    // interpolate light(#f0a79e) -> dark(#7a0d04) by relative count
+    // interpolate light(#f0a79e) -> dark(#7a0d04) by relative count, return HEX
     const t=maxCount<=1?1:(count-1)/(maxCount-1);
     const lerp=(a,b)=>Math.round(a+(b-a)*t);
+    const hx=v=>v.toString(16).padStart(2,'0');
     const r=lerp(0xf0,0x7a),g=lerp(0xa7,0x0d),b=lerp(0x9e,0x04);
-    return `rgb(${r},${g},${b})`;
+    return `#${hx(r)}${hx(g)}${hx(b)}`;
   },[rankShade,maxCount]);
 
   // every shaded country (+host) gets a centroid marker for the glow/ring pass
@@ -878,7 +879,7 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
       const s=stateRef.current;R=baseR*s.zoom;
       const pulse=pulseRef.current;
       if(pulse!==s.lastPulse){s.lastPulse=pulse;
-        if(pulse&&GLOBE_CENT[pulse]){const c=GLOBE_CENT[pulse];s.tlon=-c[0];s.tlat=Math.max(-75,Math.min(75,-c[1]));s.auto=false;}
+        if(pulse&&GLOBE_CENT[pulse]){const c=GLOBE_CENT[pulse];s.tlon=-c[0];s.tlat=Math.max(-45,Math.min(45,-c[1]*0.55));s.auto=false;}
         else{s.tlon=null;s.tlat=null;}}
       if(s.tlon!=null){let dl=((s.tlon-s.lon+540)%360)-180;s.lon+=dl*0.14;s.lat+=(s.tlat-s.lat)*0.14;}
       else if(s.auto&&!s.drag&&s.zoom<1.15)s.lon+=s.vlon;
