@@ -275,6 +275,11 @@ function buildHomeCountry(evList){
       }
     }
   }
+  // seed with META nationality (weak weight) so known athletes still resolve
+  for(const nm in META){
+    const iso=IOC_ISO[META[nm]?.nat||""]||""; if(!iso) continue;
+    (tally[nm]||(tally[nm]={})); if(!tally[nm][iso]) tally[nm][iso]=0.5;
+  }
   const home={};
   for(const nm in tally){
     home[nm]=Object.entries(tally[nm]).sort((a,b)=>b[1]-a[1])[0][0];
@@ -806,7 +811,7 @@ class ErrorBoundary extends React.Component{
   }
 }
 
-function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="regatta",hostIso=null,rankShade=false}){
+function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="regatta",hostIso=null,rankShade=false,markersHostOnly=false}){
   const canvasRef=React.useRef(null);
   const wrapRef=React.useRef(null);
   const stateRef=React.useRef({lon:0,lat:-12,zoom:1,auto:true,drag:false,px:0,py:0,vlon:0.16,pinch:0,tlon:null,tlat:null,lastPulse:undefined});
@@ -844,7 +849,7 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
 
   // Live refs so the canvas effect mounts ONCE and never tears down on data change
   const drawRef=React.useRef({});
-  drawRef.current={data,tinyEntries,markerEntries,hostIso,dark,mini,shadeFor};
+  drawRef.current={data,tinyEntries,markerEntries,hostIso,dark,mini,shadeFor,markersHostOnly};
 
   // Recenter on the busiest country when the data set itself changes
   const dataKey=React.useMemo(()=>Object.keys(data).sort().join(",")+"|"+maxCount,[data,maxCount]);
@@ -915,9 +920,12 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
       // countries like Hong Kong are visible without zooming and large ones
       // get a clear locator dot too. Compact radius so it doesn't smother things.
       const markerEntries=D2.markerEntries||[];
+      const hostOnly=D2.markersHostOnly;
       markerEntries.forEach(e=>{
         const p=project(e.lon,e.lat,s);if(!p.vis){e._sx=null;return;}
         const isHostM=hostIso&&e.iso===hostIso;
+        // keep hover hit-area for every country, but only DRAW the host marker
+        if(hostOnly&&!isHostM){e._sx=p.x;e._sy=p.y;e._sr=Math.max(R*0.05,14);return;}
         const col=isHostM?'#ffcf2e':shadeFor(e.count);
         const core=Math.max(3.5,Math.min(6,R*0.012));        // compact solid dot
         const halo=core*2.6;                                 // tighter glow
@@ -1105,7 +1113,7 @@ function RegattaFootprintModal({event,onClose,homeCountry={}}){
   const hostIso=React.useMemo(()=>IOC_ISO[event.country]||(event.country&&event.country.length===2?event.country.toUpperCase():""),[event]);
   const {natCounts,groups}=React.useMemo(()=>{
     const counts={},gmap={};
-    const isoForSailor=(entryIso,name)=>entryIso||homeCountry[name]||"";
+    const isoForSailor=(entryIso,name)=>homeCountry[name]||entryIso||"";
     (event.entries||[]).forEach(e=>{
       const entryIso=IOC_ISO[e.nat||""]||"";
       const add=(name,role)=>{
@@ -1143,13 +1151,13 @@ function RegattaFootprintModal({event,onClose,homeCountry={}}){
         <ErrorBoundary resetKey={event.id} fallback={<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>Couldn't render this regatta's map.</div>}>
         <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
           <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
-            <SailingGlobe countryData={natCounts} height={460} pulseIso={sel} dark countLabel="sailor" hostIso={hostIso} rankShade/>
-            <FootprintLegend label="Sailors / country" showHost={!!hostIso} rank maxCount={Object.values(natCounts).reduce((a,b)=>Math.max(a,b),0)}/>
+            <SailingGlobe countryData={natCounts} height={460} pulseIso={sel} dark countLabel="athlete" hostIso={hostIso} rankShade markersHostOnly/>
+            <FootprintLegend label="Athletes / country" showHost={!!hostIso} rank maxCount={Object.values(natCounts).reduce((a,b)=>Math.max(a,b),0)}/>
           </div>
           <div style={{flex:"1 1 360px",minWidth:280,maxHeight:520,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)",padding:"8px 0"}}
                onClick={e=>{if(e.target===e.currentTarget)setSel(null);}}>
             <div style={{display:"flex",alignItems:"center",gap:10,padding:"6px 18px 10px"}}>
-              <span style={{color:"#9fbdd9",fontSize:12.5,fontWeight:600}}>{groups.length} countr{groups.length!==1?"ies":"y"} · {totalSailors} sailor{totalSailors!==1?"s":""}</span>
+              <span style={{color:"#9fbdd9",fontSize:12.5,fontWeight:600}}>{groups.length} countr{groups.length!==1?"ies":"y"} · {totalSailors} athlete{totalSailors!==1?"s":""}</span>
               {groups.length>0&&<button onClick={e=>{e.stopPropagation();toggleAll();}}
                 style={{marginLeft:"auto",background:"rgba(120,160,210,.14)",color:"#cfe0f2",border:"1px solid rgba(120,160,210,.28)",borderRadius:7,fontSize:11.5,fontWeight:600,padding:"4px 10px",cursor:"pointer"}}>
                 {allOpen?"Collapse all":"Expand all"}</button>}
@@ -1171,7 +1179,7 @@ function RegattaFootprintModal({event,onClose,homeCountry={}}){
                   <span style={{fontSize:17}}>{isoFlag(g.iso)}</span>
                   <span style={{fontWeight:700,color:"#eaf3fc",fontSize:14,fontFamily:"'Barlow',sans-serif"}}>{g.cname}</span>
                   {isHost&&<span style={{fontSize:9.5,fontWeight:700,color:"#f2c037",background:"rgba(242,192,55,.14)",border:"1px solid rgba(242,192,55,.4)",borderRadius:5,padding:"1px 6px",letterSpacing:".03em"}}>HOST</span>}
-                  <span style={{marginLeft:"auto",color:"#7fa8d4",fontWeight:700,fontSize:13}}>{g.sailors.length} sailor{g.sailors.length!==1?"s":""}</span>
+                  <span style={{marginLeft:"auto",color:"#7fa8d4",fontWeight:700,fontSize:13}}>{g.sailors.length} athlete{g.sailors.length!==1?"s":""}</span>
                 </div>
                 {isOpen&&g.sailors.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:"5px 7px",padding:"0 14px 12px 32px"}}>
                   {g.sailors.map((sa,i)=>(
@@ -1604,8 +1612,8 @@ Partial query: "${q}"`;
 Helm: ${name} (${evs} regattas, best: ${best}, ${pods} podiums, ${wins} race wins).
 Crew: ${crew} (${agCrew.events} regattas, best: ${agCrew.best?"#"+agCrew.best:"unknown"}).`;
       } else {
-        prompt=`Write 2 short sentences (max 30 words total) about this sailor. Be specific and factual.
-Sailor: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race wins: ${wins}.`;
+        prompt=`Write 2 short sentences (max 30 words total) about this athlete. Be specific and factual.
+Athlete: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race wins: ${wins}.`;
       }
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({prompt,max_tokens:80})});
@@ -2510,7 +2518,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
         {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
           <Users size={14}/>All Athletes</button>}
       </div>
-      <p style={{color:"var(--mut)",fontSize:14,margin:"0 0 18px"}}>One profile per sailor, built automatically from results.</p>
+      <p style={{color:"var(--mut)",fontSize:14,margin:"0 0 18px"}}>One profile per athlete, built automatically from results.</p>
       <div className="toolbar">
         <div className="srch"><Search size={16} color="#9fb2c8"/><input placeholder="Search athletes…" value={q} onChange={e=>setQ(e.target.value)}/></div>
         <div className="seg">{(()=>{
@@ -3081,7 +3089,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
   {note&&(<div className="notice"><div className="ico"><Sparkles size={18}/></div>
     <div><b>{note.name}</b>
     <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>
-      {note.msg||`Matched ${note.matched} sailors · ${note.created} new profiles created`}
+      {note.msg||`Matched ${note.matched} athletes · ${note.created} new profiles created`}
     </div></div></div>)}
   <div className="foot">Powered by AthLink</div>
   </div>
