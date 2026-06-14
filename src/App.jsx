@@ -245,14 +245,11 @@ const nuggetFor=(cls,subclass)=>{
 //   49er  -> "49er green"    (#5FAF4E)
 const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#2E78C8","optimist":"#3D3D3D"};
 const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||"#5b6b80";
-// Muted version of a class colour (blended ~52% toward a soft grey) for the
-// global class buttons, so they read as softer than the association nuggets.
-const mutedColor=(cls)=>{
+// Class colour at a given alpha (for translucent buttons that go solid on hover).
+const classColorA=(cls,a)=>{
   const hex=classColor(cls).replace("#","");
   const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
-  const mix=(x)=>Math.round(x*0.55+0.45*186); // blend toward #BABABA
-  const h=(x)=>x.toString(16).padStart(2,"0");
-  return `#${h(mix(r))}${h(mix(g))}${h(mix(b))}`;
+  return `rgba(${r},${g},${b},${a})`;
 };
 
 // Sub-class picker (ILCA 4/6/7, Optimist fleets) — only shown for ILCA/Optimist events.
@@ -1051,7 +1048,7 @@ function WorldSVGMap({countryData}){
             <g key={iso}>
               <circle cx={x} cy={y} r={r+4} fill={`rgba(220,50,50,${opacity*0.3})`}/>
               <circle cx={x} cy={y} r={r} fill={`rgba(220,50,50,${opacity})`}/>
-              <title>{iso}: {count} regatta{count!==1?"s":""}</title>
+              <title>{iso}: {count} competition{count!==1?"s":""}</title>
             </g>
           );
         })}
@@ -1305,7 +1302,7 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
   );
 }
 
-function FootprintLegend({label="Regattas / country",showHost=false,rank=false,maxCount=0}={}){
+function FootprintLegend({label="Competitions / country",showHost=false,rank=false,maxCount=0}={}){
   if(rank){
     return(<div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",fontSize:11.5,color:"#9fbdd9",padding:"10px 4px 2px"}}>
       <span style={{fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",fontSize:10.5}}>{label}</span>
@@ -1438,7 +1435,7 @@ function RegattaFootprintModal({event,onClose,homeCountry={},onPickAthlete}){
           {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
-        <ErrorBoundary resetKey={event.id} fallback={<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>Couldn't render this regatta's map.</div>}>
+        <ErrorBoundary resetKey={event.id} fallback={<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>Couldn't render this competition's map.</div>}>
         <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
           <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
             <SailingGlobe countryData={natCounts} height={460} pulseIso={sel} dark countLabel="athlete" hostIso={hostIso} rankShade markersHostOnly/>
@@ -1694,7 +1691,6 @@ export default function AthLinkMVP(){
   const signOut=()=>{ setAuth(null); setAccountOpen(false); try{localStorage.removeItem("athlink_auth");}catch{} };
   const[portal,setPortal]=useState(null);
   const[view,setView]=useState({name:"portals"});
-  const[verified,setVerified]=useState({});
   const[q,setQ]=useState("");const[filter,setFilter]=useState("all");
 
   // ── Merge duplicate athlete profiles ───────────────────────
@@ -1919,23 +1915,25 @@ export default function AthLinkMVP(){
   },[dupGroups,myAssoc,events]);
 
   // ── Auto-merge exact duplicates ─────────────────────────────
-  // Runs whenever events change. Merges every exact (canonical-key) cluster into
-  // its most-active profile, then de-duplicates results so no profile shows the
-  // same competition twice. Guarded so it settles after one pass.
-  const autoMergeRan=React.useRef(false);
+  // Runs ONCE, shortly after events first load. Merges every exact (canonical-key)
+  // cluster into its most-active profile and de-duplicates results. A hard one-shot
+  // guard prevents any re-entrancy / render loop.
+  const autoMergeDone=React.useRef(false);
   useEffect(()=>{
+    if(autoMergeDone.current) return;
     if(!events.length) return;
-    if(!dupData.exactGroups.length){autoMergeRan.current=false;return;}
-    if(autoMergeRan.current) return;
-    autoMergeRan.current=true;
+    autoMergeDone.current=true;            // lock immediately, never unlock
+    const groups=dupData.exactGroups;
+    if(!groups.length) return;
     (async()=>{
-      for(const names of dupData.exactGroups){
-        const ordered=[...names].sort((a,b)=>regCount(b)-regCount(a));
-        await mergeGroup(ordered);
-      }
-      autoMergeRan.current=false;
+      try{
+        for(const names of groups){
+          const ordered=[...names].sort((a,b)=>regCount(b)-regCount(a));
+          await mergeGroup(ordered);
+        }
+      }catch(e){console.error("auto-merge failed",e);}
     })();
-  },[dupData.exactGroups]);
+  },[events.length]);
 
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
@@ -2294,7 +2292,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const p=dateStr?.split('/');
     if(!p||p.length!==3) return;
     setSailorCalMonth(parseInt(p[1])-1);setSailorCalYear(parseInt(p[2]));
-    setSailorCalName(name);setSailorCalAll(false);setShowSailorCal(true);
+    setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);
   };
 
   const saveEvMeta=async()=>{
@@ -2885,7 +2883,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <Pencil size={11}/>DEV
         </button>
       )}
-      {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Regattas</button>}
+      {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Competitions</button>}
       {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>{cls?.short||"Class"} Athletes</button>}
       {auth
         ? <div style={{position:"relative"}}>
@@ -2912,7 +2910,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
           <h1 className="disp" style={{margin:0}}>Sailing</h1>
           <button className="btn sky" style={{fontSize:13,padding:"7px 13px"}} onClick={()=>{setCalClsSet(new Set());setShowCalendar(true);}}>
-            <Calendar size={15}/>Race Calendar
+            <Calendar size={15}/>Calendar
           </button>
         </div>
         <p style={{marginTop:6}}>Results, athlete profiles and class standings for competitive sailing</p>
@@ -2935,7 +2933,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
         <span className="cls" style={{background:col,marginBottom:8,display:"inline-block"}}>{short}</span>
         <p className="class-name">{a.name}</p>
-        <div className="class-stats"><div><b>{ce.length}</b>regattas</div><div><b>{cp.size}</b>athletes</div></div>
+        <div className="class-stats"><div><b>{ce.length}</b>competitions</div><div><b>{cp.size}</b>athletes</div></div>
         <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(a.id);}}>Enter portal <ChevronRight size={16}/></button>
       </div>);
     };
@@ -2953,15 +2951,16 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:26}}>
         {CLASSES.map(c=>{
           const n=events.filter(e=>e.cls===c.id).length;
+          const solid=classColor(c.id);
           return(
             <button key={c.id} onClick={()=>enterPortal("class:"+c.id)}
-              style={{border:0,borderRadius:11,background:mutedColor(c.id),color:"#fff",cursor:"pointer",
+              style={{border:`1.5px solid ${classColorA(c.id,.45)}`,borderRadius:11,background:classColorA(c.id,.16),color:solid,cursor:"pointer",
                 padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,
-                fontFamily:"'Barlow',sans-serif",transition:".15s",boxShadow:"0 2px 8px -4px rgba(0,0,0,.3)"}}
-              onMouseEnter={e=>e.currentTarget.style.background=classColor(c.id)}
-              onMouseLeave={e=>e.currentTarget.style.background=mutedColor(c.id)}>
+                fontFamily:"'Barlow',sans-serif",transition:".15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.background=solid;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=solid;}}
+              onMouseLeave={e=>{e.currentTarget.style.background=classColorA(c.id,.16);e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.45);}}>
               <span style={{fontWeight:800,fontSize:16,letterSpacing:".01em"}}>{c.short}</span>
-              <span style={{fontSize:11,opacity:.9,fontWeight:600}}>{n} regatta{n!==1?"s":""}</span>
+              <span style={{fontSize:11,opacity:.85,fontWeight:600}}>{n} competition{n!==1?"s":""}</span>
             </button>
           );
         })}
@@ -2985,11 +2984,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
           <h1 className="disp">{portalName}</h1>
           <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalClsSet(cls?new Set([cls.id]):new Set());setShowCalendar(true);}}>
-            <Calendar size={15}/>Race Calendar
+            <Calendar size={15}/>Calendar
           </button>
         </div>
         <div className="pillbar">
-          <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> regattas</div>
+          <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
           <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
         </div>
       </div></div>
@@ -2997,7 +2996,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <button className="back" onClick={goHome}><ArrowLeft size={16}/>Sailing</button>
         <div className="toolbar" style={{marginBottom:8}}>
           <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
-          {canEdit&&<button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>}
+          {canEdit&&<button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a competition</button>}
         </div>
         {evFilterActive&&(
           <div style={{marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -3098,7 +3097,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               </div>);
             })}
             {filtered.length===0&&classEvents.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No results match this filter. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setEvFilterActive(null);setEvFilter("");}}>Clear filter</button></p>}
-            {classEvents.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No regattas yet. Import one to get started.</p>}
+            {classEvents.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions yet. Import one to get started.</p>}
           </>);
         })()}
       </div>
@@ -3110,7 +3109,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const ev=events.find(e=>e.id===view.id);if(!ev) return null;
     const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
     return(<div className="wrap sec" style={{paddingTop:26}}>
-      <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All regattas</button>
+      <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All competitions</button>
       {isDraft&&(
         <div className="draft-banner">
           <Clock size={22} color="#e8921a"/>
@@ -3150,12 +3149,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
-            {canEdit&&<button className="btn cta" style={{fontSize:12,padding:"6px 12px",fontWeight:600,justifyContent:"flex-start"}} onClick={()=>{
-              const names={};ev.entries.forEach(e=>{if(e.helm)names[e.helm]=true;if(e.crew)names[e.crew]=true;});
-              setVerified(v=>({...v,...names}));
-              setNote({name:ev.name,matched:0,created:0,msg:`Verified ${Object.keys(names).length} athletes from this regatta.`});
-              setTimeout(()=>setNote(null),4500);
-            }}><BadgeCheck size={14}/>Verify all athletes</button>}
           </div>
         </div>);
       })()}
@@ -3253,15 +3246,14 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {(q||athleteSmart)&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setQ("");setAthleteSmart(null);}}><X size={15}/></button>}
         </div>
         <div className="seg">{(()=>{
-          const vCount=currentPeople.filter(p=>verified[p.name]).length;
-          const counts={all:currentPeople.length,verified:vCount,unverified:currentPeople.length-vCount};
-          const tabs=["all","verified","unverified"];
+          const tabs=["all"];
           if(canEdit&&visibleDupGroups.length>0) tabs.push("duplicates");
+          if(tabs.length<2) return null;
           return tabs.map(f=>(
             <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
               <span style={{display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15}}>
                 <span>{f[0].toUpperCase()+f.slice(1)}</span>
-                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:counts[f]}</span>
+                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:currentPeople.length}</span>
               </span>
             </button>
           ));
@@ -3280,7 +3272,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       )}
       {filter==="duplicates"&&canEdit&&(
         <div>
-          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Profiles whose names are close but differ in spelling — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more regattas and moves the other's results into it.</p>
+          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Profiles whose names are close but differ in spelling — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more competitions and moves the other's results into it.</p>
           {(()=>{
             const dq=q.trim().toLowerCase();
             const shown=visibleDupGroups
@@ -3298,10 +3290,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                       <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {name}</div>
                       <div className="cn" style={{marginTop:2}}>{nat?(ag.events>1?"Multi-event":""):""}</div>
                     </div>
-                    <span style={{marginLeft:"auto",display:"flex",alignItems:"center"}}><VerifyBadge verified={verified[name]} size={18}/></span>
                   </div>
                   <div className="acstat">
-                    <div><b>{ag.events}</b>regattas</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
+                    <div><b>{ag.events}</b>competitions</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
                   </div>
                 </div>
               );
@@ -3344,7 +3335,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         const evScope=isGlobal?events:classEvents;
         const qlc=q.trim().toLowerCase();
         const shown=currentPeople
-          .filter(p=>filter==="all"?true:filter==="verified"?verified[p.name]:!verified[p.name])
+          .filter(p=>true)
           .filter(p=>{
             if(athleteSmart){
               try{ if(!athleteSmart.fn(athleteSummaryFor(p.name,evScope))) return false; }catch{}
@@ -3388,10 +3379,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                       <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {p.name}</div>
                       <div className="cn" style={{marginTop:2}}>{nat?(ag.events>1?"Multi-event":(clsLabel||"")):(clsLabel||"")}{!nat&&ag.events>1?" · multi-event":""}</div>
                     </div>
-                    <span style={{marginLeft:"auto",display:"flex",alignItems:"center"}}><VerifyBadge verified={verified[p.name]} size={18}/></span>
                   </div>
                   <div className="acstat">
-                    <div><b>{ag.events}</b>regattas</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
+                    <div><b>{ag.events}</b>competitions</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
                   </div>
                 </div>);
               })}
@@ -3408,7 +3398,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const p=currentPeople.find(x=>x.name===name)||{name};
     const ag=aggregate(name,events);
     const nat=athleteNat(name,events);
-    const isV=verified[name];
     return(<div className="wrap sec" style={{paddingTop:22}}>
       {view.fromRegatta
         ? (()=>{const rev=events.find(e=>e.id===view.fromRegatta);return rev?<button className="back" onClick={()=>{go({name:"event",id:view.fromRegatta});setTimeout(()=>setRegattaFootprint(rev),0);}}><ArrowLeft size={16}/>{rev.name} — Who's racing</button>:null;})()
@@ -3433,12 +3422,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div style={{flex:1,minWidth:0}}>
                 <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                   <span>{nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}</span>
-                  <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalAll(false);setShowSailorCal(true);}}>
+                  <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
                     <Calendar size={13}/>Calendar
                   </button>
-                  {isV
-                    ? <VerifyBadge verified size={22}/>
-                    : (canEdit?<button className="btn cta" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>setVerified({...verified,[name]:true})}><BadgeCheck size={14}/>Verify this profile</button>:<VerifyBadge verified={false} size={22}/>)}
                 </h1>
                 <div className="pmeta">
                   {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
@@ -3450,7 +3436,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   })()}
                 </div>
                 <div className="pstats">
-                  <div><div className="v disp">{ag.events}</div><div className="k">Regattas</div></div>
+                  <div><div className="v disp">{ag.events}</div><div className="k">Competitions</div></div>
                   <div><div className="v disp">{ag.best?"#"+ag.best:"—"}</div><div className="k">Best result</div></div>
                   <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
                   <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
@@ -3583,7 +3569,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {importStep==="picker"&&<button className="x" onClick={()=>setImportStep("upload")} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           {importStep==="preview"&&<button className="x" onClick={()=>setImportStep(fleetChoices.length?"picker":"upload")} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           <Upload size={18}/>
-          <h3>{importStep==="picker"?"Select fleet":importStep==="preview"?"Preview & edit results":"Import a regatta"}</h3>
+          <h3>{importStep==="picker"?"Select fleet":importStep==="preview"?"Preview & edit results":"Import a competition"}</h3>
           <button className="x" onClick={closeImport}><X size={16}/></button>
         </div>
 
@@ -3670,7 +3656,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               </div>
               <div className="mfoot">
                 <button className="btn ghost" onClick={closeImport}>Cancel</button>
-                <button className="btn cta" disabled={!manualReady} onClick={doImportManual}><Upload size={16}/>Import regatta</button>
+                <button className="btn cta" disabled={!manualReady} onClick={doImportManual}><Upload size={16}/>Import competition</button>
               </div>
             </>)}
           </div>
@@ -3812,7 +3798,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <div className="cal-modal" onClick={e=>e.stopPropagation()}>
           <div className="cal-head">
             <Calendar size={18}/>
-            <h3>Race Calendar</h3>
+            <h3>Calendar</h3>
             <button className="x" onClick={()=>setShowCalendar(false)}><X size={16}/></button>
           </div>
           <div className="cal-toolbar">
