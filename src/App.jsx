@@ -59,6 +59,14 @@ const IOC_ISO={
   TUR:'TR',TUV:'TV',UAE:'AE',UGA:'UG',UKR:'UA',URU:'UY',USA:'US',UZB:'UZ',
   VAN:'VU',VEN:'VE',VIE:'VN',VIN:'VC',YEM:'YE',ZAM:'ZM',ZIM:'ZW',
 };
+function isoFlag(iso){
+  try{
+    if(!iso||iso.length!==2) return '';
+    const a=iso.toUpperCase();
+    if(!/^[A-Z]{2}$/.test(a)) return '';
+    return [...a].map(c=>String.fromCodePoint(0x1F1E6+c.charCodeAt(0)-65)).join('');
+  }catch{return '';}
+}
 function iocFlag(code){
   if(!code) return '';
   const iso=IOC_ISO[code.toUpperCase()];
@@ -251,6 +259,27 @@ function athleteNat(name,evList){
   }
   if(!Object.keys(counts).length) return META[name]?.nat||"";
   return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+}
+
+// Build name -> home ISO-A2 (most frequent nationality seen anywhere in the data)
+function buildHomeCountry(evList){
+  const tally={};
+  for(const ev of evList){
+    for(const e of (ev.entries||[])){
+      const ioc=e.nat||""; if(!ioc) continue;
+      const iso=IOC_ISO[ioc]||""; if(!iso) continue;
+      for(const nm of [e.helm,e.crew]){
+        if(!nm) continue;
+        (tally[nm]||(tally[nm]={}));
+        tally[nm][iso]=(tally[nm][iso]||0)+1;
+      }
+    }
+  }
+  const home={};
+  for(const nm in tally){
+    home[nm]=Object.entries(tally[nm]).sort((a,b)=>b[1]-a[1])[0][0];
+  }
+  return home;
 }
 
 const avatarColor=name=>{
@@ -609,26 +638,70 @@ function CalendarBody({events,year,month,setYear,setMonth,viewMode,setViewMode,o
       </div>
     );
   }
-  const grid=buildCalGrid(year,month,events);
+  // ── continuous scrolling months (Apple-style) ──────────────────────────
+  const scrollRef=React.useRef(null);
+  const monthRefs=React.useRef({});
+  const programmatic=React.useRef(false);
+  // build the full month range: from earliest event year-1 to latest+1
+  const months=React.useMemo(()=>{
+    const yrs=events.map(e=>parseInt(e.date?.split('/')[2])).filter(Boolean);
+    let lo=year,hi=year;
+    if(yrs.length){lo=Math.min(lo,...yrs);hi=Math.max(hi,...yrs);}
+    lo=Math.min(lo,today.getFullYear())-1; hi=Math.max(hi,today.getFullYear())+1;
+    const list=[];for(let y=lo;y<=hi;y++)for(let mi=0;mi<12;mi++)list.push({y,mi,key:y+"-"+mi});
+    return list;
+  },[events,year,today]);
+
+  // scroll to the active month when year/month change via the arrows / title.
+  // Skip when the change originated from the user scrolling (no snap-back).
+  const fromScroll=React.useRef(false);
+  React.useEffect(()=>{
+    if(fromScroll.current){fromScroll.current=false;return;}
+    const el=monthRefs.current[year+"-"+month];
+    if(el&&scrollRef.current){
+      programmatic.current=true;
+      el.scrollIntoView({block:"start"});
+      setTimeout(()=>{programmatic.current=false;},220);
+    }
+  },[year,month]);
+
+  // report the top-most visible month back to the toolbar label
+  const onScroll=React.useCallback(()=>{
+    if(programmatic.current)return;
+    const cont=scrollRef.current;if(!cont)return;
+    const top=cont.scrollTop+8;let best=null,bd=Infinity;
+    for(const m of months){const el=monthRefs.current[m.key];if(!el)continue;
+      const d=Math.abs(el.offsetTop-top);if(d<bd){bd=d;best=m;}}
+    if(best&&(best.y!==year||best.mi!==month)){fromScroll.current=true;setYear(best.y);setMonth(best.mi);}
+  },[months,year,month,setYear,setMonth]);
+
   return(
-    <div className="cal-grid-wrap cal-fade" key={year+"-"+month}>
-      <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
-      <div className="cal-grid">
-        {grid.flat().map((cell,i)=>{
-          const comps=cell.other?[]:cell.events;
-          const circle=comps.length?classColor(comps[0].cls):null;
-          return(
-            <div key={i} className={`cal-cell${cell.other?" other-month":""}${cell.today?" today":""}`}>
-              <div className="cal-cell-num" style={circle?{background:circle,color:"#fff"}:cell.today?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
-              {comps.map(ev=>(
-                <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>onPick(ev)}>
-                  {eventLabel?eventLabel(ev):ev.name}
-                </div>
-              ))}
+    <div className="cal-scroll" ref={scrollRef} onScroll={onScroll}>
+      {months.map(m=>{
+        const grid=buildCalGrid(m.y,m.mi,events);
+        return(
+          <div key={m.key} className="cal-month-block" ref={el=>{if(el)monthRefs.current[m.key]=el;}}>
+            <div className="cal-month-sticky">{MON[m.mi]} {m.y}</div>
+            <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
+            <div className="cal-grid">
+              {grid.flat().map((cell,i)=>{
+                const comps=cell.other?[]:cell.events;
+                const circle=comps.length?classColor(comps[0].cls):null;
+                return(
+                  <div key={i} className={`cal-cell${cell.other?" other-month":""}${cell.today?" today":""}`}>
+                    <div className="cal-cell-num" style={circle?{background:circle,color:"#fff"}:cell.today?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
+                    {comps.map(ev=>(
+                      <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>onPick(ev)}>
+                        {eventLabel?eventLabel(ev):ev.name}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
-      </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -721,6 +794,18 @@ const TIER_COLORS=["#f0a79e","#d24a3e","#921508"];
 function tierColor(count){return count>=4?TIER_COLORS[2]:count>=2?TIER_COLORS[1]:TIER_COLORS[0];}
 function tierLabel(count){return count>=4?"4+":count>=2?"2–3":"1";}
 
+class ErrorBoundary extends React.Component{
+  constructor(props){super(props);this.state={err:false};}
+  static getDerivedStateFromError(){return{err:true};}
+  componentDidCatch(e,info){console.error("Globe/render error caught:",e,info);}
+  componentDidUpdate(prev){if(prev.resetKey!==this.props.resetKey&&this.state.err)this.setState({err:false});}
+  render(){
+    if(this.state.err) return this.props.fallback||(
+      <div style={{padding:16,color:"#9fbdd9",fontSize:13,textAlign:"center"}}>Couldn't render this view.</div>);
+    return this.props.children;
+  }
+}
+
 function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="regatta",hostIso=null,rankShade=false}){
   const canvasRef=React.useRef(null);
   const wrapRef=React.useRef(null);
@@ -746,9 +831,19 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
     return `rgb(${r},${g},${b})`;
   },[rankShade,maxCount]);
 
+  // every shaded country (+host) gets a centroid marker for the glow/ring pass
+  const markerEntries=React.useMemo(()=>{
+    const out=[],seen=new Set();
+    const push=(iso,count)=>{if(!iso||seen.has(iso)||!GLOBE_CENT[iso])return;seen.add(iso);
+      out.push({iso,count,lon:GLOBE_CENT[iso][0],lat:GLOBE_CENT[iso][1],name:GLOBE_NAMES[iso]||iso});};
+    Object.keys(data).forEach(iso=>push(iso,data[iso]));
+    if(hostIso)push(hostIso,data[hostIso]||0);
+    return out;
+  },[data,hostIso]);
+
   // Live refs so the canvas effect mounts ONCE and never tears down on data change
   const drawRef=React.useRef({});
-  drawRef.current={data,tinyEntries,hostIso,dark,mini,shadeFor};
+  drawRef.current={data,tinyEntries,markerEntries,hostIso,dark,mini,shadeFor};
 
   // Recenter on the busiest country when the data set itself changes
   const dataKey=React.useMemo(()=>Object.keys(data).sort().join(",")+"|"+maxCount,[data,maxCount]);
@@ -806,30 +901,33 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
       for(const c of GLOBE_COUNTRIES){
         const isHost=hostIso&&c.i===hostIso;
         const competing=data[c.i]>0;
-        ctx.fillStyle=isHost?'#f2c037':(competing?shadeFor(data[c.i]):land);
+        ctx.fillStyle=isHost?'#ffcf2e':(competing?shadeFor(data[c.i]):land);
         ctx.beginPath();let any=false;
         for(const ring of c.r)for(const run of runs(ring,s)){any=true;ctx.moveTo(run[0].x,run[0].y);for(let i=1;i<run.length;i++)ctx.lineTo(run[i].x,run[i].y);ctx.closePath();}
         if(any)ctx.fill();
-        ctx.strokeStyle=isHost?'rgba(150,110,10,0.7)':(competing?'rgba(120,20,12,0.55)':(dark?'rgba(150,185,225,0.30)':'rgba(20,58,99,0.45)'));
+        ctx.strokeStyle=isHost?'rgba(180,130,0,0.9)':(competing?'rgba(120,20,12,0.55)':(dark?'rgba(150,185,225,0.30)':'rgba(20,58,99,0.45)'));
         ctx.lineWidth=(isHost||competing)?0.9:0.7;
         for(const ring of c.r)for(const run of runs(ring,s)){ctx.beginPath();ctx.moveTo(run[0].x,run[0].y);for(let i=1;i<run.length;i++)ctx.lineTo(run[i].x,run[i].y);ctx.stroke();}
       }
 
-      // tiny / small-area territories: pronounced glow halo so they're visible
-      // even when their land footprint is sub-pixel (Hong Kong, Singapore, …)
-      tinyEntries.forEach(e=>{
+      // Marker + glow + ring on EVERY shaded country (and the host), so small
+      // countries like Hong Kong are visible without zooming and large ones
+      // get a clear locator dot too. Compact radius so it doesn't smother things.
+      const markerEntries=D2.markerEntries||[];
+      markerEntries.forEach(e=>{
         const p=project(e.lon,e.lat,s);if(!p.vis){e._sx=null;return;}
-        const col=(hostIso&&e.iso===hostIso)?'#f2c037':shadeFor(e.count);
-        const core=Math.max(5,Math.min(9,R*0.018));         // solid marker
-        const halo=core*3.2;                                 // glow radius
+        const isHostM=hostIso&&e.iso===hostIso;
+        const col=isHostM?'#ffcf2e':shadeFor(e.count);
+        const core=Math.max(3.5,Math.min(6,R*0.012));        // compact solid dot
+        const halo=core*2.6;                                 // tighter glow
         const g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,halo);
-        g.addColorStop(0,col);g.addColorStop(0.32,col);
-        g.addColorStop(0.62,col+'7a');g.addColorStop(1,col+'00');
+        g.addColorStop(0,col);g.addColorStop(0.34,col);
+        g.addColorStop(0.66,col+'66');g.addColorStop(1,col+'00');
         ctx.fillStyle=g;ctx.beginPath();ctx.arc(p.x,p.y,halo,0,7);ctx.fill();
         ctx.fillStyle=col;ctx.beginPath();ctx.arc(p.x,p.y,core,0,7);ctx.fill();
-        ctx.lineWidth=1.4;ctx.strokeStyle=(hostIso&&e.iso===hostIso)?'rgba(120,90,8,0.85)':'rgba(255,255,255,0.55)';
+        ctx.lineWidth=1.4;ctx.strokeStyle=isHostM?'#7a5600':'rgba(255,255,255,0.7)';
         ctx.beginPath();ctx.arc(p.x,p.y,core,0,7);ctx.stroke();
-        e._sx=p.x;e._sy=p.y;e._sr=Math.max(halo,12);
+        e._sx=p.x;e._sy=p.y;e._sr=Math.max(halo,11);
       });
 
       if(s.zoom>=1.6){
@@ -863,23 +961,32 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
     draw();
 
     const pt=ev=>{const r=canvas.getBoundingClientRect();const t=ev.touches?ev.touches[0]:ev;return{x:t.clientX-r.left,y:t.clientY-r.top};};
-    const down=ev=>{const s=stateRef.current;const q=pt(ev);s.drag=true;s.auto=false;s.tlon=null;s.tlat=null;s.px=q.x;s.py=q.y;};
-    const move=ev=>{const s=stateRef.current;const q=pt(ev);
-      if(s.drag){s.lon+=(q.x-s.px)*0.4/s.zoom;s.lat=Math.max(-82,Math.min(82,s.lat+(q.y-s.py)*0.4/s.zoom));s.px=q.x;s.py=q.y;setTip(null);return;}
-      let f=null;for(const e of drawRef.current.tinyEntries){if(e._sx==null)continue;if(Math.hypot(q.x-e._sx,q.y-e._sy)<=e._sr){f=e;break;}}
+    // window-level drag listeners are bound ONLY while a drag is active, so
+    // multiple globe instances on screen never interfere with each other.
+    const winMove=ev=>{const s=stateRef.current;if(!s.drag)return;const q=pt(ev);
+      s.lon+=(q.x-s.px)*0.4/s.zoom;s.lat=Math.max(-82,Math.min(82,s.lat+(q.y-s.py)*0.4/s.zoom));s.px=q.x;s.py=q.y;setTip(null);};
+    const winUp=()=>{const s=stateRef.current;s.drag=false;
+      window.removeEventListener('mousemove',winMove);window.removeEventListener('mouseup',winUp);
+      setTimeout(()=>{if(!s.drag&&!pulseRef.current)s.auto=true;},2500);};
+    const down=ev=>{const s=stateRef.current;const q=pt(ev);s.drag=true;s.auto=false;s.tlon=null;s.tlat=null;s.px=q.x;s.py=q.y;
+      window.addEventListener('mousemove',winMove);window.addEventListener('mouseup',winUp);};
+    // hover detection only (no drag) — bound to the canvas itself
+    const hover=ev=>{const s=stateRef.current;if(s.drag)return;const q=pt(ev);
+      let f=null;for(const e of (drawRef.current.markerEntries||[])){if(e._sx==null)continue;if(Math.hypot(q.x-e._sx,q.y-e._sy)<=e._sr){f=e;break;}}
       if(f){canvas.style.cursor='pointer';setTip({x:f._sx,y:f._sy,name:f.name,count:f.count});}else{canvas.style.cursor='grab';setTip(null);}};
-    const up=()=>{const s=stateRef.current;s.drag=false;setTimeout(()=>{if(!s.drag&&s.zoom<1.15&&!pulseRef.current)s.auto=true;},2500);};
     const wheel=ev=>{ev.preventDefault();const s=stateRef.current;s.auto=false;s.zoom=Math.max(1,Math.min(4.5,s.zoom*(ev.deltaY<0?1.12:0.89)));setTip(null);};
     const dist=t=>Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);
-    const tstart=ev=>{const s=stateRef.current;if(ev.touches.length===2){s.pinch=dist(ev.touches);s.drag=false;s.auto=false;}else down(ev);};
-    const tmove=ev=>{const s=stateRef.current;if(ev.touches.length===2&&s.pinch){const d=dist(ev.touches);s.zoom=Math.max(1,Math.min(4.5,s.zoom*d/s.pinch));s.pinch=d;setTip(null);}else move(ev);};
-    const tend=()=>{const s=stateRef.current;s.pinch=0;up();};
+    const tstart=ev=>{const s=stateRef.current;if(ev.touches.length===2){s.pinch=dist(ev.touches);s.drag=false;s.auto=false;}else{const q=pt(ev);s.drag=true;s.auto=false;s.tlon=null;s.tlat=null;s.px=q.x;s.py=q.y;}};
+    const tmove=ev=>{const s=stateRef.current;if(ev.touches.length===2&&s.pinch){const d=dist(ev.touches);s.zoom=Math.max(1,Math.min(4.5,s.zoom*d/s.pinch));s.pinch=d;setTip(null);}
+      else if(s.drag){const q=pt(ev);s.lon+=(q.x-s.px)*0.4/s.zoom;s.lat=Math.max(-82,Math.min(82,s.lat+(q.y-s.py)*0.4/s.zoom));s.px=q.x;s.py=q.y;setTip(null);}};
+    const tend=()=>{const s=stateRef.current;s.pinch=0;s.drag=false;setTimeout(()=>{if(!s.drag&&!pulseRef.current)s.auto=true;},2500);};
     const ro=new ResizeObserver(size);ro.observe(wrapRef.current);
-    canvas.addEventListener('mousedown',down);window.addEventListener('mousemove',move);window.addEventListener('mouseup',up);
+    canvas.addEventListener('mousedown',down);canvas.addEventListener('mousemove',hover);canvas.addEventListener('mouseleave',()=>setTip(null));
     if(!mini)canvas.addEventListener('wheel',wheel,{passive:false});
     canvas.addEventListener('touchstart',tstart,{passive:true});canvas.addEventListener('touchmove',tmove,{passive:true});canvas.addEventListener('touchend',tend);
     return()=>{cancelAnimationFrame(raf);ro.disconnect();
-      canvas.removeEventListener('mousedown',down);window.removeEventListener('mousemove',move);window.removeEventListener('mouseup',up);
+      canvas.removeEventListener('mousedown',down);canvas.removeEventListener('mousemove',hover);
+      window.removeEventListener('mousemove',winMove);window.removeEventListener('mouseup',winUp);
       canvas.removeEventListener('wheel',wheel);
       canvas.removeEventListener('touchstart',tstart);canvas.removeEventListener('touchmove',tmove);canvas.removeEventListener('touchend',tend);};
   },[height,dark,mini]);
@@ -991,24 +1098,34 @@ function FootprintModal({name,ag,countryCounts,onClose}){
 
 
 /* ── RegattaFootprintModal: who's racing — countries → # of sailors ───────── */
-function RegattaFootprintModal({event,onClose}){
+function RegattaFootprintModal({event,onClose,homeCountry={}}){
   const [sel,setSel]=React.useState(null);            // spotlit ISO (globe)
   const [openSet,setOpenSet]=React.useState(()=>new Set());  // expanded country keys
   const hostIso=React.useMemo(()=>IOC_ISO[event.country]||(event.country&&event.country.length===2?event.country.toUpperCase():""),[event]);
   const {natCounts,groups}=React.useMemo(()=>{
     const counts={},gmap={};
+    const isoForSailor=(entryIso,name)=>entryIso||homeCountry[name]||"";
     (event.entries||[]).forEach(e=>{
-      const ioc=e.nat||"";const iso=IOC_ISO[ioc]||"";const key=iso||ioc||"ZZ";
-      const cname=GLOBE_NAMES[iso]||ioc||"Unknown";
-      if(!gmap[key])gmap[key]={key,iso,cname,sailors:[]};
-      if(e.helm)gmap[key].sailors.push({name:e.helm,role:"Helm"});
-      if(e.crew)gmap[key].sailors.push({name:e.crew,role:"Crew"});
-      if(iso){const n=(e.helm?1:0)+(e.crew?1:0);counts[iso]=(counts[iso]||0)+n;}
+      const entryIso=IOC_ISO[e.nat||""]||"";
+      const add=(name,role)=>{
+        if(!name)return;
+        const iso=isoForSailor(entryIso,name);
+        const key=iso||"ZZ";
+        const cname=GLOBE_NAMES[iso]||"Unknown";
+        if(!gmap[key])gmap[key]={key,iso,cname,sailors:[]};
+        gmap[key].sailors.push({name,role});
+        if(iso)counts[iso]=(counts[iso]||0)+1;
+      };
+      add(e.helm,"Helm");
+      add(e.crew,"Crew");
     });
-    // alphabetical by country name
-    const groups=Object.values(gmap).sort((a,b)=>a.cname.localeCompare(b.cname));
+    // alphabetical by country name, Unknown last
+    const groups=Object.values(gmap).sort((a,b)=>{
+      if(a.key==="ZZ")return 1; if(b.key==="ZZ")return -1;
+      return a.cname.localeCompare(b.cname);
+    });
     return{natCounts:counts,groups};
-  },[event]);
+  },[event,homeCountry]);
   const totalSailors=groups.reduce((a,g)=>a+g.sailors.length,0);
   const toggle=key=>setOpenSet(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);return n;});
   const allOpen=groups.length>0&&groups.every(g=>openSet.has(g.key));
@@ -1022,10 +1139,11 @@ function RegattaFootprintModal({event,onClose}){
           {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
+        <ErrorBoundary resetKey={event.id} fallback={<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>Couldn't render this regatta's map.</div>}>
         <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
           <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
             <SailingGlobe countryData={natCounts} height={460} pulseIso={sel} dark countLabel="sailor" hostIso={hostIso} rankShade/>
-            <FootprintLegend label="Sailors / country" showHost={!!hostIso} rank maxCount={Math.max(0,...Object.values(natCounts))}/>
+            <FootprintLegend label="Sailors / country" showHost={!!hostIso} rank maxCount={Object.values(natCounts).reduce((a,b)=>Math.max(a,b),0)}/>
           </div>
           <div style={{flex:"1 1 360px",minWidth:280,maxHeight:520,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)",padding:"8px 0"}}
                onClick={e=>{if(e.target===e.currentTarget)setSel(null);}}>
@@ -1049,7 +1167,7 @@ function RegattaFootprintModal({event,onClose}){
                   onClick={e=>{e.stopPropagation();setSel(g.iso||null);toggle(g.key);}}
                   style={{display:"flex",alignItems:"center",gap:8,padding:"11px 14px",cursor:"pointer"}}>
                   <ChevronRight size={14} color="#9fbdd9" style={{flex:"none",transform:isOpen?"rotate(90deg)":"none",transition:".15s"}}/>
-                  <span style={{fontSize:17}}>{g.iso?[...g.iso].map(ch=>String.fromCodePoint(0x1F1E6+ch.charCodeAt(0)-65)).join(""):""}</span>
+                  <span style={{fontSize:17}}>{isoFlag(g.iso)}</span>
                   <span style={{fontWeight:700,color:"#eaf3fc",fontSize:14,fontFamily:"'Barlow',sans-serif"}}>{g.cname}</span>
                   {isHost&&<span style={{fontSize:9.5,fontWeight:700,color:"#f2c037",background:"rgba(242,192,55,.14)",border:"1px solid rgba(242,192,55,.4)",borderRadius:5,padding:"1px 6px",letterSpacing:".03em"}}>HOST</span>}
                   <span style={{marginLeft:"auto",color:"#7fa8d4",fontWeight:700,fontSize:13}}>{g.sailors.length} sailor{g.sailors.length!==1?"s":""}</span>
@@ -1065,6 +1183,7 @@ function RegattaFootprintModal({event,onClose}){
             {groups.length===0&&<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>No entries recorded.</div>}
           </div>
         </div>
+        </ErrorBoundary>
       </div>
     </div>
   );
@@ -1252,6 +1371,7 @@ export default function AthLinkMVP(){
 
   /* ── derived ──────────────────────────────────────────────── */
   const classEvents=useMemo(()=>portal?events.filter(e=>e.cls===portal):[],[events,portal]);
+  const homeCountry=useMemo(()=>buildHomeCountry(events),[events]);
   const people=useMemo(()=>{
     const map=new Map();
     classEvents.forEach(ev=>ev.entries.forEach(e=>{
@@ -2002,6 +2122,9 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     .cal-today-btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 13px;font:inherit;font-size:12px;font-weight:600;color:var(--navy);cursor:pointer;transition:.1s;}
     .cal-today-btn:hover{background:var(--sky);}
     .cal-grid-wrap{flex:1;overflow-y:auto;}
+    .cal-scroll{flex:1;overflow-y:auto;scroll-behavior:smooth;}
+    .cal-month-block{border-bottom:8px solid var(--paper);}
+    .cal-month-sticky{position:sticky;top:0;z-index:5;background:var(--paper);font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);padding:10px 16px 8px;border-bottom:1px solid var(--line);}
     .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);border-left:1px solid var(--line);}
     .cal-dow{background:var(--navy);color:#bcd2e8;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;text-align:center;padding:8px 4px;border-right:1px solid rgba(255,255,255,.1);}
     .cal-cell{border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-height:100px;padding:6px;position:relative;background:#fff;transition:.1s;}
@@ -2822,14 +2945,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
 
   {/* ── RACE CALENDAR MODAL ── */}
   {showCalendar&&(()=>{
-    const calEvs=events
-      .filter(ev=>calCls==="all"||ev.cls===calCls)
-      .filter(ev=>{
-        if(!calQ.trim()) return true;
-        const ql=calQ.toLowerCase();
-        return ev.name.toLowerCase().includes(ql)||
-          ev.entries.some(e=>e.helm.toLowerCase().includes(ql)||e.crew.toLowerCase().includes(ql));
-      });
+    const calEvs=events.filter(ev=>calCls==="all"||ev.cls===calCls);
     const gridRows=buildCalGrid(calYear,calMonth,calEvs);
     const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
     const prevMonth=()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);};
@@ -2852,13 +2968,9 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
             <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
             <div className="cal-filters">
               <div className="seg">
-                {[["all","All"],...CLASSES.map(cl=>[cl.id,cl.short])].map(([id,label])=>(
+                {[["all","All"],...CLASSES.map(cl=>[cl.id,cl.short]),["49er","49er"]].map(([id,label])=>(
                   <button key={id} className={calCls===id?"on":""} onClick={()=>setCalCls(id)}>{label}</button>
                 ))}
-              </div>
-              <div className="srch" style={{flex:1,minWidth:180,maxWidth:280}}>
-                <Search size={13} color="#9fb2c8"/>
-                <input placeholder="Search events or athletes..." value={calQ} onChange={e=>setCalQ(e.target.value)}/>
               </div>
             </div>
           </div>
@@ -2920,7 +3032,12 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     );
   })()}
 
-  {regattaFootprint&&<RegattaFootprintModal event={regattaFootprint} onClose={()=>setRegattaFootprint(null)}/>}
+  {regattaFootprint&&(
+    <ErrorBoundary resetKey={regattaFootprint.id}
+      fallback={<div className="ov" onClick={()=>setRegattaFootprint(null)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",color:"var(--ink)",fontWeight:600}}>Couldn't open this regatta's map.</p><button className="btn cta" onClick={()=>setRegattaFootprint(null)}>Close</button></div></div>}>
+      <RegattaFootprintModal event={regattaFootprint} homeCountry={homeCountry} onClose={()=>setRegattaFootprint(null)}/>
+    </ErrorBoundary>
+  )}
 
   {deleteConfirm&&(
     <div style={{position:"fixed",inset:0,zIndex:75}} onClick={()=>setDeleteConfirm(null)}>
