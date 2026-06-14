@@ -1671,7 +1671,7 @@ export default function AthLinkMVP(){
   },[]);
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
   const role=effectiveRole;
-  const canEdit=effectiveRole==="association"&&!(typeof portal==="string"&&portal.startsWith("class:"));
+  const canEditRole=effectiveRole==="association";
   const canEditProfileOf=(nm)=>devMode||(effectiveRole==="athlete"&&auth?.profile?.athlete_name&&auth.profile.athlete_name.toLowerCase()===String(nm||"").toLowerCase());
   useEffect(()=>{
     if(!AUTH_BASE) return;
@@ -1820,6 +1820,8 @@ export default function AthLinkMVP(){
   /* ── derived ──────────────────────────────────────────────── */
   const isClassPortal=typeof portal==="string"&&portal.startsWith("class:");
   const portalCls=isClassPortal?portal.slice(6):null; // base class id for a class portal
+  // Editing is disabled in global class portals (read-only aggregation).
+  const canEdit=canEditRole&&!isClassPortal;
   const assoc=ASSOCIATIONS.find(a=>a.id===portal);
   const classEvents=useMemo(()=>{
     if(!portal) return [];
