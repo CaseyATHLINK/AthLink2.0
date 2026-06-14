@@ -193,6 +193,12 @@ const CLASSES=[
   {id:"optimist",name:"Hong Kong Optimist Dinghy Association", short:"Optimist"},
   {id:"49er",    name:"Hong Kong 49er Class Association",      short:"49er"},
 ];
+const CLASSES_INT=[
+  {id:"29er",    name:"International 29er Class Association",     short:"29er"},
+  {id:"ilca",    name:"International Laser Class Association",    short:"ILCA"},
+  {id:"optimist",name:"International Optimist Dinghy Association",short:"Optimist"},
+  {id:"49er",    name:"International 49er Class Association",     short:"49er"},
+];
 
 // Global class colour coding (used by calendar circles)
 // Canonical class colours (refer to them by these names):
@@ -797,7 +803,12 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
   React.useEffect(()=>{
     if(viewMode!=="year"||!yearScrollRef.current) return;
     const el=yearScrollRef.current.querySelector(`[data-yr="${year}"]`);
-    if(el) el.scrollIntoView({block:"start",behavior:"instant"});
+    if(el){
+      progScrollRef.current=true;
+      el.scrollIntoView({block:"start",behavior:"instant"});
+      clearTimeout(scrollTimerRef.current);
+      scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},200);
+    }
   },[viewMode,year]); // year dep so < > nav buttons scroll correctly
 
   // ── Year view: update header year as user scrolls
@@ -805,6 +816,7 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
     if(viewMode!=="year"||!yearScrollRef.current) return;
     const c=yearScrollRef.current;
     const onScroll=()=>{
+      if(progScrollRef.current) return;
       const cr=c.getBoundingClientRect();
       for(const el of c.querySelectorAll("[data-yr]")){
         if(el.getBoundingClientRect().bottom>cr.top+10){
@@ -826,8 +838,8 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
     if(el){
       progScrollRef.current=true;
       clearTimeout(scrollTimerRef.current);
-      el.scrollIntoView({block:"start",behavior:"smooth"});
-      scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},700);
+      el.scrollIntoView({block:"start",behavior:"instant"});
+      scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},200);
     }
   },[year,month,viewMode]);
 
@@ -1625,6 +1637,27 @@ export default function AthLinkMVP(){
   const[view,setView]=useState({name:"portals"});
   const[verified,setVerified]=useState({});
   const[q,setQ]=useState("");const[filter,setFilter]=useState("all");
+
+  // ── Merge duplicate athlete profiles ───────────────────────
+  const mergeAthletes=async(primary,duplicate)=>{
+    // Persist: patch every entry in the DB that references the duplicate name
+    events.forEach(ev=>ev.entries.forEach(e=>{
+      if(!e._dbId) return;
+      const patch={};
+      if(e.helm===duplicate) patch.helm_name=primary;
+      if(e.crew===duplicate) patch.crew_name=primary;
+      if(Object.keys(patch).length) sbPatch("entries",`id=eq.${e._dbId}`,patch);
+    }));
+    // Update in-memory state
+    setEvents(prev=>prev.map(ev=>({
+      ...ev,
+      entries:ev.entries.map(e=>({
+        ...e,
+        helm:e.helm===duplicate?primary:e.helm,
+        crew:e.crew===duplicate?primary:e.crew,
+      }))
+    })));
+  };
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
@@ -1738,6 +1771,20 @@ export default function AthLinkMVP(){
     }));
     return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
   },[events]);
+
+  // ── Duplicate detection ─────────────────────────────────────
+  // Two names are duplicates if their lowercased tokens, when sorted, are identical
+  // e.g. "Emily Polson" ↔ "Polson Emily"
+  const tokenKey=nm=>nm.toLowerCase().split(/\s+/).sort().join(' ');
+  const dupGroups=useMemo(()=>{
+    const groups={};
+    allPeople.forEach(p=>{
+      const k=tokenKey(p.name);
+      if(!groups[k])groups[k]=[];
+      groups[k].push(p);
+    });
+    return Object.values(groups).filter(g=>g.length>1);
+  },[allPeople]);
 
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
@@ -2494,8 +2541,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .back:hover{color:var(--accent);}
     .foot{font-size:12px;color:var(--mut);text-align:center;padding:30px 0;}
     .ov{position:fixed;inset:0;background:rgba(16,33,58,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;animation:fade .2s both;}
-    .modal{background:var(--paper);width:100%;max-width:800px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;}
-    .modal.wide{max-width:1060px;}
+    .modal{background:var(--paper);width:100%;max-width:900px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;}
+    .modal.wide{max-width:1140px;}
     .mhead{background:var(--navy);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;}
     .mhead h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
     .mhead .x{background:rgba(255,255,255,.12);border:0;color:#fff;width:32px;height:32px;border-radius:8px;cursor:pointer;display:grid;place-items:center;}
@@ -2503,7 +2550,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .mtabs{display:flex;gap:6px;padding:14px 22px 0;}
     .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;background:none;color:var(--mut);padding:9px 14px;border-radius:9px 9px 0 0;cursor:pointer;display:flex;align-items:center;gap:7px;}
     .mtabs button.on{color:var(--navy);background:#fff;border:1px solid var(--line);border-bottom:0;}
-    .mbody{padding:20px 26px 26px;max-height:85vh;overflow-y:auto;}
+    .mbody{padding:22px 28px 28px;max-height:88vh;overflow-y:auto;}
     .prev.ok{background:#d8f0e3;color:#0a6b41;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .prev.err{background:#fbe7e4;color:#a8362a;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .mfoot{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;}
@@ -2613,7 +2660,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {/* ── TOPBAR ── */}
   <div className="topbar"><div className="topin">
     <div className="brand" onClick={goHome}><Link2 size={15}/></div>
-    <span className="topsite" style={{cursor:"pointer"}} onClick={goHome}>Hong Kong Sailing</span>
+    <span className="topsite" style={{cursor:"pointer"}} onClick={goHome}>Sailing</span>
     <div className="gsrch-wrap" onClick={e=>e.stopPropagation()}>
       <div className="gsrch">
         <Search size={14} color="#9fbdd9"/>
@@ -2622,6 +2669,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           value={gSearch}
           onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
           onFocus={()=>setGSearchOpen(true)}
+          onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
           onKeyDown={e=>{
             if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}
             if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}
@@ -2678,12 +2726,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     <div className="home-hero">
       <div className="wrap">
         <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-          <h1 className="disp" style={{margin:0}}>Hong Kong Sailing</h1>
+          <h1 className="disp" style={{margin:0}}>Sailing</h1>
           <button className="btn sky" style={{fontSize:13,padding:"7px 13px"}} onClick={()=>{setCalClsSet(new Set());setShowCalendar(true);}}>
             <Calendar size={15}/>Race Calendar
           </button>
         </div>
-        <p style={{marginTop:6}}>Results, athlete profiles and class standings for Hong Kong competitive sailing</p>
+        <p style={{marginTop:6}}>Results, athlete profiles and class standings for competitive sailing</p>
         <div className="home-tabs">
           <button className={view.name==="portals"?"on":""} onClick={()=>go({name:"portals"})}>Class Portals</button>
           <button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>All Athletes</button>
@@ -2701,13 +2749,31 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <input placeholder="Search class associations…" value={homeQ} onChange={e=>setHomeQ(e.target.value)}/>
         </div>
       </div>
-      <p className="seclabel"><Anchor size={14}/>Class Associations</p>
-      <div className="classes-grid">
+      {/* ─ Hong Kong Sailing Associations ─ */}
+      <p className="seclabel"><Anchor size={14}/>Hong Kong Sailing Associations</p>
+      <div className="classes-grid" style={{marginBottom:32}}>
         {CLASSES.filter(c=>!homeQ||c.name.toLowerCase().includes(homeQ.toLowerCase())||c.short.toLowerCase().includes(homeQ.toLowerCase())).map((c,i)=>{
           const ce=events.filter(e=>e.cls===c.id);
           const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
           return(<div className="class-card" key={c.id} style={{animationDelay:`${i*80}ms`}} onClick={()=>enterPortal(c.id)}>
-            <span className="class-tag">{c.short}</span>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+              <span style={{fontSize:16}}>{isoFlag("HK")}</span>
+              <span className="class-tag">{c.short}</span>
+            </div>
+            <p className="class-name">{c.name}</p>
+            <div className="class-stats"><div><b>{ce.length}</b>regattas</div><div><b>{cp.size}</b>athletes</div></div>
+            <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(c.id);}}>Enter portal <ChevronRight size={16}/></button>
+          </div>);
+        })}
+      </div>
+      {/* ─ International Sailing Associations ─ */}
+      <p className="seclabel"><Globe size={14}/>International Sailing Associations</p>
+      <div className="classes-grid">
+        {CLASSES_INT.filter(c=>!homeQ||c.name.toLowerCase().includes(homeQ.toLowerCase())||c.short.toLowerCase().includes(homeQ.toLowerCase())).map((c,i)=>{
+          const ce=events.filter(e=>e.cls===c.id);
+          const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
+          return(<div className="class-card" key={"int-"+c.id} style={{animationDelay:`${(CLASSES.length+i)*80}ms`}} onClick={()=>enterPortal(c.id)}>
+            <span className="class-tag" style={{marginBottom:6,display:"inline-block"}}>{c.short}</span>
             <p className="class-name">{c.name}</p>
             <div className="class-stats"><div><b>{ce.length}</b>regattas</div><div><b>{cp.size}</b>athletes</div></div>
             <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(c.id);}}>Enter portal <ChevronRight size={16}/></button>
@@ -2733,7 +2799,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         </div>
       </div></div>
       <div className="wrap sec">
-        <button className="back" onClick={goHome}><ArrowLeft size={16}/>Hong Kong Sailing</button>
+        <button className="back" onClick={goHome}><ArrowLeft size={16}/>Sailing</button>
         <div className="toolbar" style={{marginBottom:8}}>
           <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
           {canEdit&&<button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a regatta</button>}
@@ -2985,11 +3051,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <div className="seg">{(()=>{
           const vCount=currentPeople.filter(p=>verified[p.name]).length;
           const counts={all:currentPeople.length,verified:vCount,unverified:currentPeople.length-vCount};
-          return ["all","verified","unverified"].map(f=>(
+          const tabs=["all","verified","unverified"];
+          if(canEdit&&dupGroups.length>0) tabs.push("duplicates");
+          return tabs.map(f=>(
             <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
               <span style={{display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15}}>
                 <span>{f[0].toUpperCase()+f.slice(1)}</span>
-                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{counts[f]}</span>
+                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?dupGroups.length:counts[f]}</span>
               </span>
             </button>
           ));
@@ -3001,7 +3069,49 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <button onClick={()=>{setAthleteSmart(null);setQ("");}}><X size={13}/></button>
         </div>
       )}
-      {(()=>{
+      {filter==="duplicates"&&canEdit&&(
+        <div>
+          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Profiles with names that appear to be the same person in a different order. Merge to combine their regatta history.</p>
+          {dupGroups.map((group,gi)=>{
+            const sorted=[...group].sort((a,b)=>{
+              const ea=events.filter(ev=>ev.entries.some(e=>e.helm===a.name||e.crew===a.name)).length;
+              const eb=events.filter(ev=>ev.entries.some(e=>e.helm===b.name||e.crew===b.name)).length;
+              return eb-ea;
+            });
+            const primary=sorted[0];
+            const dupes=sorted.slice(1);
+            return(
+              <div key={gi} style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div style={{flex:1,minWidth:200}}>
+                    <div style={{fontSize:12,color:"var(--mut)",fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",marginBottom:6}}>Keep (primary)</div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div className="av" style={{background:avatarColor(primary.name),width:32,height:32,fontSize:12}}>{initials(primary.name)}</div>
+                      <span style={{fontWeight:700,fontSize:14,color:"var(--navy)"}}>{primary.name}</span>
+                      <span style={{fontSize:12,color:"var(--mut)"}}>({events.filter(ev=>ev.entries.some(e=>e.helm===primary.name||e.crew===primary.name)).length} events)</span>
+                    </div>
+                  </div>
+                  <div style={{flex:1,minWidth:200}}>
+                    <div style={{fontSize:12,color:"var(--mut)",fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",marginBottom:6}}>Merge into primary</div>
+                    {dupes.map(d=>(
+                      <div key={d.name} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                        <div className="av" style={{background:avatarColor(d.name),width:32,height:32,fontSize:12,opacity:.7}}>{initials(d.name)}</div>
+                        <span style={{fontSize:14,color:"var(--mut)"}}>{d.name}</span>
+                        <span style={{fontSize:12,color:"var(--mut)"}}>({events.filter(ev=>ev.entries.some(e=>e.helm===d.name||e.crew===d.name)).length} events)</span>
+                        <button className="btn cta" style={{fontSize:11,padding:"4px 10px",marginLeft:"auto"}}
+                          onClick={()=>{dupes.forEach(dup=>mergeAthletes(primary.name,dup.name));setFilter("all");}}>
+                          Merge
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {filter!=="duplicates"&&(()=>{
         const evScope=isGlobal?events:classEvents;
         const qlc=q.trim().toLowerCase();
         const shown=currentPeople
