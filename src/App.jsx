@@ -245,6 +245,15 @@ const nuggetFor=(cls,subclass)=>{
 //   49er  -> "49er green"    (#5FAF4E)
 const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#2E78C8","optimist":"#3D3D3D"};
 const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||"#5b6b80";
+// Muted version of a class colour (blended ~52% toward a soft grey) for the
+// global class buttons, so they read as softer than the association nuggets.
+const mutedColor=(cls)=>{
+  const hex=classColor(cls).replace("#","");
+  const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
+  const mix=(x)=>Math.round(x*0.55+0.45*186); // blend toward #BABABA
+  const h=(x)=>x.toString(16).padStart(2,"0");
+  return `#${h(mix(r))}${h(mix(g))}${h(mix(b))}`;
+};
 
 // Sub-class picker (ILCA 4/6/7, Optimist fleets) — only shown for ILCA/Optimist events.
 function SubclassPicker({cls,value,onChange}){
@@ -408,6 +417,7 @@ function scorePreview(ev){
 
 function aggregate(name,evList){
   const history=[];let wins=0,podiums=0,best=Infinity;
+  const seenComp=new Set(); // dedupe identical competition rows (duplicate imports)
   for(const ev of evList){
     if(ev.status==="Draft") continue;
     const e=ev.entries.find(x=>x.helm===name||x.crew===name);
@@ -415,12 +425,15 @@ function aggregate(name,evList){
     const s=scoreEvent(ev);
     const row=s.rows.find(r=>r.helm===e.helm&&r.crew===e.crew&&r.sail===e.sail);
     if(!row) continue;
+    // Signature: same event name+date, same finishing line for this athlete → same result.
+    const sig=`${(ev.name||"").trim().toLowerCase()}|${ev.date||""}|${e.sail||""}|${row.rank}|${row.net}|${(row.races||[]).join(",")}`;
+    if(seenComp.has(sig)) continue;
+    seenComp.add(sig);
     const role=e.helm===name?"Helm":"Crew";
     const partner=role==="Helm"?e.crew:e.helm;
     row.races.forEach(c=>{if(c===1) wins++;});
     if(row.rank<=3) podiums++;
     if(row.rank<best) best=row.rank;
-    // carry nat from entry onto the row for display
     history.push({ev,row:{...row,nat:e.nat||""},role,partner,fleet:s.fleet});
   }
   history.sort((a,b)=>new Date(b.ev.date)-new Date(a.ev.date));
@@ -1661,7 +1674,7 @@ export default function AthLinkMVP(){
   },[]);
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
   const role=effectiveRole;
-  const canEdit=effectiveRole==="association";
+  const canEdit=effectiveRole==="association"&&!(typeof portal==="string"&&portal.startsWith("class:"));
   const canEditProfileOf=(nm)=>devMode||(effectiveRole==="athlete"&&auth?.profile?.athlete_name&&auth.profile.athlete_name.toLowerCase()===String(nm||"").toLowerCase());
   useEffect(()=>{
     if(!AUTH_BASE) return;
@@ -1685,8 +1698,12 @@ export default function AthLinkMVP(){
   const[q,setQ]=useState("");const[filter,setFilter]=useState("all");
 
   // ── Merge duplicate athlete profiles ───────────────────────
+  // Renames every entry of `duplicate` → `primary` (persisted), then removes any
+  // entry that became an exact duplicate within the same event (same person +
+  // same sail + same results), so no profile shows the same competition twice.
   const mergeAthletes=async(primary,duplicate)=>{
-    // Persist: patch every entry in the DB that references the duplicate name
+    if(primary===duplicate) return;
+    // Persist name change for each affected entry
     events.forEach(ev=>ev.entries.forEach(e=>{
       if(!e._dbId) return;
       const patch={};
@@ -1694,29 +1711,29 @@ export default function AthLinkMVP(){
       if(e.crew===duplicate) patch.crew_name=primary;
       if(Object.keys(patch).length) sbPatch("entries",`id=eq.${e._dbId}`,patch);
     }));
-    // Update in-memory state
-    setEvents(prev=>prev.map(ev=>({
-      ...ev,
-      entries:ev.entries.map(e=>({
+    setEvents(prev=>prev.map(ev=>{
+      // 1. rename
+      let entries=ev.entries.map(e=>({
         ...e,
         helm:e.helm===duplicate?primary:e.helm,
         crew:e.crew===duplicate?primary:e.crew,
-      }))
-    })));
+      }));
+      // 2. drop within-event duplicate entries (same sig); delete the dupes in DB
+      const seen=new Set();
+      entries=entries.filter(e=>{
+        const sig=`${e.helm}|${e.crew}|${e.sail}|${(e.races||[]).join(",")}`;
+        if(seen.has(sig)){ if(e._dbId) sbDel("entries",`id=eq.${e._dbId}`); return false; }
+        seen.add(sig); return true;
+      });
+      return{...ev,entries};
+    }));
   };
   // Merge an entire group's names into the primary (first = most regattas)
   const mergeGroup=async(names)=>{
     const[primary,...dupes]=names;
     for(const d of dupes) await mergeAthletes(primary,d);
   };
-  // Merge all EXACT duplicate groups in one click (word-order/case/space variants).
-  // Near (spelling) groups are left for manual review.
-  const[dismissedDups,setDismissedDups]=useState(new Set()); // groups the user said "don't merge"
-  const mergeAllExact=async()=>{
-    for(const g of visibleDupGroups){
-      if(g.kind==="exact") await mergeGroup(g.names);
-    }
-  };
+  const[dismissedDups,setDismissedDups]=useState(new Set()); // near groups the user said "don't merge"
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
@@ -1805,8 +1822,14 @@ export default function AthLinkMVP(){
   },[]);
 
   /* ── derived ──────────────────────────────────────────────── */
+  const isClassPortal=typeof portal==="string"&&portal.startsWith("class:");
+  const portalCls=isClassPortal?portal.slice(6):null; // base class id for a class portal
   const assoc=ASSOCIATIONS.find(a=>a.id===portal);
-  const classEvents=useMemo(()=>portal?events.filter(e=>eventAssocs(e).includes(portal)):[],[events,portal]);
+  const classEvents=useMemo(()=>{
+    if(!portal) return [];
+    if(isClassPortal) return events.filter(e=>e.cls===portalCls);   // global class portal
+    return events.filter(e=>eventAssocs(e).includes(portal));        // association portal
+  },[events,portal,isClassPortal,portalCls]);
   const homeCountry=useMemo(()=>buildHomeCountry(events),[events]);
   const people=useMemo(()=>{
     const map=new Map();
@@ -1824,22 +1847,32 @@ export default function AthLinkMVP(){
   },[events]);
 
   // ── Duplicate detection ─────────────────────────────────────
-  // Normalized form: lowercase, collapse whitespace, sort tokens.
-  //  "casey law" == "law Casey" == "casey  law"  → EXACT duplicates (auto-mergeable)
-  //  "casey law" vs "cassey law"                 → NEAR duplicate (spelling diff → review)
-  const tokenKey=nm=>(nm||"").toLowerCase().trim().split(/\s+/).filter(Boolean).sort().join(" ");
+  // Canonical key collapses: case, accents/diacritics, hyphens, parentheses &
+  // punctuation, and word order. Names sharing a canonical key are the SAME
+  // person (auto-merge, no review). Keys differing by 1–2 characters are NEAR
+  // duplicates (spelling diff → review). 3+ char differences are NOT duplicates.
+  const canon=nm=>{
+    let s=(nm||"").toLowerCase();
+    s=s.normalize("NFD").replace(/[\u0300-\u036f]/g,""); // strip accents
+    s=s.replace(/ø/g,"o").replace(/ł/g,"l").replace(/đ/g,"d").replace(/ß/g,"ss").replace(/æ/g,"ae").replace(/œ/g,"oe").replace(/þ/g,"th");
+    s=s.replace(/-/g," ");                 // hyphens → spaces
+    s=s.replace(/[^a-z0-9\s]/g," ");       // strip parens, dots, other punctuation
+    return s.trim().split(/\s+/).filter(Boolean).sort().join(" ");
+  };
   const lev=(a,b)=>{
     const m=a.length,n=b.length;
     if(!m) return n; if(!n) return m;
-    const d=Array.from({length:m+1},(_,i)=>[i,...Array(n).fill(0)]);
-    for(let j=0;j<=n;j++) d[0][j]=j;
-    for(let i=1;i<=m;i++)for(let j=1;j<=n;j++){
-      d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+    let prevRow=Array.from({length:n+1},(_,j)=>j);
+    for(let i=1;i<=m;i++){
+      const cur=[i];
+      for(let j=1;j<=n;j++){
+        cur[j]=Math.min(prevRow[j]+1,cur[j-1]+1,prevRow[j-1]+(a[i-1]===b[j-1]?0:1));
+      }
+      prevRow=cur;
     }
-    return d[m][n];
+    return prevRow[n];
   };
   const regCount=nm=>events.filter(ev=>ev.entries.some(e=>e.helm===nm||e.crew===nm)).length;
-  // Associations that own/collab an event this athlete competed in
   const athleteHostAssocs=nm=>{
     const s=new Set();
     events.forEach(ev=>{ if(ev.entries.some(e=>e.helm===nm||e.crew===nm)) eventAssocs(ev).forEach(a=>s.add(a)); });
@@ -1847,47 +1880,62 @@ export default function AthLinkMVP(){
   };
 
   const dupData=useMemo(()=>{
-    // 1. Group by exact normalized key → exact duplicate clusters
+    // 1. Group by canonical key → EXACT duplicate clusters (auto-mergeable)
     const byKey={};
-    allPeople.forEach(p=>{const k=tokenKey(p.name);(byKey[k]=byKey[k]||[]).push(p.name);});
+    allPeople.forEach(p=>{const k=canon(p.name);if(!k)return;(byKey[k]=byKey[k]||[]).push(p.name);});
     const exactGroups=Object.values(byKey).filter(g=>g.length>1);
-    const exactKeys=new Set(Object.keys(byKey).filter(k=>byKey[k].length>1));
 
-    // 2. Near-duplicate pairs: distinct normalized keys within small edit distance
+    // 2. NEAR pairs: distinct canonical keys within edit distance 1–2.
+    //    Length pre-filter keeps this fast even with thousands of names.
     const keys=Object.keys(byKey);
     const nearPairs=[];
-    for(let i=0;i<keys.length;i++)for(let j=i+1;j<keys.length;j++){
-      const a=keys[i],b=keys[j];
-      if(a===b) continue;
-      const dist=lev(a,b);
-      const minLen=Math.min(a.length,b.length);
-      // close spelling: distance 1–2 and names are reasonably long
-      if(dist>0&&dist<=2&&minLen>=4){
-        nearPairs.push([byKey[a][0],byKey[b][0]]);
+    for(let i=0;i<keys.length;i++){
+      const a=keys[i];
+      for(let j=i+1;j<keys.length;j++){
+        const b=keys[j];
+        if(Math.abs(a.length-b.length)>2) continue;      // cheap reject
+        if(Math.min(a.length,b.length)<4) continue;       // too short to trust
+        const dist=lev(a,b);
+        if(dist>0&&dist<=2) nearPairs.push([byKey[a][0],byKey[b][0]]);
       }
     }
     return{exactGroups,nearPairs};
   },[allPeople,events]);
 
-  // Build display groups: each is {names:[...], kind:"exact"|"near"} sorted by regatta count desc
+  // Display groups for the review pile (NEAR only — exact ones auto-merge below).
   const dupGroups=useMemo(()=>{
     const groups=[];
-    dupData.exactGroups.forEach(names=>{
-      groups.push({names:[...names].sort((a,b)=>regCount(b)-regCount(a)),kind:"exact"});
-    });
     dupData.nearPairs.forEach(([a,b])=>{
       groups.push({names:[a,b].sort((x,y)=>regCount(y)-regCount(x)),kind:"near"});
     });
     return groups;
   },[dupData,events]);
 
-  // Filter to groups the current association is allowed to see (hosted ≥1 of the athletes' events).
-  // In dev mode / no per-association identity, the managing association can see all.
-  const myAssoc=auth?.profile?.class_id||null; // phase-2: real per-association id
+  // Per-association visibility (phase-2 identity). Dev/generic association → all.
+  const myAssoc=auth?.profile?.class_id||null;
   const visibleDupGroups=useMemo(()=>{
-    if(!myAssoc) return dupGroups; // dev / generic association → show all
+    if(!myAssoc) return dupGroups;
     return dupGroups.filter(g=>g.names.some(nm=>athleteHostAssocs(nm).has(myAssoc)));
   },[dupGroups,myAssoc,events]);
+
+  // ── Auto-merge exact duplicates ─────────────────────────────
+  // Runs whenever events change. Merges every exact (canonical-key) cluster into
+  // its most-active profile, then de-duplicates results so no profile shows the
+  // same competition twice. Guarded so it settles after one pass.
+  const autoMergeRan=React.useRef(false);
+  useEffect(()=>{
+    if(!events.length) return;
+    if(!dupData.exactGroups.length){autoMergeRan.current=false;return;}
+    if(autoMergeRan.current) return;
+    autoMergeRan.current=true;
+    (async()=>{
+      for(const names of dupData.exactGroups){
+        const ordered=[...names].sort((a,b)=>regCount(b)-regCount(a));
+        await mergeGroup(ordered);
+      }
+      autoMergeRan.current=false;
+    })();
+  },[dupData.exactGroups]);
 
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
@@ -1895,10 +1943,11 @@ export default function AthLinkMVP(){
     return Math.max(...previewEv.entries.map(e=>(e.races||[]).length),1);
   },[previewEv]);
 
-  const cls=assoc?CLASSES.find(c=>c.id===assoc.cls):null;
+  const cls=assoc?CLASSES.find(c=>c.id===assoc.cls):(isClassPortal?CLASSES.find(c=>c.id===portalCls):null);
+  const portalName=assoc?assoc.name:(isClassPortal?`${CLASSES.find(c=>c.id===portalCls)?.short||portalCls} — All Results`:"");
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
-  const athleteTitle=isGlobal?"All Athletes":`${assoc?.name||""} Athletes`;
+  const athleteTitle=isGlobal?"All Athletes":`${portalName} Athletes`;
   const evLoc=ev=>[ev.country].filter(Boolean).join(" · ");
   const manualReady=!!mf.rows.filter(r=>r.helm.trim()).length;
 
@@ -2091,6 +2140,10 @@ Partial query: "${q}"`;
     events.filter(ev=>ev.name.toLowerCase().includes(ql)).slice(0,4).forEach(ev=>{
       results.push({type:"event",label:ev.name,sub:formatDate(ev.date),nav:{type:"event",assoc:ev.owner||null,id:ev.id}});
     });
+    // Global class portals
+    CLASSES.filter(c=>c.short.toLowerCase().includes(ql)).forEach(c=>{
+      results.push({type:"portal",label:`${c.short} — All Results`,sub:"Global class portal",nav:{type:"portal",assoc:"class:"+c.id}});
+    });
     // Association portals
     ASSOCIATIONS.filter(a=>a.name.toLowerCase().includes(ql)||a.cls.toLowerCase().includes(ql)).forEach(a=>{
       results.push({type:"portal",label:a.name,sub:"Association portal",nav:{type:"portal",assoc:a.id}});
@@ -2186,8 +2239,23 @@ Athlete: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race
     }catch{setHoverSummaries(h=>({...h,[key]:""}));}
   };
 
+  // Signature of an athlete's result set — changes only when a competition is
+  // added/removed, so a cached overview can be reused until then.
+  const profileSig=(name,ag)=>{
+    const ids=ag.history.map(h=>`${(h.ev.name||"").toLowerCase()}|${h.ev.date}`).sort().join(";");
+    return `${name}::${ag.events}::${ids}`;
+  };
   const fetchFullProfileSummary=async(name,ag)=>{
     if(profileSummaries[name]!==undefined) return;
+    const sig=profileSig(name,ag);
+    // Reuse a persisted overview if the athlete's results haven't changed.
+    try{
+      const raw=localStorage.getItem("athlink_bio_"+name);
+      if(raw){
+        const cached=JSON.parse(raw);
+        if(cached.sig===sig){ setProfileSummaries(h=>({...h,[name]:cached.text})); return; }
+      }
+    }catch{}
     setProfileSummaries(h=>({...h,[name]:null})); // loading
     try{
       const countries=new Set(ag.history.map(h=>h.ev.country).filter(Boolean));
@@ -2205,7 +2273,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({prompt,max_tokens:120})});
       const data=await res.json();
-      if(data.ok) setProfileSummaries(h=>({...h,[name]:cleanAISummary(data.text)}));
+      if(data.ok){
+        const text=cleanAISummary(data.text);
+        setProfileSummaries(h=>({...h,[name]:text}));
+        try{localStorage.setItem("athlink_bio_"+name,JSON.stringify({sig,text}));}catch{}
+      }
       else setProfileSummaries(h=>({...h,[name]:""}));
     }catch{setProfileSummaries(h=>({...h,[name]:""}));}
   };
@@ -2871,11 +2943,28 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const intl=ASSOCIATIONS.filter(a=>a.scope==="INT").filter(matchA);
     return(
     <div className="wrap sec">
-      <div className="toolbar" style={{marginBottom:18}}>
+      <div className="toolbar" style={{marginBottom:14}}>
         <div className="srch">
           <Search size={16} color="#9fb2c8"/>
           <input placeholder="Search class associations…" value={homeQ} onChange={e=>setHomeQ(e.target.value)}/>
         </div>
+      </div>
+      {/* Global class portals — total results per class, across all associations */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:26}}>
+        {CLASSES.map(c=>{
+          const n=events.filter(e=>e.cls===c.id).length;
+          return(
+            <button key={c.id} onClick={()=>enterPortal("class:"+c.id)}
+              style={{border:0,borderRadius:11,background:mutedColor(c.id),color:"#fff",cursor:"pointer",
+                padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,
+                fontFamily:"'Barlow',sans-serif",transition:".15s",boxShadow:"0 2px 8px -4px rgba(0,0,0,.3)"}}
+              onMouseEnter={e=>e.currentTarget.style.background=classColor(c.id)}
+              onMouseLeave={e=>e.currentTarget.style.background=mutedColor(c.id)}>
+              <span style={{fontWeight:800,fontSize:16,letterSpacing:".01em"}}>{c.short}</span>
+              <span style={{fontSize:11,opacity:.9,fontWeight:600}}>{n} regatta{n!==1?"s":""}</span>
+            </button>
+          );
+        })}
       </div>
       {hk.length>0&&<>
         <p className="seclabel"><span style={{fontSize:16,marginRight:2}}>🇭🇰</span>Hong Kong Sailing Associations</p>
@@ -2894,8 +2983,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     <>
       <div className="strip"><div className="wrap">
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
-          <h1 className="disp">{assoc?.name}</h1>
-          <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalClsSet(assoc?new Set([assoc.cls]):new Set());setShowCalendar(true);}}>
+          <h1 className="disp">{portalName}</h1>
+          <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalClsSet(cls?new Set([cls.id]):new Set());setShowCalendar(true);}}>
             <Calendar size={15}/>Race Calendar
           </button>
         </div>
@@ -3052,7 +3141,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             {eventAssocs(ev).length>0&&(
               <div style={{marginTop:7,fontSize:12.5,color:"var(--mut)",display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
                 <Anchor size={12} style={{flex:"none"}}/>
-                <span>Organized by <b style={{color:"var(--navy)",fontWeight:600}}>{eventAssocs(ev).map(assocName).join(" & ")}</b></span>
+                <span>Organized by {eventAssocs(ev).map((aid,i)=><React.Fragment key={aid}>
+                  {i>0&&<span style={{color:"var(--mut)"}}> & </span>}
+                  <b style={{color:"var(--accent)",fontWeight:600,cursor:"pointer"}} onClick={()=>enterPortal(aid)}>{assocName(aid)}</b>
+                </React.Fragment>)}</span>
               </div>
             )}
           </div>
@@ -3142,7 +3234,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {/* ── ATHLETES (portal + global) ── */}
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:26}}>
-      {portal&&<button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>{assoc?.name}</button>}
+      {portal&&<button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>{portalName}</button>}
       <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:4,flexWrap:"wrap"}}>
         <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle} <span style={{fontSize:17,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
         {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
@@ -3174,8 +3266,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </button>
           ));
         })()}</div>
-        {canEdit&&filter==="duplicates"&&visibleDupGroups.some(g=>g.kind==="exact")&&(
-          <button className="btn cta" style={{fontSize:13,padding:"7px 13px",whiteSpace:"nowrap"}} onClick={()=>{mergeAllExact();}}>
+        {canEdit&&filter==="duplicates"&&visibleDupGroups.length>0&&(
+          <button className="btn cta" style={{fontSize:13,padding:"7px 13px",whiteSpace:"nowrap"}} onClick={()=>{visibleDupGroups.forEach(g=>mergeGroup(g.names));}}>
             <Users size={14}/>Merge all
           </button>
         )}
@@ -3188,10 +3280,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       )}
       {filter==="duplicates"&&canEdit&&(
         <div>
-          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Possible duplicate profiles. <b style={{color:"var(--navy)"}}>Exact</b> matches differ only by word order, capitals or spacing — safe to merge. <b style={{color:"#b8860b"}}>Review</b> matches differ in spelling and need a human check. Merging keeps the profile with more regattas (left) and moves the other's results into it.</p>
+          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Profiles whose names are close but differ in spelling — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more regattas and moves the other's results into it.</p>
           {(()=>{
-            const shown=visibleDupGroups.filter(g=>!dismissedDups.has(g.names.join("|")));
-            if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No duplicates to review.</p>;
+            const dq=q.trim().toLowerCase();
+            const shown=visibleDupGroups
+              .filter(g=>!dismissedDups.has(g.names.join("|")))
+              .filter(g=>!dq||g.names.some(nm=>nm.toLowerCase().includes(dq)));
+            if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>{dq?"No duplicates match your search.":"No duplicates to review."}</p>;
             const MiniCard=({name,dim})=>{
               const ag=aggregate(name,events);
               const nat=athleteNat(name,events);
@@ -3219,14 +3314,14 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 <div key={key} style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:"16px",marginBottom:14}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
                     <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",
-                      color:g.kind==="exact"?"#0a7d4a":"#b8860b",background:g.kind==="exact"?"#e7f7ef":"#fdf6e3",borderRadius:6,padding:"3px 9px"}}>
-                      {g.kind==="exact"?<><CheckCircle size={12}/>Exact match</>:<><AlertCircle size={12}/>Review — spelling differs</>}
+                      color:"#b8860b",background:"#fdf6e3",borderRadius:6,padding:"3px 9px"}}>
+                      <AlertCircle size={12}/>Review — spelling differs
                     </span>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                     <MiniCard name={primary}/>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,flex:"none"}}>
-                      <ArrowLeft size={22} color="var(--accent)" style={{transform:"rotate(180deg)"}}/>
+                      <ArrowLeft size={22} color="var(--accent)"/>
                       <span style={{fontSize:10,color:"var(--mut)",fontWeight:600,whiteSpace:"nowrap"}}>merge into</span>
                     </div>
                     <MiniCard name={other} dim/>
