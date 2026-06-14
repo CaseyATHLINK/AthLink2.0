@@ -137,11 +137,14 @@ def clean_score_with_code(raw):
 def is_race_hdr(cell):
     s = fix_doubled(str(cell or '')).strip().upper()
     return bool(
-        re.match(r'^[RFOQ]\d{1,2}$', s) or
+        re.match(r'^[RFOQ]\d{1,2}$', s) or   # Q1-Q6, F1-F7, O1, R1
         re.match(r'^[FQ]\d{1,2}$', s) or
         re.match(r'^(RACE\s*\d{1,2})$', s) or
-        re.match(r'^\d{1,2}$', s)
+        re.match(r'^\d{1,2}$', s) or
+        re.match(r'^M\d{1,2}$', s) or          # M10 = medal race 10
+        s == 'MR'                               # MR  = medal race
     )
+
 
 def hdr_key(cell):
     return re.sub(r"[\s\n_()/\\']+", '', fix_doubled(str(cell or '')).lower())
@@ -218,7 +221,18 @@ def split_combined_names(cell_value):
         crew = clean_name(person_lines[1]) if len(person_lines) > 1 else ''
         return helm, crew
 
-    # Case 3: no comma, no birth year → wrapped single name
+    # Case 3: no comma, no birth year, but TWO lines that each look like a full
+    # name (a forename + an ALL-CAPS surname). This is the manage2sail / 49er.org
+    # crewed-boat format without DOB, e.g. "Seb MENZIES\nGeorge LEE RUSH".
+    lines = [l.strip() for l in raw.split('\n') if l.strip()]
+    if len(lines) == 2:
+        def looks_like_full_name(s):
+            # has at least one token that is an ALL-CAPS surname (2+ letters)
+            return any(len(t) >= 2 and re.match(r'^[A-ZÀ-ÖØ-Þ\-]+$', t) for t in s.split())
+        if all(looks_like_full_name(l) for l in lines):
+            return clean_name(lines[0]), clean_name(lines[1])
+
+    # Case 4: no comma, no birth year, single line (or unclear) → wrapped single name
     return clean_name(join_wrapped(raw)), ''
 
 # ── sail / nationality ─────────────────────────────────────────────────────
@@ -444,7 +458,7 @@ def parse_table(tbl, fleet_hint=''):
                 next_row = tbl[idx+1]
                 next_non_empty = [str(c).strip() for c in next_row if str(c or '').strip()]
                 import re as _re
-                is_pure_race_row = bool(next_non_empty) and all(_re.match(r'^[RFOQ]\d{1,2}$', c.upper()) for c in next_non_empty)
+                is_pure_race_row = bool(next_non_empty) and all(is_race_hdr(c) for c in next_non_empty)
                 if is_pure_race_row:
                     header_rows = [tbl[idx], tbl[idx+1]]
                     header_end  = idx + 2
