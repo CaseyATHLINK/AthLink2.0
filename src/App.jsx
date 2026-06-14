@@ -1497,9 +1497,30 @@ export default function AthLinkMVP(){
   const[auth,setAuth]=useState(null);
   const[showSignIn,setShowSignIn]=useState(false);
   const[accountOpen,setAccountOpen]=useState(false);
-  const role=auth?.profile?.role||"guest";
-  const canEdit=role==="association";
-  const canEditProfileOf=(nm)=>role==="athlete"&&auth?.profile?.athlete_name&&auth.profile.athlete_name.toLowerCase()===String(nm||"").toLowerCase();
+  // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
+  // Lets Casey edit the platform pre-launch without signing in. Forces full
+  // (association) access. Enable with ?dev=1 in the URL or Ctrl/Cmd+Shift+D;
+  // persists in localStorage. REMOVE / set DEV_VIEW_ENABLED=false at publish.
+  const DEV_VIEW_ENABLED=true;
+  const[devMode,setDevMode]=useState(()=>{
+    try{
+      if(!DEV_VIEW_ENABLED) return false;
+      if(typeof window!=="undefined"&&new URLSearchParams(window.location.search).get("dev")==="1"){localStorage.setItem("athlink_dev","1");return true;}
+      return localStorage.getItem("athlink_dev")==="1";
+    }catch{return false;}
+  });
+  useEffect(()=>{
+    if(!DEV_VIEW_ENABLED) return;
+    const onKey=(e)=>{ if((e.ctrlKey||e.metaKey)&&e.shiftKey&&(e.key==="D"||e.key==="d")){
+      e.preventDefault();
+      setDevMode(d=>{const nv=!d;try{localStorage.setItem("athlink_dev",nv?"1":"0");}catch{};return nv;});
+    }};
+    window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
+  },[]);
+  const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
+  const role=effectiveRole;
+  const canEdit=effectiveRole==="association";
+  const canEditProfileOf=(nm)=>devMode||(effectiveRole==="athlete"&&auth?.profile?.athlete_name&&auth.profile.athlete_name.toLowerCase()===String(nm||"").toLowerCase());
   useEffect(()=>{
     if(!AUTH_BASE) return;
     try{
@@ -2538,6 +2559,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       )}
     </div>
     <nav className="nav">
+      {DEV_VIEW_ENABLED&&devMode&&(
+        <button onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}
+          title="Developer view is ON — click to turn off (or Ctrl/Cmd+Shift+D)"
+          style={{display:"inline-flex",alignItems:"center",gap:5,background:"#7c3aed",color:"#fff",border:0,borderRadius:7,fontWeight:700,fontSize:11,letterSpacing:".04em",padding:"4px 9px",cursor:"pointer"}}>
+          <Pencil size={11}/>DEV
+        </button>
+      )}
       {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Regattas</button>}
       {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>{cls?.short||"Class"} Athletes</button>}
       {auth
