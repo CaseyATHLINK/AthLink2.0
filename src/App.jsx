@@ -634,6 +634,8 @@ function WorldSVGMap({countryData}){
     </div>
   );
 }
+
+
 /* ── SailingGlobe v3 + FootprintModal — self-contained (no Mapbox, no API key) ─
    SailingGlobe props:
      countryData = { ISO2: count }   height = px (default 330)
@@ -867,6 +869,8 @@ function FootprintModal({name,ag,countryCounts,onClose}){
     </div>
   );
 }
+
+
 /* ── IOC country list for dropdown ───────────────────────────────────── */
 const COUNTRIES=[
   {code:"HKG",name:"Hong Kong"},{code:"NZL",name:"New Zealand"},{code:"GBR",name:"Great Britain"},
@@ -2172,83 +2176,82 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
         ? (()=>{const fev=events.find(e=>e.id===view.fromEvent);return fev?<button className="back" onClick={()=>go({name:"event",id:view.fromEvent})}><ArrowLeft size={16}/>{fev.name}</button>:null;})()
         : <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
       }
-      <div className="phead">
-        {(()=>{
-  // compute footprint + overview once, used by both the globe (right) and the strip (below)
-  const countryCounts={};
-  ag.history.forEach(h=>{
-    const country=h.ev.country;
-    if(country){const iso=IOC_ISO[country];if(iso)countryCounts[iso]=(countryCounts[iso]||0)+1;}
-  });
-  const hasFootprint=Object.keys(countryCounts).length>0;
-  if(ag.events>0&&profileSummaries[name]===undefined) fetchFullProfileSummary(name,ag);
-  const summary=profileSummaries[name];
-  return(<>
-    <div className="phead">
-      <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
-      <div style={{flex:1,minWidth:200}}>
-        <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-          <span>{nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}</span>
-          <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalAll(false);setShowSailorCal(true);}}>
-            <Calendar size={13}/>Calendar
-          </button>
-          {isV
-            ? <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:700,color:"#7fe0b0",background:"rgba(46,204,113,.16)",border:"1px solid rgba(46,204,113,.45)",borderRadius:8,padding:"5px 10px",fontFamily:"'Barlow',sans-serif"}}><BadgeCheck size={14}/>Verified</span>
-            : <button className="btn cta" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>setVerified({...verified,[name]:true})}><BadgeCheck size={14}/>Verify this profile</button>}
-        </h1>
-        <div className="pmeta">
-          {nat?<span><Flag size={14}/>{nat}</span>:null}
-          {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
-          {(()=>{
-            const recent=ag.history[0]?.row;
-            if(!recent?.sail||recent.sail==="—") return null;
-            const sailNat=ag.history[0]?.row?.nat||nat;
-            return<span style={{fontWeight:600}}>{sailNat?<>{iocFlag(sailNat)} {sailNat} </>:""}{recent.sail}</span>;
-          })()}
-        </div>
-        <div className="pstats">
-          <div><div className="v disp">{ag.events}</div><div className="k">Regattas</div></div>
-          <div><div className="v disp">{ag.best?"#"+ag.best:"—"}</div><div className="k">Best result</div></div>
-          <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
-          <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
-        </div>
-      </div>
+      {(()=>{
+        // compute footprint + overview once, used by both the globe (right) and the strip (below)
+        const countryCounts={};
+        ag.history.forEach(h=>{
+          const country=h.ev.country;
+          if(country){const iso=IOC_ISO[country];if(iso)countryCounts[iso]=(countryCounts[iso]||0)+1;}
+        });
+        const hasFootprint=Object.keys(countryCounts).length>0;
+        if(ag.events>0&&profileSummaries[name]===undefined) fetchFullProfileSummary(name,ag);
+        const summary=profileSummaries[name];
+        return(<>
+          <div className="phead">
+            <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
+            <div style={{flex:1,minWidth:200}}>
+              <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <span>{nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}</span>
+                <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalAll(false);setShowSailorCal(true);}}>
+                  <Calendar size={13}/>Calendar
+                </button>
+                {isV
+                  ? <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:700,color:"#7fe0b0",background:"rgba(46,204,113,.16)",border:"1px solid rgba(46,204,113,.45)",borderRadius:8,padding:"5px 10px",fontFamily:"'Barlow',sans-serif"}}><BadgeCheck size={14}/>Verified</span>
+                  : <button className="btn cta" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>setVerified({...verified,[name]:true})}><BadgeCheck size={14}/>Verify this profile</button>}
+              </h1>
+              <div className="pmeta">
+                {nat?<span><Flag size={14}/>{nat}</span>:null}
+                {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
+                {(()=>{
+                  const recent=ag.history[0]?.row;
+                  if(!recent?.sail||recent.sail==="—") return null;
+                  const sailNat=ag.history[0]?.row?.nat||nat;
+                  return<span style={{fontWeight:600}}>{sailNat?<>{iocFlag(sailNat)} {sailNat} </>:""}{recent.sail}</span>;
+                })()}
+              </div>
+              <div className="pstats">
+                <div><div className="v disp">{ag.events}</div><div className="k">Regattas</div></div>
+                <div><div className="v disp">{ag.best?"#"+ag.best:"—"}</div><div className="k">Best result</div></div>
+                <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
+                <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
+              </div>
+            </div>
 
-      {/* Competition footprint — right side, click to expand */}
-      {ag.events>0&&hasFootprint&&(
-        <div style={{flex:"0 0 300px",maxWidth:"100%",cursor:"pointer"}} onClick={()=>setFootprintOpen(true)} title="Click to expand">
-          <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 8px",fontSize:11}}><Flag size={12}/>Competition footprint</p>
-          <div style={{position:"relative"}}>
-            <SailingGlobe countryData={countryCounts} height={210}/>
-            <div style={{position:"absolute",top:8,right:10,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
+            {/* Competition footprint — right side, click to expand */}
+            {ag.events>0&&hasFootprint&&(
+              <div style={{flex:"0 0 300px",maxWidth:"100%",cursor:"pointer"}} onClick={()=>setFootprintOpen(true)} title="Click to expand">
+                <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 8px",fontSize:11}}><Flag size={12}/>Competition footprint</p>
+                <div style={{position:"relative"}}>
+                  <SailingGlobe countryData={countryCounts} height={210}/>
+                  <div style={{position:"absolute",top:8,right:10,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
+                </div>
+              </div>
+            )}
+
+            {/* Athlete overview — full width across the blue frame, below everything */}
+            {ag.events>0&&(
+              <div style={{flexBasis:"100%",width:"100%"}}>
+                <div style={{background:"rgba(255,255,255,.1)",borderRadius:10,padding:"12px 16px"}}>
+                  <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 6px",fontSize:11}}><Sparkles size={12}/>Athlete overview</p>
+                  {summary===null
+                    ?<div style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",opacity:.7,display:"flex",alignItems:"center",gap:6}}><Loader2 size={13} className="spin"/>Generating overview…</div>
+                    :summary
+                      ?<p style={{color:"#dce8f8",fontSize:13.5,lineHeight:1.55,margin:0}}>{summary}</p>
+                      :<p style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",margin:0}}>
+                        {profileSummaries[name]===""?"Add ANTHROPIC_API_KEY to Vercel env vars to enable AI overview.":"No data available yet."}
+                      </p>}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
 
-      {/* Athlete overview — full width across the blue frame, below everything */}
-      {ag.events>0&&(
-        <div style={{flexBasis:"100%",width:"100%"}}>
-          <div style={{background:"rgba(255,255,255,.1)",borderRadius:10,padding:"12px 16px"}}>
-            <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 6px",fontSize:11}}><Sparkles size={12}/>Athlete overview</p>
-            {summary===null
-              ?<div style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",opacity:.7,display:"flex",alignItems:"center",gap:6}}><Loader2 size={13} className="spin"/>Generating overview…</div>
-              :summary
-                ?<p style={{color:"#dce8f8",fontSize:13.5,lineHeight:1.55,margin:0}}>{summary}</p>
-                :<p style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",margin:0}}>
-                  {profileSummaries[name]===""?"Add ANTHROPIC_API_KEY to Vercel env vars to enable AI overview.":"No data available yet."}
-                </p>}
-          </div>
-        </div>
-      )}
-    </div>
-
-    {/* expanded footprint popup */}
-    {footprintOpen&&hasFootprint&&(
-      <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)}/>
-    )}
-  </>);
-})()}
-        <div style={{marginTop:22}}>
+          {/* expanded footprint popup */}
+          {footprintOpen&&hasFootprint&&(
+            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)}/>
+          )}
+        </>);
+      })()}
+      <div style={{marginTop:22}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
           <p className="seclabel" style={{margin:0}}><Trophy size={14}/>Result history</p>
           <div className="ai-srch-wrap" style={{flex:1,minWidth:220,maxWidth:420}}>
