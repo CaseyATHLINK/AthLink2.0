@@ -191,6 +191,7 @@ const CLASSES=[
   {id:"29er",    name:"Hong Kong 29er Class Association",      short:"29er"},
   {id:"ilca",    name:"Hong Kong ILCA",                        short:"ILCA"},
   {id:"optimist",name:"Hong Kong Optimist Dinghy Association", short:"Optimist"},
+  {id:"49er",    name:"Hong Kong 49er Class Association",      short:"49er"},
 ];
 
 // Global class colour coding (used by calendar circles)
@@ -778,22 +779,97 @@ function classPie(comps){
   return {background:`conic-gradient(${segs.join(",")})`};
 }
 
-function CalendarBody({events,year,month,setYear,setMonth,viewMode,setViewMode,onPick,eventLabel}){
+function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,setViewMode,onPick,eventLabel}){
   const today=new Date();
   const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const [morph,setMorph]=React.useState(false); // play enlarge animation on enter day view
+  // Scroll refs
+  const yearScrollRef=React.useRef(null);
+  const monthScrollRef=React.useRef(null);
+  // Prevent programmatic scroll from triggering IO update loop
+  const progScrollRef=React.useRef(false);   // true while doing programmatic scroll
+  const fromScrollRef=React.useRef(false);   // true when IO just set year/month
+  const scrollTimerRef=React.useRef(null);
+  // Always-fresh refs for scroll handlers (avoid stale closures)
+  const yrRef=React.useRef(year); yrRef.current=year;
+  const moRef=React.useRef({year,month}); moRef.current={year,month};
 
+  // ── Year view: scroll to current year whenever we enter it
+  React.useEffect(()=>{
+    if(viewMode!=="year"||!yearScrollRef.current) return;
+    const el=yearScrollRef.current.querySelector(`[data-yr="${year}"]`);
+    if(el) el.scrollIntoView({block:"start",behavior:"instant"});
+  },[viewMode,year]); // year dep so < > nav buttons scroll correctly
+
+  // ── Year view: update header year as user scrolls
+  React.useEffect(()=>{
+    if(viewMode!=="year"||!yearScrollRef.current) return;
+    const c=yearScrollRef.current;
+    const onScroll=()=>{
+      const cr=c.getBoundingClientRect();
+      for(const el of c.querySelectorAll("[data-yr]")){
+        if(el.getBoundingClientRect().bottom>cr.top+10){
+          const yr=parseInt(el.dataset.yr);
+          if(!isNaN(yr)&&yr!==yrRef.current) setYear(yr);
+          break;
+        }
+      }
+    };
+    c.addEventListener("scroll",onScroll,{passive:true});
+    return()=>c.removeEventListener("scroll",onScroll);
+  },[viewMode]);
+
+  // ── Month view: scroll to current month when year/month changes from nav/year-click
+  React.useEffect(()=>{
+    if(viewMode!=="month"||!monthScrollRef.current) return;
+    if(fromScrollRef.current){fromScrollRef.current=false;return;} // came from scroll, skip
+    const el=monthScrollRef.current.querySelector(`[data-ym="${year}-${month}"]`);
+    if(el){
+      progScrollRef.current=true;
+      clearTimeout(scrollTimerRef.current);
+      el.scrollIntoView({block:"start",behavior:"smooth"});
+      scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},700);
+    }
+  },[year,month,viewMode]);
+
+  // ── Month view: update header as user scrolls
+  React.useEffect(()=>{
+    if(viewMode!=="month"||!monthScrollRef.current) return;
+    const c=monthScrollRef.current;
+    const onScroll=()=>{
+      if(progScrollRef.current) return;
+      const cr=c.getBoundingClientRect();
+      for(const el of c.querySelectorAll("[data-ym]")){
+        if(el.getBoundingClientRect().bottom>cr.top+50){
+          const [ys,ms]=el.dataset.ym.split("-");
+          const y=parseInt(ys),m=parseInt(ms);
+          const cur=moRef.current;
+          if(!isNaN(y)&&!isNaN(m)&&(y!==cur.year||m!==cur.month)){
+            fromScrollRef.current=true;
+            setYear(y);setMonth(m);
+          }
+          break;
+        }
+      }
+    };
+    c.addEventListener("scroll",onScroll,{passive:true});
+    return()=>c.removeEventListener("scroll",onScroll);
+  },[viewMode]);
+
+  // ── Compute year range (use allEvents so filter changes don't shrink the range)
+  const src=allEvents||events;
+  const evYrs=src.map(e=>parseInt(e.date?.split('/')[2])).filter(Boolean);
+  let lo=year,hi=year;
+  if(evYrs.length){lo=Math.min(lo,...evYrs);hi=Math.max(hi,...evYrs);}
+  lo=Math.min(lo,today.getFullYear())-1; hi=Math.max(hi,today.getFullYear())+1;
+  const yearList=[];for(let y=lo;y<=hi;y++)yearList.push(y);
+
+  // ── YEAR VIEW
   if(viewMode==="year"){
-    const yrs=events.map(e=>parseInt(e.date?.split('/')[2])).filter(Boolean);
-    let lo=year,hi=year;
-    if(yrs.length){lo=Math.min(lo,...yrs);hi=Math.max(hi,...yrs);}
-    lo=Math.min(lo,today.getFullYear())-1; hi=Math.max(hi,today.getFullYear())+1;
-    const years=[];for(let y=lo;y<=hi;y++)years.push(y);
-    const openMonth=(y,mi)=>{setYear(y);setMonth(mi);setMorph(true);setViewMode("month");};
+    const openMonth=(y,mi)=>{setYear(y);setMonth(mi);setViewMode("month");};
     return(
-      <div className="cal-year-scroll">
-        {years.map(y=>(
-          <div key={y} className="cal-year-block">
+      <div className="cal-year-scroll" ref={yearScrollRef}>
+        {yearList.map(y=>(
+          <div key={y} className="cal-year-block" data-yr={y}>
             <div className="cal-year-label">{y}</div>
             <div className="cal-year-grid">
               {MON.map((mn,mi)=>(
@@ -819,28 +895,36 @@ function CalendarBody({events,year,month,setYear,setMonth,viewMode,setViewMode,o
     );
   }
 
-  // ── single-month day view (with enlarge/morph-in animation) ──────────────
-  const grid=buildCalGrid(year,month,events);
+  // ── MONTH VIEW — continuous scroll (Apple Calendar style)
+  // Build all months in range
+  const allMonths=[];
+  for(let y=lo;y<=hi;y++) for(let m=0;m<12;m++) allMonths.push({year:y,month:m});
+
   return(
-    <div className="cal-grid-wrap" key={year+"-"+month} style={morph?{animation:"calMorph .34s cubic-bezier(.22,1,.36,1) both"}:undefined}
-         onAnimationEnd={()=>setMorph(false)}>
-      <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
-      <div className="cal-grid">
-        {grid.flat().map((cell,i)=>{
-          const comps=cell.other?[]:cell.events;
-          const pie=comps.length?classPie(comps):null;
-          return(
-            <div key={i} className={`cal-cell${cell.other?" other-month":""}${cell.today?" today":""}`}>
-              <div className="cal-cell-num" style={pie?{...pie,color:"#fff"}:cell.today?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
-              {comps.map(ev=>(
-                <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>onPick(ev)}>
-                  {eventLabel?eventLabel(ev):ev.name}
+    <div className="cal-month-scroll" ref={monthScrollRef}>
+      {allMonths.map(({year:y,month:m})=>(
+        <div key={`${y}-${m}`} data-ym={`${y}-${m}`} className="cal-month-block">
+          <div className="cal-month-lbl">{MON[m]} {y}</div>
+          <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
+          <div className="cal-grid">
+            {buildCalGrid(y,m,events).flat().map((cell,i)=>{
+              const comps=cell.other?[]:cell.events;
+              const pie=comps.length?classPie(comps):null;
+              const isT=!cell.other&&today.getFullYear()===y&&today.getMonth()===m&&today.getDate()===cell.day;
+              return(
+                <div key={i} className={`cal-cell${cell.other?" other-month":""}${isT?" today":""}`}>
+                  <div className="cal-cell-num" style={pie?{...pie,color:"#fff"}:isT?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
+                  {comps.map(ev=>(
+                    <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>onPick(ev)}>
+                      {eventLabel?eventLabel(ev):ev.name}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1595,14 +1679,14 @@ export default function AthLinkMVP(){
   const[gSearch,setGSearch]=useState("");
   // Calendar
   const[showCalendar,setShowCalendar]=useState(false);
-  const[calCls,setCalCls]=useState("all");
+  const[calClsSet,setCalClsSet]=useState(new Set()); // empty = All
   const[calQ,setCalQ]=useState("");
   const[calYear,setCalYear]=useState(new Date().getFullYear());
   const[calMonth,setCalMonth]=useState(new Date().getMonth()); // 0-indexed
   const[calViewMode,setCalViewMode]=useState("year");
   const[showSailorCal,setShowSailorCal]=useState(false);
   const[sailorCalName,setSailorCalName]=useState("");
-  const[sailorCalAll,setSailorCalAll]=useState(false);
+  const[sailorCalClsSet,setSailorCalClsSet]=useState(new Set());
   const[sailorCalYear,setSailorCalYear]=useState(new Date().getFullYear());
   const[sailorCalMonth,setSailorCalMonth]=useState(new Date().getMonth());
   const[sailorCalViewMode,setSailorCalViewMode]=useState("year");
@@ -2410,8 +2494,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .back:hover{color:var(--accent);}
     .foot{font-size:12px;color:var(--mut);text-align:center;padding:30px 0;}
     .ov{position:fixed;inset:0;background:rgba(16,33,58,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;animation:fade .2s both;}
-    .modal{background:var(--paper);width:100%;max-width:700px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;}
-    .modal.wide{max-width:940px;}
+    .modal{background:var(--paper);width:100%;max-width:800px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;}
+    .modal.wide{max-width:1060px;}
     .mhead{background:var(--navy);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;}
     .mhead h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
     .mhead .x{background:rgba(255,255,255,.12);border:0;color:#fff;width:32px;height:32px;border-radius:8px;cursor:pointer;display:grid;place-items:center;}
@@ -2419,7 +2503,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .mtabs{display:flex;gap:6px;padding:14px 22px 0;}
     .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;background:none;color:var(--mut);padding:9px 14px;border-radius:9px 9px 0 0;cursor:pointer;display:flex;align-items:center;gap:7px;}
     .mtabs button.on{color:var(--navy);background:#fff;border:1px solid var(--line);border-bottom:0;}
-    .mbody{padding:18px 22px 22px;max-height:80vh;overflow-y:auto;}
+    .mbody{padding:20px 26px 26px;max-height:85vh;overflow-y:auto;}
     .prev.ok{background:#d8f0e3;color:#0a6b41;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .prev.err{background:#fbe7e4;color:#a8362a;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .mfoot{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;}
@@ -2466,6 +2550,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .cal-today-btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 13px;font:inherit;font-size:12px;font-weight:600;color:var(--navy);cursor:pointer;transition:.1s;}
     .cal-today-btn:hover{background:var(--sky);}
     .cal-grid-wrap{flex:1;overflow-y:auto;}
+    .cal-month-scroll{flex:1;overflow-y:auto;}
+    .cal-month-block{border-bottom:2px solid var(--line);}
+    .cal-month-lbl{font-family:'Barlow',sans-serif;font-weight:800;font-size:15px;color:var(--navy);padding:8px 12px 6px;position:sticky;top:0;background:var(--paper);z-index:2;border-bottom:1px solid var(--line);}
     .cal-scroll{flex:1;overflow-y:auto;scroll-behavior:smooth;}
     .cal-month-block{border-bottom:8px solid var(--paper);}
     .cal-month-sticky{position:sticky;top:0;z-index:5;background:var(--paper);font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);padding:10px 16px 8px;border-bottom:1px solid var(--line);}
@@ -2592,7 +2679,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div className="wrap">
         <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
           <h1 className="disp" style={{margin:0}}>Hong Kong Sailing</h1>
-          <button className="btn sky" style={{fontSize:13,padding:"7px 13px"}} onClick={()=>{setCalCls("all");setShowCalendar(true);}}>
+          <button className="btn sky" style={{fontSize:13,padding:"7px 13px"}} onClick={()=>{setCalClsSet(new Set());setShowCalendar(true);}}>
             <Calendar size={15}/>Race Calendar
           </button>
         </div>
@@ -2636,7 +2723,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div className="strip"><div className="wrap">
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
           <h1 className="disp">{cls?.name}</h1>
-          <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalCls(portal||"all");setShowCalendar(true);}}>
+          <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalClsSet(portal?new Set([portal]):new Set());setShowCalendar(true);}}>
             <Calendar size={15}/>Race Calendar
           </button>
         </div>
@@ -3361,12 +3448,14 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   {/* ── RACE CALENDAR MODAL ── */}
   {showCalendar&&(()=>{
-    const calEvs=events.filter(ev=>calCls==="all"||ev.cls===calCls);
-    const gridRows=buildCalGrid(calYear,calMonth,calEvs);
-    const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+    const calEvs=events.filter(ev=>calClsSet.size===0||calClsSet.has(ev.cls));
     const prevMonth=()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);};
     const nextMonth=()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);};
     const goToday=()=>{const n=new Date();setCalYear(n.getFullYear());setCalMonth(n.getMonth());};
+    const toggleCls=(id)=>{
+      if(id==="all"){setCalClsSet(new Set());return;}
+      setCalClsSet(prev=>{const s=new Set(prev);s.has(id)?s.delete(id):s.add(id);return s;});
+    };
     return(
       <div className="ov" onClick={()=>setShowCalendar(false)}>
         <div className="cal-modal" onClick={e=>e.stopPropagation()}>
@@ -3384,11 +3473,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
             <div className="cal-filters">
               <div className="seg">
-                {[["all","All"],["29er","29er"],["ilca","ILCA"],["optimist","Optimist"],["49er","49er"]].map(([id,label])=>{
-                  const on=calCls===id;
-                  const col=id==="all"?"var(--navy)":classColor(id);
-                  return <button key={id} className={on?"on":""} onClick={()=>setCalCls(id)}
-                    style={on?{background:col,color:"#fff"}:{color:id==="all"?undefined:classColor(id)}}>{label}</button>;
+                <button className={calClsSet.size===0?"on":""} onClick={()=>toggleCls("all")}
+                  style={calClsSet.size===0?{background:"var(--navy)",color:"#fff"}:{}}>All</button>
+                {CLASSES.map(({id,short})=>{
+                  const on=calClsSet.has(id);
+                  return<button key={id} className={on?"on":""} onClick={()=>toggleCls(id)}
+                    style={on?{background:classColor(id),color:"#fff"}:{color:classColor(id)}}>{short}</button>;
                 })}
               </div>
             </div>
@@ -3396,9 +3486,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <div className="cal-legend" style={{padding:"8px 16px",borderBottom:"1px solid var(--line)",flex:"none"}}>
             <span style={{fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",fontSize:10.5,color:"var(--mut)"}}>Class</span>
             {CLASSES.map(cl=><span key={cl.id} className="lg"><span className="dot" style={{background:classColor(cl.id)}}/>{cl.short}</span>)}
-            <span className="lg"><span className="dot" style={{background:classColor("49er")}}/>49er</span>
           </div>
-          <CalendarBody events={calEvs} year={calYear} month={calMonth}
+          <CalendarBody events={calEvs} allEvents={events} year={calYear} month={calMonth}
             setYear={setCalYear} setMonth={setCalMonth} viewMode={calViewMode} setViewMode={setCalViewMode}
             onPick={(ev)=>{setShowCalendar(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}/>
         </div>
@@ -3408,15 +3497,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   {/* ── SAILOR CALENDAR MODAL ── */}
   {showSailorCal&&(()=>{
-    const sailorEvs=events.filter(ev=>{
-      if(sailorCalAll) return true;
-      return ev.entries.some(e=>e.helm===sailorCalName||e.crew===sailorCalName);
-    });
-    const gridRows=buildCalGrid(sailorCalYear,sailorCalMonth,sailorEvs);
-    const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+    const baseEvs=events.filter(ev=>ev.entries.some(e=>e.helm===sailorCalName||e.crew===sailorCalName));
+    const sailorEvs=baseEvs.filter(ev=>sailorCalClsSet.size===0||sailorCalClsSet.has(ev.cls));
     const prevM=()=>{if(sailorCalMonth===0){setSailorCalMonth(11);setSailorCalYear(y=>y-1);}else setSailorCalMonth(m=>m-1);};
     const nextM=()=>{if(sailorCalMonth===11){setSailorCalMonth(0);setSailorCalYear(y=>y+1);}else setSailorCalMonth(m=>m+1);};
     const goTodayS=()=>{const n=new Date();setSailorCalYear(n.getFullYear());setSailorCalMonth(n.getMonth());};
+    const toggleSCls=(id)=>{
+      if(id==="all"){setSailorCalClsSet(new Set());return;}
+      setSailorCalClsSet(prev=>{const s=new Set(prev);s.has(id)?s.delete(id):s.add(id);return s;});
+    };
     return(
       <div className="ov" onClick={()=>setShowSailorCal(false)}>
         <div className="cal-modal" onClick={e=>e.stopPropagation()}>
@@ -3432,17 +3521,23 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <button onClick={()=>{sailorCalViewMode==="year"?setSailorCalYear(y=>y+1):nextM();}}><ChevronRight size={14}/></button>
             </div>
             <button className="cal-today-btn" onClick={()=>{goTodayS();setSailorCalViewMode("month");}}>Today</button>
-            <div className="seg">
-              <button className={!sailorCalAll?"on":""} onClick={()=>setSailorCalAll(false)}>My regattas</button>
-              <button className={sailorCalAll?"on":""} onClick={()=>setSailorCalAll(true)}>All regattas</button>
+            <div className="cal-filters">
+              <div className="seg">
+                <button className={sailorCalClsSet.size===0?"on":""} onClick={()=>toggleSCls("all")}
+                  style={sailorCalClsSet.size===0?{background:"var(--navy)",color:"#fff"}:{}}>All</button>
+                {CLASSES.map(({id,short})=>{
+                  const on=sailorCalClsSet.has(id);
+                  return<button key={id} className={on?"on":""} onClick={()=>toggleSCls(id)}
+                    style={on?{background:classColor(id),color:"#fff"}:{color:classColor(id)}}>{short}</button>;
+                })}
+              </div>
             </div>
           </div>
           <div className="cal-legend" style={{padding:"8px 16px",borderBottom:"1px solid var(--line)",flex:"none"}}>
             <span style={{fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",fontSize:10.5,color:"var(--mut)"}}>Class</span>
             {CLASSES.map(cl=><span key={cl.id} className="lg"><span className="dot" style={{background:classColor(cl.id)}}/>{cl.short}</span>)}
-            <span className="lg"><span className="dot" style={{background:classColor("49er")}}/>49er</span>
           </div>
-          <CalendarBody events={sailorEvs} year={sailorCalYear} month={sailorCalMonth}
+          <CalendarBody events={sailorEvs} allEvents={baseEvs} year={sailorCalYear} month={sailorCalMonth}
             setYear={setSailorCalYear} setMonth={setSailorCalMonth} viewMode={sailorCalViewMode} setViewMode={setSailorCalViewMode}
             onPick={(ev)=>{setShowSailorCal(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}
             eventLabel={(ev)=>{const e=ev.entries.find(e=>e.helm===sailorCalName||e.crew===sailorCalName);const s=scoreEvent(ev);const row=e?s.rows.find(r=>r.helm===e.helm&&r.sail===e.sail):null;return (row?`#${row.rank} `:"")+ev.name;}}/>
