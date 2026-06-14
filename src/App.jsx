@@ -89,7 +89,7 @@ const CLASSES=[
 ];
 
 // Global class colour coding (used by calendar circles)
-const CLASS_COLOR={"29er":"#e63c32","49er":"#27ae60","ilca":"#0d8ecf","optimist":"#111111"};
+const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#1B4965","optimist":"#3D3D3D"};
 const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||"#5b6b80";
 
 // Strip stray markdown / leading heading / duplicated name from AI summaries
@@ -1646,7 +1646,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     .al-root *{box-sizing:border-box;}
     .disp{font-family:'Barlow',sans-serif;}
     .wrap{max-width:1000px;margin:0 auto;padding:0 22px;}
-    .topbar{background:var(--navy);color:#fff;position:sticky;top:0;z-index:30;}
+    .topbar{background:var(--navy);color:#fff;position:sticky;top:0;z-index:60;}
     .topin{max-width:1000px;margin:0 auto;padding:12px 22px;display:flex;align-items:center;gap:14px;}
     .brand{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;flex:none;}
     .topname{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;}
@@ -1871,6 +1871,8 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
     .cal-modal{background:var(--paper);width:100%;max-width:1020px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;max-height:92vh;display:flex;flex-direction:column;}
     .cal-head{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:10px;flex:none;}
     .cal-head h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:18px;margin:0;flex:1;}
+    .cal-head .x{background:none;border:0;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;display:grid;place-items:center;opacity:.85;transition:.12s;}
+    .cal-head .x:hover{opacity:1;background:rgba(255,255,255,.14);}
     .cal-body{padding:0;overflow-y:auto;flex:1;display:flex;flex-direction:column;}
     .cal-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap;}
     .cal-nav{display:flex;align-items:center;gap:4px;}
@@ -1956,7 +1958,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
       {gSearchOpen&&gSearchResults.length>0&&(
         <div className="gsrch-drop">
           {gSearchResults.map((r,i)=>(
-            <div key={i} className="gsrch-item" onClick={()=>execGSearch(r)}>
+            <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
               <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
                 {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
               </div>
@@ -2129,7 +2131,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
                   </div>
                 </div>
                 {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
-                <span className="cls">{ev.cls}</span>
+                <span className="cls" style={{background:classColor(ev.cls)}}>{(CLASSES.find(c=>c.id===ev.cls)?.short)||ev.cls}</span>
                 <button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>
                 <ChevronRight size={18} color="#9fb2c8"/>
               </div>);
@@ -2415,7 +2417,7 @@ Regular partners: ${partners.join(', ')||'unknown'}.`;
             </div>
             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:7,flex:"none"}}>
               <span className="vchip"><BadgeCheck size={13}/>Verified</span>
-              {(()=>{const cl=CLASSES.find(cl=>cl.id===h.ev.cls);return cl?<span className="cls" style={{fontSize:10,padding:"2px 8px"}}>{cl.short}</span>:null;})()}
+              {(()=>{const cl=CLASSES.find(cl=>cl.id===h.ev.cls);return cl?<span className="cls" style={{fontSize:10,padding:"2px 8px",background:classColor(h.ev.cls)}}>{cl.short}</span>:null;})()}
             </div>
           </div>
         ))}
