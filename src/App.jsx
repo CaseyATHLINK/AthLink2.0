@@ -187,18 +187,55 @@ const META={
   "Mihiro Okada":{nat:"JPN"},"Iwao Yasuda":{nat:"JPN"},
   "Yuto Tsutsumi":{nat:"JPN"},"Taishi Goto":{nat:"JPN"},
 };
+// ── Base classes (used for colour coding) ──
 const CLASSES=[
-  {id:"29er",    name:"Hong Kong 29er Class Association",      short:"29er"},
-  {id:"ilca",    name:"Hong Kong ILCA",                        short:"ILCA"},
-  {id:"optimist",name:"Hong Kong Optimist Dinghy Association", short:"Optimist"},
-  {id:"49er",    name:"Hong Kong 49er Class Association",      short:"49er"},
+  {id:"29er",    short:"29er"},
+  {id:"ilca",    short:"ILCA"},
+  {id:"optimist",short:"Optimist"},
+  {id:"49er",    short:"49er"},
 ];
-const CLASSES_INT=[
-  {id:"29er",    name:"International 29er Class Association",     short:"29er"},
-  {id:"ilca",    name:"International Laser Class Association",    short:"ILCA"},
-  {id:"optimist",name:"International Optimist Dinghy Association",short:"Optimist"},
-  {id:"49er",    name:"International 49er Class Association",     short:"49er"},
+
+// ── Associations: each portal is one association ──
+// scope: "HK" (Hong Kong) or "INT" (International). cls: base class for colour.
+const ASSOCIATIONS=[
+  {id:"hk-29er",     scope:"HK",  cls:"29er",     name:"Hong Kong 29er Class Association"},
+  {id:"hk-ilca",     scope:"HK",  cls:"ilca",     name:"Hong Kong ILCA"},
+  {id:"hk-optimist", scope:"HK",  cls:"optimist", name:"Hong Kong Optimist Dinghy Association"},
+  {id:"int-29er",    scope:"INT", cls:"29er",     name:"International 29er Class Association"},
+  {id:"int-ilca",    scope:"INT", cls:"ilca",     name:"International Laser Class Association"},
+  {id:"int-optimist",scope:"INT", cls:"optimist", name:"International Optimist Dinghy Association"},
+  {id:"int-49er",    scope:"INT", cls:"49er",     name:"International 49er Class Association"},
 ];
+const assocById=id=>ASSOCIATIONS.find(a=>a.id===id);
+const assocName=id=>assocById(id)?.name||id;
+// Association → ISO country flag (HK gets a flag; International gets none)
+const assocFlag=scope=>scope==="HK"?"🇭🇰":"";
+// All associations that own/co-own an event
+const eventAssocs=ev=>[ev.owner,...(ev.collabs||[])].filter(Boolean);
+
+// ── Sub-classes (per-event) for ILCA and Optimist ──
+// ILCA: 3 rigs, varying shades of blue (ILCA 7 darkest → ILCA 4 lightest).
+// Optimist: 3 fleets, ranked high→low performance, black → grey.
+const SUBCLASSES={
+  ilca:[
+    {id:"ilca7", label:"ILCA 7", color:"#16456e"},
+    {id:"ilca6", label:"ILCA 6", color:"#2E78C8"},
+    {id:"ilca4", label:"ILCA 4", color:"#6db3ef"},
+  ],
+  optimist:[
+    {id:"opti",       label:"Optimist",              color:"#2b2b2b"},
+    {id:"opti-int",   label:"Optimist Intermediate", color:"#6b6b6b"},
+    {id:"opti-green", label:"Optimist Green",        color:"#a3a3a3"},
+  ],
+};
+const subById=(cls,id)=>(SUBCLASSES[cls]||[]).find(s=>s.id===id);
+// Nugget label + colour for an event (subclass overrides base class)
+const nuggetFor=(cls,subclass)=>{
+  const s=subById(cls,subclass);
+  if(s) return{label:s.label,color:s.color};
+  const c=CLASSES.find(c=>c.id===cls);
+  return{label:c?.short||cls,color:classColor(cls)};
+};
 
 // Global class colour coding (used by calendar circles)
 // Canonical class colours (refer to them by these names):
@@ -208,6 +245,60 @@ const CLASSES_INT=[
 //   49er  -> "49er green"    (#5FAF4E)
 const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#2E78C8","optimist":"#3D3D3D"};
 const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||"#5b6b80";
+
+// Sub-class picker (ILCA 4/6/7, Optimist fleets) — only shown for ILCA/Optimist events.
+function SubclassPicker({cls,value,onChange}){
+  const opts=SUBCLASSES[cls];
+  if(!opts) return null;
+  return <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
+    {opts.map(s=>{
+      const on=value===s.id;
+      return <button key={s.id} type="button" onClick={()=>onChange(on?null:s.id)}
+        style={{border:"1px solid "+(on?s.color:"var(--line)"),background:on?s.color:"transparent",
+          color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
+          padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{s.label}</button>;
+    })}
+  </div>;
+}
+
+// Collaboration picker — tickbox reveals a type-to-search dropdown of other
+// associations of the same class. Multiple collaborators allowed.
+function CollabPicker({cls,owner,value,onChange}){
+  const[on,setOn]=React.useState((value||[]).length>0);
+  const[q,setQ]=React.useState("");
+  const[focus,setFocus]=React.useState(false);
+  const selected=value||[];
+  const candidates=ASSOCIATIONS.filter(a=>a.cls===cls&&a.id!==owner&&!selected.includes(a.id));
+  const filtered=candidates.filter(a=>!q||a.name.toLowerCase().includes(q.toLowerCase()));
+  return <div style={{marginTop:6}}>
+    <label style={{display:"inline-flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13,color:"var(--navy)",fontWeight:600}}>
+      <input type="checkbox" checked={on} onChange={e=>{setOn(e.target.checked);if(!e.target.checked)onChange([]);}}/>
+      Collaborated with another association
+    </label>
+    {on&&<div style={{marginTop:8}}>
+      {selected.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+        {selected.map(id=><span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"var(--sky)",color:"var(--navy)",borderRadius:7,fontSize:12,fontWeight:600,padding:"4px 8px"}}>
+          {assocName(id)}
+          <button type="button" onClick={()=>onChange(selected.filter(x=>x!==id))} style={{border:0,background:"none",cursor:"pointer",color:"var(--navy)",display:"flex",padding:0}}><X size={12}/></button>
+        </span>)}
+      </div>}
+      <div style={{position:"relative",maxWidth:380}}>
+        <input value={q} onChange={e=>{setQ(e.target.value);setFocus(true);}} onFocus={()=>setFocus(true)}
+          onBlur={()=>setTimeout(()=>setFocus(false),150)}
+          placeholder="Search associations to add…"
+          style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
+        {focus&&filtered.length>0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 28px -12px rgba(0,0,0,.25)",zIndex:20,overflow:"hidden"}}>
+          {filtered.map(a=><div key={a.id} onMouseDown={()=>{onChange([...selected,a.id]);setQ("");}}
+            style={{padding:"9px 12px",cursor:"pointer",fontSize:13,borderBottom:"1px solid #f0f4f8"}}
+            onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"} onMouseLeave={e=>e.currentTarget.style.background="#fff"}>{a.name}</div>)}
+        </div>}
+        {focus&&filtered.length===0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,padding:"9px 12px",fontSize:12.5,color:"var(--mut)",zIndex:20}}>No matching associations</div>}
+      </div>
+      <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>Collaborated events appear in both associations' portals.</p>
+    </div>}
+  </div>;
+}
+
 
 // ── Division (gender / age) helpers — shared by manual import, edit results,
 //    and the results page. Stored as a normalized token set on entry.div. ──
@@ -242,55 +333,7 @@ const cleanAISummary=(t)=>{
   s=s.replace(/^\s*[-•]\s+/gm,"");
   return s.replace(/\n{2,}/g,"\n").trim();
 };
-const REAL_2023={
-  id:"29asia23",name:"2023 29er Asian Championship",cls:"29er",doublehanded:true,
-  venue:"RHKYC",country:"HKG",date:"22/02/2023",discards:2,
-  scoring:"Appendix A",
-  source:"",status:"Provisional",
-  entries:[
-    {sail:"3053",nat:"HKG",div:"Female Junior",helm:"Emily Polson",crew:"Tiffany Mak",races:[1,1,1,2,1,1,1,3,2,5]},
-    {sail:"2751",nat:"HKG",div:"Male",helm:"Cameron Law",crew:"Christopher Lam",races:[2,3,2,1,2,2,2,1,1,4]},
-    {sail:"2840",nat:"HKG",div:"Male",helm:"Jayden Fung",crew:"Jack Dingemans",races:[3,8,6,3,5,6,4,4,3,1]},
-    {sail:"1946",nat:"THA",div:"Male",helm:"Bunyamin Klongsamoot",crew:"Kan Kachachuen",races:[4,4,3,4,8,3,7,5,7,2]},
-    {sail:"2750",nat:"HKG",div:"Female",helm:"Jamie Tsang",crew:"Cheuk Wing Mak",races:[10,2,5,6,3,8,3,2,8,8]},
-    {sail:"2412",nat:"HKG",div:"Mixed",helm:"Ethan Kong",crew:"Aaron Dampier",races:[5,7,"DSQ",5,4,4,5,9,4,9]},
-    {sail:"2943",nat:"HKG",div:"Female",helm:"Bertille Voets",crew:"Tomoe Thiry",races:[8,6,7,7,6,5,9,11,5,3]},
-    {sail:"3016",nat:"AUS",div:"Female Junior",helm:"Piper Attwood",crew:"Annabelle Sampson",races:[7,10,4,8,7,7,6,10,6,7]},
-    {sail:"500",nat:"JPN",div:"Male Junior",helm:"Mihiro Okada",crew:"Iwao Yasuda",races:[9,9,9,9,9,9,10,8,9,10]},
-    {sail:"2752",nat:"HKG",div:"Female Junior",helm:"Yalei Su",crew:"Hei Man Lam",races:["DNF","DNC","DNC","DNC","DNC","DNC",11,6,10,6]},
-    {sail:"2146",nat:"THA",div:"Male",helm:"Chatree Makmul",crew:"Manintorn Leelas",races:[6,5,8,"DNF","DNC","DNC","DNC","DNC","DNC","DNC"]},
-    {sail:"49",nat:"HKG",div:"Male Junior",helm:"Raphael Mak",crew:"William Chen",races:[11,"RET","DNC","DNC","DNC","DNC",8,7,12,"DNF"]},
-    {sail:"2026",nat:"HKG",div:"Male",helm:"Kuan Lik Jun",crew:"Wong Yiu Hoi",races:["DNF","DNC","DNC","DNF","DNC","DNC","UFD",12,11,11]},
-    {sail:"2718",nat:"HKG",div:"Male Junior",helm:"Skyler Lam",crew:"Nathan Hon",races:["DNC","DNC","DNC","DNF","DNC","DNC","DNC","DNC","DNC","DNC"]},
-    {sail:"2165",nat:"HKG",div:"Male",helm:"Yang Yi Zheng",crew:"Jeremy Choy",races:["DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNC"]},
-  ],
-};
-const REAL_2024={
-  id:"29asia24",name:"2024 29er Asian Championship",cls:"29er",doublehanded:true,
-  venue:"RHKYC",country:"HKG",date:"08/02/2024",discards:2,
-  scoring:"Appendix A",
-  source:"",status:"Final",
-  entries:[
-    {sail:"3084",nat:"HKG",div:"Female",helm:"Emily Polson",crew:"Tiffany Mak",races:[1,1,1,1,1,4,2,4,1,1,4,3,1,3]},
-    {sail:"3054",nat:"HKG",div:"Male",helm:"Cameron Law",crew:"Christopher Lam",races:[2,2,2,2,2,3,1,1,3,2,5,2,2,1]},
-    {sail:"3140",nat:"JPN",div:"Male",helm:"Yuto Tsutsumi",crew:"Taishi Goto",races:[4,3,4,5,"DSQ",5,3,2,4,3,"UFD",1,3,2]},
-    {sail:"2750",nat:"HKG",div:"Female",helm:"Jamie Tsang",crew:"Cheuk Wing Mak",races:[5,4,7,3,5,2,4,3,2,4,3,5,4,5]},
-    {sail:"2846",nat:"HKG",div:"Male Junior",helm:"Raphael Mak",crew:"Louis Polson",races:[6,6,3,6,4,1,5,5,5,5,1,4,5,4]},
-    {sail:"2411",nat:"HKG",div:"Mixed",helm:"Chloe Kong",crew:"Ethan Kong",races:[3,5,5,4,7,7,6,8,7,8,6,7,8,"UFD"]},
-    {sail:"2876",nat:"HKG",div:"Male",helm:"Casey Law",crew:"Conrad Lunsden",races:[10,9,11,12,3,6,8,7,6,6,2,6,6,7]},
-    {sail:"2521",nat:"HKG",div:"Mixed",helm:"Ayden Pang",crew:"Tomoe Thiry",races:[7,7,12,7,6,8,7,6,8,7,7,8,7,6]},
-    {sail:"777",nat:"HKG",div:"Female",helm:"Ka Lam Chen",crew:"Ka Yi Chen",races:[12,12,6,11,10,10,10,"DNF",9,"DNF",8,12,10,13]},
-    {sail:"2752",nat:"HKG",div:"Male",helm:"Yan Cheuk Ng",crew:"Cheung Fu Wan",races:[13,10,8,8,9,11,9,"DNC","DNC","DNC","DNF",13,11,8]},
-    {sail:"2222",nat:"HKG",div:"Female Junior",helm:"Kristen Hwang",crew:"Bernice Pang",races:[11,11,9,9,8,9,12,"DNC","DNC","DNC","DNC",10,14,12]},
-    {sail:"287",nat:"HKG",div:"Male Junior",helm:"Sung Chak Kyle Lee",crew:"Shun Yan Rex Law",races:[14,8,10,10,11,13,13,"DNC","DNC","DNC","DNS",16,9,11]},
-    {sail:"2412",nat:"HKG",div:"Male",helm:"Chap Pang Wong",crew:"Sheungching Yau",races:[15,15,15,14,12,14,14,9,"DNF","DNC","DNC",11,13,10]},
-    {sail:"261",nat:"HKG",div:"Female Junior",helm:"Shing Yin Aria Hon",crew:"McCarley Wong",races:[8,13,"DNF",15,13,15,15,"DNF","DNC","DNC","DNC",14,12,9]},
-    {sail:"2613",nat:"HKG",div:"Male Junior",helm:"Jaden Lau",crew:"Kaden Chan",races:[9,14,13,13,14,12,11,"DNF","DNF","DNF","DNF",15,"DNF",14]},
-    {sail:"284",nat:"HKG",div:"Mixed Junior",helm:"Keira Slaughter",crew:"Alfred Fong",races:[16,"DNF","UFD",16,15,16,16,"DNC","DNC","DNC","DNC","DNF","DNF",15]},
-    {sail:"2749",nat:"HKG",div:"Male Junior",helm:"Skyler Lam",crew:"William Chen",races:["DNC","DNC","DNC","DNC","DNC","DNC","DNC","DNF","DNC","DNC","DNC",9,15,16]},
-    {sail:"2655",nat:"HKG",div:"Mixed Junior",helm:"Sebastian Chun",crew:"Kaitlyn Lee",races:[17,"DNF",14,17,"DNF","DNF","DNF","DNC","DNC","DNC","DNC","DNF","DNF","DNF"]},
-  ],
-};
+// Demo events removed — all data now comes from Supabase per association.
 
 /* ── scoring engine ───────────────────────────────────────────────────────
    Rules:
@@ -495,6 +538,8 @@ function dbToApp(ev){
   return{id:ev.id,name:ev.name,cls:ev.class,doublehanded:ev.doublehanded,
     venue:ev.venue||"—",country:ev.country||"",date:ev.date||"—",discards:ev.discards,
     scoring:ev.scoring||"",source:ev.source||"Imported",status:ev.status||"Final",
+    owner:ev.owner||null,collabs:Array.isArray(ev.collabs)?ev.collabs:(ev.collabs?JSON.parse(ev.collabs):[]),
+    subclass:ev.subclass||null,
     entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",nat:e.nat||"",div:e.division||"",
       helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null}))};
 }
@@ -505,6 +550,7 @@ async function saveEventToDb(ev){
     venue:ev.venue||null, country:ev.country||null, date:ev.date||null,
     discards:ev.discards||1, scoring:ev.scoring||null,
     source:ev.source||null, status:ev.status||"Final",
+    owner:ev.owner||null, collabs:ev.collabs||[], subclass:ev.subclass||null,
   };
   const ins=await sbPost("events",evPayload);
   if(!ins?.[0]?.id){
@@ -540,7 +586,7 @@ async function updateEventStatus(evId,status){
 
 /* ── manual form ─────────────────────────────────────────────────────── */
 const defRow=n=>({helm:"",crew:"",sail:"",nat:"",div:"",scores:Array(n).fill("")});
-const emptyForm=()=>({name:"",cls:"29er",club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
+const emptyForm=()=>({name:"",cls:"29er",subclass:null,collabs:[],club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
 
 /* ── HTML (Sailwave) parser ────────────────────────────────────────────────
    Parses the standard Sailwave HTML results format directly in the browser.
@@ -1658,6 +1704,19 @@ export default function AthLinkMVP(){
       }))
     })));
   };
+  // Merge an entire group's names into the primary (first = most regattas)
+  const mergeGroup=async(names)=>{
+    const[primary,...dupes]=names;
+    for(const d of dupes) await mergeAthletes(primary,d);
+  };
+  // Merge all EXACT duplicate groups in one click (word-order/case/space variants).
+  // Near (spelling) groups are left for manual review.
+  const[dismissedDups,setDismissedDups]=useState(new Set()); // groups the user said "don't merge"
+  const mergeAllExact=async()=>{
+    for(const g of visibleDupGroups){
+      if(g.kind==="exact") await mergeGroup(g.names);
+    }
+  };
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
@@ -1729,33 +1788,25 @@ export default function AthLinkMVP(){
   useEffect(()=>{
     (async()=>{
       if(!sbH){
-        console.warn("No Supabase credentials — using hardcoded events");
-        setEvents([REAL_2024,REAL_2023]);
+        console.warn("No Supabase credentials — no events to show");
+        setEvents([]);
         return;
       }
       console.log("Loading from Supabase:", SB_URL);
       const data=await sbGet("events?select=*,entries(*)&order=created_at.desc");
       if(data===null){
-        // Supabase request failed — keep hardcoded so app is usable
         console.error("Supabase load failed — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY");
-        setEvents([REAL_2024,REAL_2023]);
+        setEvents([]);
         return;
       }
-      // Use DB events only — never try to auto-seed hardcoded events
-      // (hardcoded event IDs are not valid UUIDs and would cause 400 errors)
       console.log("Loaded",data.length,"events from Supabase");
-      if(data.length===0){
-        // Empty DB — show hardcoded events in memory only (not saved to DB)
-        console.log("Empty DB — showing hardcoded events in memory");
-        setEvents([REAL_2024,REAL_2023]);
-      }else{
-        setEvents(data.map(dbToApp));
-      }
+      setEvents(data.map(dbToApp));
     })();
   },[]);
 
   /* ── derived ──────────────────────────────────────────────── */
-  const classEvents=useMemo(()=>portal?events.filter(e=>e.cls===portal):[],[events,portal]);
+  const assoc=ASSOCIATIONS.find(a=>a.id===portal);
+  const classEvents=useMemo(()=>portal?events.filter(e=>eventAssocs(e).includes(portal)):[],[events,portal]);
   const homeCountry=useMemo(()=>buildHomeCountry(events),[events]);
   const people=useMemo(()=>{
     const map=new Map();
@@ -1773,18 +1824,70 @@ export default function AthLinkMVP(){
   },[events]);
 
   // ── Duplicate detection ─────────────────────────────────────
-  // Two names are duplicates if their lowercased tokens, when sorted, are identical
-  // e.g. "Emily Polson" ↔ "Polson Emily"
-  const tokenKey=nm=>nm.toLowerCase().split(/\s+/).sort().join(' ');
+  // Normalized form: lowercase, collapse whitespace, sort tokens.
+  //  "casey law" == "law Casey" == "casey  law"  → EXACT duplicates (auto-mergeable)
+  //  "casey law" vs "cassey law"                 → NEAR duplicate (spelling diff → review)
+  const tokenKey=nm=>(nm||"").toLowerCase().trim().split(/\s+/).filter(Boolean).sort().join(" ");
+  const lev=(a,b)=>{
+    const m=a.length,n=b.length;
+    if(!m) return n; if(!n) return m;
+    const d=Array.from({length:m+1},(_,i)=>[i,...Array(n).fill(0)]);
+    for(let j=0;j<=n;j++) d[0][j]=j;
+    for(let i=1;i<=m;i++)for(let j=1;j<=n;j++){
+      d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+    }
+    return d[m][n];
+  };
+  const regCount=nm=>events.filter(ev=>ev.entries.some(e=>e.helm===nm||e.crew===nm)).length;
+  // Associations that own/collab an event this athlete competed in
+  const athleteHostAssocs=nm=>{
+    const s=new Set();
+    events.forEach(ev=>{ if(ev.entries.some(e=>e.helm===nm||e.crew===nm)) eventAssocs(ev).forEach(a=>s.add(a)); });
+    return s;
+  };
+
+  const dupData=useMemo(()=>{
+    // 1. Group by exact normalized key → exact duplicate clusters
+    const byKey={};
+    allPeople.forEach(p=>{const k=tokenKey(p.name);(byKey[k]=byKey[k]||[]).push(p.name);});
+    const exactGroups=Object.values(byKey).filter(g=>g.length>1);
+    const exactKeys=new Set(Object.keys(byKey).filter(k=>byKey[k].length>1));
+
+    // 2. Near-duplicate pairs: distinct normalized keys within small edit distance
+    const keys=Object.keys(byKey);
+    const nearPairs=[];
+    for(let i=0;i<keys.length;i++)for(let j=i+1;j<keys.length;j++){
+      const a=keys[i],b=keys[j];
+      if(a===b) continue;
+      const dist=lev(a,b);
+      const minLen=Math.min(a.length,b.length);
+      // close spelling: distance 1–2 and names are reasonably long
+      if(dist>0&&dist<=2&&minLen>=4){
+        nearPairs.push([byKey[a][0],byKey[b][0]]);
+      }
+    }
+    return{exactGroups,nearPairs};
+  },[allPeople,events]);
+
+  // Build display groups: each is {names:[...], kind:"exact"|"near"} sorted by regatta count desc
   const dupGroups=useMemo(()=>{
-    const groups={};
-    allPeople.forEach(p=>{
-      const k=tokenKey(p.name);
-      if(!groups[k])groups[k]=[];
-      groups[k].push(p);
+    const groups=[];
+    dupData.exactGroups.forEach(names=>{
+      groups.push({names:[...names].sort((a,b)=>regCount(b)-regCount(a)),kind:"exact"});
     });
-    return Object.values(groups).filter(g=>g.length>1);
-  },[allPeople]);
+    dupData.nearPairs.forEach(([a,b])=>{
+      groups.push({names:[a,b].sort((x,y)=>regCount(y)-regCount(x)),kind:"near"});
+    });
+    return groups;
+  },[dupData,events]);
+
+  // Filter to groups the current association is allowed to see (hosted ≥1 of the athletes' events).
+  // In dev mode / no per-association identity, the managing association can see all.
+  const myAssoc=auth?.profile?.class_id||null; // phase-2: real per-association id
+  const visibleDupGroups=useMemo(()=>{
+    if(!myAssoc) return dupGroups; // dev / generic association → show all
+    return dupGroups.filter(g=>g.names.some(nm=>athleteHostAssocs(nm).has(myAssoc)));
+  },[dupGroups,myAssoc,events]);
 
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
@@ -1792,10 +1895,10 @@ export default function AthLinkMVP(){
     return Math.max(...previewEv.entries.map(e=>(e.races||[]).length),1);
   },[previewEv]);
 
-  const cls=CLASSES.find(c=>c.id===portal);
+  const cls=assoc?CLASSES.find(c=>c.id===assoc.cls):null;
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
-  const athleteTitle=isGlobal?"All Athletes":`${cls?.short||""} Athletes`;
+  const athleteTitle=isGlobal?"All Athletes":`${assoc?.name||""} Athletes`;
   const evLoc=ev=>[ev.country].filter(Boolean).join(" · ");
   const manualReady=!!mf.rows.filter(r=>r.helm.trim()).length;
 
@@ -1842,7 +1945,7 @@ Query: "${query}"`;
       const res=await fetch("/api/ai_filter",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt:buildFilterPrompt(evFilter,`Class: ${cls?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
+        body:JSON.stringify({prompt:buildFilterPrompt(evFilter,`Class: ${assoc?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
       });
       const data=await res.json();
       if(!data.ok) throw new Error(data.error||"API error");
@@ -1941,7 +2044,7 @@ Query: "${qq}"`,
       const eventCtx=classEvents.slice(0,5).map(e=>`"${e.name}" (${scoreEvent(e).fleet} boats)`).join(", ");
       const prompt=`You are a sailing results filter suggestion engine. Given a partial query, suggest 4 short filter query completions.
 Return ONLY a JSON array of 4 strings (no markdown). Each string is a complete natural-language filter query.
-Context: class=${cls?.name||"unknown"}, recent events: ${eventCtx}
+Context: class=${assoc?.name||"unknown"}, recent events: ${eventCtx}
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({prompt,max_tokens:200})});
@@ -1979,21 +2082,22 @@ Partial query: "${q}"`;
     if(!q.trim()){setGSearchResults([]);return;}
     const ql=q.toLowerCase();
     const results=[];
-    // Athletes
+    // Athletes — nav into the owner association of one of their events
     allPeople.filter(p=>p.name.toLowerCase().includes(ql)).slice(0,5).forEach(p=>{
-      results.push({type:"athlete",label:p.name,sub:CLASSES.find(cl=>cl.id===p.cls)?.short||"",nav:{type:"profile",cls:p.cls,id:p.name}});
+      const ev=events.find(e=>e.entries.some(en=>en.helm===p.name||en.crew===p.name));
+      results.push({type:"athlete",label:p.name,sub:CLASSES.find(cl=>cl.id===p.cls)?.short||"",nav:{type:"profile",assoc:ev?.owner||null,id:p.name}});
     });
-    // Events
+    // Events — nav into the event's owner association portal
     events.filter(ev=>ev.name.toLowerCase().includes(ql)).slice(0,4).forEach(ev=>{
-      results.push({type:"event",label:ev.name,sub:formatDate(ev.date),nav:{type:"event",cls:ev.cls,id:ev.id}});
+      results.push({type:"event",label:ev.name,sub:formatDate(ev.date),nav:{type:"event",assoc:ev.owner||null,id:ev.id}});
     });
-    // Class portals
-    CLASSES.filter(cl=>cl.name.toLowerCase().includes(ql)||cl.short.toLowerCase().includes(ql)).forEach(cl=>{
-      results.push({type:"portal",label:cl.name,sub:"Class portal",nav:{type:"portal",cls:cl.id}});
+    // Association portals
+    ASSOCIATIONS.filter(a=>a.name.toLowerCase().includes(ql)||a.cls.toLowerCase().includes(ql)).forEach(a=>{
+      results.push({type:"portal",label:a.name,sub:"Association portal",nav:{type:"portal",assoc:a.id}});
     });
     // Nav shortcuts
-    if("home all classes portals hong kong sailing".includes(ql))
-      results.push({type:"nav",label:"Hong Kong Sailing — Home",sub:"Navigate",nav:{type:"home"}});
+    if("home all classes portals sailing associations".includes(ql))
+      results.push({type:"nav",label:"Sailing — Home",sub:"Navigate",nav:{type:"home"}});
     if("all athletes".includes(ql)||ql.includes("athlete"))
       results.push({type:"nav",label:"All Athletes",sub:"Navigate",nav:{type:"athletes"}});
     setGSearchResults(results.slice(0,10));
@@ -2031,7 +2135,7 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
     const n=r.nav;
     if(n.type==="portal"){
       // enterPortal sets portal+view in one batch — no defer needed
-      enterPortal(n.cls);
+      enterPortal(n.assoc);
     } else if(n.type==="home"){
       goHome();
     } else if(n.type==="athletes"){
@@ -2039,15 +2143,15 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
       // Defer view change so portal state settles first
       setTimeout(()=>setView({name:"athletes"}),0);
     } else if(n.type==="profile"){
-      if(n.cls&&n.cls!==portal){
-        setPortal(n.cls);
+      if(n.assoc&&n.assoc!==portal){
+        setPortal(n.assoc);
         setTimeout(()=>setView({name:"profile",id:n.id}),0);
       } else {
         go({name:"profile",id:n.id});
       }
     } else if(n.type==="event"){
-      if(n.cls!==portal){
-        setPortal(n.cls);
+      if(n.assoc&&n.assoc!==portal){
+        setPortal(n.assoc);
         setTimeout(()=>setView({name:"event",id:n.id}),0);
       } else {
         go({name:"event",id:n.id});
@@ -2137,6 +2241,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       entries:ev.entries.map(e=>({...e})),
     };
     setPreviewEv(prev);
+    setMf(f=>({...f,cls:ev.cls,subclass:ev.subclass||null,collabs:ev.collabs||[]}));
     setEditResultsEv(ev.id); // flag: this is an edit, not a new import
     setOpen(true);
     setImportStep("preview");
@@ -2145,11 +2250,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   const saveEditedResults=async(asDraft)=>{
     if(!previewEv||!editResultsEv) return;
     const status=asDraft?"Draft":"Final";
-    const ev={...previewEv,status,country:(previewEv.venue||"").toUpperCase()||previewEv.country||""};
+    const ev={...previewEv,status,country:(previewEv.venue||"").toUpperCase()||previewEv.country||"",
+      subclass:mf.subclass||null,collabs:mf.collabs||[]};
     // Update event metadata
     await sbPatch("events",`id=eq.${editResultsEv}`,{
       name:ev.name,date:ev.date,country:ev.country||null,
-      discards:ev.discards,status,
+      discards:ev.discards,status,subclass:ev.subclass,collabs:ev.collabs,
     });
     // Update entries (delete old, insert new)
     if(sbH){
@@ -2266,6 +2372,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     if(!previewEv) return;
     const status=asDraft?"Draft":"Final";
     const ev={...previewEv,status,
+      cls:assoc?.cls||previewEv.cls,
+      subclass:mf.subclass||previewEv.subclass||null,
+      owner:portal||previewEv.owner||null,
+      collabs:mf.collabs||previewEv.collabs||[],
       venue:previewEv.venue||"",
       country:(previewEv.venue||"").toUpperCase()||previewEv.country||"",
       date:previewEv.date||"",
@@ -2324,8 +2434,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   const buildManualEvent=()=>{
     const rows=mf.rows.filter(r=>r.helm.trim());if(!rows.length)return null;
     const disc=Math.min(mf.discards,Math.max(0,mf.numRaces-1));
-    const sh=mf.cls==="ilca"||mf.cls==="optimist";
-    return{id:"imp_"+Date.now(),name:mf.name||"Imported Regatta",cls:mf.cls||portal||"29er",
+    const evCls=assoc?.cls||mf.cls||"29er";
+    const sh=evCls==="ilca"||evCls==="optimist";
+    return{id:"imp_"+Date.now(),name:mf.name||"Imported Regatta",cls:evCls,
+      subclass:mf.subclass||null,owner:portal||null,collabs:mf.collabs||[],
       doublehanded:!sh&&rows.some(r=>r.crew.trim()),venue:mf.club||"—",country:mf.club||mf.country||"",
       date:mf.date||"",discards:disc,scoring:'Appendix A',
       source:"Manual import",status:"Final",
@@ -2740,8 +2852,24 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     </div>
   )}
 
-  {/* ── HOME: Class portals grid ── */}
-  {!portal&&view.name==="portals"&&(
+  {/* ── HOME: Association portals grid ── */}
+  {!portal&&view.name==="portals"&&(()=>{
+    const matchA=a=>!homeQ||a.name.toLowerCase().includes(homeQ.toLowerCase())||a.cls.toLowerCase().includes(homeQ.toLowerCase());
+    const renderCard=(a,i)=>{
+      const ce=events.filter(e=>eventAssocs(e).includes(a.id));
+      const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
+      const col=classColor(a.cls);
+      const short=CLASSES.find(c=>c.id===a.cls)?.short||a.cls;
+      return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
+        <span className="cls" style={{background:col,marginBottom:8,display:"inline-block"}}>{short}</span>
+        <p className="class-name">{a.name}</p>
+        <div className="class-stats"><div><b>{ce.length}</b>regattas</div><div><b>{cp.size}</b>athletes</div></div>
+        <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(a.id);}}>Enter portal <ChevronRight size={16}/></button>
+      </div>);
+    };
+    const hk=ASSOCIATIONS.filter(a=>a.scope==="HK").filter(matchA);
+    const intl=ASSOCIATIONS.filter(a=>a.scope==="INT").filter(matchA);
+    return(
     <div className="wrap sec">
       <div className="toolbar" style={{marginBottom:18}}>
         <div className="srch">
@@ -2749,47 +2877,25 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <input placeholder="Search class associations…" value={homeQ} onChange={e=>setHomeQ(e.target.value)}/>
         </div>
       </div>
-      {/* ─ Hong Kong Sailing Associations ─ */}
-      <p className="seclabel"><Anchor size={14}/>Hong Kong Sailing Associations</p>
-      <div className="classes-grid" style={{marginBottom:32}}>
-        {CLASSES.filter(c=>!homeQ||c.name.toLowerCase().includes(homeQ.toLowerCase())||c.short.toLowerCase().includes(homeQ.toLowerCase())).map((c,i)=>{
-          const ce=events.filter(e=>e.cls===c.id);
-          const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
-          return(<div className="class-card" key={c.id} style={{animationDelay:`${i*80}ms`}} onClick={()=>enterPortal(c.id)}>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-              <span style={{fontSize:16}}>{isoFlag("HK")}</span>
-              <span className="class-tag">{c.short}</span>
-            </div>
-            <p className="class-name">{c.name}</p>
-            <div className="class-stats"><div><b>{ce.length}</b>regattas</div><div><b>{cp.size}</b>athletes</div></div>
-            <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(c.id);}}>Enter portal <ChevronRight size={16}/></button>
-          </div>);
-        })}
-      </div>
-      {/* ─ International Sailing Associations ─ */}
-      <p className="seclabel"><Globe size={14}/>International Sailing Associations</p>
-      <div className="classes-grid">
-        {CLASSES_INT.filter(c=>!homeQ||c.name.toLowerCase().includes(homeQ.toLowerCase())||c.short.toLowerCase().includes(homeQ.toLowerCase())).map((c,i)=>{
-          const ce=events.filter(e=>e.cls===c.id);
-          const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
-          return(<div className="class-card" key={"int-"+c.id} style={{animationDelay:`${(CLASSES.length+i)*80}ms`}} onClick={()=>enterPortal(c.id)}>
-            <span className="class-tag" style={{marginBottom:6,display:"inline-block"}}>{c.short}</span>
-            <p className="class-name">{c.name}</p>
-            <div className="class-stats"><div><b>{ce.length}</b>regattas</div><div><b>{cp.size}</b>athletes</div></div>
-            <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(c.id);}}>Enter portal <ChevronRight size={16}/></button>
-          </div>);
-        })}
-      </div>
+      {hk.length>0&&<>
+        <p className="seclabel"><span style={{fontSize:16,marginRight:2}}>🇭🇰</span>Hong Kong Sailing Associations</p>
+        <div className="classes-grid" style={{marginBottom:32}}>{hk.map(renderCard)}</div>
+      </>}
+      {intl.length>0&&<>
+        <p className="seclabel"><Globe size={14}/>International Sailing Associations</p>
+        <div className="classes-grid">{intl.map(renderCard)}</div>
+      </>}
     </div>
-  )}
+    );
+  })()}
 
   {/* ── PORTAL: Events list ── */}
   {portal&&view.name==="events"&&(
     <>
       <div className="strip"><div className="wrap">
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
-          <h1 className="disp">{cls?.name}</h1>
-          <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalClsSet(portal?new Set([portal]):new Set());setShowCalendar(true);}}>
+          <h1 className="disp">{assoc?.name}</h1>
+          <button className="btn sky" style={{fontSize:13,padding:"7px 13px",marginTop:4}} onClick={()=>{setCalClsSet(assoc?new Set([assoc.cls]):new Set());setShowCalendar(true);}}>
             <Calendar size={15}/>Race Calendar
           </button>
         </div>
@@ -2897,7 +3003,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   </div>
                 </div>
                 {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
-                <span className="cls" style={{background:classColor(ev.cls)}}>{(CLASSES.find(c=>c.id===ev.cls)?.short)||ev.cls}</span>
+                {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
                 <button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>
                 <ChevronRight size={18} color="#9fb2c8"/>
               </div>);
@@ -2941,8 +3047,14 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <div className="evmeta" style={{marginTop:8}}>
               <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
               <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-              {(()=>{const cl=CLASSES.find(c=>c.id===ev.cls);return <span className="cls" style={{background:classColor(ev.cls)}}>{cl?.short||ev.cls}</span>;})()}
+              {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
             </div>
+            {eventAssocs(ev).length>0&&(
+              <div style={{marginTop:7,fontSize:12.5,color:"var(--mut)",display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                <Anchor size={12} style={{flex:"none"}}/>
+                <span>Organized by <b style={{color:"var(--navy)",fontWeight:600}}>{eventAssocs(ev).map(assocName).join(" & ")}</b></span>
+              </div>
+            )}
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
@@ -3030,7 +3142,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {/* ── ATHLETES (portal + global) ── */}
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:26}}>
-      {portal&&<button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>{cls?.name}</button>}
+      {portal&&<button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>{assoc?.name}</button>}
       <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:4,flexWrap:"wrap"}}>
         <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle} <span style={{fontSize:17,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
         {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
@@ -3052,16 +3164,21 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           const vCount=currentPeople.filter(p=>verified[p.name]).length;
           const counts={all:currentPeople.length,verified:vCount,unverified:currentPeople.length-vCount};
           const tabs=["all","verified","unverified"];
-          if(canEdit&&dupGroups.length>0) tabs.push("duplicates");
+          if(canEdit&&visibleDupGroups.length>0) tabs.push("duplicates");
           return tabs.map(f=>(
             <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
               <span style={{display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15}}>
                 <span>{f[0].toUpperCase()+f.slice(1)}</span>
-                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?dupGroups.length:counts[f]}</span>
+                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:counts[f]}</span>
               </span>
             </button>
           ));
         })()}</div>
+        {canEdit&&filter==="duplicates"&&visibleDupGroups.some(g=>g.kind==="exact")&&(
+          <button className="btn cta" style={{fontSize:13,padding:"7px 13px",whiteSpace:"nowrap"}} onClick={()=>{mergeAllExact();}}>
+            <Users size={14}/>Merge all
+          </button>
+        )}
       </div>
       {athleteSmart&&(
         <div className="filter-chip" style={{marginBottom:14}}>
@@ -3071,44 +3188,61 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       )}
       {filter==="duplicates"&&canEdit&&(
         <div>
-          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Profiles with names that appear to be the same person in a different order. Merge to combine their regatta history.</p>
-          {dupGroups.map((group,gi)=>{
-            const sorted=[...group].sort((a,b)=>{
-              const ea=events.filter(ev=>ev.entries.some(e=>e.helm===a.name||e.crew===a.name)).length;
-              const eb=events.filter(ev=>ev.entries.some(e=>e.helm===b.name||e.crew===b.name)).length;
-              return eb-ea;
-            });
-            const primary=sorted[0];
-            const dupes=sorted.slice(1);
-            return(
-              <div key={gi} style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
-                <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
-                  <div style={{flex:1,minWidth:200}}>
-                    <div style={{fontSize:12,color:"var(--mut)",fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",marginBottom:6}}>Keep (primary)</div>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <div className="av" style={{background:avatarColor(primary.name),width:32,height:32,fontSize:12}}>{initials(primary.name)}</div>
-                      <span style={{fontWeight:700,fontSize:14,color:"var(--navy)"}}>{primary.name}</span>
-                      <span style={{fontSize:12,color:"var(--mut)"}}>({events.filter(ev=>ev.entries.some(e=>e.helm===primary.name||e.crew===primary.name)).length} events)</span>
+          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Possible duplicate profiles. <b style={{color:"var(--navy)"}}>Exact</b> matches differ only by word order, capitals or spacing — safe to merge. <b style={{color:"#b8860b"}}>Review</b> matches differ in spelling and need a human check. Merging keeps the profile with more regattas (left) and moves the other's results into it.</p>
+          {(()=>{
+            const shown=visibleDupGroups.filter(g=>!dismissedDups.has(g.names.join("|")));
+            if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No duplicates to review.</p>;
+            const MiniCard=({name,dim})=>{
+              const ag=aggregate(name,events);
+              const nat=athleteNat(name,events);
+              return(
+                <div className="acard" style={{flex:1,minWidth:0,opacity:dim?.75:1,cursor:"pointer"}} onClick={()=>go({name:"profile",id:name})}>
+                  <div className="achead">
+                    <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
+                    <div style={{minWidth:0}}>
+                      <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {name}</div>
+                      <div className="cn" style={{marginTop:2}}>{nat?(ag.events>1?"Multi-event":""):""}</div>
                     </div>
+                    <span style={{marginLeft:"auto",display:"flex",alignItems:"center"}}><VerifyBadge verified={verified[name]} size={18}/></span>
                   </div>
-                  <div style={{flex:1,minWidth:200}}>
-                    <div style={{fontSize:12,color:"var(--mut)",fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",marginBottom:6}}>Merge into primary</div>
-                    {dupes.map(d=>(
-                      <div key={d.name} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                        <div className="av" style={{background:avatarColor(d.name),width:32,height:32,fontSize:12,opacity:.7}}>{initials(d.name)}</div>
-                        <span style={{fontSize:14,color:"var(--mut)"}}>{d.name}</span>
-                        <span style={{fontSize:12,color:"var(--mut)"}}>({events.filter(ev=>ev.entries.some(e=>e.helm===d.name||e.crew===d.name)).length} events)</span>
-                        <button className="btn cta" style={{fontSize:11,padding:"4px 10px",marginLeft:"auto"}}
-                          onClick={()=>{dupes.forEach(dup=>mergeAthletes(primary.name,dup.name));setFilter("all");}}>
-                          Merge
-                        </button>
-                      </div>
-                    ))}
+                  <div className="acstat">
+                    <div><b>{ag.events}</b>regattas</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            };
+            return shown.map((g,gi)=>{
+              const key=g.names.join("|");
+              const primary=g.names[0];      // most regattas → left
+              const other=g.names[g.names.length-1]; // least regattas → right
+              return(
+                <div key={key} style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:"16px",marginBottom:14}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
+                    <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",
+                      color:g.kind==="exact"?"#0a7d4a":"#b8860b",background:g.kind==="exact"?"#e7f7ef":"#fdf6e3",borderRadius:6,padding:"3px 9px"}}>
+                      {g.kind==="exact"?<><CheckCircle size={12}/>Exact match</>:<><AlertCircle size={12}/>Review — spelling differs</>}
+                    </span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                    <MiniCard name={primary}/>
+                    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,flex:"none"}}>
+                      <ArrowLeft size={22} color="var(--accent)" style={{transform:"rotate(180deg)"}}/>
+                      <span style={{fontSize:10,color:"var(--mut)",fontWeight:600,whiteSpace:"nowrap"}}>merge into</span>
+                    </div>
+                    <MiniCard name={other} dim/>
+                  </div>
+                  <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+                    <button className="btn ghost" style={{fontSize:13,padding:"6px 14px"}}
+                      onClick={()=>setDismissedDups(prev=>{const s=new Set(prev);s.add(key);return s;})}>Don't merge</button>
+                    <button className="btn cta" style={{fontSize:13,padding:"6px 14px"}}
+                      onClick={()=>{mergeGroup(g.names);setDismissedDups(prev=>{const s=new Set(prev);s.add(key);return s;});}}>
+                      <Users size={14}/>Merge
+                    </button>
+                  </div>
+                </div>
+              );
+            });
+          })()}
         </div>
       )}
       {filter!=="duplicates"&&(()=>{
@@ -3373,16 +3507,17 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
             {tab==="manual"&&(<>
+              {(()=>{const evCls=assoc?.cls||mf.cls;return(<>
               <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:10,flexWrap:"wrap"}}>
-                <div>
-                  <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class</label>
-                  <ClassPicker value={mf.cls} onChange={v=>updMeta("cls",v)}/>
-                </div>
                 <div style={{flex:1,minWidth:200}}>
                   <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Event name</label>
                   <input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="2025 29er Asian Championship" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
                 </div>
               </div>
+              {SUBCLASSES[evCls]&&<div style={{marginBottom:12}}>
+                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Class type</label>
+                <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
+              </div>}
               {/* Host country, date and discards on one row */}
               <div className="meta-grid three" style={{marginBottom:14}}>
                 <div><label>Host Country</label><CountrySelect value={mf.club||""} onChange={v=>updMeta("club",v)}/></div>
@@ -3392,6 +3527,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 </div>
                 <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
               </div>
+              <CollabPicker cls={evCls} owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              </>);})()}
               <div className="race-ctrl">
                 <span>Number of races</span>
                 <div className="stepper">
@@ -3404,7 +3541,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 <table className="rtable">
                   <thead><tr>
                     <th className="l" style={{minWidth:110}}>Helm Name</th>
-                    {!(mf.cls==="ilca"||mf.cls==="optimist")&&<th className="l" style={{minWidth:110}}>Crew Name</th>}
+                    {!((assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist")&&<th className="l" style={{minWidth:110}}>Crew Name</th>}
                     <th style={{minWidth:46}}>Nat</th>
                     <th style={{minWidth:46}}>Sail</th>
                     <th style={{minWidth:140}}>Div</th>
@@ -3417,10 +3554,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                     {mf.rows.map((row,i)=>(
                       <tr key={i}>
                         <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Helm name"/></td>
-                        {!(mf.cls==="ilca"||mf.cls==="optimist")&&<td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>}
+                        {!((assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist")&&<td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>}
                         <td><NatInput value={row.nat||""} onChange={v=>updRow(i,"nat",v)}/></td>
                         <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="···" style={{textAlign:"center"}}/></td>
-                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)} noMix={mf.cls==="ilca"||mf.cls==="optimist"}/></td>
+                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)} noMix={(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist"}/></td>
                         {Array.from({length:mf.numRaces}).map((_,j)=>(
                           <td key={j}><input value={row.scores[j]||""} onChange={e=>updScore(i,j,e.target.value)} placeholder="–" style={{textAlign:"center"}}/></td>
                         ))}
@@ -3485,6 +3622,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updPMeta("venue",v)}/></div>
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
+            {(()=>{const evCls=assoc?.cls||previewEv.cls;return(<>
+              {SUBCLASSES[evCls]&&<div style={{marginBottom:10}}>
+                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Class type</label>
+                <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
+              </div>}
+              <div style={{marginBottom:10}}>
+                <CollabPicker cls={evCls} owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              </div>
+            </>);})()}
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}
             <div className="preview-table-wrap">
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12.5px",minWidth:560}}>
@@ -3599,7 +3745,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           </div>
           <CalendarBody events={calEvs} allEvents={events} year={calYear} month={calMonth}
             setYear={setCalYear} setMonth={setCalMonth} viewMode={calViewMode} setViewMode={setCalViewMode}
-            onPick={(ev)=>{setShowCalendar(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}/>
+            onPick={(ev)=>{setShowCalendar(false);setPortal(ev.owner||null);go({name:"event",id:ev.id});}}/>
         </div>
       </div>
     );
@@ -3649,7 +3795,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           </div>
           <CalendarBody events={sailorEvs} allEvents={baseEvs} year={sailorCalYear} month={sailorCalMonth}
             setYear={setSailorCalYear} setMonth={setSailorCalMonth} viewMode={sailorCalViewMode} setViewMode={setSailorCalViewMode}
-            onPick={(ev)=>{setShowSailorCal(false);setPortal(ev.cls);go({name:"event",id:ev.id});}}
+            onPick={(ev)=>{setShowSailorCal(false);setPortal(ev.owner||null);go({name:"event",id:ev.id});}}
             eventLabel={(ev)=>{const e=ev.entries.find(e=>e.helm===sailorCalName||e.crew===sailorCalName);const s=scoreEvent(ev);const row=e?s.rows.find(r=>r.helm===e.helm&&r.sail===e.sail):null;return (row?`#${row.rank} `:"")+ev.name;}}/>
         </div>
       </div>
