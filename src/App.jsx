@@ -412,21 +412,36 @@ function scorePreview(ev){
   return scoreEvent(clean);
 }
 
+// ── Canonical name key — collapses case, accents, hyphens, punctuation & word
+//    order. Two names sharing a canon key are treated as the SAME athlete.
+function canonName(nm){
+  let s=(nm||"").toLowerCase();
+  s=s.normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  s=s.replace(/ø/g,"o").replace(/ł/g,"l").replace(/đ/g,"d").replace(/ß/g,"ss").replace(/æ/g,"ae").replace(/œ/g,"oe").replace(/þ/g,"th");
+  s=s.replace(/-/g," ").replace(/[^a-z0-9\s]/g," ");
+  return s.trim().split(/\s+/).filter(Boolean).sort().join(" ");
+}
+// Stable identity for an event (to detect duplicate imports of the same comp).
+function eventKey(ev){
+  return `${(ev.name||"").trim().toLowerCase()}|${(ev.date||"").trim()}|${ev.cls||""}|${ev.subclass||""}`;
+}
+
 function aggregate(name,evList){
   const history=[];let wins=0,podiums=0,best=Infinity;
+  const target=canonName(name);
   const seenComp=new Set(); // dedupe identical competition rows (duplicate imports)
   for(const ev of evList){
     if(ev.status==="Draft") continue;
-    const e=ev.entries.find(x=>x.helm===name||x.crew===name);
+    const e=ev.entries.find(x=>canonName(x.helm)===target||canonName(x.crew)===target);
     if(!e) continue;
     const s=scoreEvent(ev);
     const row=s.rows.find(r=>r.helm===e.helm&&r.crew===e.crew&&r.sail===e.sail);
     if(!row) continue;
-    // Signature: same event name+date, same finishing line for this athlete → same result.
-    const sig=`${(ev.name||"").trim().toLowerCase()}|${ev.date||""}|${e.sail||""}|${row.rank}|${row.net}|${(row.races||[]).join(",")}`;
+    // Signature: same competition + same finishing line for this athlete → same result.
+    const sig=`${eventKey(ev)}|${e.sail||""}|${row.rank}|${row.net}|${(row.races||[]).join(",")}`;
     if(seenComp.has(sig)) continue;
     seenComp.add(sig);
-    const role=e.helm===name?"Helm":"Crew";
+    const role=canonName(e.helm)===target?"Helm":"Crew";
     const partner=role==="Helm"?e.crew:e.helm;
     row.races.forEach(c=>{if(c===1) wins++;});
     if(row.rank<=3) podiums++;
@@ -849,7 +864,8 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
   const monthScrollRef=React.useRef(null);
   // Prevent programmatic scroll from triggering IO update loop
   const progScrollRef=React.useRef(false);   // true while doing programmatic scroll
-  const fromScrollRef=React.useRef(false);   // true when IO just set year/month
+  const fromScrollRef=React.useRef(false);   // (legacy) true when IO just set year/month
+  const navTargetRef=React.useRef(true);     // true when a nav button / year-click set the target → scroll to it
   const scrollTimerRef=React.useRef(null);
   // Always-fresh refs for scroll handlers (avoid stale closures)
   const yrRef=React.useRef(year); yrRef.current=year;
@@ -886,39 +902,46 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
     return()=>c.removeEventListener("scroll",onScroll);
   },[viewMode]);
 
-  // ── Month view: scroll to current month when year/month changes from nav/year-click
+  // ── Month view: scroll to a month ONLY when the change came from a nav button
+  //    or the year picker (navTargetRef), never from the user's own scrolling.
   React.useEffect(()=>{
     if(viewMode!=="month"||!monthScrollRef.current) return;
-    if(fromScrollRef.current){fromScrollRef.current=false;return;} // came from scroll, skip
+    if(!navTargetRef.current){navTargetRef.current=true;return;} // change came from scrolling → skip, re-arm
     const el=monthScrollRef.current.querySelector(`[data-ym="${year}-${month}"]`);
     if(el){
       progScrollRef.current=true;
       clearTimeout(scrollTimerRef.current);
       el.scrollIntoView({block:"start",behavior:"instant"});
-      scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},200);
+      scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},250);
     }
   },[year,month,viewMode]);
 
-  // ── Month view: update header as user scrolls
+  // ── Month view: update the header as the user scrolls (rAF-throttled, read-only).
   React.useEffect(()=>{
     if(viewMode!=="month"||!monthScrollRef.current) return;
     const c=monthScrollRef.current;
-    const onScroll=()=>{
-      if(progScrollRef.current) return;
+    let ticking=false;
+    const read=()=>{
+      ticking=false;
+      if(progScrollRef.current) return;            // ignore our own programmatic scroll
       const cr=c.getBoundingClientRect();
+      const anchor=cr.top+8;
+      let pick=null;
       for(const el of c.querySelectorAll("[data-ym]")){
-        if(el.getBoundingClientRect().bottom>cr.top+50){
-          const [ys,ms]=el.dataset.ym.split("-");
-          const y=parseInt(ys),m=parseInt(ms);
-          const cur=moRef.current;
-          if(!isNaN(y)&&!isNaN(m)&&(y!==cur.year||m!==cur.month)){
-            fromScrollRef.current=true;
-            setYear(y);setMonth(m);
-          }
-          break;
-        }
+        const r=el.getBoundingClientRect();
+        if(r.top<=anchor&&r.bottom>anchor){pick=el;break;}
+        if(r.top>anchor){pick=pick||el;break;}     // fallback: first below the anchor
+      }
+      if(!pick) return;
+      const [ys,ms]=pick.dataset.ym.split("-");
+      const y=parseInt(ys),m=parseInt(ms);
+      const cur=moRef.current;
+      if(!isNaN(y)&&!isNaN(m)&&(y!==cur.year||m!==cur.month)){
+        navTargetRef.current=false;                // header update from scroll, don't re-scroll
+        setYear(y);setMonth(m);
       }
     };
+    const onScroll=()=>{ if(!ticking){ticking=true;requestAnimationFrame(read);} };
     c.addEventListener("scroll",onScroll,{passive:true});
     return()=>c.removeEventListener("scroll",onScroll);
   },[viewMode]);
@@ -1724,12 +1747,11 @@ export default function AthLinkMVP(){
       return{...ev,entries};
     }));
   };
-  // Merge an entire group's names into the primary (first = most regattas)
+  // Merge an entire group's names into the primary (first = most competitions)
   const mergeGroup=async(names)=>{
     const[primary,...dupes]=names;
     for(const d of dupes) await mergeAthletes(primary,d);
   };
-  const[dismissedDups,setDismissedDups]=useState(new Set()); // near groups the user said "don't merge"
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
@@ -1820,122 +1842,120 @@ export default function AthLinkMVP(){
   /* ── derived ──────────────────────────────────────────────── */
   const isClassPortal=typeof portal==="string"&&portal.startsWith("class:");
   const portalCls=isClassPortal?portal.slice(6):null; // base class id for a class portal
-  // Editing is disabled in global class portals (read-only aggregation).
-  const canEdit=canEditRole&&!isClassPortal;
+  // Dev mode can edit everything. Otherwise associations edit their own portals
+  // (not the read-only global class portals).
+  const canEdit=devMode||(canEditRole&&!isClassPortal);
   const assoc=ASSOCIATIONS.find(a=>a.id===portal);
+  // Collapse duplicate imports of the same competition (same name+date+class+
+  // subclass), keeping the row with the most entries. Non-destructive (display).
+  const dedupEvents=list=>{
+    const byKey=new Map();
+    for(const ev of list){
+      const k=eventKey(ev);
+      const cur=byKey.get(k);
+      if(!cur||(ev.entries?.length||0)>(cur.entries?.length||0)) byKey.set(k,ev);
+    }
+    return[...byKey.values()];
+  };
   const classEvents=useMemo(()=>{
     if(!portal) return [];
-    if(isClassPortal) return events.filter(e=>e.cls===portalCls);   // global class portal
-    return events.filter(e=>eventAssocs(e).includes(portal));        // association portal
+    const scoped=isClassPortal
+      ? events.filter(e=>e.cls===portalCls)            // global class portal
+      : events.filter(e=>eventAssocs(e).includes(portal)); // association portal
+    return dedupEvents(scoped);
   },[events,portal,isClassPortal,portalCls]);
   const homeCountry=useMemo(()=>buildHomeCountry(events),[events]);
-  const people=useMemo(()=>{
-    const map=new Map();
-    classEvents.forEach(ev=>ev.entries.forEach(e=>{
-      [e.helm,e.crew].forEach(nm=>{if(nm&&!map.has(nm))map.set(nm,{name:nm,cls:ev.cls});});
-    }));
-    return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
-  },[classEvents]);
-  const allPeople=useMemo(()=>{
-    const map=new Map();
-    events.forEach(ev=>ev.entries.forEach(e=>{
-      [e.helm,e.crew].forEach(nm=>{if(nm&&!map.has(nm))map.set(nm,{name:nm,cls:ev.cls});});
-    }));
-    return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
+  // Pick the best display variant for a canonical group: the raw name that
+  // appears in the most events (ties → the more "normal" mixed-case spelling).
+  const displayNameFor=useMemo(()=>{
+    const counts={};                  // canonKey -> {rawName: eventCount}
+    events.forEach(ev=>{
+      const seen=new Set();
+      ev.entries.forEach(e=>[e.helm,e.crew].forEach(nm=>{
+        if(!nm) return; const k=canonName(nm); if(!k) return;
+        const id=k+"|"+nm; if(seen.has(id)) return; seen.add(id);
+        (counts[k]=counts[k]||{})[nm]=(counts[k]?.[nm]||0)+1;
+      }));
+    });
+    const best={};
+    Object.entries(counts).forEach(([k,variants])=>{
+      best[k]=Object.entries(variants).sort((a,b)=>{
+        if(b[1]!==a[1]) return b[1]-a[1];               // most events first
+        const am=/[a-z]/.test(a[0])&&/[A-Z]/.test(a[0]); // prefer mixed-case
+        const bm=/[a-z]/.test(b[0])&&/[A-Z]/.test(b[0]);
+        if(am!==bm) return am?-1:1;
+        return a[0].localeCompare(b[0]);
+      })[0][0];
+    });
+    return k=>best[k]||null;
   },[events]);
+  const dispName=nm=>displayNameFor(canonName(nm))||nm;
 
-  // ── Duplicate detection ─────────────────────────────────────
-  // Canonical key collapses: case, accents/diacritics, hyphens, parentheses &
-  // punctuation, and word order. Names sharing a canonical key are the SAME
-  // person (auto-merge, no review). Keys differing by 1–2 characters are NEAR
-  // duplicates (spelling diff → review). 3+ char differences are NOT duplicates.
-  const canon=nm=>{
-    let s=(nm||"").toLowerCase();
-    s=s.normalize("NFD").replace(/[\u0300-\u036f]/g,""); // strip accents
-    s=s.replace(/ø/g,"o").replace(/ł/g,"l").replace(/đ/g,"d").replace(/ß/g,"ss").replace(/æ/g,"ae").replace(/œ/g,"oe").replace(/þ/g,"th");
-    s=s.replace(/-/g," ");                 // hyphens → spaces
-    s=s.replace(/[^a-z0-9\s]/g," ");       // strip parens, dots, other punctuation
-    return s.trim().split(/\s+/).filter(Boolean).sort().join(" ");
+  // Build the (deduped) athlete list for a set of events — one entry per
+  // canonical identity, shown under its best display name. Non-destructive.
+  const buildPeople=evs=>{
+    const map=new Map();              // canonKey -> {name, cls}
+    evs.forEach(ev=>ev.entries.forEach(e=>{
+      [e.helm,e.crew].forEach(nm=>{
+        if(!nm) return; const k=canonName(nm); if(!k||map.has(k)) return;
+        map.set(k,{name:displayNameFor(k)||nm,cls:ev.cls});
+      });
+    }));
+    return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
   };
+  const people=useMemo(()=>buildPeople(classEvents),[classEvents,displayNameFor]);
+  const allPeople=useMemo(()=>buildPeople(events),[events,displayNameFor]);
+
+  // ── Duplicate detection (review pile) ───────────────────────
+  // Exact canonical matches (word order / case / accents / hyphens / punctuation)
+  // are ALREADY collapsed in every view via displayNameFor — non-destructive, no
+  // DB writes. The Duplicates tab only surfaces NEAR matches (spelling differs by
+  // 1–2 chars) which a human must confirm. 3+ char differences are not shown.
   const lev=(a,b)=>{
     const m=a.length,n=b.length;
     if(!m) return n; if(!n) return m;
     let prevRow=Array.from({length:n+1},(_,j)=>j);
     for(let i=1;i<=m;i++){
       const cur=[i];
-      for(let j=1;j<=n;j++){
-        cur[j]=Math.min(prevRow[j]+1,cur[j-1]+1,prevRow[j-1]+(a[i-1]===b[j-1]?0:1));
-      }
+      for(let j=1;j<=n;j++) cur[j]=Math.min(prevRow[j]+1,cur[j-1]+1,prevRow[j-1]+(a[i-1]===b[j-1]?0:1));
       prevRow=cur;
     }
     return prevRow[n];
   };
-  const regCount=nm=>events.filter(ev=>ev.entries.some(e=>e.helm===nm||e.crew===nm)).length;
+  const regCount=nm=>{const t=canonName(nm);return events.filter(ev=>ev.entries.some(e=>canonName(e.helm)===t||canonName(e.crew)===t)).length;};
   const athleteHostAssocs=nm=>{
-    const s=new Set();
-    events.forEach(ev=>{ if(ev.entries.some(e=>e.helm===nm||e.crew===nm)) eventAssocs(ev).forEach(a=>s.add(a)); });
+    const t=canonName(nm),s=new Set();
+    events.forEach(ev=>{ if(ev.entries.some(e=>canonName(e.helm)===t||canonName(e.crew)===t)) eventAssocs(ev).forEach(a=>s.add(a)); });
     return s;
   };
 
-  const dupData=useMemo(()=>{
-    // 1. Group by canonical key → EXACT duplicate clusters (auto-mergeable)
-    const byKey={};
-    allPeople.forEach(p=>{const k=canon(p.name);if(!k)return;(byKey[k]=byKey[k]||[]).push(p.name);});
-    const exactGroups=Object.values(byKey).filter(g=>g.length>1);
-
-    // 2. NEAR pairs: distinct canonical keys within edit distance 1–2.
-    //    Length pre-filter keeps this fast even with thousands of names.
-    const keys=Object.keys(byKey);
-    const nearPairs=[];
+  const dupGroups=useMemo(()=>{
+    // distinct canonical keys (already display-deduped) → find near neighbours
+    const keys=[...new Set(allPeople.map(p=>canonName(p.name)).filter(Boolean))];
+    const groups=[];
     for(let i=0;i<keys.length;i++){
       const a=keys[i];
       for(let j=i+1;j<keys.length;j++){
         const b=keys[j];
-        if(Math.abs(a.length-b.length)>2) continue;      // cheap reject
-        if(Math.min(a.length,b.length)<4) continue;       // too short to trust
+        if(Math.abs(a.length-b.length)>2) continue;
+        if(Math.min(a.length,b.length)<4) continue;
         const dist=lev(a,b);
-        if(dist>0&&dist<=2) nearPairs.push([byKey[a][0],byKey[b][0]]);
+        if(dist>0&&dist<=2){
+          const na=displayNameFor(a),nb=displayNameFor(b);
+          if(na&&nb) groups.push({names:[na,nb].sort((x,y)=>regCount(y)-regCount(x)),kind:"near",key:[a,b].sort().join("~")});
+        }
       }
     }
-    return{exactGroups,nearPairs};
-  },[allPeople,events]);
-
-  // Display groups for the review pile (NEAR only — exact ones auto-merge below).
-  const dupGroups=useMemo(()=>{
-    const groups=[];
-    dupData.nearPairs.forEach(([a,b])=>{
-      groups.push({names:[a,b].sort((x,y)=>regCount(y)-regCount(x)),kind:"near"});
-    });
     return groups;
-  },[dupData,events]);
+  },[allPeople,displayNameFor,events]);
 
-  // Per-association visibility (phase-2 identity). Dev/generic association → all.
   const myAssoc=auth?.profile?.class_id||null;
+  const[dismissedDups2,setDismissedDups2]=useState(new Set()); // keys the user resolved this session
   const visibleDupGroups=useMemo(()=>{
-    if(!myAssoc) return dupGroups;
-    return dupGroups.filter(g=>g.names.some(nm=>athleteHostAssocs(nm).has(myAssoc)));
-  },[dupGroups,myAssoc,events]);
-
-  // ── Auto-merge exact duplicates ─────────────────────────────
-  // Runs ONCE, shortly after events first load. Merges every exact (canonical-key)
-  // cluster into its most-active profile and de-duplicates results. A hard one-shot
-  // guard prevents any re-entrancy / render loop.
-  const autoMergeDone=React.useRef(false);
-  useEffect(()=>{
-    if(autoMergeDone.current) return;
-    if(!events.length) return;
-    autoMergeDone.current=true;            // lock immediately, never unlock
-    const groups=dupData.exactGroups;
-    if(!groups.length) return;
-    (async()=>{
-      try{
-        for(const names of groups){
-          const ordered=[...names].sort((a,b)=>regCount(b)-regCount(a));
-          await mergeGroup(ordered);
-        }
-      }catch(e){console.error("auto-merge failed",e);}
-    })();
-  },[events.length]);
+    let g=dupGroups.filter(x=>!dismissedDups2.has(x.key));
+    if(myAssoc) g=g.filter(x=>x.names.some(nm=>athleteHostAssocs(nm).has(myAssoc)));
+    return g;
+  },[dupGroups,dismissedDups2,myAssoc,events]);
 
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
@@ -1964,8 +1984,13 @@ export default function AthLinkMVP(){
   };
   const confirmDelete=async()=>{
     if(!deleteConfirm) return;
-    await sbDel("events",`id=eq.${deleteConfirm.id}`);
-    setEvents(p=>p.filter(ev=>ev.id!==deleteConfirm.id));
+    const target=events.find(ev=>ev.id===deleteConfirm.id);
+    // Delete this event AND every duplicate row of the same competition, so no
+    // ghost copy survives on the global class page or another association.
+    const victims=target?events.filter(ev=>eventKey(ev)===eventKey(target)):events.filter(ev=>ev.id===deleteConfirm.id);
+    for(const v of victims) await sbDel("events",`id=eq.${v.id}`);
+    const ids=new Set(victims.map(v=>v.id));
+    setEvents(p=>p.filter(ev=>!ids.has(ev.id)));
     setDeleteConfirm(null);
   };
   const confirmDraft=async(evId)=>{
@@ -3110,7 +3135,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {portal&&view.name==="event"&&(()=>{
     const ev=events.find(e=>e.id===view.id);if(!ev) return null;
     const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
-    return(<div className="wrap sec" style={{paddingTop:26}}>
+    return(<ErrorBoundary resetKey={ev.id} fallback={
+      <div className="wrap sec" style={{paddingTop:26}}>
+        <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All competitions</button>
+        <div style={{padding:"40px 0",color:"var(--mut)"}}>Couldn't render this competition. <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"events"})}>Go back</button></div>
+      </div>}>
+      <div className="wrap sec" style={{paddingTop:26}}>
       <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All competitions</button>
       {isDraft&&(
         <div className="draft-banner">
@@ -3223,7 +3253,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         ))}</tbody>
       </table></div>
       <p style={{fontSize:12,color:"var(--mut)",marginTop:12,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}><span>( ) = discard · red = penalty code</span></p>
-    </div>);
+    </div></ErrorBoundary>);
   })()}
 
   {/* ── ATHLETES (portal + global) ── */}
@@ -3261,7 +3291,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           ));
         })()}</div>
         {canEdit&&filter==="duplicates"&&visibleDupGroups.length>0&&(
-          <button className="btn cta" style={{fontSize:13,padding:"7px 13px",whiteSpace:"nowrap"}} onClick={()=>{visibleDupGroups.forEach(g=>mergeGroup(g.names));}}>
+          <button className="btn cta" style={{fontSize:13,padding:"7px 13px",whiteSpace:"nowrap"}} onClick={()=>{
+            const keys=visibleDupGroups.map(g=>g.key);
+            visibleDupGroups.forEach(g=>mergeGroup(g.names));
+            setDismissedDups2(prev=>{const s=new Set(prev);keys.forEach(k=>s.add(k));return s;});
+          }}>
             <Users size={14}/>Merge all
           </button>
         )}
@@ -3278,7 +3312,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {(()=>{
             const dq=q.trim().toLowerCase();
             const shown=visibleDupGroups
-              .filter(g=>!dismissedDups.has(g.names.join("|")))
               .filter(g=>!dq||g.names.some(nm=>nm.toLowerCase().includes(dq)));
             if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>{dq?"No duplicates match your search.":"No duplicates to review."}</p>;
             const MiniCard=({name,dim})=>{
@@ -3299,10 +3332,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 </div>
               );
             };
-            return shown.map((g,gi)=>{
-              const key=g.names.join("|");
-              const primary=g.names[0];      // most regattas → left
-              const other=g.names[g.names.length-1]; // least regattas → right
+            return shown.map((g)=>{
+              const key=g.key;
+              const primary=g.names[0];
+              const other=g.names[g.names.length-1];
               return(
                 <div key={key} style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:"16px",marginBottom:14}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
@@ -3321,9 +3354,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   </div>
                   <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
                     <button className="btn ghost" style={{fontSize:13,padding:"6px 14px"}}
-                      onClick={()=>setDismissedDups(prev=>{const s=new Set(prev);s.add(key);return s;})}>Don't merge</button>
+                      onClick={()=>setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;})}>Don't merge</button>
                     <button className="btn cta" style={{fontSize:13,padding:"6px 14px"}}
-                      onClick={()=>{mergeGroup(g.names);setDismissedDups(prev=>{const s=new Set(prev);s.add(key);return s;});}}>
+                      onClick={()=>{mergeGroup(g.names);setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});}}>
                       <Users size={14}/>Merge
                     </button>
                   </div>
@@ -3400,7 +3433,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const p=currentPeople.find(x=>x.name===name)||{name};
     const ag=aggregate(name,events);
     const nat=athleteNat(name,events);
-    return(<div className="wrap sec" style={{paddingTop:22}}>
+    return(<ErrorBoundary resetKey={name} fallback={
+      <div className="wrap sec" style={{paddingTop:22}}>
+        <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
+        <div style={{padding:"40px 0",color:"var(--mut)"}}>Couldn't render this profile. <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"athletes"})}>Go back</button></div>
+      </div>}>
+      <div className="wrap sec" style={{paddingTop:22}}>
       {view.fromRegatta
         ? (()=>{const rev=events.find(e=>e.id===view.fromRegatta);return rev?<button className="back" onClick={()=>{go({name:"event",id:view.fromRegatta});setTimeout(()=>setRegattaFootprint(rev),0);}}><ArrowLeft size={16}/>{rev.name} — Who's racing</button>:null;})()
         : view.fromEvent
@@ -3560,7 +3598,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         })()}
         {ag.history.length===0&&<p style={{color:"var(--mut)",fontSize:14}}>No confirmed results found.</p>}
       </div>
-    </div>);
+    </div></ErrorBoundary>);
   })()}
 
   {/* ══ IMPORT MODAL ══════════════════════════════════════════ */}
