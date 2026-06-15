@@ -274,7 +274,7 @@ function CollabPicker({cls,owner,value,onChange}){
   const[q,setQ]=React.useState("");
   const[focus,setFocus]=React.useState(false);
   const selected=value||[];
-  const candidates=ASSOCIATIONS.filter(a=>a.cls===cls&&a.id!==owner&&!selected.includes(a.id));
+  const candidates=ASSOCIATIONS.filter(a=>a.id!==owner&&!selected.includes(a.id));
   const filtered=candidates.filter(a=>!q||a.name.toLowerCase().includes(q.toLowerCase()));
   return <div style={{marginTop:6}}>
     <label style={{display:"inline-flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13,color:"var(--navy)",fontWeight:600}}>
@@ -857,8 +857,8 @@ function classPie(comps){
 }
 
 function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,setViewMode,onPick,eventLabel}){
-  const today=new Date();
-  const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const today=React.useMemo(()=>new Date(),[]);
+  const DAYS=React.useMemo(()=>["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],[]);
   // Scroll refs
   const yearScrollRef=React.useRef(null);
   const monthScrollRef=React.useRef(null);
@@ -946,13 +946,19 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
     return()=>c.removeEventListener("scroll",onScroll);
   },[viewMode]);
 
-  // ── Compute year range (use allEvents so filter changes don't shrink the range)
-  const src=allEvents||events;
-  const evYrs=src.map(e=>parseInt(e.date?.split('/')[2])).filter(Boolean);
-  let lo=year,hi=year;
-  if(evYrs.length){lo=Math.min(lo,...evYrs);hi=Math.max(hi,...evYrs);}
-  lo=Math.min(lo,today.getFullYear())-1; hi=Math.max(hi,today.getFullYear())+1;
+  // ── Fixed render range: Jan 1990 → Dec (currentYear + 3). Stable across data
+  //    and filter changes, so the month list never re-renders mid-scroll (which
+  //    was causing the scroll-up jumpiness). Re-derives only when the year rolls.
+  const lo=1990;
+  const hi=today.getFullYear()+3;
   const yearList=[];for(let y=lo;y<=hi;y++)yearList.push(y);
+  // Month list (memoized stable ref) — declared before any early return so hook
+  // order stays constant across year/month views.
+  const allMonths=React.useMemo(()=>{
+    const out=[];
+    for(let y=lo;y<=hi;y++) for(let m=0;m<12;m++) out.push({year:y,month:m});
+    return out;
+  },[lo,hi]);
 
   // ── YEAR VIEW
   if(viewMode==="year"){
@@ -987,38 +993,46 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
   }
 
   // ── MONTH VIEW — continuous scroll (Apple Calendar style)
-  // Build all months in range
-  const allMonths=[];
-  for(let y=lo;y<=hi;y++) for(let m=0;m<12;m++) allMonths.push({year:y,month:m});
 
   return(
     <div className="cal-month-scroll" ref={monthScrollRef}>
-      {allMonths.map(({year:y,month:m})=>(
-        <div key={`${y}-${m}`} data-ym={`${y}-${m}`} className="cal-month-block">
-          <div className="cal-month-lbl">{MON[m]} {y}</div>
-          <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
-          <div className="cal-grid">
-            {buildCalGrid(y,m,events).flat().map((cell,i)=>{
-              const comps=cell.other?[]:cell.events;
-              const pie=comps.length?classPie(comps):null;
-              const isT=!cell.other&&today.getFullYear()===y&&today.getMonth()===m&&today.getDate()===cell.day;
-              return(
-                <div key={i} className={`cal-cell${cell.other?" other-month":""}${isT?" today":""}`}>
-                  <div className="cal-cell-num" style={pie?{...pie,color:"#fff"}:isT?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
-                  {comps.map(ev=>(
-                    <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>onPick(ev)}>
-                      {eventLabel?eventLabel(ev):ev.name}
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+      <CalMonthList months={allMonths} events={events} onPick={onPick} eventLabel={eventLabel} today={today} DAYS={DAYS}/>
     </div>
   );
 }
+
+// Memoized so the (480-month) grid only re-renders when events change — NOT on
+// every scroll-driven year/month header update. This is what keeps scroll smooth.
+// Custom comparator ignores onPick/eventLabel identity (they're stable in intent,
+// just re-created each parent render) so scrolling never forces a 480-grid rebuild.
+const CalMonthList=React.memo(function CalMonthList({months,events,onPick,eventLabel,today,DAYS}){
+  // keep latest callbacks without re-rendering on their identity change
+  const cbRef=React.useRef({onPick,eventLabel});
+  cbRef.current={onPick,eventLabel};
+  return months.map(({year:y,month:m})=>(
+    <div key={`${y}-${m}`} data-ym={`${y}-${m}`} className="cal-month-block">
+      <div className="cal-month-lbl">{MON[m]} {y}</div>
+      <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
+      <div className="cal-grid">
+        {buildCalGrid(y,m,events).flat().map((cell,i)=>{
+          const comps=cell.other?[]:cell.events;
+          const pie=comps.length?classPie(comps):null;
+          const isT=!cell.other&&today.getFullYear()===y&&today.getMonth()===m&&today.getDate()===cell.day;
+          return(
+            <div key={i} className={`cal-cell${cell.other?" other-month":""}${isT?" today":""}`}>
+              <div className="cal-cell-num" style={pie?{...pie,color:"#fff"}:isT?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
+              {comps.map(ev=>(
+                <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>cbRef.current.onPick(ev)}>
+                  {cbRef.current.eventLabel?cbRef.current.eventLabel(ev):ev.name}
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  ));
+},(prev,next)=>prev.months===next.months&&prev.events===next.events&&prev.today===next.today&&prev.DAYS===next.DAYS);
 
 /* ── World SVG map fallback (no API key required) ───────────────────── */
 function WorldSVGMap({countryData}){
@@ -1454,7 +1468,7 @@ function RegattaFootprintModal({event,onClose,homeCountry={},onPickAthlete}){
       <div className="modal wide" onClick={e=>e.stopPropagation()}
         style={{maxWidth:1000,background:"linear-gradient(160deg,#0d2340,#091a31)",border:"1px solid rgba(120,160,210,.22)"}}>
         <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
-          <Flag size={18}/><h3>{event.name} — Who's racing</h3>
+          <Flag size={18}/><h3>{event.name}</h3>
           {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
@@ -1714,6 +1728,7 @@ export default function AthLinkMVP(){
   const signOut=()=>{ setAuth(null); setAccountOpen(false); try{localStorage.removeItem("athlink_auth");}catch{} };
   const[portal,setPortal]=useState(null);
   const[view,setView]=useState({name:"portals"});
+  const[navStack,setNavStack]=useState([]); // universal back-button history
   const[q,setQ]=useState("");const[filter,setFilter]=useState("all");
 
   // ── Merge duplicate athlete profiles ───────────────────────
@@ -1783,6 +1798,10 @@ export default function AthLinkMVP(){
   const[pdfMeta,setPdfMeta]=useState(null);
   const[previewEv,setPreviewEv]=useState(null);
   const[previewEdit,setPreviewEdit]=useState(null);
+  // Multi-file import: each pending result = {id,name,status:'ok'|'error'|'parsing',
+  //   error, previewEv, subclass, collabs}. activePending = index being edited.
+  const[pending,setPending]=useState([]);
+  const[activePending,setActivePending]=useState(0);
   const[previewEditVal,setPreviewEditVal]=useState("");
   const[editCell,setEditCell]=useState(null);
   const[editVal,setEditVal]=useState("");
@@ -1972,9 +1991,32 @@ export default function AthLinkMVP(){
   const manualReady=!!mf.rows.filter(r=>r.helm.trim()).length;
 
   /* ── navigation ───────────────────────────────────────────── */
-  const go=v=>{setView(v);setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
-  const goHome=()=>{setPortal(null);go({name:"portals"});};
-  const enterPortal=id=>{setPortal(id);go({name:"events"});};
+  // ── Navigation with universal history ───────────────────────
+  const pushNav=()=>setNavStack(s=>[...s.slice(-19),{portal,view}]);
+  const go=v=>{pushNav();setView(v);setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  const goHome=()=>{pushNav();setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  const navBack=()=>{
+    setNavStack(s=>{
+      if(!s.length) return s;
+      const prev=s[s.length-1];
+      setPortal(prev.portal??null);
+      setView(prev.view||{name:"portals"});
+      setQ("");setAthleteSmart(null);window.scrollTo(0,0);
+      return s.slice(0,-1);
+    });
+  };
+  const navLabelFor=(snap)=>{
+    if(!snap) return "Back";
+    const v=snap.view||{};
+    const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`${CLASSES.find(c=>c.id===id.slice(6))?.short||""} — All Results`;return null;};
+    if(v.name==="portals") return "Sailing";
+    if(v.name==="athletes") return snap.portal?`${pName(snap.portal)||""} Athletes`:"All Athletes";
+    if(v.name==="events") return pName(snap.portal)||"Competitions";
+    if(v.name==="event"){const ev=events.find(e=>e.id===v.id);return ev?ev.name:"Competition";}
+    if(v.name==="profile") return v.id||"Profile";
+    return "Back";
+  };
 
   /* ── event ops ────────────────────────────────────────────── */
   const deleteEvent=(evId,evName,e)=>{
@@ -2217,11 +2259,12 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
     } else if(n.type==="home"){
       goHome();
     } else if(n.type==="athletes"){
+      pushNav();
       setPortal(null);
-      // Defer view change so portal state settles first
       setTimeout(()=>setView({name:"athletes"}),0);
     } else if(n.type==="profile"){
       if(n.assoc&&n.assoc!==portal){
+        pushNav();
         setPortal(n.assoc);
         setTimeout(()=>setView({name:"profile",id:n.id}),0);
       } else {
@@ -2229,6 +2272,7 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
       }
     } else if(n.type==="event"){
       if(n.assoc&&n.assoc!==portal){
+        pushNav();
         setPortal(n.assoc);
         setTimeout(()=>setView({name:"event",id:n.id}),0);
       } else {
@@ -2375,8 +2419,28 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   const resetImport=()=>{
     setPdfLoading(false);setPdfError("");setImportStep("upload");
     setFleetChoices([]);setPdfMeta(null);setPreviewEv(null);setPreviewEdit(null);
+    setPending([]);setActivePending(0);
   };
   const closeImport=()=>{setOpen(false);resetImport();setTab("pdf");};
+
+  // Snapshot current editor (previewEv + class/subclass/collab) into the active pending slot.
+  const syncActivePending=()=>{
+    setPending(prev=>prev.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p));
+  };
+  // Switch to another pending result tab.
+  const switchPending=idx=>{
+    if(idx===activePending||idx<0||idx>=pending.length) return;
+    setPending(prev=>{
+      const next=prev.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
+      const target=next[idx];
+      if(target?.previewEv){
+        setPreviewEv(target.previewEv);
+        setMf(f=>({...f,subclass:target.subclass||null,collabs:target.collabs||[]}));
+      }
+      return next;
+    });
+    setActivePending(idx);
+  };
 
   const buildPreviewFromFleet=(pdfName,pdfDate,fleet)=>{
     const ev={
@@ -2400,40 +2464,73 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     setPreviewEv(ev);setImportStep("preview");
   };
 
-  const handlePdf=async file=>{
-    if(!file) return;
-    setPdfLoading(true);setPdfError("");
-    // If HTML file, parse in-browser via parseHtml; otherwise send to api
+  // Parse a single file → {ok, name, date, entries, discards, multi, fleets, error}
+  const parseOneFile=async file=>{
     if(file.name.toLowerCase().endsWith(".html")||file.type==="text/html"){
       try{
-        // Read as ArrayBuffer first so we can decode as ISO-8859-1 (Sailwave's encoding)
         const buf=await file.arrayBuffer();
         const html=new TextDecoder('iso-8859-1').decode(buf);
         const data=parseHtml(html);
-        if(!data.ok){setPdfError(data.error||"Could not parse this HTML file.");setPdfLoading(false);return;}
-        if(data.multi){
-          setFleetChoices(data.fleets);setPdfMeta({name:data.name,date:data.date||""});setImportStep("picker");
-        }else{
-          buildPreviewFromFleet(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards});
-        }
-      }catch(err){setPdfError("HTML parse failed: "+err.message);}
-      finally{setPdfLoading(false);}
-      return;
+        if(!data.ok) return{ok:false,error:data.error||"Could not parse this HTML file."};
+        return data;
+      }catch(err){return{ok:false,error:"HTML parse failed: "+err.message};}
     }
     try{
       const res=await fetch("/api/parse_pdf",{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const data=await res.json();
-      if(!data.ok){setPdfError(data.error||"Could not parse this PDF.");setPdfLoading(false);return;}
-      if(data.multi){
-        setFleetChoices(data.fleets);
-        setPdfMeta({name:data.name,date:data.date||""});
-        setImportStep("picker");
+      if(!data.ok) return{ok:false,error:data.error||"Could not parse this file."};
+      return data;
+    }catch{return{ok:false,error:"Upload failed. Check api/parse_pdf.py is deployed."};}
+  };
+
+  // Build a previewEv object from parsed fleet data (no state side-effects).
+  const previewFromData=(name,date,fleet)=>{
+    const sh=(assoc?.cls)==="ilca"||(assoc?.cls)==="optimist";
+    return{
+      id:"imp_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
+      name:(fleet.name?`${name} — ${fleet.name}`:name)||"Imported Competition",
+      cls:assoc?.cls||"29er",doublehanded:!sh,venue:"",country:"",
+      date:date||"",discards:fleet.discards||1,scoring:"Appendix A",
+      source:"Imported",status:"Final",
+      entries:(fleet.entries||[]).map(e=>({
+        helm:e.helm||"",crew:sh?"":(e.crew||""),sail:e.sail||"—",nat:e.nat||"",div:e.div||"",
+        races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank??null,pdf_net:e.pdf_net??null,
+      })),
+    };
+  };
+
+  // ── MULTI-FILE: parse all chosen files into the pending list ──
+  const handleFiles=async fileList=>{
+    const files=[...(fileList||[])];
+    if(!files.length) return;
+    setPdfError("");setPdfLoading(true);
+    // seed placeholders
+    const seed=files.map((f,i)=>({id:"pf_"+Date.now()+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]}));
+    setPending(seed);setActivePending(0);setImportStep("preview");
+    const results=[];
+    for(let i=0;i<files.length;i++){
+      const data=await parseOneFile(files[i]);
+      if(!data.ok){
+        results.push({...seed[i],status:"error",error:data.error});
+      }else if(data.multi&&data.fleets?.length){
+        // multi-fleet file → expand each fleet into its own pending tab
+        data.fleets.forEach((fl,fi)=>{
+          results.push({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+            previewEv:previewFromData(data.name,data.date||"",fl),subclass:null,collabs:[]});
+        });
       }else{
-        buildPreviewFromFleet(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards});
+        results.push({...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards})});
       }
-    }catch{
-      setPdfError("Upload failed. Check api/parse_pdf.py and requirements.txt are pushed to GitHub.");
-    }finally{setPdfLoading(false);}
+    }
+    setPending(results);setActivePending(0);
+    const firstOk=results.findIndex(r=>r.status==="ok");
+    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);}
+    setPdfLoading(false);
+  };
+
+  const handlePdf=async file=>{
+    if(!file) return;
+    return handleFiles([file]);
   };
   const selectFleet=fleet=>buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,fleet);
   const updPMeta=(k,v)=>setPreviewEv(ev=>({...ev,[k]:v}));
@@ -2469,9 +2566,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     if(!previewEv) return;
     const status=asDraft?"Draft":"Final";
     const ev={...previewEv,status,
-      cls:assoc?.cls||previewEv.cls,
+      cls:previewEv.cls||assoc?.cls||"29er",
       subclass:mf.subclass||previewEv.subclass||null,
-      owner:portal||previewEv.owner||null,
+      owner:portal&&!isClassPortal?portal:(previewEv.owner||null),
       collabs:mf.collabs||previewEv.collabs||[],
       venue:previewEv.venue||"",
       country:(previewEv.venue||"").toUpperCase()||previewEv.country||"",
@@ -2486,7 +2583,22 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     setEvents(p=>[ev,...p.filter(x=>x.id!==ev.id)]);
     setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":null});
     setTimeout(()=>setNote(null),7000);
-    closeImport();
+    // Multi-file: remove this published tab; advance to the next pending one, or close.
+    if(pending.length){
+      const remaining=pending.filter((_,i)=>i!==activePending);
+      if(remaining.length){
+        setPending(remaining);
+        const nextIdx=Math.min(activePending,remaining.length-1);
+        const firstOk=remaining[nextIdx]?.status==="ok"?nextIdx:remaining.findIndex(r=>r.status==="ok");
+        setActivePending(firstOk<0?0:firstOk);
+        const t=remaining[firstOk<0?0:firstOk];
+        if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
+      } else {
+        closeImport();
+      }
+    } else {
+      closeImport();
+    }
     // Persist in the background; swap in the DB copy (with real ids) once saved
     try{
       const saved=await saveEventToDb(ev);
@@ -2870,6 +2982,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   <div className="topbar"><div className="topin">
     <div className="brand" onClick={goHome}><Link2 size={15}/></div>
     <span className="topsite" style={{cursor:"pointer"}} onClick={goHome}>Sailing</span>
+    {navStack.length>0&&(
+      <button onClick={navBack} title="Go back"
+        style={{display:"inline-flex",alignItems:"center",gap:5,maxWidth:200,background:"rgba(255,255,255,.12)",color:"#fff",border:"1px solid rgba(255,255,255,.18)",borderRadius:8,padding:"6px 11px",fontSize:12.5,fontWeight:600,cursor:"pointer",marginLeft:4,whiteSpace:"nowrap",overflow:"hidden"}}>
+        <ArrowLeft size={14} style={{flex:"none"}}/>
+        <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{navLabelFor(navStack[navStack.length-1])}</span>
+      </button>
+    )}
     <div className="gsrch-wrap" onClick={e=>e.stopPropagation()}>
       <div className="gsrch">
         <Search size={14} color="#9fbdd9"/>
@@ -3278,8 +3397,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {(q||athleteSmart)&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setQ("");setAthleteSmart(null);}}><X size={15}/></button>}
         </div>
         <div className="seg">{(()=>{
-          const tabs=["all"];
-          if(canEdit&&visibleDupGroups.length>0) tabs.push("duplicates");
+          // Associations always see both tabs (so you can toggle back to All even
+          // after clearing every duplicate). Non-association users see no tabs.
+          const tabs=canEdit?["all","duplicates"]:["all"];
           if(tabs.length<2) return null;
           return tabs.map(f=>(
             <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
@@ -3607,7 +3727,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div className={`modal${importStep==="preview"?" wide":""}`} onClick={e=>e.stopPropagation()}>
         <div className="mhead">
           {importStep==="picker"&&<button className="x" onClick={()=>setImportStep("upload")} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
-          {importStep==="preview"&&<button className="x" onClick={()=>setImportStep(fleetChoices.length?"picker":"upload")} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
+          {importStep==="preview"&&!editResultsEv&&<button className="x" onClick={()=>{setPending([]);setActivePending(0);setPreviewEv(null);setImportStep(fleetChoices.length?"picker":"upload");}} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
+          {importStep==="preview"&&editResultsEv&&<button className="x" onClick={()=>{closeImport();setEditResultsEv(null);}} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           <Upload size={18}/>
           <h3>{importStep==="picker"?"Select fleet":importStep==="preview"?"Preview & edit results":"Import a competition"}</h3>
           <button className="x" onClick={closeImport}><X size={16}/></button>
@@ -3620,10 +3741,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           </div>
           <div className="mbody">
             {tab==="pdf"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload a results PDF or Sailwave HTML file (preferred) — supports Sailwave, Manage2sail and more. Multi-fleet files will show a fleet picker.</p>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload one or more results files (PDF or Sailwave HTML) — supports Sailwave, Manage2sail and more. You can select several at once; each gets its own editable tab. Multi-fleet files split into a tab per fleet.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
-                {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose File</>}
-                <input type="file" accept="application/pdf,.html,text/html" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handlePdf(e.target.files?.[0])}/>
+                {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose Files</>}
+                <input type="file" multiple accept="application/pdf,.html,text/html" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files)}/>
               </label>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
@@ -3732,34 +3853,82 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           </div>
         )}
 
-        {importStep==="preview"&&previewEv&&(()=>{
+        {importStep==="preview"&&(pending.length>0||previewEv)&&(()=>{
           const scored=previewScored;
           const maxR=previewMaxRaces;
-          const missingCells=previewEv.entries.some(e=>!e.helm||(e.races||[]).length<maxR);
+          const active=pending[activePending];
+          const isError=active&&active.status==="error";
+          const missingCells=previewEv&&previewEv.entries.some(e=>!e.helm||(e.races||[]).length<maxR);
+          // Effective class for the table comes from the previewEv itself when set
+          // by the per-result selector, else the portal association's class.
+          const evCls=(previewEv?.cls)||assoc?.cls||"29er";
+          const singleHanded=evCls==="ilca"||evCls==="optimist";
           return(<div className="mbody">
+            {/* ── Pending result tabs (multi-file import) ── */}
+            {pending.length>1&&(
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,borderBottom:"1px solid var(--line)",paddingBottom:10}}>
+                {pending.map((p,i)=>(
+                  <button key={p.id} onClick={()=>switchPending(i)}
+                    style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:200,border:"1px solid "+(i===activePending?"var(--accent)":"var(--line)"),
+                      background:i===activePending?"var(--accent)":(p.status==="error"?"#fdeceA":"#fff"),color:i===activePending?"#fff":(p.status==="error"?"#b3261e":"var(--navy)"),
+                      borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",overflow:"hidden"}}>
+                    {p.status==="error"?<AlertCircle size={12} style={{flex:"none"}}/>:p.status==="parsing"?<Loader2 size={12} className="spin" style={{flex:"none"}}/>:<FileText size={12} style={{flex:"none"}}/>}
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{p.previewEv?.name||p.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* ── Unparseable file notice ── */}
+            {isError&&(
+              <div className="prev err" style={{marginBottom:12}}>
+                <AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:6}}/>
+                <b>Couldn't parse "{active.name}".</b> {active.error||""} Try exporting this result in a different format (Sailwave <b>HTML</b> or a text-based <b>PDF</b>) and uploading again.
+                <div style={{marginTop:10}}>
+                  <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} onClick={()=>{
+                    const remaining=pending.filter((_,i)=>i!==activePending);
+                    setPending(remaining);
+                    if(!remaining.length){closeImport();return;}
+                    const ni=Math.min(activePending,remaining.length-1);setActivePending(ni);
+                    const t=remaining[ni];if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
+                  }}>Dismiss this file</button>
+                </div>
+              </div>
+            )}
+            {!isError&&previewEv&&(<>
             <div className="preview-meta wide" style={{marginBottom:8}}>
               <div><label>Event name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Event name"/></div>
               <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updPMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
               <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updPMeta("venue",v)}/></div>
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
-            {(()=>{const evCls=assoc?.cls||previewEv.cls;return(<>
-              {SUBCLASSES[evCls]&&<div style={{marginBottom:10}}>
-                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Class type</label>
-                <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
-              </div>}
-              <div style={{marginBottom:10}}>
-                <CollabPicker cls={evCls} owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+            {/* ── Per-result class type selector (reshapes the table) ── */}
+            <div style={{marginBottom:10}}>
+              <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class</label>
+              <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
+                {CLASSES.map(c=>{
+                  const on=evCls===c.id;
+                  return <button key={c.id} type="button" onClick={()=>{updPMeta("cls",c.id);updMeta("subclass",null);}}
+                    style={{border:"1px solid "+(on?classColor(c.id):"var(--line)"),background:on?classColor(c.id):"transparent",
+                      color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",cursor:"pointer"}}>{c.short}</button>;
+                })}
               </div>
-            </>);})()}
-            {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}
+            </div>
+            {SUBCLASSES[evCls]&&<div style={{marginBottom:10}}>
+              <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Class type</label>
+              <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
+            </div>}
+            <div style={{marginBottom:10}}>
+              <CollabPicker cls={evCls} owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+            </div>
+            {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}</>)}
+            {!isError&&previewEv&&(<>
             <div className="preview-table-wrap">
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12.5px",minWidth:560}}>
                 <thead>
                   <tr>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Pos</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
-                    {!(previewEv.cls==="ilca"||previewEv.cls==="optimist")&&<th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>}
+                    {!singleHanded&&<th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>}
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:150}}>Div</th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
@@ -3777,7 +3946,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
                           :<div onClick={()=>startPreviewEdit("helm",idx,0,entry.helm)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,minHeight:24,background:!entry.helm?"#fffbec":"transparent",border:!entry.helm?"1.5px solid #e8921a":"1.5px solid transparent",fontSize:12,fontWeight:600,color:"var(--ink)"}}>{entry.helm||<span style={{color:"#e8921a",fontStyle:"italic"}}>missing</span>}</div>}
                       </td>
-                      {!(previewEv.cls==="ilca"||previewEv.cls==="optimist")&&<td style={{padding:"4px 6px",minWidth:100}}>
+                      {!singleHanded&&<td style={{padding:"4px 6px",minWidth:100}}>
                         {previewEdit?.type==="crew"&&previewEdit.idx===idx
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
                           :<div onClick={()=>startPreviewEdit("crew",idx,0,entry.crew)} style={{cursor:"text",padding:"4px 2px",borderRadius:4,minHeight:24,fontSize:12,color:"var(--mut)"}}>{entry.crew||<span style={{fontStyle:"italic",opacity:.4}}>—</span>}</div>}
@@ -3790,7 +3959,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                           </div>}
                       </td>
                       <td style={{padding:"4px 6px",textAlign:"center"}}>
-                        <DivisionToggle value={entry.div} onChange={v=>updPEntry(idx,"div",v)} noMix={previewEv.cls==="ilca"||previewEv.cls==="optimist"}/>
+                        <DivisionToggle value={entry.div} onChange={v=>updPEntry(idx,"div",v)} noMix={singleHanded}/>
                       </td>
                       {Array.from({length:maxR}).map((_,raceIdx)=>{
                         const score=(entry.races||[])[raceIdx];
@@ -3815,8 +3984,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <div className="mfoot" style={{marginTop:14}}>
               <button className="btn ghost" onClick={()=>{closeImport();setEditResultsEv(null);}}>Cancel</button>
               <button className="btn amber" onClick={()=>editResultsEv?saveEditedResults(true):importPreview(true)}><Clock size={16}/>Save as Draft</button>
-              <button className="btn cta" onClick={()=>editResultsEv?saveEditedResults(false):importPreview(false)}><CheckCircle size={16}/>{editResultsEv?"Save changes":"Confirm & Publish"}</button>
+              <button className="btn cta" onClick={()=>editResultsEv?saveEditedResults(false):importPreview(false)}><CheckCircle size={16}/>{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</button>
             </div>
+            </>)}
           </div>);
         })()}
       </div>
