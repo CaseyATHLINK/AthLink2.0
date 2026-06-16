@@ -196,35 +196,70 @@ const CLASSES=[
 ];
 
 // ── Associations: each portal is one association ──
-// scope: "HK" (Hong Kong) or "INT" (International). cls: base class for colour.
-const ASSOCIATIONS=[
-  {id:"hk-29er",     scope:"HK",  cls:"29er",     name:"Hong Kong 29er Class Association"},
-  {id:"hk-ilca",     scope:"HK",  cls:"ilca",     name:"Hong Kong ILCA"},
-  {id:"hk-optimist", scope:"HK",  cls:"optimist", name:"Hong Kong Optimist Dinghy Association"},
-  {id:"int-29er",    scope:"INT", cls:"29er",     name:"International 29er Class Association"},
-  {id:"int-ilca",    scope:"INT", cls:"ilca",     name:"International Laser Class Association"},
-  {id:"int-optimist",scope:"INT", cls:"optimist", name:"International Optimist Dinghy Association"},
-  {id:"int-49er",    scope:"INT", cls:"49er",     name:"International 49er Class Association"},
+// ── Hosts (associations, clubs, federations) ────────────────────────────────
+// Hosts own/co-own events. Three types:
+//   association — locked to one boat class (has `cls`)
+//   club        — any class (no `cls`)
+//   federation  — governing body of a country; auto-collaborates on every event
+//                 hosted in its country (`country`), across all classes.
+// These DEFAULT_* arrays are the always-present seeds; hosts added via dev mode
+// are stored in Supabase (`hosts` table) and merged in at runtime.
+const DEFAULT_ASSOCIATIONS=[
+  {id:"hk-29er",     type:"association", scope:"HK",  cls:"29er",     name:"Hong Kong 29er Class Association"},
+  {id:"hk-ilca",     type:"association", scope:"HK",  cls:"ilca",     name:"Hong Kong ILCA"},
+  {id:"hk-optimist", type:"association", scope:"HK",  cls:"optimist", name:"Hong Kong Optimist Dinghy Association"},
+  {id:"int-29er",    type:"association", scope:"INT", cls:"29er",     name:"International 29er Class Association"},
+  {id:"int-ilca",    type:"association", scope:"INT", cls:"ilca",     name:"International Laser Class Association"},
+  {id:"int-optimist",type:"association", scope:"INT", cls:"optimist", name:"International Optimist Dinghy Association"},
+  {id:"int-49er",    type:"association", scope:"INT", cls:"49er",     name:"International 49er Class Association"},
 ];
+const DEFAULT_CLUBS=[
+  {id:"rhkyc", type:"club", scope:"HK", name:"Royal Hong Kong Yacht Club"},
+];
+const DEFAULT_FEDERATIONS=[
+  {id:"hksf", type:"federation", scope:"HK", country:"HKG", name:"Hong Kong Sailing Federation"},
+];
+// Mutable runtime registries (defaults + DB-added). Rebuilt by applyDbHosts.
+let ASSOCIATIONS=[...DEFAULT_ASSOCIATIONS];
+let CLUBS=[...DEFAULT_CLUBS];
+let FEDERATIONS=[...DEFAULT_FEDERATIONS];
+// Merge DB host rows on top of the defaults (by id; defaults always win on id clash).
+function applyDbHosts(rows){
+  const norm=t=>(rows||[]).filter(r=>r.type===t).map(r=>({
+    id:r.id, type:r.type, scope:r.scope||"HK", name:r.name,
+    ...(r.cls?{cls:r.cls}:{}), ...(r.country?{country:r.country}:{}),
+  }));
+  const merge=(defs,extra)=>{const m=new Map();[...extra,...defs].forEach(h=>m.set(h.id,h));return[...m.values()];};
+  ASSOCIATIONS=merge(DEFAULT_ASSOCIATIONS,norm("association"));
+  CLUBS=merge(DEFAULT_CLUBS,norm("club"));
+  FEDERATIONS=merge(DEFAULT_FEDERATIONS,norm("federation"));
+}
 const assocById=id=>ASSOCIATIONS.find(a=>a.id===id);
-
-// ── Clubs ──────────────────────────────────────────────────────────────────
-// Clubs (e.g. yacht clubs) are hosts just like associations, but are NOT locked
-// to a single boat class — a club may host events in any of the 4 classes.
-// A club has no `cls` field. Club ids are stored in event.owner / event.collabs
-// exactly like association ids (no schema change needed).
-const CLUBS=[
-  {id:"rhkyc", scope:"HK", name:"Royal Hong Kong Yacht Club"},
-];
 const clubById=id=>CLUBS.find(c=>c.id===id);
+const fedById=id=>FEDERATIONS.find(f=>f.id===id);
 const isClubId=id=>!!clubById(id);
-// Resolve any host id (association OR club) to its record / name.
-const hostById=id=>assocById(id)||clubById(id)||null;
+const isFedId=id=>!!fedById(id);
+// Resolve any host id (association, club OR federation) to its record / name.
+const hostById=id=>assocById(id)||clubById(id)||fedById(id)||null;
 const assocName=id=>hostById(id)?.name||id;
 // Association → ISO country flag (HK gets a flag; International gets none)
 const assocFlag=scope=>scope==="HK"?"🇭🇰":"";
-// All hosts (associations + clubs) that own/co-own an event
-const eventAssocs=ev=>[ev.owner,...(ev.collabs||[])].filter(Boolean);
+// scope → governing country code (extend as more countries are added)
+const SCOPE_COUNTRY={HK:"HKG"};
+// The country an event is "hosted in": its own country code, else its owner's scope country.
+const eventCountryCode=ev=>{
+  if(ev.country) return String(ev.country).toUpperCase();
+  return SCOPE_COUNTRY[hostById(ev.owner)?.scope]||"";
+};
+// Federations that govern an event (auto-collaborators): owner is a host in the
+// federation's country, OR the event's host country matches the federation's.
+const governingFeds=ev=>{
+  const ownerCountry=SCOPE_COUNTRY[hostById(ev.owner)?.scope];
+  const cc=eventCountryCode(ev);
+  return FEDERATIONS.filter(f=>(ownerCountry&&ownerCountry===f.country)||(cc&&cc===f.country));
+};
+// All hosts that own/co-own an event, INCLUDING auto-collaborating federations.
+const eventAssocs=ev=>[...new Set([ev.owner,...(ev.collabs||[]),...governingFeds(ev).map(f=>f.id)].filter(Boolean))];
 
 // ── Sub-classes (per-event) for ILCA and Optimist ──
 // ILCA: 3 rigs, varying shades of blue (ILCA 7 darkest → ILCA 4 lightest).
@@ -1754,6 +1789,12 @@ function SignInModal({onClose,onAuthed}){
 
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
+  const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
+  const reloadHosts=async()=>{
+    const rows=await sbGet("hosts?select=*");
+    if(rows) applyDbHosts(rows);
+    setHostsVersion(v=>v+1);
+  };
   const[auth,setAuth]=useState(null);
   const[showSignIn,setShowSignIn]=useState(false);
   const[accountOpen,setAccountOpen]=useState(false);
@@ -1896,6 +1937,31 @@ export default function AthLinkMVP(){
   const[gSearch,setGSearch]=useState("");
   // Calendar
   const[showCalendar,setShowCalendar]=useState(false);
+  // Dev-mode host creation
+  const[showAddHost,setShowAddHost]=useState(false);
+  const[newHost,setNewHost]=useState({type:"club",scope:"HK",name:"",cls:"29er",country:"HKG"});
+  const[addingHost,setAddingHost]=useState(false);
+  const saveNewHost=async()=>{
+    const name=(newHost.name||"").trim();
+    if(!name) return;
+    const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"").slice(0,32)||"host";
+    const id=slug+"-"+Math.random().toString(36).slice(2,6);
+    const payload={
+      id, type:newHost.type, scope:newHost.scope, name,
+      cls:newHost.type==="association"?newHost.cls:null,
+      country:newHost.type==="federation"?(newHost.country||"HKG").toUpperCase():null,
+    };
+    setAddingHost(true);
+    const r=await sbPost("hosts",payload);
+    setAddingHost(false);
+    if(r){
+      await reloadHosts();
+      setShowAddHost(false);
+      setNewHost({type:"club",scope:"HK",name:"",cls:"29er",country:"HKG"});
+      setNote({name,matched:0,created:0,msg:`${payload.type} added.`});
+      setTimeout(()=>setNote(null),5000);
+    }
+  };
   const[calClsSet,setCalClsSet]=useState(new Set()); // empty = All
   const[calQ,setCalQ]=useState("");
   const[calYear,setCalYear]=useState(new Date().getFullYear());
@@ -1926,6 +1992,9 @@ export default function AthLinkMVP(){
       }
       console.log("Loaded",data.length,"events from Supabase");
       setEvents(data.map(dbToApp));
+      // Load any dev-added hosts (clubs/associations/federations) and merge them in.
+      const hostRows=await sbGet("hosts?select=*");
+      if(hostRows){applyDbHosts(hostRows);setHostsVersion(v=>v+1);}
     })();
   },[]);
 
@@ -1937,7 +2006,8 @@ export default function AthLinkMVP(){
   const canEdit=devMode||(canEditRole&&!isClassPortal);
   const assoc=ASSOCIATIONS.find(a=>a.id===portal);
   const club=CLUBS.find(c=>c.id===portal);
-  const host=assoc||club;
+  const fed=FEDERATIONS.find(f=>f.id===portal);
+  const host=assoc||club||fed;
   // Collapse duplicate imports of the same competition (same name+date+class+
   // subclass), keeping the row with the most entries. Non-destructive (display).
   const dedupEvents=list=>{
@@ -2287,6 +2357,10 @@ Partial query: "${q}"`;
     // Club portals
     CLUBS.filter(c=>c.name.toLowerCase().includes(ql)).forEach(c=>{
       results.push({type:"portal",label:c.name,sub:"Club portal",nav:{type:"portal",assoc:c.id}});
+    });
+    // Federation portals
+    FEDERATIONS.filter(f=>f.name.toLowerCase().includes(ql)).forEach(f=>{
+      results.push({type:"portal",label:f.name,sub:"Federation portal",nav:{type:"portal",assoc:f.id}});
     });
     // Association portals
     ASSOCIATIONS.filter(a=>a.name.toLowerCase().includes(ql)||(a.cls||"").toLowerCase().includes(ql)).forEach(a=>{
@@ -2705,7 +2779,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       const saved=await saveEventToDb(ev);
       if(saved?.[0]?.id){
         const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
-        if(fresh?.[0]) setEvents(p=>p.map(x=>x.id===ev.id?dbToApp(fresh[0]):x));
+        if(fresh?.[0]){
+          const dbEv=dbToApp(fresh[0]);
+          setEvents(p=>p.map(x=>x.id===ev.id?dbEv:x));
+          // If the user is currently viewing this just-imported event, keep the
+          // view pointed at the new DB id so the page doesn't go blank.
+          setView(v=>(v.name==="event"&&v.id===ev.id)?{...v,id:dbEv.id}:v);
+        }
       } else {
         console.error("importPreview: Supabase save failed — kept in memory only (will not persist on reload)");
       }
@@ -3175,31 +3255,40 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const renderCard=(a,i)=>{
       const ce=events.filter(e=>eventAssocs(e).includes(a.id));
       const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
-      const isClub=!a.cls;  // clubs have no single class
-      const col=isClub?"var(--navy)":classColor(a.cls);
-      const short=isClub?"CLUB":(CLASSES.find(c=>c.id===a.cls)?.short||a.cls);
-      // For a club, show which classes it has events in (distinct, in canonical order)
-      const clubClasses=isClub?CLASSES.filter(c=>ce.some(e=>e.cls===c.id)):[];
+      const isClub=!a.cls;  // clubs and federations have no single class
+      const typeLabel=a.type==="federation"?"Federation":a.type==="club"?"Club":"Association";
+      // Class nuggets shown top-right: a club/federation shows every class it has
+      // events in; an association shows its single class.
+      const nuggets=isClub?CLASSES.filter(c=>ce.some(e=>e.cls===c.id)):CLASSES.filter(c=>c.id===a.cls);
       return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
-        <span className="cls" style={{background:col,marginBottom:8,display:"inline-block"}}>{short}</span>
+        {/* Standard header: host-type label (left) + class nugget(s) (right) */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:10,minHeight:22}}>
+          <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
+            color:"var(--mut)",border:"1px solid var(--line)",borderRadius:6,padding:"2px 7px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end"}}>
+            {nuggets.map(c=><span key={c.id} className="cls" style={{background:classColor(c.id)}}>{c.short}</span>)}
+          </div>
+        </div>
         <p className="class-name">{a.name}</p>
-        {isClub&&clubClasses.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
-          {clubClasses.map(c=><span key={c.id} style={{fontSize:10.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",color:"#fff",background:classColor(c.id),borderRadius:5,padding:"2px 6px"}}>{c.short}</span>)}
-        </div>}
         <div className="class-stats"><div><b>{ce.length}</b>competitions</div><div><b>{cp.size}</b>athletes</div></div>
         <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(a.id);}}>Enter portal <ChevronRight size={16}/></button>
       </div>);
     };
+    const hkFeds=FEDERATIONS.filter(f=>f.scope==="HK").filter(matchA);
     const hkClubs=CLUBS.filter(c=>c.scope==="HK").filter(matchA);
-    const hk=ASSOCIATIONS.filter(a=>a.scope==="HK").filter(matchA);
-    const intl=ASSOCIATIONS.filter(a=>a.scope==="INT").filter(matchA);
+    const hkAssoc=ASSOCIATIONS.filter(a=>a.scope==="HK").filter(matchA);
+    const intFeds=FEDERATIONS.filter(f=>f.scope==="INT").filter(matchA);
+    const intClubs=CLUBS.filter(c=>c.scope==="INT").filter(matchA);
+    const intAssoc=ASSOCIATIONS.filter(a=>a.scope==="INT").filter(matchA);
+    const subLabel=t=><p className="seclabel" style={{fontSize:12,opacity:.75,marginTop:4,marginLeft:2}}>{t}</p>;
     return(
     <div className="wrap sec">
-      <div className="toolbar" style={{marginBottom:14}}>
-        <div className="srch">
+      <div className="toolbar" style={{marginBottom:14,display:"flex",gap:10,alignItems:"center"}}>
+        <div className="srch" style={{flex:1}}>
           <Search size={16} color="#9fb2c8"/>
           <input placeholder="Search clubs & associations…" value={homeQ} onChange={e=>setHomeQ(e.target.value)}/>
         </div>
+        {devMode&&<button className="btn ghost" style={{fontSize:13,padding:"8px 13px",whiteSpace:"nowrap"}} onClick={()=>setShowAddHost(true)}><Plus size={15}/>Add host</button>}
       </div>
       {/* Global class portals — total results per class, across all associations */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:26}}>
@@ -3219,20 +3308,23 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           );
         })}
       </div>
-      {(hkClubs.length>0||hk.length>0)&&<>
+      {(hkFeds.length>0||hkClubs.length>0||hkAssoc.length>0)&&<>
         <p className="seclabel" style={{fontSize:17}}><span style={{fontSize:16,marginRight:2}}>🇭🇰</span>Hong Kong Sailing</p>
-        {hkClubs.length>0&&<>
-          <p className="seclabel" style={{fontSize:12,opacity:.75,marginTop:4,marginLeft:2}}>Clubs</p>
-          <div className="classes-grid" style={{marginBottom:hk.length>0?22:32}}>{hkClubs.map(renderCard)}</div>
-        </>}
-        {hk.length>0&&<>
-          <p className="seclabel" style={{fontSize:12,opacity:.75,marginTop:4,marginLeft:2}}>Associations</p>
-          <div className="classes-grid" style={{marginBottom:32}}>{hk.map(renderCard)}</div>
-        </>}
+        {hkFeds.length>0&&<>{subLabel("Federations")}
+          <div className="classes-grid" style={{marginBottom:(hkClubs.length>0||hkAssoc.length>0)?22:32}}>{hkFeds.map(renderCard)}</div></>}
+        {hkClubs.length>0&&<>{subLabel("Clubs")}
+          <div className="classes-grid" style={{marginBottom:hkAssoc.length>0?22:32}}>{hkClubs.map(renderCard)}</div></>}
+        {hkAssoc.length>0&&<>{subLabel("Associations")}
+          <div className="classes-grid" style={{marginBottom:32}}>{hkAssoc.map(renderCard)}</div></>}
       </>}
-      {intl.length>0&&<>
-        <p className="seclabel"><Globe size={14}/>International Sailing Associations</p>
-        <div className="classes-grid">{intl.map(renderCard)}</div>
+      {(intFeds.length>0||intClubs.length>0||intAssoc.length>0)&&<>
+        <p className="seclabel" style={{fontSize:17}}><Globe size={15} style={{marginRight:2}}/>International Sailing</p>
+        {intFeds.length>0&&<>{subLabel("Federations")}
+          <div className="classes-grid" style={{marginBottom:(intClubs.length>0||intAssoc.length>0)?22:32}}>{intFeds.map(renderCard)}</div></>}
+        {intClubs.length>0&&<>{subLabel("Clubs")}
+          <div className="classes-grid" style={{marginBottom:intAssoc.length>0?22:32}}>{intClubs.map(renderCard)}</div></>}
+        {intAssoc.length>0&&<>{subLabel("Associations")}
+          <div className="classes-grid">{intAssoc.map(renderCard)}</div></>}
       </>}
     </div>
     );
@@ -3367,8 +3459,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   {/* ── PORTAL: Event detail ── */}
   {portal&&view.name==="event"&&(()=>{
-    const ev=events.find(e=>e.id===view.id);if(!ev) return null;
-    const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
+    const ev=events.find(e=>e.id===view.id);
+    const notFound=(msg)=>(<div className="wrap sec" style={{paddingTop:26}}>
+      <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All competitions</button>
+      <div style={{padding:"40px 0",color:"var(--mut)"}}>{msg} <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"events"})}>Back to competitions</button></div>
+    </div>);
+    if(!ev) return notFound("This competition couldn't be found — it may have just been updated or removed.");
+    let s=null;try{s=scoreEvent(ev);}catch(err){console.error("event page: scoreEvent failed",err);}
+    if(!s) return notFound("Couldn't read this competition's scores.");
+    const isDraft=ev.status==="Draft";
     return(<ErrorBoundary resetKey={ev.id} fallback={
       <div className="wrap sec" style={{paddingTop:26}}>
         <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All competitions</button>
@@ -4287,6 +4386,64 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>
       {note.msg||`Matched ${note.matched} athletes · ${note.created} new profiles created`}
     </div></div></div>)}
+  {showAddHost&&(
+    <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setShowAddHost(false);}} style={{position:"fixed",inset:0,background:"rgba(8,20,40,.55)",zIndex:90,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"60px 16px",overflow:"auto"}}>
+      <div style={{background:"#fff",borderRadius:14,maxWidth:460,width:"100%",boxShadow:"0 24px 60px -20px rgba(0,0,0,.4)"}}>
+        <div style={{background:"var(--navy)",color:"#fff",padding:"16px 20px",borderRadius:"14px 14px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <strong style={{fontSize:16}}>Add a host</strong>
+          <button onClick={()=>setShowAddHost(false)} style={{border:0,background:"rgba(255,255,255,.15)",color:"#fff",borderRadius:8,padding:6,cursor:"pointer",display:"flex"}}><X size={16}/></button>
+        </div>
+        <div style={{padding:20,display:"flex",flexDirection:"column",gap:14}}>
+          <div>
+            <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:5}}>Type</label>
+            <div style={{display:"flex",gap:6}}>
+              {[["association","Association"],["club","Club"],["federation","Federation"]].map(([v,l])=>(
+                <button key={v} type="button" onClick={()=>setNewHost(h=>({...h,type:v}))}
+                  style={{flex:1,border:"1px solid "+(newHost.type===v?"var(--accent)":"var(--line)"),background:newHost.type===v?"var(--accent)":"#fff",color:newHost.type===v?"#fff":"var(--navy)",borderRadius:8,padding:"7px 8px",fontSize:13,fontWeight:600,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:5}}>Name</label>
+            <input value={newHost.name} onChange={e=>setNewHost(h=>({...h,name:e.target.value}))} placeholder="e.g. Aberdeen Boat Club"
+              style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"9px 11px",font:"inherit",fontSize:13,outline:"none"}}/>
+          </div>
+          <div style={{display:"flex",gap:12}}>
+            <div style={{flex:1}}>
+              <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:5}}>Region</label>
+              <div style={{display:"flex",gap:6}}>
+                {[["HK","Hong Kong"],["INT","International"]].map(([v,l])=>(
+                  <button key={v} type="button" onClick={()=>setNewHost(h=>({...h,scope:v}))}
+                    style={{flex:1,border:"1px solid "+(newHost.scope===v?"var(--accent)":"var(--line)"),background:newHost.scope===v?"var(--sky)":"#fff",color:"var(--navy)",borderRadius:8,padding:"7px 8px",fontSize:12.5,fontWeight:600,cursor:"pointer"}}>{l}</button>
+                ))}
+              </div>
+            </div>
+            {newHost.type==="association"&&<div style={{flex:1}}>
+              <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:5}}>Boat class</label>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                {CLASSES.map(c=>(
+                  <button key={c.id} type="button" onClick={()=>setNewHost(h=>({...h,cls:c.id}))}
+                    style={{border:"1px solid "+(newHost.cls===c.id?classColor(c.id):"var(--line)"),background:newHost.cls===c.id?classColor(c.id):"#fff",color:newHost.cls===c.id?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,padding:"5px 9px",cursor:"pointer"}}>{c.short}</button>
+                ))}
+              </div>
+            </div>}
+            {newHost.type==="federation"&&<div style={{flex:1}}>
+              <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:5}}>Governing country (IOC)</label>
+              <input value={newHost.country} onChange={e=>setNewHost(h=>({...h,country:e.target.value.toUpperCase().slice(0,3)}))} placeholder="HKG" maxLength={3}
+                style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"9px 11px",font:"inherit",fontSize:13,outline:"none",textTransform:"uppercase"}}/>
+            </div>}
+          </div>
+          {newHost.type==="federation"&&<p style={{fontSize:11.5,color:"var(--mut)",margin:0}}>Federations auto-collaborate on every competition hosted in their country.</p>}
+          <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:4}}>
+            <button className="btn ghost" style={{fontSize:13,padding:"8px 14px"}} onClick={()=>setShowAddHost(false)}>Cancel</button>
+            <button className="btn cta" style={{fontSize:13,padding:"8px 16px"}} disabled={!newHost.name.trim()||addingHost} onClick={saveNewHost}>
+              {addingHost?<><Loader2 size={15} className="spin"/>Saving…</>:<>Add host</>}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )}
   <div className="foot">Powered by AthLink</div>
   </div>
   );
