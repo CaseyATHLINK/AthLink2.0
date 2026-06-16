@@ -207,10 +207,23 @@ const ASSOCIATIONS=[
   {id:"int-49er",    scope:"INT", cls:"49er",     name:"International 49er Class Association"},
 ];
 const assocById=id=>ASSOCIATIONS.find(a=>a.id===id);
-const assocName=id=>assocById(id)?.name||id;
+
+// ── Clubs ──────────────────────────────────────────────────────────────────
+// Clubs (e.g. yacht clubs) are hosts just like associations, but are NOT locked
+// to a single boat class — a club may host events in any of the 4 classes.
+// A club has no `cls` field. Club ids are stored in event.owner / event.collabs
+// exactly like association ids (no schema change needed).
+const CLUBS=[
+  {id:"rhkyc", scope:"HK", name:"Royal Hong Kong Yacht Club"},
+];
+const clubById=id=>CLUBS.find(c=>c.id===id);
+const isClubId=id=>!!clubById(id);
+// Resolve any host id (association OR club) to its record / name.
+const hostById=id=>assocById(id)||clubById(id)||null;
+const assocName=id=>hostById(id)?.name||id;
 // Association → ISO country flag (HK gets a flag; International gets none)
 const assocFlag=scope=>scope==="HK"?"🇭🇰":"";
-// All associations that own/co-own an event
+// All hosts (associations + clubs) that own/co-own an event
 const eventAssocs=ev=>[ev.owner,...(ev.collabs||[])].filter(Boolean);
 
 // ── Sub-classes (per-event) for ILCA and Optimist ──
@@ -268,39 +281,50 @@ function SubclassPicker({cls,value,onChange}){
 }
 
 // Collaboration picker — tickbox reveals a type-to-search dropdown of other
-// associations of the same class. Multiple collaborators allowed.
-function CollabPicker({cls,owner,value,onChange}){
-  const[on,setOn]=React.useState((value||[]).length>0);
+// hosts. `kind` selects the pool: "association" → only associations,
+// "club" → only clubs. Both pickers share ONE `value` (collabs) array; each
+// only displays/edits its own kind and preserves the other kind's entries.
+function CollabPicker({kind="association",owner,value,onChange}){
+  const pool=kind==="club"?CLUBS:ASSOCIATIONS;
+  const poolIds=React.useMemo(()=>new Set(pool.map(x=>x.id)),[pool]);
+  const all=value||[];
+  const selected=all.filter(id=>poolIds.has(id));   // this kind only
+  const[on,setOn]=React.useState(selected.length>0);
   const[q,setQ]=React.useState("");
   const[focus,setFocus]=React.useState(false);
-  const selected=value||[];
-  const candidates=ASSOCIATIONS.filter(a=>a.id!==owner&&!selected.includes(a.id));
+  const candidates=pool.filter(a=>a.id!==owner&&!selected.includes(a.id));
   const filtered=candidates.filter(a=>!q||a.name.toLowerCase().includes(q.toLowerCase()));
+  const label=kind==="club"?"Collaborated with a club":"Collaborated with another association";
+  const placeholder=kind==="club"?"Search clubs to add…":"Search associations to add…";
+  const noMatch=kind==="club"?"No matching clubs":"No matching associations";
+  const addId=id=>onChange([...all,id]);
+  const removeId=id=>onChange(all.filter(x=>x!==id));
+  const clearKind=()=>onChange(all.filter(id=>!poolIds.has(id)));  // drop only this kind
   return <div style={{marginTop:6}}>
     <label style={{display:"inline-flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13,color:"var(--navy)",fontWeight:600}}>
-      <input type="checkbox" checked={on} onChange={e=>{setOn(e.target.checked);if(!e.target.checked)onChange([]);}}/>
-      Collaborated with another association
+      <input type="checkbox" checked={on} onChange={e=>{setOn(e.target.checked);if(!e.target.checked)clearKind();}}/>
+      {label}
     </label>
     {on&&<div style={{marginTop:8}}>
       {selected.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
         {selected.map(id=><span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"var(--sky)",color:"var(--navy)",borderRadius:7,fontSize:12,fontWeight:600,padding:"4px 8px"}}>
           {assocName(id)}
-          <button type="button" onClick={()=>onChange(selected.filter(x=>x!==id))} style={{border:0,background:"none",cursor:"pointer",color:"var(--navy)",display:"flex",padding:0}}><X size={12}/></button>
+          <button type="button" onClick={()=>removeId(id)} style={{border:0,background:"none",cursor:"pointer",color:"var(--navy)",display:"flex",padding:0}}><X size={12}/></button>
         </span>)}
       </div>}
       <div style={{position:"relative",maxWidth:380}}>
         <input value={q} onChange={e=>{setQ(e.target.value);setFocus(true);}} onFocus={()=>setFocus(true)}
           onBlur={()=>setTimeout(()=>setFocus(false),150)}
-          placeholder="Search associations to add…"
+          placeholder={placeholder}
           style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
         {focus&&filtered.length>0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 28px -12px rgba(0,0,0,.25)",zIndex:20,overflow:"hidden"}}>
-          {filtered.map(a=><div key={a.id} onMouseDown={()=>{onChange([...selected,a.id]);setQ("");}}
+          {filtered.map(a=><div key={a.id} onMouseDown={()=>{addId(a.id);setQ("");}}
             style={{padding:"9px 12px",cursor:"pointer",fontSize:13,borderBottom:"1px solid #f0f4f8"}}
             onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"} onMouseLeave={e=>e.currentTarget.style.background="#fff"}>{a.name}</div>)}
         </div>}
-        {focus&&filtered.length===0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,padding:"9px 12px",fontSize:12.5,color:"var(--mut)",zIndex:20}}>No matching associations</div>}
+        {focus&&filtered.length===0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,padding:"9px 12px",fontSize:12.5,color:"var(--mut)",zIndex:20}}>{noMatch}</div>}
       </div>
-      <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>Collaborated events appear in both associations' portals.</p>
+      <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>Collaborated events appear in every host's portal.</p>
     </div>}
   </div>;
 }
@@ -728,14 +752,14 @@ function parseHtml(htmlString){
       if(!thead||!tbody) return;
 
       // Build column index map from header
-      const headers=[...thead.querySelectorAll('th,td')].map(th=>th.textContent.trim().toLowerCase().replace(/[\s\n_()/']+/g,''));
+      const headers=[...thead.querySelectorAll('th,td')].map(th=>th.textContent.trim().toLowerCase().replace(/[\s\n_()/'#.]+/g,''));
       const colIdx={};
       headers.forEach((h,i)=>{
         if(['rank','rk','pos','pl'].includes(h)) colIdx.rank??=i;
         else if(['helmname','helm','helmsname'].includes(h)) colIdx.helm??=i;
         else if(['crewname','crew','crewsname'].includes(h)) colIdx.crew??=i;
         else if(['sailno','sail','sailnumber'].includes(h)) colIdx.sail??=i;
-        else if(['nat','nationality','country'].includes(h)) colIdx.nat??=i;
+        else if(['nat','nationality','country','sailprefix','prefix','natletter'].includes(h)) colIdx.nat??=i;
         else if(['division','div','fleet'].includes(h)) colIdx.div??=i;
         else if(['nett','net','netpts'].includes(h)) colIdx.net??=i;
         else if(['total','totalpts'].includes(h)) colIdx.total??=i;
@@ -1865,6 +1889,8 @@ export default function AthLinkMVP(){
   // (not the read-only global class portals).
   const canEdit=devMode||(canEditRole&&!isClassPortal);
   const assoc=ASSOCIATIONS.find(a=>a.id===portal);
+  const club=CLUBS.find(c=>c.id===portal);
+  const host=assoc||club;
   // Collapse duplicate imports of the same competition (same name+date+class+
   // subclass), keeping the row with the most entries. Non-destructive (display).
   const dedupEvents=list=>{
@@ -1983,7 +2009,7 @@ export default function AthLinkMVP(){
   },[previewEv]);
 
   const cls=assoc?CLASSES.find(c=>c.id===assoc.cls):(isClassPortal?CLASSES.find(c=>c.id===portalCls):null);
-  const portalName=assoc?assoc.name:(isClassPortal?`${CLASSES.find(c=>c.id===portalCls)?.short||portalCls} — All Results`:"");
+  const portalName=host?host.name:(isClassPortal?`${CLASSES.find(c=>c.id===portalCls)?.short||portalCls} — All Results`:"");
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
   const athleteTitle=isGlobal?"All Athletes":`${portalName} Athletes`;
@@ -2061,7 +2087,7 @@ Query: "${query}"`;
       const res=await fetch("/api/ai_filter",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt:buildFilterPrompt(evFilter,`Class: ${assoc?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
+        body:JSON.stringify({prompt:buildFilterPrompt(evFilter,`Portal: ${host?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
       });
       const data=await res.json();
       if(!data.ok) throw new Error(data.error||"API error");
@@ -2160,7 +2186,7 @@ Query: "${qq}"`,
       const eventCtx=classEvents.slice(0,5).map(e=>`"${e.name}" (${scoreEvent(e).fleet} boats)`).join(", ");
       const prompt=`You are a sailing results filter suggestion engine. Given a partial query, suggest 4 short filter query completions.
 Return ONLY a JSON array of 4 strings (no markdown). Each string is a complete natural-language filter query.
-Context: class=${assoc?.name||"unknown"}, recent events: ${eventCtx}
+Context: portal=${host?.name||"unknown"}, recent events: ${eventCtx}
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({prompt,max_tokens:200})});
@@ -2211,8 +2237,12 @@ Partial query: "${q}"`;
     CLASSES.filter(c=>c.short.toLowerCase().includes(ql)).forEach(c=>{
       results.push({type:"portal",label:`${c.short} — All Results`,sub:"Global class portal",nav:{type:"portal",assoc:"class:"+c.id}});
     });
+    // Club portals
+    CLUBS.filter(c=>c.name.toLowerCase().includes(ql)).forEach(c=>{
+      results.push({type:"portal",label:c.name,sub:"Club portal",nav:{type:"portal",assoc:c.id}});
+    });
     // Association portals
-    ASSOCIATIONS.filter(a=>a.name.toLowerCase().includes(ql)||a.cls.toLowerCase().includes(ql)).forEach(a=>{
+    ASSOCIATIONS.filter(a=>a.name.toLowerCase().includes(ql)||(a.cls||"").toLowerCase().includes(ql)).forEach(a=>{
       results.push({type:"portal",label:a.name,sub:"Association portal",nav:{type:"portal",assoc:a.id}});
     });
     // Nav shortcuts
@@ -3093,19 +3123,26 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   {/* ── HOME: Association portals grid ── */}
   {!portal&&view.name==="portals"&&(()=>{
-    const matchA=a=>!homeQ||a.name.toLowerCase().includes(homeQ.toLowerCase())||a.cls.toLowerCase().includes(homeQ.toLowerCase());
+    const matchA=a=>!homeQ||a.name.toLowerCase().includes(homeQ.toLowerCase())||(a.cls||"").toLowerCase().includes(homeQ.toLowerCase());
     const renderCard=(a,i)=>{
       const ce=events.filter(e=>eventAssocs(e).includes(a.id));
       const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
-      const col=classColor(a.cls);
-      const short=CLASSES.find(c=>c.id===a.cls)?.short||a.cls;
+      const isClub=!a.cls;  // clubs have no single class
+      const col=isClub?"var(--navy)":classColor(a.cls);
+      const short=isClub?"CLUB":(CLASSES.find(c=>c.id===a.cls)?.short||a.cls);
+      // For a club, show which classes it has events in (distinct, in canonical order)
+      const clubClasses=isClub?CLASSES.filter(c=>ce.some(e=>e.cls===c.id)):[];
       return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
         <span className="cls" style={{background:col,marginBottom:8,display:"inline-block"}}>{short}</span>
         <p className="class-name">{a.name}</p>
+        {isClub&&clubClasses.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+          {clubClasses.map(c=><span key={c.id} style={{fontSize:10.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",color:"#fff",background:classColor(c.id),borderRadius:5,padding:"2px 6px"}}>{c.short}</span>)}
+        </div>}
         <div className="class-stats"><div><b>{ce.length}</b>competitions</div><div><b>{cp.size}</b>athletes</div></div>
         <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(a.id);}}>Enter portal <ChevronRight size={16}/></button>
       </div>);
     };
+    const hkClubs=CLUBS.filter(c=>c.scope==="HK").filter(matchA);
     const hk=ASSOCIATIONS.filter(a=>a.scope==="HK").filter(matchA);
     const intl=ASSOCIATIONS.filter(a=>a.scope==="INT").filter(matchA);
     return(
@@ -3113,7 +3150,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div className="toolbar" style={{marginBottom:14}}>
         <div className="srch">
           <Search size={16} color="#9fb2c8"/>
-          <input placeholder="Search class associations…" value={homeQ} onChange={e=>setHomeQ(e.target.value)}/>
+          <input placeholder="Search clubs & associations…" value={homeQ} onChange={e=>setHomeQ(e.target.value)}/>
         </div>
       </div>
       {/* Global class portals — total results per class, across all associations */}
@@ -3134,9 +3171,16 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           );
         })}
       </div>
-      {hk.length>0&&<>
-        <p className="seclabel"><span style={{fontSize:16,marginRight:2}}>🇭🇰</span>Hong Kong Sailing Associations</p>
-        <div className="classes-grid" style={{marginBottom:32}}>{hk.map(renderCard)}</div>
+      {(hkClubs.length>0||hk.length>0)&&<>
+        <p className="seclabel" style={{fontSize:17}}><span style={{fontSize:16,marginRight:2}}>🇭🇰</span>Hong Kong Sailing</p>
+        {hkClubs.length>0&&<>
+          <p className="seclabel" style={{fontSize:12,opacity:.75,marginTop:4,marginLeft:2}}>Clubs</p>
+          <div className="classes-grid" style={{marginBottom:hk.length>0?22:32}}>{hkClubs.map(renderCard)}</div>
+        </>}
+        {hk.length>0&&<>
+          <p className="seclabel" style={{fontSize:12,opacity:.75,marginTop:4,marginLeft:2}}>Associations</p>
+          <div className="classes-grid" style={{marginBottom:32}}>{hk.map(renderCard)}</div>
+        </>}
       </>}
       {intl.length>0&&<>
         <p className="seclabel"><Globe size={14}/>International Sailing Associations</p>
@@ -3759,15 +3803,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
         {importStep==="upload"&&(<>
           <div className="mtabs">
-            <button className={tab==="pdf"?"on":""} onClick={()=>setTab("pdf")}><FileText size={15}/>Upload PDF / HTML</button>
+            <button className={tab==="pdf"?"on":""} onClick={()=>setTab("pdf")}><FileText size={15}/>Upload PDF / HTML / Image</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
           </div>
           <div className="mbody">
             {tab==="pdf"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload one or more results files (PDF or Sailwave HTML) — supports Sailwave, Manage2sail and more. You can select several at once; each gets its own editable tab. Multi-fleet files split into a tab per fleet.</p>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload one or more results files — PDF, Sailwave HTML, or an <strong style={{color:"var(--ink)"}}>image</strong> (photo or screenshot) of a results sheet. Supports Sailwave, Manage2sail and more. You can select several at once; each gets its own editable tab. Multi-fleet files split into a tab per fleet. Unrecognised PDFs and all images are parsed by AI.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose Files</>}
-                <input type="file" multiple accept="application/pdf,.html,text/html" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files)}/>
+                <input type="file" multiple accept="application/pdf,.html,text/html,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files)}/>
               </label>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
@@ -3792,7 +3836,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 </div>
                 <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
               </div>
-              <CollabPicker cls={evCls} owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              <CollabPicker kind="association" owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              <CollabPicker kind="club" owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
               </>);})()}
               <div className="race-ctrl">
                 <span>Number of races</span>
@@ -3886,6 +3931,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           // by the per-result selector, else the portal association's class.
           const evCls=(previewEv?.cls)||assoc?.cls||"29er";
           const singleHanded=evCls==="ilca"||evCls==="optimist";
+          // Associations may only host their own class; clubs (and edit mode) host any.
+          const classLocked=!!assoc&&!editResultsEv;
           // Detect fleet groups in pending (same fleetGroupId = same multi-fleet source file)
           const fleetGroupIds=[...new Set(pending.filter(p=>p.fleetGroupId).map(p=>p.fleetGroupId))];
           return(<div className="mbody">
@@ -3946,13 +3993,16 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </div>
             {/* ── Per-result class type selector (reshapes the table) ── */}
             <div style={{marginBottom:10}}>
-              <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class</label>
+              <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class{classLocked&&<span style={{fontWeight:500,opacity:.7}}> — fixed to {assoc.name}'s class</span>}</label>
               <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
                 {CLASSES.map(c=>{
                   const on=evCls===c.id;
-                  return <button key={c.id} type="button" onClick={()=>{updPMeta("cls",c.id);updMeta("subclass",null);}}
+                  const disabled=classLocked&&c.id!==assoc.cls;
+                  return <button key={c.id} type="button" disabled={disabled}
+                    onClick={()=>{if(disabled)return;updPMeta("cls",c.id);updMeta("subclass",null);}}
                     style={{border:"1px solid "+(on?classColor(c.id):"var(--line)"),background:on?classColor(c.id):"transparent",
-                      color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",cursor:"pointer"}}>{c.short}</button>;
+                      color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
+                      cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1}}>{c.short}</button>;
                 })}
               </div>
             </div>
@@ -3961,7 +4011,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
             </div>}
             <div style={{marginBottom:10}}>
-              <CollabPicker cls={evCls} owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              <CollabPicker kind="association" owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              <CollabPicker kind="club" owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
             </div>
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}</>)}
             {!isError&&previewEv&&(<>
