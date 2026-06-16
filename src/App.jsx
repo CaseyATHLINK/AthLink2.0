@@ -234,6 +234,12 @@ function applyDbHosts(rows){
   CLUBS=merge(DEFAULT_CLUBS,norm("club"));
   FEDERATIONS=merge(DEFAULT_FEDERATIONS,norm("federation"));
 }
+// Optimistically add a single host to the runtime registry (before/while it
+// persists to the DB) so its portal appears immediately.
+function addHostLocal(h){
+  const arr=h.type==="association"?ASSOCIATIONS:h.type==="club"?CLUBS:FEDERATIONS;
+  if(!arr.some(x=>x.id===h.id)) arr.unshift(h);
+}
 const assocById=id=>ASSOCIATIONS.find(a=>a.id===id);
 const clubById=id=>CLUBS.find(c=>c.id===id);
 const fedById=id=>FEDERATIONS.find(f=>f.id===id);
@@ -1939,8 +1945,8 @@ export default function AthLinkMVP(){
   const[showCalendar,setShowCalendar]=useState(false);
   // Ranking page
   const[rankCls,setRankCls]=useState("29er");
-  const[rankSeason,setRankSeason]=useState(null);   // calendar year string; null = latest
-  const[rankCountry,setRankCountry]=useState("ALL");
+  const[rankSourceOpen,setRankSourceOpen]=useState(null);   // "federation" | "international" | null
+  const[rankSelected,setRankSelected]=useState(()=>new Set());// selected competition ids → columns
   const[rankExpanded,setRankExpanded]=useState(()=>new Set());
   const toggleRankCell=k=>setRankExpanded(prev=>{const n=new Set(prev);n.has(k)?n.delete(k):n.add(k);return n;});
   // Dev-mode host creation
@@ -1957,16 +1963,23 @@ export default function AthLinkMVP(){
       cls:newHost.type==="association"?newHost.cls:null,
       country:newHost.type==="federation"?(newHost.country||"HKG").toUpperCase():null,
     };
-    setAddingHost(true);
-    const r=await sbPost("hosts",payload);
-    setAddingHost(false);
-    if(r){
-      await reloadHosts();
-      setShowAddHost(false);
-      setNewHost({type:"club",scope:"HK",name:"",cls:"29er",country:"HKG"});
-      setNote({name,matched:0,created:0,msg:`${payload.type} added.`});
-      setTimeout(()=>setNote(null),5000);
-    }
+    // Registry-shaped object (cls/country only where relevant)
+    const host={id,type:newHost.type,scope:newHost.scope,name,
+      ...(newHost.type==="association"?{cls:newHost.cls}:{}),
+      ...(newHost.type==="federation"?{country:(newHost.country||"HKG").toUpperCase()}:{})};
+    // Optimistic: portal appears immediately
+    addHostLocal(host);
+    setHostsVersion(v=>v+1);
+    setShowAddHost(false);
+    setNewHost({type:"club",scope:"HK",name:"",cls:"29er",country:"HKG"});
+    setNote({name,matched:0,created:0,msg:`${payload.type} portal created.`});
+    setTimeout(()=>setNote(null),5000);
+    // Persist in the background; reconcile from DB on success
+    try{
+      const r=await sbPost("hosts",payload);
+      if(r) await reloadHosts();
+      else console.error("saveNewHost: Supabase save failed — host won't survive reload (run hosts_migration.sql).");
+    }catch(err){console.error("saveNewHost: background save error",err);}
   };
   const[calClsSet,setCalClsSet]=useState(new Set()); // empty = All
   const[calQ,setCalQ]=useState("");
@@ -3341,49 +3354,61 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {!portal&&view.name==="ranking"&&(()=>{
     const yearOf=ev=>{const m=(ev.date||"").match(/(\d{4})/);return m?m[1]:null;};
     const dateKey=ev=>{const m=(ev.date||"").match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);return m?`${m[3]}${m[2].padStart(2,"0")}${m[1].padStart(2,"0")}`:"00000000";};
-    const mode=arr=>{const c={};arr.forEach(v=>c[v]=(c[v]||0)+1);const t=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];return t?parseInt(t[0]):null;};
+    const mode=arr=>{const c={};arr.forEach(v=>c[v]=(c[v]||0)+1);const t=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];return t?t[0]:null;};
     const genderOf=div=>{const d=String(div||"").trim().toLowerCase();if(["m","men","male","boy","boys"].includes(d))return"M";if(["f","w","women","female","girl","girls"].includes(d))return"F";return null;};
-    // Non-draft, deduped events of the selected class
+    const dh=rankCls==="29er"||rankCls==="49er";
+    // Class events (non-draft, deduped), split into federation-governed vs international
     const clsEvents=dedupEvents(events.filter(e=>e.cls===rankCls&&e.status!=="Draft"));
-    const seasons=[...new Set(clsEvents.map(yearOf).filter(Boolean))].sort().reverse();
-    const season=rankSeason&&seasons.includes(rankSeason)?rankSeason:(seasons[0]||null);
-    const comps=clsEvents.filter(e=>yearOf(e)===season).sort((a,b)=>dateKey(a).localeCompare(dateKey(b)));
-    // Aggregate each sailor's net + detail per competition
-    const byAth=new Map();
+    const fedEvents=clsEvents.filter(e=>governingFeds(e).length>0).sort((a,b)=>dateKey(b).localeCompare(dateKey(a)));
+    const intEvents=clsEvents.filter(e=>governingFeds(e).length===0).sort((a,b)=>dateKey(b).localeCompare(dateKey(a)));
+    const sourceEvents=rankSourceOpen==="federation"?fedEvents:rankSourceOpen==="international"?intEvents:[];
+    // Group the open source's events by year (desc) for the picker
+    const byYear={};sourceEvents.forEach(e=>{const y=yearOf(e)||"—";(byYear[y]||(byYear[y]=[])).push(e);});
+    const years=Object.keys(byYear).sort().reverse();
+    // Selected competitions become columns (date asc)
+    const comps=clsEvents.filter(e=>rankSelected.has(e.id)).sort((a,b)=>dateKey(a).localeCompare(dateKey(b)));
+    // Aggregate: teams (doublehanded) or solo sailors (singlehanded)
+    const byComp=new Map();
     comps.forEach(ev=>{
       const sc=scoreEvent(ev);
       sc.rows.forEach(r=>{
-        [[r.helm,r.birth_year,r.crew,"crew"],[r.crew,r.crew_birth_year,r.helm,"helm"]].forEach(([nm,by,partner])=>{
-          if(!nm) return;const k=canonName(nm);if(!k) return;
-          if(!byAth.has(k)) byAth.set(k,{name:displayNameFor(k)||nm,perComp:{},birthYears:[],genders:[]});
-          const a=byAth.get(k);
-          a.perComp[ev.id]={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,partner};
-          if(by) a.birthYears.push(by);
-          const g=genderOf(r.div);if(g) a.genders.push(g);
-        });
+        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail};
+        if(dh){
+          const hk=canonName(r.helm||""),ck=canonName(r.crew||"");
+          const key=[hk,ck].filter(Boolean).sort().join("|")||hk||ck;if(!key) return;
+          if(!byComp.has(key)) byComp.set(key,{type:"team",helm:"",crew:"",perComp:{},genders:[],divs:[]});
+          const t=byComp.get(key);
+          if(r.helm) t.helm=displayNameFor(hk)||r.helm;
+          if(r.crew) t.crew=displayNameFor(ck)||r.crew;
+          t.perComp[ev.id]=cell;
+          const g=genderOf(r.div);if(g)t.genders.push(g);if(r.div&&!genderOf(r.div))t.divs.push(r.div);
+        }else{
+          const nm=r.helm;if(!nm) return;const k=canonName(nm);if(!k) return;
+          if(!byComp.has(k)) byComp.set(k,{type:"solo",name:displayNameFor(k)||nm,perComp:{},genders:[],divs:[]});
+          const a=byComp.get(k);a.perComp[ev.id]=cell;
+          const g=genderOf(r.div);if(g)a.genders.push(g);if(r.div&&!genderOf(r.div))a.divs.push(r.div);
+        }
       });
     });
-    let rows=[...byAth.entries()].map(([k,a])=>{
-      const nat=athleteNat(a.name,events);
+    let rows=[...byComp.entries()].map(([k,a])=>{
       const comped=comps.filter(c=>a.perComp[c.id]);
       const total=comped.reduce((s,c)=>s+(a.perComp[c.id].net||0),0);
-      const birthYear=a.birthYears.length?mode(a.birthYears):null;
-      const age=birthYear&&season?(parseInt(season)-birthYear):null;
-      const gender=a.genders.length?(mode(a.genders.map(g=>g==="M"?1:0))===1?"M":"F"):null;
-      return{key:k,name:a.name,nat,perComp:a.perComp,total,count:comped.length,age,gender,junior:age!=null?age<19:null};
+      const gender=a.genders.length?mode(a.genders):null;
+      const division=a.divs.length?mode(a.divs):null;
+      return{key:k,type:a.type,name:a.name,helm:a.helm,crew:a.crew,perComp:a.perComp,total,count:comped.length,gender,division};
     });
-    const countries=[...new Set(rows.map(r=>r.nat).filter(Boolean))].sort();
-    if(rankCountry!=="ALL") rows=rows.filter(r=>r.nat===rankCountry);
-    rows.sort((a,b)=>a.total-b.total||b.count-a.count||a.name.localeCompare(b.name));
+    rows.sort((a,b)=>a.total-b.total||b.count-a.count||(a.name||a.helm||"").localeCompare(b.name||b.helm||""));
     rows.forEach((r,i)=>r.rankNum=i+1);
-    const fmtScore=(raw)=>raw==null?"":String(raw);
+    const podium=n=>n===1?"#e3b341":n===2?"#9aa6b2":n===3?"#c08457":"var(--navy)";
+    const clsShort=CLASSES.find(c=>c.id===rankCls)?.short||rankCls;
+    const Nug=({children,color})=><span style={{display:"inline-block",fontSize:10,fontWeight:700,color:"#fff",background:color||"var(--mut)",borderRadius:5,padding:"2px 6px",marginRight:4}}>{children}</span>;
     return(
       <div className="wrap sec">
         {/* Class tabs */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:18}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
           {CLASSES.map(c=>{
             const on=rankCls===c.id;const solid=classColor(c.id);
-            return(<button key={c.id} onClick={()=>{setRankCls(c.id);setRankSeason(null);setRankExpanded(new Set());}}
+            return(<button key={c.id} onClick={()=>{setRankCls(c.id);setRankSelected(new Set());setRankSourceOpen(null);setRankExpanded(new Set());}}
               style={{border:`1.5px solid ${on?solid:classColorA(c.id,.45)}`,borderRadius:11,background:on?solid:classColorA(c.id,.16),color:on?"#fff":solid,cursor:"pointer",
                 padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Barlow',sans-serif",transition:".15s"}}>
               <span style={{fontWeight:800,fontSize:16}}>{c.short}</span>
@@ -3391,75 +3416,90 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </button>);
           })}
         </div>
-        {/* Season + country controls */}
-        <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center",marginBottom:16}}>
-          <div style={{display:"flex",alignItems:"center",gap:7}}>
-            <span style={{fontSize:12,color:"var(--mut)",fontWeight:700,textTransform:"uppercase",letterSpacing:".04em"}}>Season</span>
-            <select value={season||""} onChange={e=>{setRankSeason(e.target.value);setRankExpanded(new Set());}}
-              style={{border:"1px solid var(--line)",borderRadius:8,padding:"7px 10px",font:"inherit",fontSize:13,background:"#fff"}}>
-              {seasons.length===0&&<option value="">—</option>}
-              {seasons.map(s=><option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:7}}>
-            <span style={{fontSize:12,color:"var(--mut)",fontWeight:700,textTransform:"uppercase",letterSpacing:".04em"}}>Country</span>
-            <select value={rankCountry} onChange={e=>setRankCountry(e.target.value)}
-              style={{border:"1px solid var(--line)",borderRadius:8,padding:"7px 10px",font:"inherit",fontSize:13,background:"#fff"}}>
-              <option value="ALL">All countries</option>
-              {countries.map(c=><option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
+        {/* Source nuggets */}
+        <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+          {[["federation","Federation",fedEvents.length],["international","International",intEvents.length]].map(([id,label,n])=>{
+            const on=rankSourceOpen===id;
+            return<button key={id} onClick={()=>setRankSourceOpen(o=>o===id?null:id)}
+              style={{border:"1.5px solid "+(on?"var(--accent)":"var(--line)"),background:on?"var(--accent)":"#fff",color:on?"#fff":"var(--navy)",
+                borderRadius:9,padding:"8px 14px",fontSize:13,fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6}}>
+              {label}<span style={{fontSize:11,opacity:.75,fontWeight:600}}>{n}</span>{on?<ChevronRight size={14} style={{transform:"rotate(90deg)"}}/>:<ChevronRight size={14}/>}
+            </button>;
+          })}
         </div>
+        {/* Result picker for the open source */}
+        {rankSourceOpen&&<div style={{border:"1px solid var(--line)",borderRadius:11,padding:"12px 14px",marginBottom:16,background:"#f8fbfe"}}>
+          {years.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:0}}>No {clsShort} {rankSourceOpen==="federation"?"federation":"international"} competitions yet.</p>}
+          {years.map((y,yi)=>(
+            <div key={y} style={{marginTop:yi?14:0,paddingTop:yi?12:0,borderTop:yi?"1px solid var(--line)":"none"}}>
+              <p style={{fontSize:11,fontWeight:800,color:"var(--mut)",letterSpacing:".06em",margin:"0 0 7px"}}>{y}</p>
+              <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+                {byYear[y].map(ev=>{
+                  const sel=rankSelected.has(ev.id);
+                  return<button key={ev.id} onClick={()=>setRankSelected(prev=>{const n=new Set(prev);n.has(ev.id)?n.delete(ev.id):n.add(ev.id);return n;})}
+                    title={ev.name}
+                    style={{border:"1.5px solid "+(sel?classColor(rankCls):"var(--line)"),background:sel?classColor(rankCls):"#fff",color:sel?"#fff":"var(--navy)",
+                      borderRadius:8,padding:"6px 11px",fontSize:12.5,fontWeight:600,cursor:"pointer",maxWidth:280,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:6}}>
+                    {sel?<CheckCircle size={13}/>:<Plus size={13}/>}{ev.name}
+                  </button>;
+                })}
+              </div>
+            </div>
+          ))}
+        </div>}
         {comps.length===0
-          ?<p style={{color:"var(--mut)",fontSize:14,padding:"30px 0"}}>No {CLASSES.find(c=>c.id===rankCls)?.short} competitions found{season?` for ${season}`:""}. Import results to build a ranking.</p>
+          ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Total = sum of net points (lowest wins).</p>
           :<>
-          <p style={{fontSize:12.5,color:"var(--mut)",marginBottom:10}}>{rows.length} sailor{rows.length!==1?"s":""} across {comps.length} competition{comps.length!==1?"s":""} · Total = sum of net points (lowest wins) · tap a net score to see that competition's races.</p>
+          <p style={{fontSize:12.5,color:"var(--mut)",marginBottom:10}}>{rows.length} {dh?"teams":"sailors"} across {comps.length} competition{comps.length!==1?"s":""} · Total = sum of net points (lowest wins) · tap a net score for race detail.</p>
           <div style={{overflowX:"auto",border:"1px solid var(--line)",borderRadius:12}}>
-            <table style={{borderCollapse:"collapse",width:"100%",fontSize:13,minWidth:680}}>
+            <table style={{borderCollapse:"collapse",width:"100%",fontSize:13,minWidth:640}}>
               <thead>
                 <tr style={{background:"var(--navy)",color:"#fff",textAlign:"left"}}>
-                  <th style={{padding:"10px 12px",position:"sticky",left:0,background:"var(--navy)"}}>#</th>
-                  <th style={{padding:"10px 12px",position:"sticky",left:40,background:"var(--navy)"}}>Name</th>
-                  <th style={{padding:"10px 10px",textAlign:"center"}}>Gender</th>
-                  <th style={{padding:"10px 10px",textAlign:"center"}}>Jr</th>
-                  {comps.map((c,i)=><th key={c.id} title={c.name} style={{padding:"10px 10px",textAlign:"center",whiteSpace:"nowrap"}}>C{i+1}</th>)}
+                  <th style={{padding:"10px 12px"}}>#</th>
+                  <th style={{padding:"10px 10px",textAlign:"center"}}>Class</th>
+                  <th style={{padding:"10px 12px"}}>{dh?"Team":"Name"}</th>
+                  {comps.map((c,i)=><th key={c.id} title={c.name} style={{padding:"10px 10px",textAlign:"center",maxWidth:130}}><div style={{maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div></th>)}
                   <th style={{padding:"10px 12px",textAlign:"center"}}>Total</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(r=>{
-                  const expandedComps=comps.filter(c=>rankExpanded.has(`${r.key}|${c.id}`)&&r.perComp[c.id]);
+                  const expanded=comps.filter(c=>rankExpanded.has(`${r.key}|${c.id}`)&&r.perComp[c.id]);
                   return(<React.Fragment key={r.key}>
                     <tr style={{borderTop:"1px solid var(--line)"}}>
-                      <td style={{padding:"9px 12px",fontWeight:700,position:"sticky",left:0,background:"#fff"}}>{r.rankNum}</td>
-                      <td style={{padding:"9px 12px",fontWeight:600,position:"sticky",left:40,background:"#fff",whiteSpace:"nowrap",cursor:"pointer",color:"var(--navy)"}}
-                        onClick={()=>go({name:"profile",id:r.name})}>{r.nat?<span style={{color:"var(--mut)",fontWeight:700,marginRight:6,fontSize:11}}>{r.nat}</span>:null}{r.name}</td>
-                      <td style={{padding:"9px 10px",textAlign:"center",color:"var(--mut)"}}>{r.gender||"—"}</td>
-                      <td style={{padding:"9px 10px",textAlign:"center"}}>{r.junior?<span style={{background:"var(--sky)",color:"var(--navy)",borderRadius:5,fontSize:11,fontWeight:700,padding:"2px 6px"}}>Jr</span>:"—"}</td>
+                      <td style={{padding:"9px 12px",fontWeight:800,color:podium(r.rankNum),fontSize:r.rankNum<=3?15:13}}>{r.rankNum}</td>
+                      <td style={{padding:"9px 10px",textAlign:"center",whiteSpace:"nowrap"}}>
+                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
+                        {r.division&&<Nug>{r.division}</Nug>}
+                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
+                      </td>
+                      <td style={{padding:"9px 12px",fontWeight:600,whiteSpace:"nowrap"}}>
+                        {dh
+                          ?<div style={{lineHeight:1.35}}>
+                            <div style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>r.helm&&go({name:"profile",id:r.helm})}>{r.helm||"—"} <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>HELM</span></div>
+                            {r.crew&&<div style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>go({name:"profile",id:r.crew})}>{r.crew} <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>CREW</span></div>}
+                          </div>
+                          :<span style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
+                      </td>
                       {comps.map(c=>{
                         const pc=r.perComp[c.id];
                         if(!pc) return <td key={c.id} style={{padding:"9px 10px",textAlign:"center",color:"#c8d4e0"}}>–</td>;
                         const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
                         return <td key={c.id} style={{padding:"9px 10px",textAlign:"center"}}>
                           <button onClick={()=>toggleRankCell(ek)} title="Tap for race detail"
-                            style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:"var(--navy)",borderRadius:6,padding:"3px 7px",fontWeight:600,cursor:"pointer",fontSize:13}}>{pc.net}</button>
+                            style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:"pointer",fontSize:13}}>{pc.net}</button>
                         </td>;
                       })}
                       <td style={{padding:"9px 12px",textAlign:"center",fontWeight:800}}>{r.total}</td>
                     </tr>
-                    {expandedComps.map(c=>{
+                    {expanded.map(c=>{
                       const pc=r.perComp[c.id];
                       return(<tr key={r.key+c.id} style={{background:"#f3f8fd"}}>
-                        <td/><td colSpan={3+comps.length+1} style={{padding:"8px 14px"}}>
+                        <td/><td/><td colSpan={2+comps.length} style={{padding:"8px 14px"}}>
                           <div style={{fontSize:12.5,color:"var(--navy)"}}>
-                            <strong>{c.name}</strong> — finished #{pc.rank??"–"} {pc.sail&&pc.sail!=="—"?`(${pc.sail})`:""}{pc.partner?` · with ${pc.partner}`:""}
+                            <strong>{c.name}</strong> — finished #{pc.rank??"–"} {pc.sail&&pc.sail!=="—"?`(${pc.sail})`:""}
                             <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:6}}>
-                              {(pc.races||[]).map((raw,ri)=>{
-                                const code=pc.race_codes?.[ri];
-                                return<span key={ri} style={{background:"#fff",border:"1px solid var(--line)",borderRadius:6,padding:"2px 7px",fontSize:11.5}}>
-                                  <span style={{color:"var(--mut)"}}>R{ri+1}</span> <span style={{fontWeight:600,color:code?"#c0392b":"var(--navy)"}}>{fmtScore(raw)}{code?` ${code}`:""}</span>
-                                </span>;
-                              })}
+                              {(pc.races||[]).map((raw,ri)=>{const code=pc.race_codes?.[ri];return<span key={ri} style={{background:"#fff",border:"1px solid var(--line)",borderRadius:6,padding:"2px 7px",fontSize:11.5}}><span style={{color:"var(--mut)"}}>R{ri+1}</span> <span style={{fontWeight:600,color:code?"#c0392b":"var(--navy)"}}>{raw==null?"":String(raw)}{code?` ${code}`:""}</span></span>;})}
                               <span style={{fontWeight:700}}>Net {pc.net}</span>
                             </div>
                           </div>
@@ -3471,7 +3511,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               </tbody>
             </table>
           </div>
-          <p style={{fontSize:11.5,color:"var(--mut)",marginTop:10}}>Columns C1–C{comps.length}: {comps.map((c,i)=>`C${i+1} = ${c.name}`).join(" · ")}</p>
         </>}
       </div>
     );
@@ -3494,6 +3533,28 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       </div></div>
       <div className="wrap sec">
         <button className="back" onClick={goHome}><ArrowLeft size={16}/>Sailing</button>
+        {fed&&(()=>{
+          const feAssoc=ASSOCIATIONS.filter(a=>a.scope===fed.scope);
+          if(!feAssoc.length) return null;
+          return <div style={{marginBottom:22}}>
+            <p className="seclabel" style={{marginBottom:8}}><Anchor size={14}/>Associations under {fed.name}</p>
+            <div className="classes-grid">
+              {feAssoc.map(a=>{
+                const ce=events.filter(e=>eventAssocs(e).includes(a.id));
+                const col=classColor(a.cls);const short=CLASSES.find(c=>c.id===a.cls)?.short||a.cls;
+                return <div className="class-card" key={a.id} style={{cursor:"pointer"}} onClick={()=>enterPortal(a.id)}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:10,minHeight:22}}>
+                    <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)",border:"1px solid var(--line)",borderRadius:6,padding:"2px 7px"}}>Association</span>
+                    <span className="cls" style={{background:col}}>{short}</span>
+                  </div>
+                  <p className="class-name">{a.name}</p>
+                  <div className="class-stats"><div><b>{ce.length}</b>competitions</div></div>
+                  <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(a.id);}}>Enter portal <ChevronRight size={16}/></button>
+                </div>;
+              })}
+            </div>
+          </div>;
+        })()}
         <div className="toolbar" style={{marginBottom:8}}>
           <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
           {canEdit&&<button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a competition</button>}
