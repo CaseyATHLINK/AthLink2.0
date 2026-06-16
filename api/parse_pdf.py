@@ -352,6 +352,14 @@ def detect_cols(header_rows):
             cols['total'] = i
         elif h in ('nett','net','netpts','netpoints','nettpts','nettpoints','nett.','netpts.'):
             cols['net'] = i
+        elif h in ('yob','yearofbirth','birthyear','born','dob','helmyob'):
+            cols.setdefault('yob', i)
+        elif h in ('crewyob','crewyearofbirth','crewbirthyear','crewborn','crewdob'):
+            cols['crewyob'] = i
+        elif h in ('age','optiage','helmage','years'):
+            cols.setdefault('age', i)
+        elif h in ('crewage',):
+            cols['crewage'] = i
         if is_race_hdr(cell):
             cols.setdefault('race_start', i)
             cols['race_end'] = i
@@ -433,6 +441,31 @@ def parse_row_with_cols(row, cols):
             except ValueError:
                 pass
 
+    # ── Birth year / age extraction ──
+    def _year(v):
+        m = re.search(r'\b(19[3-9]\d|20[0-2]\d)\b', str(v or ''))
+        return int(m.group(0)) if m else None
+    def _age(v):
+        m = re.search(r'\b(\d{1,2})\b', str(v or ''))
+        n = int(m.group(0)) if m else None
+        return n if (n is not None and 5 <= n <= 99) else None
+
+    birth_year      = _year(get('yob'))
+    crew_birth_year = _year(get('crewyob'))
+    age_h           = _age(get('age'))
+    age_c           = _age(get('crewage'))
+
+    # Manage2sail / combined-cell birth years e.g. "Seb Menzies (2005)" — the
+    # name cleaner strips these, so capture them here before they're lost.
+    if birth_year is None or crew_birth_year is None:
+        src = get('sailors') if 'sailors' in cols else get('helm')
+        yrs = re.findall(r'\b(19[3-9]\d|20[0-2]\d)\b', str(src or ''))
+        if yrs:
+            if birth_year is None:
+                birth_year = int(yrs[0])
+            if crew_birth_year is None and len(yrs) > 1:
+                crew_birth_year = int(yrs[1])
+
     return {
         'helm':       clean_name(helm_raw),
         'crew':       clean_name(crew_raw),
@@ -443,6 +476,9 @@ def parse_row_with_cols(row, cols):
         'race_codes': race_codes,
         'pdf_rank':   pdf_rank,
         'pdf_net':    pdf_net,
+        'birth_year':      birth_year,
+        'crew_birth_year': crew_birth_year,
+        '_age': age_h, '_crew_age': age_c,   # resolved to birth_year once event year is known
     }
 
 # ── table parser ───────────────────────────────────────────────────────────
@@ -568,7 +604,7 @@ def detect_fleets_in_text(text):
     return found
 
 # ── Gemini AI fallback ─────────────────────────────────────────────────────
-_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 _GEMINI_PROMPT = """Parse this sailing regatta results PDF and return ONLY a JSON object — no markdown, no explanation.
 
@@ -586,6 +622,8 @@ Return exactly this structure:
       "div": "fleet or division label or empty",
       "pdf_rank": 1,
       "pdf_net": 67.0,
+      "birth_year": 2005,
+      "crew_birth_year": 2004,
       "races": [5, 12, 4, "DNF", 7],
       "race_codes": [null, null, null, null, null]
     }
@@ -597,6 +635,7 @@ RULES:
 - helm/crew: title case "First Last". Convert "SMITH, John" to "John Smith"
 - sail: country prefix + number if present (e.g. "NZL 7"), else just the number
 - nat: 3-letter IOC code (NZL, AUS, GBR, HKG, POL etc.) — empty if unknown
+- birth_year/crew_birth_year: 4-digit year of birth if a YOB column is shown. If only an AGE is shown, compute birth_year = (event year) - age. If neither is available, use null.
 - races: ALL race scores in order as numbers or string codes.
   Penalty codes as strings: DNF, DNC, DNS, UFD, BFD, DSQ, OCS, RET, NSC, SCP, STP, RDG
   Discarded scores: include as plain numbers (no parentheses)
@@ -606,7 +645,7 @@ RULES:
 - discards: number of discards applied (integer, usually 1)
 """
 
-def _gemini_parse(pdf_bytes: bytes) -> dict:
+def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict:
     key = os.environ.get("GEMINI_API_KEY", "")
     if not key:
         raise ValueError("GEMINI_API_KEY not configured.")
@@ -616,8 +655,8 @@ def _gemini_parse(pdf_bytes: bytes) -> dict:
     payload = json.dumps({
         "contents": [{"parts": [
             {"text": _GEMINI_PROMPT},
-            {"inline_data": {"mime_type": "application/pdf",
-                             "data": base64.b64encode(pdf_bytes).decode()}}
+            {"inline_data": {"mime_type": mime_type,
+                             "data": base64.b64encode(file_bytes).decode()}}
         ]}],
         "generationConfig": {"temperature": 0}
     }).encode()
@@ -673,6 +712,13 @@ def _gemini_parse(pdf_bytes: bytes) -> dict:
         except (ValueError, TypeError):
             pass
 
+        def _yob(v):
+            try:
+                y = int(v)
+                return y if 1930 <= y <= 2030 else None
+            except (ValueError, TypeError):
+                return None
+
         entries.append({
             "helm": helm, "crew": crew,
             "sail": clean_sail or "—",
@@ -680,6 +726,8 @@ def _gemini_parse(pdf_bytes: bytes) -> dict:
             "div":  str(e.get("div") or ""),
             "races": races, "race_codes": race_codes,
             "pdf_rank": pdf_rank, "pdf_net": pdf_net,
+            "birth_year": _yob(e.get("birth_year")),
+            "crew_birth_year": _yob(e.get("crew_birth_year")),
         })
 
     if not entries:
@@ -762,6 +810,18 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
 
     results = [r for r in results if r.get('entries')]
 
+    # Resolve any age-based birth years now that the event year is known, then
+    # drop the temporary _age keys so they never reach the client/DB.
+    ym = re.search(r'\b(20[0-2]\d|19[5-9]\d)\b', (ev_date or '') + ' ' + (ev_name or '') + ' ' + full_text[:400])
+    ev_year = int(ym.group(0)) if ym else None
+    for r in results:
+        for e in r['entries']:
+            if e.get('birth_year') is None and e.get('_age') and ev_year:
+                e['birth_year'] = ev_year - e['_age']
+            if e.get('crew_birth_year') is None and e.get('_crew_age') and ev_year:
+                e['crew_birth_year'] = ev_year - e['_crew_age']
+            e.pop('_age', None); e.pop('_crew_age', None)
+
     # Merge Gold/Silver/Bronze/Emerald fleet sections into one event
     gsb = [r for r in results if re.search(r'Gold|Silver|Bronze|Emerald|Sapphire', r.get('fleet',''), re.IGNORECASE)]
     other = [r for r in results if r not in gsb]
@@ -784,16 +844,46 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         'fleets': [{'name':r['fleet'],'entries':r['entries'],'discards':r['discards'],'count':len(r['entries'])} for r in results],
     }
 
-def parse_pdf_bytes(pdf_bytes: bytes) -> dict:
-    """Try rule-based parser; fall back to Gemini AI if it yields nothing."""
+def _detect_mime(data: bytes) -> str:
+    """Sniff file type from magic bytes. Returns a mime type string."""
+    if data[:4] == b"%PDF":
+        return "application/pdf"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return "application/pdf"  # default — let pdfplumber try
+
+
+def parse_pdf_bytes(file_bytes: bytes) -> dict:
+    """
+    Entry point. Images go straight to Gemini (no rule-based parser exists for
+    them). PDFs try the rule-based parser first, then fall back to Gemini.
+    """
+    mime = _detect_mime(file_bytes)
+
+    # ── Image upload → Gemini only ──
+    if mime.startswith("image/"):
+        key = os.environ.get("GEMINI_API_KEY", "")
+        if not key:
+            raise ValueError(
+                "Image results require AI parsing, but GEMINI_API_KEY is not configured."
+            )
+        return _gemini_parse(file_bytes, mime)
+
+    # ── PDF → rule-based first, Gemini fallback ──
     try:
-        return _rule_based_parse(pdf_bytes)
+        return _rule_based_parse(file_bytes)
     except ValueError as rule_err:
         key = os.environ.get("GEMINI_API_KEY", "")
         if not key:
             raise  # No AI key — surface original error
         try:
-            return _gemini_parse(pdf_bytes)
+            return _gemini_parse(file_bytes, "application/pdf")
         except Exception as ai_err:
             raise ValueError(
                 f"{rule_err} (AI fallback also failed: {ai_err})"
