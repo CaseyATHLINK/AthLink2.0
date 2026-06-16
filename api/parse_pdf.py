@@ -12,7 +12,11 @@ Universal parser covering:
 """
 
 from http.server import BaseHTTPRequestHandler
-import json, io, re
+import json, io, re, os, base64
+try:
+    from urllib.request import urlopen, Request as UrlRequest
+except ImportError:
+    urlopen = UrlRequest = None
 
 try:
     import pdfplumber
@@ -563,8 +567,136 @@ def detect_fleets_in_text(text):
             seen.add(key); found.append(name)
     return found
 
+# ── Gemini AI fallback ─────────────────────────────────────────────────────
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+_GEMINI_PROMPT = """Parse this sailing regatta results PDF and return ONLY a JSON object — no markdown, no explanation.
+
+Return exactly this structure:
+{
+  "name": "event name string",
+  "date": "dd/mm/yyyy or empty string",
+  "discards": 1,
+  "entries": [
+    {
+      "helm": "First Last",
+      "crew": "First Last or empty string",
+      "sail": "sail number e.g. 88 or NZL 7",
+      "nat": "3-letter IOC country code e.g. NZL or empty",
+      "div": "fleet or division label or empty",
+      "pdf_rank": 1,
+      "pdf_net": 67.0,
+      "races": [5, 12, 4, "DNF", 7],
+      "race_codes": [null, null, null, null, null]
+    }
+  ]
+}
+
+RULES:
+- Extract the OVERALL / FINAL results table (skip preliminary per-fleet tables if present)
+- helm/crew: title case "First Last". Convert "SMITH, John" to "John Smith"
+- sail: country prefix + number if present (e.g. "NZL 7"), else just the number
+- nat: 3-letter IOC code (NZL, AUS, GBR, HKG, POL etc.) — empty if unknown
+- races: ALL race scores in order as numbers or string codes.
+  Penalty codes as strings: DNF, DNC, DNS, UFD, BFD, DSQ, OCS, RET, NSC, SCP, STP, RDG
+  Discarded scores: include as plain numbers (no parentheses)
+- race_codes: null for clean/plain scores; the code string when a numeric score has a code annotation
+- pdf_rank: finishing position as integer (1 = winner)
+- pdf_net: net score after discards, as a number
+- discards: number of discards applied (integer, usually 1)
+"""
+
+def _gemini_parse(pdf_bytes: bytes) -> dict:
+    key = os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ValueError("GEMINI_API_KEY not configured.")
+    if urlopen is None:
+        raise ValueError("urllib not available.")
+
+    payload = json.dumps({
+        "contents": [{"parts": [
+            {"text": _GEMINI_PROMPT},
+            {"inline_data": {"mime_type": "application/pdf",
+                             "data": base64.b64encode(pdf_bytes).decode()}}
+        ]}],
+        "generationConfig": {"temperature": 0}
+    }).encode()
+
+    req = UrlRequest(
+        f"{_GEMINI_URL}?key={key}",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    with urlopen(req, timeout=90) as resp:
+        result = json.loads(resp.read())
+
+    raw = result["candidates"][0]["content"]["parts"][0]["text"]
+    raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
+    data = json.loads(raw)
+
+    entries = []
+    for e in (data.get("entries") or []):
+        helm = clean_name(str(e.get("helm") or ""))
+        crew = clean_name(str(e.get("crew") or ""))
+        sail_raw = str(e.get("sail") or "").strip()
+        nat_raw  = str(e.get("nat")  or "").strip()
+
+        extracted_nat, clean_sail = parse_sail_country(sail_raw)
+        if not nat_raw and extracted_nat:
+            nat_raw = extracted_nat
+        if not clean_sail:
+            clean_sail = sail_raw
+
+        races, race_codes = [], []
+        for r in (e.get("races") or []):
+            if r is None:
+                continue
+            sc, code = clean_score_with_code(str(r))
+            if sc is not None:
+                races.append(sc)
+                race_codes.append(code)
+
+        if not helm or not races:
+            continue
+
+        pdf_rank = None
+        try:
+            pdf_rank = int(e.get("pdf_rank") or 0) or None
+        except (ValueError, TypeError):
+            pass
+
+        pdf_net = None
+        try:
+            n = float(e.get("pdf_net") or 0)
+            pdf_net = int(n) if n == int(n) else round(n, 2)
+        except (ValueError, TypeError):
+            pass
+
+        entries.append({
+            "helm": helm, "crew": crew,
+            "sail": clean_sail or "—",
+            "nat":  flag_from_ioc(nat_raw),
+            "div":  str(e.get("div") or ""),
+            "races": races, "race_codes": race_codes,
+            "pdf_rank": pdf_rank, "pdf_net": pdf_net,
+        })
+
+    if not entries:
+        raise ValueError("AI parser returned no valid entries.")
+
+    return {
+        "ok": True, "multi": False,
+        "name": str(data.get("name") or "Imported Competition"),
+        "date": str(data.get("date") or ""),
+        "discards": int(data.get("discards") or 1),
+        "entries": entries,
+        "ai_parsed": True,
+    }
+
+
 # ── main parse ─────────────────────────────────────────────────────────────
-def parse_pdf_bytes(pdf_bytes: bytes) -> dict:
+def _rule_based_parse(pdf_bytes: bytes) -> dict:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         full_text = '\n'.join(p.extract_text() or '' for p in pdf.pages)
         all_tables = []
@@ -651,6 +783,22 @@ def parse_pdf_bytes(pdf_bytes: bytes) -> dict:
         'ok': True, 'multi': True, 'name': ev_name, 'date': ev_date,
         'fleets': [{'name':r['fleet'],'entries':r['entries'],'discards':r['discards'],'count':len(r['entries'])} for r in results],
     }
+
+def parse_pdf_bytes(pdf_bytes: bytes) -> dict:
+    """Try rule-based parser; fall back to Gemini AI if it yields nothing."""
+    try:
+        return _rule_based_parse(pdf_bytes)
+    except ValueError as rule_err:
+        key = os.environ.get("GEMINI_API_KEY", "")
+        if not key:
+            raise  # No AI key — surface original error
+        try:
+            return _gemini_parse(pdf_bytes)
+        except Exception as ai_err:
+            raise ValueError(
+                f"{rule_err} (AI fallback also failed: {ai_err})"
+            )
+
 
 # ── Vercel handler ─────────────────────────────────────────────────────────
 class handler(BaseHTTPRequestHandler):
