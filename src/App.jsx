@@ -1937,6 +1937,12 @@ export default function AthLinkMVP(){
   const[gSearch,setGSearch]=useState("");
   // Calendar
   const[showCalendar,setShowCalendar]=useState(false);
+  // Ranking page
+  const[rankCls,setRankCls]=useState("29er");
+  const[rankSeason,setRankSeason]=useState(null);   // calendar year string; null = latest
+  const[rankCountry,setRankCountry]=useState("ALL");
+  const[rankExpanded,setRankExpanded]=useState(()=>new Set());
+  const toggleRankCell=k=>setRankExpanded(prev=>{const n=new Set(prev);n.has(k)?n.delete(k):n.add(k);return n;});
   // Dev-mode host creation
   const[showAddHost,setShowAddHost]=useState(false);
   const[newHost,setNewHost]=useState({type:"club",scope:"HK",name:"",cls:"29er",country:"HKG"});
@@ -3244,6 +3250,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <div className="home-tabs">
           <button className={view.name==="portals"?"on":""} onClick={()=>go({name:"portals"})}>Class Portals</button>
           <button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>All Athletes</button>
+          <button className={view.name==="ranking"?"on":""} onClick={()=>go({name:"ranking"})}>Ranking</button>
         </div>
       </div>
     </div>
@@ -3327,6 +3334,146 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <div className="classes-grid">{intAssoc.map(renderCard)}</div></>}
       </>}
     </div>
+    );
+  })()}
+
+  {/* ── HOME: Ranking ── */}
+  {!portal&&view.name==="ranking"&&(()=>{
+    const yearOf=ev=>{const m=(ev.date||"").match(/(\d{4})/);return m?m[1]:null;};
+    const dateKey=ev=>{const m=(ev.date||"").match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);return m?`${m[3]}${m[2].padStart(2,"0")}${m[1].padStart(2,"0")}`:"00000000";};
+    const mode=arr=>{const c={};arr.forEach(v=>c[v]=(c[v]||0)+1);const t=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];return t?parseInt(t[0]):null;};
+    const genderOf=div=>{const d=String(div||"").trim().toLowerCase();if(["m","men","male","boy","boys"].includes(d))return"M";if(["f","w","women","female","girl","girls"].includes(d))return"F";return null;};
+    // Non-draft, deduped events of the selected class
+    const clsEvents=dedupEvents(events.filter(e=>e.cls===rankCls&&e.status!=="Draft"));
+    const seasons=[...new Set(clsEvents.map(yearOf).filter(Boolean))].sort().reverse();
+    const season=rankSeason&&seasons.includes(rankSeason)?rankSeason:(seasons[0]||null);
+    const comps=clsEvents.filter(e=>yearOf(e)===season).sort((a,b)=>dateKey(a).localeCompare(dateKey(b)));
+    // Aggregate each sailor's net + detail per competition
+    const byAth=new Map();
+    comps.forEach(ev=>{
+      const sc=scoreEvent(ev);
+      sc.rows.forEach(r=>{
+        [[r.helm,r.birth_year,r.crew,"crew"],[r.crew,r.crew_birth_year,r.helm,"helm"]].forEach(([nm,by,partner])=>{
+          if(!nm) return;const k=canonName(nm);if(!k) return;
+          if(!byAth.has(k)) byAth.set(k,{name:displayNameFor(k)||nm,perComp:{},birthYears:[],genders:[]});
+          const a=byAth.get(k);
+          a.perComp[ev.id]={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,partner};
+          if(by) a.birthYears.push(by);
+          const g=genderOf(r.div);if(g) a.genders.push(g);
+        });
+      });
+    });
+    let rows=[...byAth.entries()].map(([k,a])=>{
+      const nat=athleteNat(a.name,events);
+      const comped=comps.filter(c=>a.perComp[c.id]);
+      const total=comped.reduce((s,c)=>s+(a.perComp[c.id].net||0),0);
+      const birthYear=a.birthYears.length?mode(a.birthYears):null;
+      const age=birthYear&&season?(parseInt(season)-birthYear):null;
+      const gender=a.genders.length?(mode(a.genders.map(g=>g==="M"?1:0))===1?"M":"F"):null;
+      return{key:k,name:a.name,nat,perComp:a.perComp,total,count:comped.length,age,gender,junior:age!=null?age<19:null};
+    });
+    const countries=[...new Set(rows.map(r=>r.nat).filter(Boolean))].sort();
+    if(rankCountry!=="ALL") rows=rows.filter(r=>r.nat===rankCountry);
+    rows.sort((a,b)=>a.total-b.total||b.count-a.count||a.name.localeCompare(b.name));
+    rows.forEach((r,i)=>r.rankNum=i+1);
+    const fmtScore=(raw)=>raw==null?"":String(raw);
+    return(
+      <div className="wrap sec">
+        {/* Class tabs */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:18}}>
+          {CLASSES.map(c=>{
+            const on=rankCls===c.id;const solid=classColor(c.id);
+            return(<button key={c.id} onClick={()=>{setRankCls(c.id);setRankSeason(null);setRankExpanded(new Set());}}
+              style={{border:`1.5px solid ${on?solid:classColorA(c.id,.45)}`,borderRadius:11,background:on?solid:classColorA(c.id,.16),color:on?"#fff":solid,cursor:"pointer",
+                padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Barlow',sans-serif",transition:".15s"}}>
+              <span style={{fontWeight:800,fontSize:16}}>{c.short}</span>
+              <span style={{fontSize:11,opacity:.85,fontWeight:600}}>Ranking</span>
+            </button>);
+          })}
+        </div>
+        {/* Season + country controls */}
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center",marginBottom:16}}>
+          <div style={{display:"flex",alignItems:"center",gap:7}}>
+            <span style={{fontSize:12,color:"var(--mut)",fontWeight:700,textTransform:"uppercase",letterSpacing:".04em"}}>Season</span>
+            <select value={season||""} onChange={e=>{setRankSeason(e.target.value);setRankExpanded(new Set());}}
+              style={{border:"1px solid var(--line)",borderRadius:8,padding:"7px 10px",font:"inherit",fontSize:13,background:"#fff"}}>
+              {seasons.length===0&&<option value="">—</option>}
+              {seasons.map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:7}}>
+            <span style={{fontSize:12,color:"var(--mut)",fontWeight:700,textTransform:"uppercase",letterSpacing:".04em"}}>Country</span>
+            <select value={rankCountry} onChange={e=>setRankCountry(e.target.value)}
+              style={{border:"1px solid var(--line)",borderRadius:8,padding:"7px 10px",font:"inherit",fontSize:13,background:"#fff"}}>
+              <option value="ALL">All countries</option>
+              {countries.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+        {comps.length===0
+          ?<p style={{color:"var(--mut)",fontSize:14,padding:"30px 0"}}>No {CLASSES.find(c=>c.id===rankCls)?.short} competitions found{season?` for ${season}`:""}. Import results to build a ranking.</p>
+          :<>
+          <p style={{fontSize:12.5,color:"var(--mut)",marginBottom:10}}>{rows.length} sailor{rows.length!==1?"s":""} across {comps.length} competition{comps.length!==1?"s":""} · Total = sum of net points (lowest wins) · tap a net score to see that competition's races.</p>
+          <div style={{overflowX:"auto",border:"1px solid var(--line)",borderRadius:12}}>
+            <table style={{borderCollapse:"collapse",width:"100%",fontSize:13,minWidth:680}}>
+              <thead>
+                <tr style={{background:"var(--navy)",color:"#fff",textAlign:"left"}}>
+                  <th style={{padding:"10px 12px",position:"sticky",left:0,background:"var(--navy)"}}>#</th>
+                  <th style={{padding:"10px 12px",position:"sticky",left:40,background:"var(--navy)"}}>Name</th>
+                  <th style={{padding:"10px 10px",textAlign:"center"}}>Gender</th>
+                  <th style={{padding:"10px 10px",textAlign:"center"}}>Jr</th>
+                  {comps.map((c,i)=><th key={c.id} title={c.name} style={{padding:"10px 10px",textAlign:"center",whiteSpace:"nowrap"}}>C{i+1}</th>)}
+                  <th style={{padding:"10px 12px",textAlign:"center"}}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r=>{
+                  const expandedComps=comps.filter(c=>rankExpanded.has(`${r.key}|${c.id}`)&&r.perComp[c.id]);
+                  return(<React.Fragment key={r.key}>
+                    <tr style={{borderTop:"1px solid var(--line)"}}>
+                      <td style={{padding:"9px 12px",fontWeight:700,position:"sticky",left:0,background:"#fff"}}>{r.rankNum}</td>
+                      <td style={{padding:"9px 12px",fontWeight:600,position:"sticky",left:40,background:"#fff",whiteSpace:"nowrap",cursor:"pointer",color:"var(--navy)"}}
+                        onClick={()=>go({name:"profile",id:r.name})}>{r.nat?<span style={{color:"var(--mut)",fontWeight:700,marginRight:6,fontSize:11}}>{r.nat}</span>:null}{r.name}</td>
+                      <td style={{padding:"9px 10px",textAlign:"center",color:"var(--mut)"}}>{r.gender||"—"}</td>
+                      <td style={{padding:"9px 10px",textAlign:"center"}}>{r.junior?<span style={{background:"var(--sky)",color:"var(--navy)",borderRadius:5,fontSize:11,fontWeight:700,padding:"2px 6px"}}>Jr</span>:"—"}</td>
+                      {comps.map(c=>{
+                        const pc=r.perComp[c.id];
+                        if(!pc) return <td key={c.id} style={{padding:"9px 10px",textAlign:"center",color:"#c8d4e0"}}>–</td>;
+                        const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
+                        return <td key={c.id} style={{padding:"9px 10px",textAlign:"center"}}>
+                          <button onClick={()=>toggleRankCell(ek)} title="Tap for race detail"
+                            style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:"var(--navy)",borderRadius:6,padding:"3px 7px",fontWeight:600,cursor:"pointer",fontSize:13}}>{pc.net}</button>
+                        </td>;
+                      })}
+                      <td style={{padding:"9px 12px",textAlign:"center",fontWeight:800}}>{r.total}</td>
+                    </tr>
+                    {expandedComps.map(c=>{
+                      const pc=r.perComp[c.id];
+                      return(<tr key={r.key+c.id} style={{background:"#f3f8fd"}}>
+                        <td/><td colSpan={3+comps.length+1} style={{padding:"8px 14px"}}>
+                          <div style={{fontSize:12.5,color:"var(--navy)"}}>
+                            <strong>{c.name}</strong> — finished #{pc.rank??"–"} {pc.sail&&pc.sail!=="—"?`(${pc.sail})`:""}{pc.partner?` · with ${pc.partner}`:""}
+                            <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:6}}>
+                              {(pc.races||[]).map((raw,ri)=>{
+                                const code=pc.race_codes?.[ri];
+                                return<span key={ri} style={{background:"#fff",border:"1px solid var(--line)",borderRadius:6,padding:"2px 7px",fontSize:11.5}}>
+                                  <span style={{color:"var(--mut)"}}>R{ri+1}</span> <span style={{fontWeight:600,color:code?"#c0392b":"var(--navy)"}}>{fmtScore(raw)}{code?` ${code}`:""}</span>
+                                </span>;
+                              })}
+                              <span style={{fontWeight:700}}>Net {pc.net}</span>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>);
+                    })}
+                  </React.Fragment>);
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p style={{fontSize:11.5,color:"var(--mut)",marginTop:10}}>Columns C1–C{comps.length}: {comps.map((c,i)=>`C${i+1} = ${c.name}`).join(" · ")}</p>
+        </>}
+      </div>
     );
   })()}
 
