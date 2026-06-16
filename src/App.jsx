@@ -2441,6 +2441,25 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     });
     setActivePending(idx);
   };
+  // Merge all pending tabs that share a fleetGroupId into one combined tab.
+  const combineFleetGroup=(groupId)=>{
+    const groupItems=pending.filter(p=>p.fleetGroupId===groupId);
+    if(groupItems.length<2) return;
+    const allEntries=groupItems.flatMap(p=>p.previewEv?.entries||[]);
+    const seen=new Set();
+    const merged=allEntries.filter(e=>{const k=(e.helm||"").toLowerCase()+(e.sail||"");if(seen.has(k))return false;seen.add(k);return true;});
+    merged.sort((a,b)=>(a.pdf_rank??9999)-(b.pdf_rank??9999));
+    const baseName=groupItems[0].fleetGroupBaseName||groupItems[0].previewEv?.name?.split(" — ")[0]||"Imported Competition";
+    const maxDisc=groupItems[0].fleetGroupDiscards||Math.max(...groupItems.map(p=>p.previewEv?.discards||1));
+    const combinedPreview={...groupItems[0].previewEv,name:baseName,discards:maxDisc,entries:merged,ai_parsed:false};
+    const combinedItem={id:"combined_"+groupId,name:baseName,status:"ok",error:null,previewEv:combinedPreview,subclass:groupItems[0].subclass,collabs:groupItems[0].collabs};
+    const newPending=[...pending.filter(p=>p.fleetGroupId!==groupId),combinedItem];
+    const newIdx=newPending.length-1;
+    setPending(newPending);
+    setActivePending(newIdx);
+    setPreviewEv(combinedPreview);
+    setMf(f=>({...f,subclass:combinedItem.subclass||null,collabs:combinedItem.collabs||[]}));
+  };
 
   const buildPreviewFromFleet=(pdfName,pdfDate,fleet)=>{
     const ev={
@@ -2484,7 +2503,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   };
 
   // Build a previewEv object from parsed fleet data (no state side-effects).
-  const previewFromData=(name,date,fleet)=>{
+  const previewFromData=(name,date,fleet,aiParsed=false)=>{
     const sh=(assoc?.cls)==="ilca"||(assoc?.cls)==="optimist";
     return{
       id:"imp_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
@@ -2492,6 +2511,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       cls:assoc?.cls||"29er",doublehanded:!sh,venue:"",country:"",
       date:date||"",discards:fleet.discards||1,scoring:"Appendix A",
       source:"Imported",status:"Final",
+      ai_parsed:aiParsed||false,
       entries:(fleet.entries||[]).map(e=>({
         helm:e.helm||"",crew:sh?"":(e.crew||""),sail:e.sail||"—",nat:e.nat||"",div:e.div||"",
         races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank??null,pdf_net:e.pdf_net??null,
@@ -2513,13 +2533,16 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       if(!data.ok){
         results.push({...seed[i],status:"error",error:data.error});
       }else if(data.multi&&data.fleets?.length){
-        // multi-fleet file → expand each fleet into its own pending tab
+        // multi-fleet file → expand each fleet into its own pending tab, tagged with a groupId
+        const groupId="fg_"+Date.now()+"_"+i;
+        const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
         data.fleets.forEach((fl,fi)=>{
           results.push({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-            previewEv:previewFromData(data.name,data.date||"",fl),subclass:null,collabs:[]});
+            previewEv:previewFromData(data.name,data.date||"",fl),subclass:null,collabs:[],
+            fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc});
         });
       }else{
-        results.push({...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards})});
+        results.push({...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false)});
       }
     }
     setPending(results);setActivePending(0);
@@ -3863,6 +3886,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           // by the per-result selector, else the portal association's class.
           const evCls=(previewEv?.cls)||assoc?.cls||"29er";
           const singleHanded=evCls==="ilca"||evCls==="optimist";
+          // Detect fleet groups in pending (same fleetGroupId = same multi-fleet source file)
+          const fleetGroupIds=[...new Set(pending.filter(p=>p.fleetGroupId).map(p=>p.fleetGroupId))];
           return(<div className="mbody">
             {/* ── Pending result tabs (multi-file import) ── */}
             {pending.length>1&&(
@@ -3876,6 +3901,19 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                     <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{p.previewEv?.name||p.name}</span>
                   </button>
                 ))}
+                {/* Combine fleets button — shown per fleet group */}
+                {fleetGroupIds.map(gid=>{
+                  const gItems=pending.filter(p=>p.fleetGroupId===gid);
+                  if(gItems.length<2) return null;
+                  return(
+                    <button key={gid} onClick={()=>combineFleetGroup(gid)}
+                      title={`Merge all ${gItems.length} fleets into one combined result`}
+                      style={{display:"inline-flex",alignItems:"center",gap:5,border:"1px dashed var(--accent)",background:"#f0f8ff",color:"var(--accent)",
+                        borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>
+                      <Trophy size={12} style={{flex:"none"}}/>Combine {gItems.length} fleets → one result
+                    </button>
+                  );
+                })}
               </div>
             )}
             {/* ── Unparseable file notice ── */}
@@ -3896,6 +3934,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             )}
             {!isError&&previewEv&&(<>
             <div className="preview-meta wide" style={{marginBottom:8}}>
+              {previewEv?.ai_parsed&&<div style={{gridColumn:"1/-1",marginBottom:6,display:"flex",alignItems:"center",gap:6,background:"#f0f4ff",border:"1px solid #c5d3f8",borderRadius:7,padding:"5px 10px"}}>
+                <Sparkles size={13} style={{color:"#3b5bdb",flex:"none"}}/>
+                <span style={{fontSize:12,fontWeight:600,color:"#3b5bdb"}}>AI parsed</span>
+                <span style={{fontSize:11,color:"#6278b5"}}>— This result was parsed by Gemini AI. Review all cells before publishing.</span>
+              </div>}
               <div><label>Event name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Event name"/></div>
               <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updPMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
               <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updPMeta("venue",v)}/></div>
