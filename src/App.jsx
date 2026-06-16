@@ -284,48 +284,60 @@ function SubclassPicker({cls,value,onChange}){
 // hosts. `kind` selects the pool: "association" → only associations,
 // "club" → only clubs. Both pickers share ONE `value` (collabs) array; each
 // only displays/edits its own kind and preserves the other kind's entries.
-function CollabPicker({kind="association",owner,value,onChange}){
-  const pool=kind==="club"?CLUBS:ASSOCIATIONS;
-  const poolIds=React.useMemo(()=>new Set(pool.map(x=>x.id)),[pool]);
-  const all=value||[];
-  const selected=all.filter(id=>poolIds.has(id));   // this kind only
-  const[on,setOn]=React.useState(selected.length>0);
+// One search field over a host pool (associations or clubs). Shared chips above.
+function CollabSearchField({pool,owner,selected,onAdd,onRemove,placeholder,noMatch,heading}){
   const[q,setQ]=React.useState("");
   const[focus,setFocus]=React.useState(false);
   const candidates=pool.filter(a=>a.id!==owner&&!selected.includes(a.id));
   const filtered=candidates.filter(a=>!q||a.name.toLowerCase().includes(q.toLowerCase()));
-  const label=kind==="club"?"Collaborated with a club":"Collaborated with another association";
-  const placeholder=kind==="club"?"Search clubs to add…":"Search associations to add…";
-  const noMatch=kind==="club"?"No matching clubs":"No matching associations";
+  return <div style={{flex:1,minWidth:210}}>
+    <p style={{fontSize:11,color:"var(--mut)",fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",margin:"0 0 5px"}}>{heading}</p>
+    {selected.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+      {selected.map(id=><span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"var(--sky)",color:"var(--navy)",borderRadius:7,fontSize:12,fontWeight:600,padding:"4px 8px"}}>
+        {assocName(id)}
+        <button type="button" onClick={()=>onRemove(id)} style={{border:0,background:"none",cursor:"pointer",color:"var(--navy)",display:"flex",padding:0}}><X size={12}/></button>
+      </span>)}
+    </div>}
+    <div style={{position:"relative"}}>
+      <input value={q} onChange={e=>{setQ(e.target.value);setFocus(true);}} onFocus={()=>setFocus(true)}
+        onBlur={()=>setTimeout(()=>setFocus(false),150)} placeholder={placeholder}
+        style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
+      {focus&&filtered.length>0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 28px -12px rgba(0,0,0,.25)",zIndex:20,overflow:"hidden"}}>
+        {filtered.map(a=><div key={a.id} onMouseDown={()=>{onAdd(a.id);setQ("");}}
+          style={{padding:"9px 12px",cursor:"pointer",fontSize:13,borderBottom:"1px solid #f0f4f8"}}
+          onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"} onMouseLeave={e=>e.currentTarget.style.background="#fff"}>{a.name}</div>)}
+      </div>}
+      {focus&&filtered.length===0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,padding:"9px 12px",fontSize:12.5,color:"var(--mut)",zIndex:20}}>{noMatch}</div>}
+    </div>
+  </div>;
+}
+
+// Combined collaboration picker: one checkbox reveals an association search box
+// and a club search box side by side. Both feed the SAME collabs array; each box
+// only shows/edits its own host type. An event may collaborate with any mix.
+function CollabPicker({owner,value,onChange}){
+  const all=value||[];
+  const assocIds=React.useMemo(()=>new Set(ASSOCIATIONS.map(x=>x.id)),[]);
+  const clubIds=React.useMemo(()=>new Set(CLUBS.map(x=>x.id)),[]);
+  const selAssoc=all.filter(id=>assocIds.has(id));
+  const selClub=all.filter(id=>clubIds.has(id));
+  const[on,setOn]=React.useState(all.length>0);
   const addId=id=>onChange([...all,id]);
   const removeId=id=>onChange(all.filter(x=>x!==id));
-  const clearKind=()=>onChange(all.filter(id=>!poolIds.has(id)));  // drop only this kind
   return <div style={{marginTop:6}}>
     <label style={{display:"inline-flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13,color:"var(--navy)",fontWeight:600}}>
-      <input type="checkbox" checked={on} onChange={e=>{setOn(e.target.checked);if(!e.target.checked)clearKind();}}/>
-      {label}
+      <input type="checkbox" checked={on} onChange={e=>{setOn(e.target.checked);if(!e.target.checked)onChange([]);}}/>
+      Collab with association or club
     </label>
-    {on&&<div style={{marginTop:8}}>
-      {selected.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
-        {selected.map(id=><span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"var(--sky)",color:"var(--navy)",borderRadius:7,fontSize:12,fontWeight:600,padding:"4px 8px"}}>
-          {assocName(id)}
-          <button type="button" onClick={()=>removeId(id)} style={{border:0,background:"none",cursor:"pointer",color:"var(--navy)",display:"flex",padding:0}}><X size={12}/></button>
-        </span>)}
-      </div>}
-      <div style={{position:"relative",maxWidth:380}}>
-        <input value={q} onChange={e=>{setQ(e.target.value);setFocus(true);}} onFocus={()=>setFocus(true)}
-          onBlur={()=>setTimeout(()=>setFocus(false),150)}
-          placeholder={placeholder}
-          style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
-        {focus&&filtered.length>0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 28px -12px rgba(0,0,0,.25)",zIndex:20,overflow:"hidden"}}>
-          {filtered.map(a=><div key={a.id} onMouseDown={()=>{addId(a.id);setQ("");}}
-            style={{padding:"9px 12px",cursor:"pointer",fontSize:13,borderBottom:"1px solid #f0f4f8"}}
-            onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"} onMouseLeave={e=>e.currentTarget.style.background="#fff"}>{a.name}</div>)}
-        </div>}
-        {focus&&filtered.length===0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,padding:"9px 12px",fontSize:12.5,color:"var(--mut)",zIndex:20}}>{noMatch}</div>}
+    {on&&<>
+      <div style={{display:"flex",gap:16,flexWrap:"wrap",marginTop:8}}>
+        <CollabSearchField pool={ASSOCIATIONS} owner={owner} selected={selAssoc} onAdd={addId} onRemove={removeId}
+          heading="Associations" placeholder="Search associations…" noMatch="No matching associations"/>
+        <CollabSearchField pool={CLUBS} owner={owner} selected={selClub} onAdd={addId} onRemove={removeId}
+          heading="Clubs" placeholder="Search clubs…" noMatch="No matching clubs"/>
       </div>
       <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>Collaborated events appear in every host's portal.</p>
-    </div>}
+    </>}
   </div>;
 }
 
@@ -487,6 +499,21 @@ function athleteNat(name,evList){
   return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
 }
 
+// Most-frequently-seen birth year for an athlete (as helm or crew), or null.
+function athleteBirthYear(name,evList){
+  const counts={};
+  for(const ev of (evList||[])){
+    for(const e of (ev.entries||[])){
+      let by=null;
+      if(e.helm===name) by=e.birth_year;
+      else if(e.crew===name) by=e.crew_birth_year;
+      if(by){counts[by]=(counts[by]||0)+1;}
+    }
+  }
+  const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+  return top?parseInt(top[0]):null;
+}
+
 // Build name -> home ISO-A2 (most frequent nationality seen anywhere in the data)
 function buildHomeCountry(evList){
   const tally={};
@@ -590,7 +617,8 @@ function dbToApp(ev){
     owner:ev.owner||null,collabs:Array.isArray(ev.collabs)?ev.collabs:(ev.collabs?JSON.parse(ev.collabs):[]),
     subclass:ev.subclass||null,
     entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",nat:e.nat||"",div:e.division||"",
-      helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null}))};
+      helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
+      birth_year:e.birth_year??null,crew_birth_year:e.crew_birth_year??null}))};
 }
 async function saveEventToDb(ev){
   if(!sbH){console.warn("saveEventToDb: no Supabase connection");return null;}
@@ -621,6 +649,8 @@ async function saveEventToDb(ev){
       race_codes:e.race_codes||null,
       pdf_rank:e.pdf_rank||null,
       pdf_net:e.pdf_net||null,
+      birth_year:e.birth_year||null,
+      crew_birth_year:e.crew_birth_year||null,
     };
     const r=await sbPost("entries",entryPayload);
     if(!r?.[0]?.id) entryErrors.push(e.helm);
@@ -763,6 +793,10 @@ function parseHtml(htmlString){
         else if(['division','div','fleet'].includes(h)) colIdx.div??=i;
         else if(['nett','net','netpts'].includes(h)) colIdx.net??=i;
         else if(['total','totalpts'].includes(h)) colIdx.total??=i;
+        else if(['yob','yearofbirth','birthyear','born','dob'].includes(h)) colIdx.yob??=i;
+        else if(['crewyob','crewyearofbirth','crewbirthyear','crewborn'].includes(h)) colIdx.crewyob??=i;
+        else if(['age','optiage','helmage','years'].includes(h)) colIdx.age??=i;
+        else if(['crewage'].includes(h)) colIdx.crewage??=i;
       });
       // Race columns: look for col class="race" or headers matching F1,R1,F2...
       const raceCols=[];
@@ -812,7 +846,20 @@ function parseHtml(htmlString){
         const race_codes=raceResults.filter(([sc])=>sc!==null).map(([,cd])=>cd||null);
         if(!races.length) return;
 
-        entries.push({helm,crew,sail,nat,div,races,race_codes,pdf_rank:pdfRank,pdf_net:pdfNet});
+        // Birth year: prefer an explicit YOB column; else derive from age + event year.
+        const evYear=(()=>{const m=(evDate||'').match(/(20\d{2}|19\d{2})/)||bodyText.slice(0,400).match(/(20\d{2}|19\d{2})/);return m?parseInt(m[1]):null;})();
+        const yobOf=(yobIdx,ageIdx)=>{
+          const yraw=yobIdx!=null?get(yobIdx):'';
+          const ym=String(yraw).match(/\b(19[3-9]\d|20[0-2]\d)\b/);
+          if(ym) return parseInt(ym[1]);
+          const araw=ageIdx!=null?get(ageIdx):'';
+          const am=String(araw).match(/\b(\d{1,2})\b/);
+          if(am&&evYear){const a=parseInt(am[1]);if(a>=5&&a<=99)return evYear-a;}
+          return null;
+        };
+        const birth_year=yobOf(colIdx.yob,colIdx.age);
+        const crew_birth_year=yobOf(colIdx.crewyob,colIdx.crewage);
+        entries.push({helm,crew,sail,nat,div,races,race_codes,pdf_rank:pdfRank,pdf_net:pdfNet,birth_year,crew_birth_year});
       });
 
       if(entries.length) fleetGroups.push({name:fleetName,entries,discards});
@@ -2545,6 +2592,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       entries:(fleet.entries||[]).map(e=>({
         helm:e.helm||"",crew:sh?"":(e.crew||""),sail:e.sail||"—",nat:e.nat||"",div:e.div||"",
         races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank??null,pdf_net:e.pdf_net??null,
+        birth_year:e.birth_year??null,crew_birth_year:sh?null:(e.crew_birth_year??null),
       })),
     };
   };
@@ -3620,6 +3668,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const p=currentPeople.find(x=>x.name===name)||{name};
     const ag=aggregate(name,events);
     const nat=athleteNat(name,events);
+    const birthYear=athleteBirthYear(name,events);
+    const age=birthYear?(new Date().getFullYear()-birthYear):null;
     return(<ErrorBoundary resetKey={name} fallback={
       <div className="wrap sec" style={{paddingTop:22}}>
         <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
@@ -3655,6 +3705,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 </h1>
                 <div className="pmeta">
                   {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
+                  {age!=null&&<span style={{fontWeight:600}}>Age {age}</span>}
                   {(()=>{
                     const recent=ag.history[0]?.row;
                     if(!recent?.sail||recent.sail==="—") return null;
@@ -3836,8 +3887,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 </div>
                 <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
               </div>
-              <CollabPicker kind="association" owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
-              <CollabPicker kind="club" owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              <CollabPicker owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
               </>);})()}
               <div className="race-ctrl">
                 <span>Number of races</span>
@@ -4011,8 +4061,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
             </div>}
             <div style={{marginBottom:10}}>
-              <CollabPicker kind="association" owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
-              <CollabPicker kind="club" owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              <CollabPicker owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
             </div>
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}</>)}
             {!isError&&previewEv&&(<>
