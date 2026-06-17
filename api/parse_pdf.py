@@ -459,6 +459,16 @@ def parse_row_with_cols(row, cols):
         gender = combine_boat_gender(get('gender'), get('crewgender'))
     category = norm_category(cat_raw)
 
+    # A "Fleet"/"Division" column sometimes holds an age group ("U23") or a
+    # placeholder ("---") rather than a real boat class. Route those away from
+    # div (which drives grouping); keep any other label as a genuine fleet name.
+    if div_raw in ('---', '--', '—', '–', '-', 'n/a', 'N/A'):
+        div_raw = ''
+    elif div_raw and not _looks_like_class(div_raw) and norm_category(div_raw):
+        if not category:
+            category = norm_category(div_raw)
+        div_raw = ''
+
     if 'sailors' in cols and not helm_raw:
         # Combined column: split into helm + crew
         helm_raw, crew_raw = split_combined_names(get('sailors'))
@@ -617,6 +627,7 @@ def parse_table(tbl, fleet_hint=''):
             continue
         if fleet_hint and not e['div']:
             e['div'] = fleet_hint
+        e['_tbl_class'] = _class_of(fleet_hint)   # class from the section heading
         entries.append(e)
 
     return {'entries': entries} if entries else None
@@ -672,9 +683,48 @@ def try_clubspot(full_text):
 
 # ── Fleet detection ────────────────────────────────────────────────────────
 FLEET_PATTERNS = re.compile(
-    r'(?i)\b(29er|49er|49erFX|ILCA\s*\d?|Optimist\s*(?:Main|Intermediate|Green|Junior|Novice)?'
-    r'|Laser|RS\w+|2\.4\s*mR|Finn|470|Nacra\s*\d+|420|Topper)\b'
+    r'(?i)\b(29er|49erFX|49er|Nacra\s*\d+|ILCA\s*\d?'
+    r'|Optimist\s*(?:Main|Intermediate|Green|Junior|Novice)?'
+    r'|Laser|RS\w+|2\.4\s*mR|Finn|470|420|Topper)\b'
 )
+
+def _class_of(text):
+    """
+    Normalise free text (a section heading / fleet label) to a canonical boat
+    class for grouping. Order matters: 49erFX before 49er, Nacra before others.
+    Returns '' when no class is recognised.
+    """
+    s = (text or '').lower()
+    if 'nacra' in s:
+        m = re.search(r'nacra\s*(\d+)', s)
+        return 'Nacra ' + m.group(1) if m else 'Nacra'
+    if '49erfx' in s or '49er fx' in s or '49fx' in s:
+        return '49erFX'
+    if '49er' in s:
+        return '49er'
+    if '29er' in s:
+        return '29er'
+    m = re.search(r'ilca\s*([4-7])', s)
+    if m:
+        return 'ILCA ' + m.group(1)
+    if 'ilca' in s or 'laser' in s:
+        return 'ILCA'
+    if 'opti' in s or re.search(r'\bop\b', s):
+        m = re.search(r'(main|intermediate|green|junior|novice)', s)
+        return 'Optimist ' + m.group(1).title() if m else 'Optimist'
+    if re.search(r'2\.4\s*mr', s):
+        return '2.4mR'
+    if '470' in s:  return '470'
+    if '420' in s:  return '420'
+    if 'finn' in s: return 'Finn'
+    return ''
+
+def _looks_like_class(label):
+    """A per-row div value that genuinely names a boat class / colour fleet."""
+    if not label:
+        return False
+    return bool(_class_of(label)) or _is_colour_fleet(label) or bool(
+        re.search(r'\bfleet\b', label, re.IGNORECASE))
 
 def detect_fleets_in_text(text):
     found = []; seen = set()
@@ -864,16 +914,37 @@ def _resolve_birth_years(entries, ev_year):
 
 def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label="the built-in parser"):
     """
-    Group entries by their per-row fleet/class label (e['div']) and decide
-    single vs multi:
-      - one distinct label (or none)         → single result
-      - several labels, all colour-splits     → merge into one championship
-      - several genuine fleets/classes        → multi: one competition per fleet
+    Group entries and decide single vs multi. Grouping key:
+      1. the per-row fleet/class label (div) when those values name real classes
+         (Southside's "Dinghy Class / Fleet" column, or Gold/Silver splits), else
+      2. the per-table class context (_tbl_class, from each table's section
+         heading) when several tables carry distinct classes (e.g. a page with
+         separate 49er / 49erFX / Nacra tables), else
+      3. everything in one result.
+    Then: a single group → single; all-colour-split groups → merged championship;
+    otherwise → multi, one competition per group.
     """
     from collections import OrderedDict
+
+    div_vals  = [(e.get('div') or '').strip() for e in all_entries]
+    distinct_div = [v for v in dict.fromkeys(div_vals) if v]
+
+    tbl_vals  = [(e.get('_tbl_class') or '').strip() for e in all_entries]
+    distinct_tbl = [v for v in dict.fromkeys(tbl_vals) if v]
+
+    if len(distinct_div) >= 2:
+        # per-row fleet/class column distinguishes the fleets (Southside, Euro)
+        key_fn = lambda e: (e.get('div') or '').strip() or '__main__'
+    elif len(distinct_tbl) >= 2:
+        # per-row column is uniform/blank, but separate tables carry distinct
+        # classes (e.g. a page with 49er / 49erFX / Nacra tables)
+        key_fn = lambda e: (e.get('_tbl_class') or '').strip() or '__main__'
+    else:
+        key_fn = lambda e: (e.get('div') or '').strip() or '__main__'
+
     groups, seen = OrderedDict(), {}
     for e in all_entries:
-        key = (e.get('div') or '').strip() or '__main__'
+        key = key_fn(e)
         if key not in groups:
             groups[key] = []; seen[key] = set()
         sk = (e['helm'].lower(), e.get('sail', ''))
@@ -882,6 +953,8 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
         seen[key].add(sk); groups[key].append(e)
     for k in groups:
         groups[k].sort(key=lambda e: (e.get('pdf_rank') if e.get('pdf_rank') is not None else 9999))
+        for e in groups[k]:
+            e.pop('_tbl_class', None)   # internal-only, never reaches client/DB
 
     real = [k for k in groups if groups[k]]
     n_total = sum(len(groups[k]) for k in real)
@@ -1038,6 +1111,14 @@ class _TableHarvester(_HTMLParser):
             self._row = []
         elif tag in ('td', 'th') and self._row is not None:
             self._cell = []
+        elif tag == 'br' and self._cell is not None:
+            # a line break inside a cell separates stacked content (e.g. helm
+            # on one line, crew on the next, or a score and its code).
+            self._cell.append('\n')
+        elif tag in ('div', 'p', 'li') and self._cell is not None and any(
+                c.strip() for c in self._cell):
+            # block elements inside a cell also start a new visual line
+            self._cell.append('\n')
         elif tag == 'img' and self._cell is not None:
             t = (a.get('title') or a.get('alt') or '').strip()
             if t:
@@ -1048,7 +1129,11 @@ class _TableHarvester(_HTMLParser):
 
     def handle_endtag(self, tag):
         if tag in ('td', 'th') and self._cell is not None:
-            txt = re.sub(r'\s+', ' ', ''.join(self._cell)).strip()
+            # collapse runs of spaces/tabs but KEEP newlines (they mark stacked
+            # helm/crew names or score+code), then trim each line.
+            raw = ''.join(self._cell)
+            lines = [re.sub(r'[ \t]+', ' ', ln).strip() for ln in raw.split('\n')]
+            txt = '\n'.join(ln for ln in lines if ln)
             self._row.append(txt)
             self._cell = None
         elif tag == 'tr' and self._row is not None:
@@ -1100,15 +1185,11 @@ def _parse_html_string(html_text: str) -> dict:
     all_parsed = []
     for ti, tbl in enumerate(hv.tables):
         anchor = hv._table_anchor_text[ti] if ti < len(hv._table_anchor_text) else ''
-        fleet = ''
         fsec = re.search(r'(\d+-(?:Gold|Silver|Bronze|Emerald)\s+Fleet|'
                          r'Gold Fleet|Silver Fleet|Bronze Fleet)', anchor, re.IGNORECASE)
-        if fsec:
-            fleet = fsec.group(1)
-        else:
-            for f in detected_fleets:
-                if f.lower() in anchor.lower():
-                    fleet = f; break
+        # _class_of resolves 49erFX before 49er etc., so separate per-class tables
+        # (e.g. a page stacking 49er / 49erFX / Nacra) are distinguished correctly.
+        fleet = fsec.group(1) if fsec else _class_of(anchor)
         parsed = parse_table(tbl, fleet)
         if parsed and parsed['entries']:
             all_parsed.extend(parsed['entries'])
