@@ -408,6 +408,54 @@ function divToString(tokens){
   return [g,jr?"Jr":null].filter(Boolean).join(" ");
 }
 
+/* ── gender + age-category (real fields, with legacy-div fallback) ─────────
+   Entries now carry real `gender` ('M'|'F'|'Mix') and `category` ('U17','Jr'…)
+   fields from parser v5. Older events stored both inside the free `div` string,
+   so genderCatOf() prefers the real fields and falls back to parsing div. */
+function normGender(raw){
+  const s=String(raw||"").toLowerCase().replace(/[^a-z]/g,"");
+  if(!s) return "";
+  if(["m","male","man","men","boy","boys"].includes(s)) return "M";
+  if(["f","female","woman","women","w","girl","girls","lady","ladies"].includes(s)) return "F";
+  if(["mix","mixed","x","mf","fm"].includes(s)) return "Mix";
+  return "";
+}
+function normCategory(raw){
+  const s=String(raw||"").trim(); if(!s) return "";
+  const low=s.toLowerCase();
+  if(["open","overall","main","all","mixed","m","f","-","—"].includes(low)) return "";
+  if(/\b(gold|silver|bronze|emerald|sapphire)\b/.test(low)) return "";
+  let m=low.match(/\bu[\s-]?(\d{1,2})\b/); if(m) return "U"+m[1];
+  m=low.match(/\bunder[\s-]?(\d{1,2})\b/); if(m) return "U"+m[1];
+  if(/\b(junior|jr|youth|cadet)\b/.test(low)) return "Jr";
+  if(/\b(master|veteran|senior)s?\b/.test(low)) return "Mst";
+  return s.length<=14?s.slice(0,12):"";
+}
+// Resolve the gender + category to display for an entry, preferring real fields.
+function genderCatOf(e){
+  if(!e) return {gender:"",category:""};
+  let gender=normGender(e.gender);
+  let category=normCategory(e.category);
+  if(!gender||!category){
+    const {gender:dg,jr}=parseDiv(e.div||"");
+    if(!gender&&dg) gender=dg;
+    if(!category&&jr) category="Jr";
+  }
+  return {gender,category};
+}
+const GENDER_COLOR={M:"#2d6cc9",F:"#c2477f",Mix:"#7c3aed"};
+// Gender + category nuggets shown on every result page + the preview.
+function ResultNuggets({entry,size="md"}){
+  const {gender,category}=genderCatOf(entry);
+  if(!gender&&!category) return <span style={{color:"#c8d4e0",fontSize:12}}>—</span>;
+  const fs=size==="sm"?9.5:10.5;
+  const pad=size==="sm"?"1px 5px":"2px 6px";
+  return <span style={{display:"inline-flex",gap:3,alignItems:"center",flexWrap:"wrap"}}>
+    {gender&&<span style={{background:GENDER_COLOR[gender]||"var(--mut)",color:"#fff",borderRadius:4,fontSize:fs,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:pad,letterSpacing:".02em"}} title={gender==="Mix"?"Mixed":gender==="F"?"Female":"Male"}>{gender}</span>}
+    {category&&<span style={{background:"#0f8a7e",color:"#fff",borderRadius:4,fontSize:fs,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:pad,letterSpacing:".02em"}} title={"Age category: "+category}>{category}</span>}
+  </span>;
+}
+
 // Strip stray markdown / leading heading / duplicated name from AI summaries
 const cleanAISummary=(t)=>{
   let s=(t||"").trim();
@@ -658,6 +706,7 @@ function dbToApp(ev){
     owner:ev.owner||null,collabs:Array.isArray(ev.collabs)?ev.collabs:(ev.collabs?JSON.parse(ev.collabs):[]),
     subclass:ev.subclass||null,
     entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",nat:e.nat||"",div:e.division||"",
+      gender:e.gender||"",category:e.category||"",
       helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
       birth_year:e.birth_year??null,crew_birth_year:e.crew_birth_year??null}))};
 }
@@ -684,6 +733,8 @@ async function saveEventToDb(ev){
       sail:e.sail||"—",
       nat:e.nat||null,
       division:e.div||null,
+      gender:e.gender||null,
+      category:e.category||null,
       helm_name:e.helm||"",
       crew_name:e.crew||null,
       races:Array.isArray(e.races)?e.races:[],
@@ -831,7 +882,10 @@ function parseHtml(htmlString){
         else if(['crewname','crew','crewsname'].includes(h)) colIdx.crew??=i;
         else if(['sailno','sail','sailnumber'].includes(h)) colIdx.sail??=i;
         else if(['nat','nationality','country','sailprefix','prefix','natletter'].includes(h)) colIdx.nat??=i;
-        else if(['division','div','fleet'].includes(h)) colIdx.div??=i;
+        else if(['division','div','category','agegroup','agecategory','agecat','group'].includes(h)) colIdx.category??=i;
+        else if(['fleet','class','dinghyclass','dinghyclass/fleet','fleet/class','boatclass'].includes(h)) colIdx.div??=i;
+        else if(['gender','sex','boatgender','gender(skipper)','genderskipper','helmgender','skippergender'].includes(h)) colIdx.gender??=i;
+        else if(['crewgender','gender(crew)','gendercrew'].includes(h)) colIdx.crewgender??=i;
         else if(['nett','net','netpts'].includes(h)) colIdx.net??=i;
         else if(['total','totalpts'].includes(h)) colIdx.total??=i;
         else if(['yob','yearofbirth','birthyear','born','dob'].includes(h)) colIdx.yob??=i;
@@ -873,6 +927,13 @@ function parseHtml(htmlString){
         if(!helm) return;
         const crew=get(colIdx.crew)||'';
         const div=get(colIdx.div)||'';
+        // Gender: boat/skipper column, else combine helm + crew gender columns.
+        let gender=normGender(get(colIdx.gender));
+        if(colIdx.crewgender!=null){
+          const hg=normGender(get(colIdx.gender)),cg=normGender(get(colIdx.crewgender));
+          gender=(hg&&cg)?(hg===cg?hg:"Mix"):(hg||cg||"");
+        }
+        const category=normCategory(get(colIdx.category));
 
         let pdfRank=null;
         const rankRaw=get(colIdx.rank).replace(/(st|nd|rd|th)$/i,'');
@@ -900,7 +961,7 @@ function parseHtml(htmlString){
         };
         const birth_year=yobOf(colIdx.yob,colIdx.age);
         const crew_birth_year=yobOf(colIdx.crewyob,colIdx.crewage);
-        entries.push({helm,crew,sail,nat,div,races,race_codes,pdf_rank:pdfRank,pdf_net:pdfNet,birth_year,crew_birth_year});
+        entries.push({helm,crew,sail,nat,div,gender,category,races,race_codes,pdf_rank:pdfRank,pdf_net:pdfNet,birth_year,crew_birth_year});
       });
 
       if(entries.length) fleetGroups.push({name:fleetName,entries,discards});
@@ -1890,7 +1951,7 @@ export default function AthLinkMVP(){
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
   const[note,setNote]=useState(null);
   const[open,setOpen]=useState(false);
-  const[tab,setTab]=useState("pdf");
+  const[tab,setTab]=useState("rule");  // "rule" | "ai" | "manual"
   const[mf,setMf]=useState(emptyForm());
   const manualCalc=useMemo(()=>{
     const maxPer=Array.from({length:mf.numRaces},(_,j)=>{
@@ -1911,6 +1972,9 @@ export default function AthLinkMVP(){
   },[mf]);
   const[pdfLoading,setPdfLoading]=useState(false);
   const[pdfError,setPdfError]=useState("");
+  const[liveUrl,setLiveUrl]=useState("");               // AI parser: paste a results link
+  const[parseLog,setParseLog]=useState([]);             // [{name,status,notes:[]}] thinking stream
+  const[parseProgress,setParseProgress]=useState({done:0,total:0});
   const[importStep,setImportStep]=useState("upload");
   const[fleetChoices,setFleetChoices]=useState([]);
   const[pdfMeta,setPdfMeta]=useState(null);
@@ -2644,7 +2708,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       await sbDel("entries",`event_id=eq.${editResultsEv}`);
       await sbPost("entries",ev.entries.map(e=>({
         event_id:editResultsEv,sail:e.sail,nat:e.nat||null,
-        division:e.div,helm_name:e.helm,crew_name:e.crew||null,
+        division:e.div,gender:e.gender||null,category:e.category||null,helm_name:e.helm,crew_name:e.crew||null,
         races:e.races,race_codes:e.race_codes||null,
         pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
       })));
@@ -2661,8 +2725,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     setPdfLoading(false);setPdfError("");setImportStep("upload");
     setFleetChoices([]);setPdfMeta(null);setPreviewEv(null);setPreviewEdit(null);
     setPending([]);setActivePending(0);
+    setLiveUrl("");setParseLog([]);setParseProgress({done:0,total:0});
   };
-  const closeImport=()=>{setOpen(false);resetImport();setTab("pdf");};
+  const closeImport=()=>{setOpen(false);resetImport();setTab("rule");};
 
   // Snapshot current editor (previewEv + class/subclass/collab) into the active pending slot.
   const syncActivePending=()=>{
@@ -2716,6 +2781,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       entries:fleet.entries.map((e,i)=>({
         _previewKey:`${i}_${e.helm}`,
         sail:e.sail||"—",nat:e.nat||"",div:e.div||"",
+        gender:e.gender||"",category:e.category||"",
         helm:e.helm||"",crew:e.crew||"",
         races:(e.races||[]),
         race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
@@ -2724,23 +2790,33 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     setPreviewEv(ev);setImportStep("preview");
   };
 
-  // Parse a single file → {ok, name, date, entries, discards, multi, fleets, error}
-  const parseOneFile=async file=>{
+  // Parse a single file → {ok, name, date, entries, discards, multi, fleets, notes, error}
+  const parseOneFile=async(file,mode="ai")=>{
     if(file.name.toLowerCase().endsWith(".html")||file.type==="text/html"){
       try{
         const buf=await file.arrayBuffer();
         const html=new TextDecoder('iso-8859-1').decode(buf);
         const data=parseHtml(html);
         if(!data.ok) return{ok:false,error:data.error||"Could not parse this HTML file."};
-        return data;
+        return{...data,notes:data.notes||["Parsed the Sailwave HTML in your browser."]};
       }catch(err){return{ok:false,error:"HTML parse failed: "+err.message};}
     }
     try{
-      const res=await fetch("/api/parse_pdf",{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const data=await res.json();
       if(!data.ok) return{ok:false,error:data.error||"Could not parse this file."};
       return data;
     }catch{return{ok:false,error:"Upload failed. Check api/parse_pdf.py is deployed."};}
+  };
+
+  // Fetch + parse a live results link server-side (browser can't, due to CORS).
+  const parseLink=async(url,mode="ai")=>{
+    try{
+      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,mode})});
+      const data=await res.json();
+      if(!data.ok) return{ok:false,error:data.error||"Could not parse that link."};
+      return data;
+    }catch{return{ok:false,error:"Couldn't reach the parser. Check api/parse_pdf.py is deployed."};}
   };
 
   // Build a previewEv object from parsed fleet data (no state side-effects).
@@ -2755,6 +2831,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       ai_parsed:aiParsed||false,
       entries:(fleet.entries||[]).map(e=>({
         helm:e.helm||"",crew:sh?"":(e.crew||""),sail:e.sail||"—",nat:e.nat||"",div:e.div||"",
+        gender:e.gender||"",category:e.category||"",
         races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank??null,pdf_net:e.pdf_net??null,
         birth_year:e.birth_year??null,crew_birth_year:sh?null:(e.crew_birth_year??null),
       })),
@@ -2762,35 +2839,76 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   };
 
   // ── MULTI-FILE: parse all chosen files into the pending list ──
-  const handleFiles=async fileList=>{
+  const handleFiles=async(fileList,mode="ai")=>{
     const files=[...(fileList||[])];
     if(!files.length) return;
     setPdfError("");setPdfLoading(true);
+    setParseProgress({done:0,total:files.length});
+    setParseLog(files.map(f=>({name:f.name,status:"queued",notes:[]})));
     // seed placeholders
     const seed=files.map((f,i)=>({id:"pf_"+Date.now()+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]}));
     setPending(seed);setActivePending(0);setImportStep("preview");
     const results=[];
     for(let i=0;i<files.length;i++){
-      const data=await parseOneFile(files[i]);
+      setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:[mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]}:l));
+      const data=await parseOneFile(files[i],mode);
       if(!data.ok){
         results.push({...seed[i],status:"error",error:data.error});
+        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"error",notes:[data.error]}:l));
       }else if(data.multi&&data.fleets?.length){
-        // multi-fleet file → expand each fleet into its own pending tab, tagged with a groupId
         const groupId="fg_"+Date.now()+"_"+i;
         const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
         data.fleets.forEach((fl,fi)=>{
           results.push({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-            previewEv:previewFromData(data.name,data.date||"",fl),subclass:null,collabs:[],
+            previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false),subclass:null,collabs:[],
             fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc});
         });
+        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]}:l));
       }else{
         results.push({...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false)});
+        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:data.notes||["Done."]}:l));
       }
+      setParseProgress({done:i+1,total:files.length});
     }
     setPending(results);setActivePending(0);
     const firstOk=results.findIndex(r=>r.status==="ok");
     if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);}
     setPdfLoading(false);
+  };
+
+  // ── LIVE LINK: fetch + parse a results URL server-side, add to pending ──
+  const handleLink=async(url,mode="ai")=>{
+    const u=(url||"").trim();
+    if(!u) return;
+    setPdfError("");setPdfLoading(true);
+    setParseProgress({done:0,total:1});
+    setParseLog([{name:u,status:"parsing",notes:["Fetching the page server-side…"]}]);
+    setImportStep("preview");
+    const data=await parseLink(u,mode);
+    if(!data.ok){
+      setPending([{id:"link_"+Date.now(),name:u,status:"error",error:data.error,previewEv:null,subclass:null,collabs:[]}]);
+      setParseLog([{name:u,status:"error",notes:[data.error]}]);
+      setActivePending(0);setParseProgress({done:1,total:1});setPdfLoading(false);
+      return;
+    }
+    const results=[];
+    if(data.multi&&data.fleets?.length){
+      const groupId="fg_link_"+Date.now();
+      const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
+      data.fleets.forEach((fl,fi)=>{
+        results.push({id:groupId+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false),subclass:null,collabs:[],
+          fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc});
+      });
+    }else{
+      results.push({id:"link_"+Date.now(),name:data.name||u,status:"ok",error:null,
+        previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false),subclass:null,collabs:[]});
+    }
+    setPending(results);
+    const firstOk=results.findIndex(r=>r.status==="ok");
+    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);}
+    setParseLog([{name:u,status:"ok",notes:data.notes||["Parsed."]}]);
+    setParseProgress({done:1,total:1});setPdfLoading(false);
   };
 
   const handlePdf=async file=>{
@@ -2800,6 +2918,23 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   const selectFleet=fleet=>buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,fleet);
   const updPMeta=(k,v)=>setPreviewEv(ev=>({...ev,[k]:v}));
   const updPEntry=(idx,k,v)=>setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>i===idx?{...e,[k]:v}:e)}));
+  // Build the DivisionToggle string from an entry's real gender + category.
+  const divFromEntry=(e)=>{
+    const g=normGender(e.gender)||parseDiv(e.div||"").gender||"";
+    const jr=normCategory(e.category)==="Jr"||parseDiv(e.div||"").jr;
+    return [g,jr?"Jr":null].filter(Boolean).join(" ");
+  };
+  // Toggle in preview writes the REAL gender + category fields (preserves U17 etc.).
+  const applyPreviewDiv=(idx,v)=>{
+    const g=/mix/i.test(v)?"Mix":/\bF\b/.test(v)?"F":/\bM\b/.test(v)?"M":"";
+    const jr=/\bJr\b/.test(v);
+    setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>{
+      if(i!==idx) return e;
+      let category=e.category||"";
+      if(jr&&!category) category="Jr"; else if(!jr&&category==="Jr") category="";
+      return {...e,div:v,gender:g,category};
+    })}));
+  };
 
   const startPreviewEdit=(type,idx,raceIdx,val)=>{
     setPreviewEdit({type,idx,raceIdx});
@@ -3455,12 +3590,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           if(r.helm) t.helm=displayNameFor(hk)||r.helm;
           if(r.crew) t.crew=displayNameFor(ck)||r.crew;
           t.perComp[ev.id]=cell;
-          const g=genderOf(r.div);if(g)t.genders.push(g);if(r.div&&!genderOf(r.div))t.divs.push(r.div);
+          const gc=genderCatOf(r);if(gc.gender)t.genders.push(gc.gender);if(gc.category)t.divs.push(gc.category);
         }else{
           const nm=r.helm;if(!nm) return;const k=canonName(nm);if(!k) return;
           if(!byComp.has(k)) byComp.set(k,{type:"solo",name:displayNameFor(k)||nm,perComp:{},genders:[],divs:[]});
           const a=byComp.get(k);a.perComp[ev.id]=cell;
-          const g=genderOf(r.div);if(g)a.genders.push(g);if(r.div&&!genderOf(r.div))a.divs.push(r.div);
+          const gc=genderCatOf(r);if(gc.gender)a.genders.push(gc.gender);if(gc.category)a.divs.push(gc.category);
         }
       });
     });
@@ -3832,7 +3967,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       </div>
       <div className="panel"><table>
         <thead><tr>
-          <th>Pos</th><th className="l">Boat</th><th className="l">Sail #</th>
+          <th>Pos</th><th className="l">Boat</th><th>Gender / Div</th><th className="l">Sail #</th>
           {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
           <th>Net</th>
         </tr></thead>
@@ -3850,9 +3985,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
               <div>
                 <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
-                <div className="cn">{r.crew&&<>with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></>}{r.div&&<span style={{marginLeft:r.crew?8:0,display:"inline-flex",verticalAlign:"middle"}}><DivNugget div={r.div}/></span>}</div>
+                {r.crew&&<div className="cn">with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></div>}
               </div>
             </div></td>
+            <td style={{textAlign:"center",whiteSpace:"nowrap"}}><ResultNuggets entry={r}/></td>
             <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
             {Array.from({length:s.races}).map((_,i)=>{
               const c=r.races[i];
@@ -3869,7 +4005,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           </tr>
           {hoverRow?.evId===ev.id&&hoverRow?.helm===r.helm&&(()=>{
             const k=r.crew?`${r.helm}+${r.crew}`:r.helm;const v=hoverSummaries[k];
-            return(<tr className="summary-row"><td colSpan={s.races+4} style={{padding:0,border:0,background:"none"}}>
+            return(<tr className="summary-row"><td colSpan={s.races+5} style={{padding:0,border:0,background:"none"}}>
               <div className={`team-summary${v===null?" loading":""}`}>
                 <Sparkles size={14} style={{flex:"none",marginTop:1,color:"var(--accent)"}}/>
                 <span>{v===null?"Generating team summary…":(v===undefined||v==="")?"AI summary unavailable.":v}</span>
@@ -3950,7 +4086,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                     <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
                     <div style={{minWidth:0}}>
                       <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {name}</div>
-                      <div className="cn" style={{marginTop:2}}>{nat?(ag.events>1?"Multi-event":""):""}</div>
                     </div>
                   </div>
                   <div className="acstat">
@@ -4253,18 +4388,79 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
         {importStep==="upload"&&(<>
           <div className="mtabs">
-            <button className={tab==="pdf"?"on":""} onClick={()=>setTab("pdf")}><FileText size={15}/>Upload PDF / HTML / Image</button>
+            <button className={tab==="rule"?"on":""} onClick={()=>setTab("rule")}><FileText size={15}/>Non-AI parser</button>
+            <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI parser</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
           </div>
           <div className="mbody">
-            {tab==="pdf"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Upload one or more results files — PDF, Sailwave HTML, or an <strong style={{color:"var(--ink)"}}>image</strong> (photo or screenshot) of a results sheet. Supports Sailwave, Manage2sail and more. You can select several at once; each gets its own editable tab. Multi-fleet files split into a tab per fleet. Unrecognised PDFs and all images are parsed by AI.</p>
+            {tab==="rule"&&(<>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>For known formats — <strong style={{color:"var(--ink)"}}>Sailwave</strong>, Sailwave HTML, <strong style={{color:"var(--ink)"}}>Manage2sail</strong>, SailingResults.net and Clubspot. Fast and exact, no AI. Select one or more PDF/HTML files; multi-fleet files split into a tab per fleet. If a file isn't recognised, switch to the AI parser.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
-                {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose Files</>}
-                <input type="file" multiple accept="application/pdf,.html,text/html,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files)}/>
+                {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose files</>}
+                <input type="file" multiple accept="application/pdf,.html,text/html,.png,.jpg,.jpeg,.webp" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"rule")}/>
               </label>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
+            {tab==="ai"&&(<>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Gemini AI</strong>. Review every AI-parsed result before publishing.</p>
+              <label className="btn cta" style={{cursor:"pointer"}}>
+                {pdfLoading?<><Loader2 size={16} className="spin"/>Working…</>:<><Sparkles size={16}/>Choose files</>}
+                <input type="file" multiple accept="application/pdf,.html,text/html,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"ai")}/>
+              </label>
+              <div style={{margin:"16px 0 6px",display:"flex",alignItems:"center",gap:10}}>
+                <div style={{flex:1,height:1,background:"var(--line)"}}/>
+                <span style={{fontSize:11,fontWeight:700,letterSpacing:".06em",color:"var(--mut)",textTransform:"uppercase"}}>or paste a results link</span>
+                <div style={{flex:1,height:1,background:"var(--line)"}}/>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <div style={{flex:1,display:"flex",alignItems:"center",gap:8,border:"1px solid var(--line)",borderRadius:9,padding:"0 11px",background:"#fff"}}>
+                  <Link2 size={15} color="#9fb2c8" style={{flex:"none"}}/>
+                  <input value={liveUrl} onChange={e=>setLiveUrl(e.target.value)} disabled={pdfLoading}
+                    onKeyDown={e=>{if(e.key==="Enter"&&liveUrl.trim()&&!pdfLoading)handleLink(liveUrl,"ai");}}
+                    placeholder="https://… Manage2sail / Clubspot / Sailwave results page"
+                    style={{flex:1,border:0,outline:"none",font:"inherit",fontSize:13,padding:"10px 0",background:"transparent"}}/>
+                </div>
+                <button className="btn cta" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={pdfLoading||!liveUrl.trim()} onClick={()=>handleLink(liveUrl,"ai")}>
+                  {pdfLoading?<Loader2 size={15} className="spin"/>:<>Fetch &amp; parse</>}
+                </button>
+              </div>
+              <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0",lineHeight:1.5}}>Parsing the page's source is usually more accurate than a PDF. The link is fetched on our server (your browser can't, due to cross-origin rules).</p>
+              {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
+            </>)}
+            {(tab==="rule"||tab==="ai")&&(pdfLoading||parseLog.length>0)&&(
+              <div style={{marginTop:16,border:"1px solid var(--line)",borderRadius:11,background:"#f7fafd",padding:"13px 15px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:parseProgress.total>0?9:0}}>
+                  {pdfLoading?<Loader2 size={14} className="spin" color="var(--accent)"/>:<CheckCircle size={14} color="#0f8a7e"/>}
+                  <span style={{fontSize:12.5,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
+                    {pdfLoading?(tab==="ai"?"AI is reading your files…":"Parsing…"):"Finished"}
+                  </span>
+                  {parseProgress.total>0&&<span style={{marginLeft:"auto",fontSize:11.5,color:"var(--mut)",fontWeight:600}}>{parseProgress.done}/{parseProgress.total}</span>}
+                </div>
+                {parseProgress.total>0&&(
+                  <div style={{height:6,borderRadius:4,background:"#e3edf6",overflow:"hidden",marginBottom:11}}>
+                    <div style={{height:"100%",width:`${Math.round((parseProgress.done/Math.max(parseProgress.total,1))*100)}%`,background:"linear-gradient(90deg,var(--accent),#0f8a7e)",borderRadius:4,transition:"width .3s ease"}}/>
+                  </div>
+                )}
+                <div style={{display:"flex",flexDirection:"column",gap:7,maxHeight:190,overflowY:"auto"}}>
+                  {parseLog.map((l,li)=>(
+                    <div key={li} style={{fontSize:12,lineHeight:1.5}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        {l.status==="parsing"?<Loader2 size={12} className="spin" color="var(--accent)" style={{flex:"none"}}/>
+                          :l.status==="error"?<AlertCircle size={12} color="#c0392b" style={{flex:"none"}}/>
+                          :l.status==="ok"?<CheckCircle size={12} color="#0f8a7e" style={{flex:"none"}}/>
+                          :<Clock size={12} color="#9fb2c8" style={{flex:"none"}}/>}
+                        <span style={{fontWeight:600,color:"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.name}</span>
+                      </div>
+                      {(l.notes||[]).length>0&&(
+                        <div style={{paddingLeft:18,color:l.status==="error"?"#c0392b":"var(--mut)"}}>
+                          {l.notes.map((n,ni)=><div key={ni} style={{display:"flex",gap:5}}><span style={{opacity:.5}}>›</span><span>{n}</span></div>)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {tab==="manual"&&(<>
               {(()=>{const evCls=assoc?.cls||mf.cls;return(<>
               <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:10,flexWrap:"wrap"}}>
@@ -4472,7 +4668,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
                     {!singleHanded&&<th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>}
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:150}}>Div</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:160}}>Gender / Div</th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
                     <th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>
                   </tr>
@@ -4501,7 +4697,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                           </div>}
                       </td>
                       <td style={{padding:"4px 6px",textAlign:"center"}}>
-                        <DivisionToggle value={entry.div} onChange={v=>updPEntry(idx,"div",v)} noMix={singleHanded}/>
+                        <div style={{display:"flex",flexDirection:"column",gap:5,alignItems:"center"}}>
+                          <ResultNuggets entry={entry} size="sm"/>
+                          <DivisionToggle value={divFromEntry(entry)} onChange={v=>applyPreviewDiv(idx,v)} noMix={singleHanded}/>
+                        </div>
                       </td>
                       {Array.from({length:maxR}).map((_,raceIdx)=>{
                         const score=(entry.races||[])[raceIdx];
