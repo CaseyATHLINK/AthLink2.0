@@ -4044,7 +4044,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                     <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
                     <div style={{minWidth:0,flex:1}}>
                       <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {p.name}</div>
-                      <div className="cn" style={{marginTop:2}}>{st.events>1?"Multi-event":"\u00a0"}</div>
                     </div>
                   </div>
                   <div className="acstat">
