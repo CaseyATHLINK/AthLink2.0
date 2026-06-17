@@ -443,6 +443,15 @@ function genderCatOf(e){
   }
   return {gender,category};
 }
+// Infer a boat class id from a fleet/competition label (for multi-class imports).
+function classFromFleetName(name){
+  const s=String(name||"").toLowerCase();
+  if(/49er/.test(s)) return "49er";
+  if(/29er/.test(s)) return "29er";
+  if(/\bilca\b|laser/.test(s)) return "ilca";
+  if(/opti/.test(s)) return "optimist";
+  return null;
+}
 const GENDER_COLOR={M:"#2d6cc9",F:"#c2477f",Mix:"#7c3aed"};
 // Gender + category nuggets shown on every result page + the preview.
 function ResultNuggets({entry,size="md"}){
@@ -2821,11 +2830,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   // Build a previewEv object from parsed fleet data (no state side-effects).
   const previewFromData=(name,date,fleet,aiParsed=false)=>{
-    const sh=(assoc?.cls)==="ilca"||(assoc?.cls)==="optimist";
+    const lockedCls=assoc?.cls;                          // association portals lock to their class
+    const dhFromEntries=(fleet.entries||[]).some(e=>e.crew&&String(e.crew).trim());
+    const inferred=classFromFleetName(fleet.name||name);
+    const cls=lockedCls||inferred||(dhFromEntries?"29er":"optimist");
+    const sh=cls==="ilca"||cls==="optimist";
     return{
       id:"imp_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
       name:(fleet.name?`${name} — ${fleet.name}`:name)||"Imported Competition",
-      cls:assoc?.cls||"29er",doublehanded:!sh,venue:"",country:"",
+      cls,doublehanded:!sh,venue:"",country:"",
       date:date||"",discards:fleet.discards||1,scoring:"Appendix A",
       source:"Imported",status:"Final",
       ai_parsed:aiParsed||false,
