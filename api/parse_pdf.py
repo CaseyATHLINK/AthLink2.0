@@ -1,5 +1,5 @@
 """
-AthLink PDF parser v4 — Vercel serverless function.
+AthLink PDF parser v5 — Vercel serverless function.
 
 Universal parser covering:
   - Sailwave PDF (standard, any column arrangement, wrapped text in cells)
@@ -9,6 +9,20 @@ Universal parser covering:
   - Clubspot (SAILORS section below table)
   - ourclubadmin multi-class (Rank Class Sail number Club Helm's Name Crew's Name)
   - Multi-fleet / split Gold/Silver/Bronze fleet events
+
+v5 additions:
+  - Gender + age-category detection (rule headers, server HTML, Gemini prompt).
+    Emits entry['gender'] in {'M','F','Mix',''} and entry['category'] (e.g.
+    'U17','Jr','U23',''). Boat gender for two-person boats is combined from
+    separate helm/crew gender columns when no single boat-gender column exists.
+  - Live results LINK ingestion: POST a JSON body {"url": "...", "mode": "ai"}
+    and the function fetches + parses the page server-side (browsers can't, due
+    to CORS). HTML pages are parsed from source (more accurate than PDFs) via a
+    stdlib HTMLParser that reuses the same column machinery.
+  - Parser MODE routing: ?mode=rule (built-in parser only, no AI) or ?mode=ai
+    (built-in first, Gemini fallback; images always AI).
+  - 'notes': a short status trail returned with every parse, for the import
+    "thinking" / progress stream in the UI.
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -255,6 +269,57 @@ def flag_from_ioc(code):
     up = code.upper().strip()
     return up if re.match(r'^[A-Z]{3}$', up) else ''
 
+# ── gender / age-category ───────────────────────────────────────────────────
+def norm_gender(raw):
+    """Normalise any gender cell into 'M' | 'F' | 'Mix' | ''."""
+    s = re.sub(r'[^a-z]', '', str(raw or '').lower())
+    if not s:
+        return ''
+    if s in ('m', 'male', 'man', 'men', 'boy', 'boys', 'h', 'herr'):
+        return 'M'
+    if s in ('f', 'female', 'woman', 'women', 'w', 'girl', 'girls',
+             'lady', 'ladies', 'dame'):
+        return 'F'
+    if s in ('mix', 'mixed', 'x', 'mf', 'fm', 'co', 'coed'):
+        return 'Mix'
+    return ''
+
+def combine_boat_gender(helm_g, crew_g):
+    """Derive a single boat gender from helm + crew gender."""
+    h, c = norm_gender(helm_g), norm_gender(crew_g)
+    if h and c:
+        return h if h == c else 'Mix'
+    return h or c or ''
+
+def norm_category(raw):
+    """
+    Normalise an age-group / division category into a short label, preserving
+    the source intent: 'U17', 'U-17', 'Under 17' → 'U17'; 'Junior' → 'Jr';
+    'Open'/'Senior'/'Master' kept title-cased. Returns '' for empties / pure
+    fleet colours (Gold/Silver/Bronze are fleets, not categories).
+    """
+    s = str(raw or '').strip()
+    if not s:
+        return ''
+    low = s.lower()
+    if low in ('open', 'overall', 'main', 'all', 'mixed', 'm', 'f', '-', '—'):
+        return ''
+    if re.search(r'\b(gold|silver|bronze|emerald|sapphire)\b', low):
+        return ''
+    m = re.search(r'\bu[\s\-]?(\d{1,2})\b', low)        # U17, U-17, U 17
+    if m:
+        return 'U' + m.group(1)
+    m = re.search(r'\bunder[\s\-]?(\d{1,2})\b', low)     # Under 17
+    if m:
+        return 'U' + m.group(1)
+    if re.search(r'\b(junior|jr|youth|cadet)\b', low):
+        return 'Jr'
+    if re.search(r'\b(master|veteran|senior)s?\b', low):
+        return 'Mst'
+    # Keep a clean short alphanumeric label (e.g. "Apprentice", "Radial")
+    cleaned = re.sub(r'\s+', ' ', s).strip()
+    return cleaned[:12] if len(cleaned) <= 14 else ''
+
 # ── metadata ───────────────────────────────────────────────────────────────
 def extract_event_name(text):
     kw = r'(?i)(championship|regatta|nationals|cup|trophy|open|series|race|sailing|woche|ovington)'
@@ -341,9 +406,17 @@ def detect_cols(header_rows):
             cols.setdefault('sailors', i)
         elif h in ('sailno','sail','sailnum','sailnumber','no.','boatno','sailno.','number'):
             cols.setdefault('sail', i)
-        elif h in ('division','div','fleet','class','dinghyclass/fleet','fleet/class',
-                   'boatclass','dinghyclass','boatgender'):
+        elif h in ('division','div','category','agegroup','agecategory','agecat',
+                   'group','catgory'):
+            cols.setdefault('category', i)
+        elif h in ('fleet','class','dinghyclass/fleet','fleet/class',
+                   'boatclass','dinghyclass'):
             cols.setdefault('div', i)
+        elif h in ('gender','sex','boatgender','gender(skipper)','genderskipper',
+                   'gendersksipper','helmgender','skippergender'):
+            cols.setdefault('gender', i)
+        elif h in ('crewgender','gender(crew)','gendercrew'):
+            cols['crewgender'] = i
         elif h in ('nat','nationality','country','sailnationalletter','nationalletter'):
             cols.setdefault('nat', i)
         elif h in ('club','clubs','clubname','club/association','clubassociation','club/org'):
@@ -378,6 +451,13 @@ def parse_row_with_cols(row, cols):
     sail_raw = get('sail')
     nat_raw  = get('nat')
     div_raw  = get('div')
+    cat_raw  = get('category')
+
+    # Gender: prefer a boat/skipper gender column; else combine helm + crew gender.
+    gender = norm_gender(get('gender'))
+    if 'crewgender' in cols:
+        gender = combine_boat_gender(get('gender'), get('crewgender'))
+    category = norm_category(cat_raw)
 
     if 'sailors' in cols and not helm_raw:
         # Combined column: split into helm + crew
@@ -472,6 +552,8 @@ def parse_row_with_cols(row, cols):
         'sail':       clean_sail or '—',
         'nat':        flag_from_ioc(nat_raw),
         'div':        div_raw,
+        'gender':     gender,
+        'category':   category,
         'races':      races,
         'race_codes': race_codes,
         'pdf_rank':   pdf_rank,
@@ -584,7 +666,7 @@ def try_clubspot(full_text):
         helm = sailors[i2*2]     if i2*2 < len(sailors) else ''
         crew = sailors[i2*2+1]   if i2*2+1 < len(sailors) else ''
         if score_vals:
-            entries.append({'helm':helm,'crew':crew,'sail':sail,'nat':nat,'div':'','races':score_vals,'race_codes':[None]*len(score_vals),'pdf_rank':i2+1,'pdf_net':None})
+            entries.append({'helm':helm,'crew':crew,'sail':sail,'nat':nat,'div':'','gender':'','category':'','races':score_vals,'race_codes':[None]*len(score_vals),'pdf_rank':i2+1,'pdf_net':None})
 
     return entries if entries else None
 
@@ -620,6 +702,8 @@ Return exactly this structure:
       "sail": "sail number e.g. 88 or NZL 7",
       "nat": "3-letter IOC country code e.g. NZL or empty",
       "div": "fleet or division label or empty",
+      "gender": "M, F, or Mix (boat gender) or empty",
+      "category": "age category e.g. U17, U19, U23, Jr or empty",
       "pdf_rank": 1,
       "pdf_net": 67.0,
       "birth_year": 2005,
@@ -635,6 +719,13 @@ RULES:
 - helm/crew: title case "First Last". Convert "SMITH, John" to "John Smith"
 - sail: country prefix + number if present (e.g. "NZL 7"), else just the number
 - nat: 3-letter IOC code (NZL, AUS, GBR, HKG, POL etc.) — empty if unknown
+- gender: the competitor's / boat's gender as "M", "F", or "Mix". Read any
+  Gender / Sex / Boat Gender / M-F column. For a two-person boat with separate
+  helm + crew gender columns, combine them: both male -> "M", both female ->
+  "F", one of each -> "Mix". Empty string if no gender information is shown.
+- category: age group or division if shown — e.g. "U17", "U19", "U23", "Jr".
+  Normalise "Under 17"/"U-17" to "U17" and "Junior" to "Jr". Do NOT put fleet
+  colours (Gold/Silver/Bronze) or "Open" here — leave empty if none.
 - birth_year/crew_birth_year: 4-digit year of birth if a YOB column is shown. If only an AGE is shown, compute birth_year = (event year) - age. If neither is available, use null.
 - races: ALL race scores in order as numbers or string codes.
   Penalty codes as strings: DNF, DNC, DNS, UFD, BFD, DSQ, OCS, RET, NSC, SCP, STP, RDG
@@ -724,6 +815,8 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict
             "sail": clean_sail or "—",
             "nat":  flag_from_ioc(nat_raw),
             "div":  str(e.get("div") or ""),
+            "gender":   norm_gender(e.get("gender")),
+            "category": norm_category(e.get("category")),
             "races": races, "race_codes": race_codes,
             "pdf_rank": pdf_rank, "pdf_net": pdf_net,
             "birth_year": _yob(e.get("birth_year")),
@@ -733,6 +826,17 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict
     if not entries:
         raise ValueError("AI parser returned no valid entries.")
 
+    n_gender = sum(1 for e in entries if e.get('gender'))
+    n_cat    = sum(1 for e in entries if e.get('category'))
+    notes = [
+        "Sent the file to Gemini for analysis.",
+        f"Gemini returned {len(entries)} competitor rows.",
+    ]
+    if n_gender:
+        notes.append(f"Detected gender on {n_gender} of {len(entries)} rows.")
+    if n_cat:
+        notes.append(f"Detected age category on {n_cat} of {len(entries)} rows.")
+
     return {
         "ok": True, "multi": False,
         "name": str(data.get("name") or "Imported Competition"),
@@ -740,6 +844,7 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict
         "discards": int(data.get("discards") or 1),
         "entries": entries,
         "ai_parsed": True,
+        "notes": notes,
     }
 
 
@@ -822,6 +927,19 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
                 e['crew_birth_year'] = ev_year - e['_crew_age']
             e.pop('_age', None); e.pop('_crew_age', None)
 
+    # Build a short status trail for the AI/import thinking stream.
+    all_entries = [e for r in results for e in r['entries']]
+    n_gender = sum(1 for e in all_entries if e.get('gender'))
+    n_cat    = sum(1 for e in all_entries if e.get('category'))
+    notes = [
+        "Recognised a known results format — used the built-in parser.",
+        f"Read {len(all_entries)} competitor rows across {len(results)} table(s).",
+    ]
+    if n_gender:
+        notes.append(f"Detected gender on {n_gender} of {len(all_entries)} rows.")
+    if n_cat:
+        notes.append(f"Detected age category on {n_cat} of {len(all_entries)} rows.")
+
     # Merge Gold/Silver/Bronze/Emerald fleet sections into one event
     gsb = [r for r in results if re.search(r'Gold|Silver|Bronze|Emerald|Sapphire', r.get('fleet',''), re.IGNORECASE)]
     other = [r for r in results if r not in gsb]
@@ -833,14 +951,14 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
                 k = (e['helm'].lower(), e['sail'])
                 if k not in seen:
                     seen.add(k); merged.append(e)
-        return {'ok':True,'multi':False,'name':ev_name,'discards':discards,'date':ev_date,'entries':merged}
+        return {'ok':True,'multi':False,'name':ev_name,'discards':discards,'date':ev_date,'entries':merged,'notes':notes}
 
     if len(results) == 1:
         r = results[0]
-        return {'ok':True,'multi':False,'name':ev_name,'discards':r['discards'],'date':ev_date,'entries':r['entries']}
+        return {'ok':True,'multi':False,'name':ev_name,'discards':r['discards'],'date':ev_date,'entries':r['entries'],'notes':notes}
 
     return {
-        'ok': True, 'multi': True, 'name': ev_name, 'date': ev_date,
+        'ok': True, 'multi': True, 'name': ev_name, 'date': ev_date, 'notes': notes,
         'fleets': [{'name':r['fleet'],'entries':r['entries'],'discards':r['discards'],'count':len(r['entries'])} for r in results],
     }
 
@@ -856,18 +974,237 @@ def _detect_mime(data: bytes) -> str:
         return "image/webp"
     if data[:6] in (b"GIF87a", b"GIF89a"):
         return "image/gif"
+    head = data[:512].lstrip().lower()
+    if head[:5] == b"<html" or head[:9] == b"<!doctype" or b"<table" in data[:4000].lower():
+        return "text/html"
     return "application/pdf"  # default — let pdfplumber try
 
 
-def parse_pdf_bytes(file_bytes: bytes) -> dict:
+# ── HTML parsing (server-side, stdlib only) ─────────────────────────────────
+from html.parser import HTMLParser as _HTMLParser
+from html import unescape as _unescape
+
+class _TableHarvester(_HTMLParser):
     """
-    Entry point. Images go straight to Gemini (no rule-based parser exists for
-    them). PDFs try the rule-based parser first, then fall back to Gemini.
+    Minimal HTML table extractor. Produces a list of tables, each a list of
+    rows, each a list of cell strings — the same shape pdfplumber yields — so
+    the existing detect_cols / parse_table machinery can be reused verbatim.
+    A flag image inside a cell contributes its title/alt (Sailwave nat codes).
+    Headings (h1/h3) are captured for the event name + fleet section labels.
+    """
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables = []
+        self.headings = []        # (tag, text) for h1/h3
+        self._tbl = None
+        self._row = None
+        self._cell = None
+        self._heading_tag = None
+        self._heading_buf = []
+        self._table_anchor_text = []   # text seen just before each table (fleet label)
+        self._recent_text = []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == 'table':
+            self._tbl = []
+            # remember the most recent heading-ish text as a fleet anchor
+            self._table_anchor_text.append(' '.join(self._recent_text[-4:]))
+        elif tag == 'tr' and self._tbl is not None:
+            self._row = []
+        elif tag in ('td', 'th') and self._row is not None:
+            self._cell = []
+        elif tag == 'img' and self._cell is not None:
+            t = (a.get('title') or a.get('alt') or '').strip()
+            if t:
+                self._cell.append(' ' + t + ' ')
+        elif tag in ('h1', 'h2', 'h3', 'h4'):
+            self._heading_tag = tag
+            self._heading_buf = []
+
+    def handle_endtag(self, tag):
+        if tag in ('td', 'th') and self._cell is not None:
+            txt = re.sub(r'\s+', ' ', ''.join(self._cell)).strip()
+            self._row.append(txt)
+            self._cell = None
+        elif tag == 'tr' and self._row is not None:
+            if any(c for c in self._row):
+                self._tbl.append(self._row)
+            self._row = None
+        elif tag == 'table' and self._tbl is not None:
+            if self._tbl:
+                self.tables.append(self._tbl)
+            self._tbl = None
+        elif tag in ('h1', 'h2', 'h3', 'h4') and self._heading_tag == tag:
+            txt = re.sub(r'\s+', ' ', ''.join(self._heading_buf)).strip()
+            if txt:
+                self.headings.append((tag, txt))
+                self._recent_text.append(txt)
+            self._heading_tag = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+        elif self._heading_tag is not None:
+            self._heading_buf.append(data)
+        else:
+            t = data.strip()
+            if t:
+                self._recent_text.append(t)
+
+
+def _parse_html_string(html_text: str) -> dict:
+    """Parse an HTML results page into the standard result dict."""
+    html_text = _unescape(html_text)
+    hv = _TableHarvester()
+    try:
+        hv.feed(html_text)
+    except Exception:
+        pass
+
+    if not hv.tables:
+        raise ValueError("No results table found in this HTML page.")
+
+    ev_name = next((t for (tag, t) in hv.headings if tag == 'h1'), '') \
+        or extract_event_name(html_text) or 'Imported Competition'
+    plain = re.sub(r'<[^>]+>', ' ', html_text)
+    plain = re.sub(r'\s+', ' ', _unescape(plain))
+    ev_date = extract_date(plain)
+    discards = extract_discards(plain)
+    detected_fleets = detect_fleets_in_text(plain)
+
+    results = []
+    for ti, tbl in enumerate(hv.tables):
+        anchor = hv._table_anchor_text[ti] if ti < len(hv._table_anchor_text) else ''
+        fleet = ''
+        fsec = re.search(r'(\d+-(?:Gold|Silver|Bronze|Emerald)\s+Fleet|'
+                         r'Gold Fleet|Silver Fleet|Bronze Fleet)', anchor, re.IGNORECASE)
+        if fsec:
+            fleet = fsec.group(1)
+        else:
+            for f in detected_fleets:
+                if f.lower() in anchor.lower():
+                    fleet = f; break
+        parsed = parse_table(tbl, fleet)
+        if parsed and parsed['entries']:
+            results.append({'fleet': fleet, 'entries': parsed['entries'], 'discards': discards})
+
+    if not results:
+        raise ValueError("Found tables in the page, but none looked like a results table.")
+
+    # resolve ages → birth years
+    ym = re.search(r'\b(20[0-2]\d|19[5-9]\d)\b', (ev_date or '') + ' ' + (ev_name or '') + ' ' + plain[:400])
+    ev_year = int(ym.group(0)) if ym else None
+    for r in results:
+        for e in r['entries']:
+            if e.get('birth_year') is None and e.get('_age') and ev_year:
+                e['birth_year'] = ev_year - e['_age']
+            if e.get('crew_birth_year') is None and e.get('_crew_age') and ev_year:
+                e['crew_birth_year'] = ev_year - e['_crew_age']
+            e.pop('_age', None); e.pop('_crew_age', None)
+
+    all_entries = [e for r in results for e in r['entries']]
+    n_gender = sum(1 for e in all_entries if e.get('gender'))
+    n_cat    = sum(1 for e in all_entries if e.get('category'))
+    notes = [
+        "Fetched the page and read its source HTML directly.",
+        f"Read {len(all_entries)} competitor rows from {len(results)} table(s).",
+    ]
+    if n_gender: notes.append(f"Detected gender on {n_gender} rows.")
+    if n_cat:    notes.append(f"Detected age category on {n_cat} rows.")
+
+    # merge gold/silver/bronze
+    gsb = [r for r in results if re.search(r'gold|silver|bronze|emerald', r.get('fleet',''), re.IGNORECASE)]
+    other = [r for r in results if r not in gsb]
+    if (gsb and not other) or len(results) == 1:
+        merged, seen = [], set()
+        for r in (sorted(gsb, key=lambda x: x.get('fleet','')) if (gsb and not other) else results):
+            for e in r['entries']:
+                k = (e['helm'].lower(), e['sail'])
+                if k not in seen:
+                    seen.add(k); merged.append(e)
+        return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,'discards':discards,'entries':merged,'notes':notes}
+
+    return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,
+            'fleets':[{'name':r['fleet'],'entries':r['entries'],'discards':r['discards'],'count':len(r['entries'])} for r in results]}
+
+
+_ALLOWED_FETCH_SCHEMES = ('http://', 'https://')
+
+def fetch_url_bytes(url: str):
+    """Fetch a results URL server-side (the browser can't, due to CORS).
+    Returns (content_bytes, content_type). Raises ValueError on problems."""
+    if urlopen is None:
+        raise ValueError("URL fetching is not available in this environment.")
+    u = (url or '').strip()
+    if not u.lower().startswith(_ALLOWED_FETCH_SCHEMES):
+        raise ValueError("Please paste a full http(s) results link.")
+    req = UrlRequest(u, headers={
+        "User-Agent": "Mozilla/5.0 (compatible; AthLinkBot/1.0; +https://athlink20.vercel.app)",
+        "Accept": "text/html,application/xhtml+xml,application/pdf,*/*",
+    }, method="GET")
+    try:
+        with urlopen(req, timeout=45) as resp:
+            ctype = (resp.headers.get('Content-Type') or '').lower()
+            data = resp.read(20 * 1024 * 1024)   # cap 20 MB
+    except Exception as exc:
+        raise ValueError(f"Couldn't fetch that link: {exc}")
+    if not data:
+        raise ValueError("The link returned no content.")
+    return data, ctype
+
+
+def parse_url(url: str, mode: str = 'ai') -> dict:
+    """Fetch a results link and parse it. HTML pages are parsed from source
+    (most accurate); PDFs go through the normal byte pipeline."""
+    data, ctype = fetch_url_bytes(url)
+    mime = _detect_mime(data)
+    is_html = ('html' in ctype) or (mime == 'text/html')
+    if is_html and 'pdf' not in ctype:
+        try:
+            text = data.decode('utf-8', errors='replace')
+        except Exception:
+            text = data.decode('iso-8859-1', errors='replace')
+        try:
+            out = _parse_html_string(text)
+            out.setdefault('notes', []).insert(0, f"Loaded {url}")
+            return out
+        except ValueError as html_err:
+            if mode == 'ai' and os.environ.get("GEMINI_API_KEY"):
+                # Some 'HTML' pages are really embedded PDFs / JS apps — let AI try the bytes.
+                try:
+                    return _gemini_parse(data, "application/pdf")
+                except Exception:
+                    raise html_err
+            raise
+    # PDF or other bytes
+    return parse_pdf_bytes(data, mode=mode)
+
+
+def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
+    """
+    Entry point for uploaded bytes.
+
+    mode='rule'  → built-in parser only; raise on unknown formats (no AI).
+    mode='ai'    → built-in parser first, Gemini fallback; images always AI.
     """
     mime = _detect_mime(file_bytes)
 
-    # ── Image upload → Gemini only ──
+    # ── HTML upload (rare; usually parsed client-side, but supported here too) ──
+    if mime == "text/html":
+        try:
+            text = file_bytes.decode('utf-8', errors='replace')
+        except Exception:
+            text = file_bytes.decode('iso-8859-1', errors='replace')
+        return _parse_html_string(text)
+
+    # ── Image upload → Gemini only (no rule-based parser exists for images) ──
     if mime.startswith("image/"):
+        if mode == 'rule':
+            raise ValueError(
+                "This is an image — the non-AI parser can't read it. "
+                "Use the AI parser for photos and screenshots."
+            )
         key = os.environ.get("GEMINI_API_KEY", "")
         if not key:
             raise ValueError(
@@ -875,10 +1212,12 @@ def parse_pdf_bytes(file_bytes: bytes) -> dict:
             )
         return _gemini_parse(file_bytes, mime)
 
-    # ── PDF → rule-based first, Gemini fallback ──
+    # ── PDF → rule-based first ──
     try:
         return _rule_based_parse(file_bytes)
     except ValueError as rule_err:
+        if mode == 'rule':
+            raise   # non-AI parser: surface the failure, no fallback
         key = os.environ.get("GEMINI_API_KEY", "")
         if not key:
             raise  # No AI key — surface original error
@@ -897,11 +1236,36 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if pdfplumber is None:
             return self._respond(500, {'ok':False,'error':'pdfplumber not installed.'})
+        # mode comes from ?mode=rule|ai (default ai)
+        mode = 'ai'
+        try:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            mode = (qs.get('mode', ['ai'])[0] or 'ai').lower()
+            if mode not in ('rule', 'ai'):
+                mode = 'ai'
+        except Exception:
+            mode = 'ai'
+
         length = int(self.headers.get('Content-Length', 0))
         if not length:
-            return self._respond(400, {'ok':False,'error':'No file received.'})
+            return self._respond(400, {'ok':False,'error':'No file or link received.'})
+        body = self.rfile.read(length)
+        ctype = (self.headers.get('Content-Type') or '').lower()
+
         try:
-            self._respond(200, parse_pdf_bytes(self.rfile.read(length)))
+            # JSON body with a results link → fetch + parse server-side
+            if 'application/json' in ctype:
+                payload = json.loads(body.decode('utf-8', errors='replace') or '{}')
+                url = (payload.get('url') or '').strip()
+                jmode = (payload.get('mode') or mode or 'ai').lower()
+                if jmode not in ('rule', 'ai'):
+                    jmode = 'ai'
+                if not url:
+                    return self._respond(400, {'ok':False,'error':'No "url" provided in the request.'})
+                return self._respond(200, parse_url(url, mode=jmode))
+            # Otherwise treat the body as raw file bytes
+            return self._respond(200, parse_pdf_bytes(body, mode=mode))
         except Exception as exc:
             self._respond(422, {'ok':False,'error':str(exc)})
     def _cors(self):
