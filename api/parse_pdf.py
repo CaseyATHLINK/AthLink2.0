@@ -409,8 +409,8 @@ def detect_cols(header_rows):
         elif h in ('division','div','category','agegroup','agecategory','agecat',
                    'group','catgory'):
             cols.setdefault('category', i)
-        elif h in ('fleet','class','dinghyclass/fleet','fleet/class',
-                   'boatclass','dinghyclass'):
+        elif h in ('fleet','class','dinghyclassfleet','dinghyclass/fleet','fleetclass',
+                   'fleet/class','boatclass','dinghyclass'):
             cols.setdefault('div', i)
         elif h in ('gender','sex','boatgender','gender(skipper)','genderskipper',
                    'gendersksipper','helmgender','skippergender'):
@@ -450,7 +450,7 @@ def parse_row_with_cols(row, cols):
     crew_raw = get('crew')
     sail_raw = get('sail')
     nat_raw  = get('nat')
-    div_raw  = get('div')
+    div_raw  = re.sub(r'\s+', ' ', get('div')).strip()
     cat_raw  = get('category')
 
     # Gender: prefer a boat/skipper gender column; else combine helm + crew gender.
@@ -849,6 +849,76 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict
 
 
 # ── main parse ─────────────────────────────────────────────────────────────
+# ── fleet grouping ──────────────────────────────────────────────────────────
+def _is_colour_fleet(label):
+    """True for qualifying/final splits of ONE championship (Gold/Silver/…)."""
+    return bool(re.search(r'gold|silver|bronze|emerald|sapphire', label or '', re.IGNORECASE))
+
+def _resolve_birth_years(entries, ev_year):
+    for e in entries:
+        if e.get('birth_year') is None and e.get('_age') and ev_year:
+            e['birth_year'] = ev_year - e['_age']
+        if e.get('crew_birth_year') is None and e.get('_crew_age') and ev_year:
+            e['crew_birth_year'] = ev_year - e['_crew_age']
+        e.pop('_age', None); e.pop('_crew_age', None)
+
+def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label="the built-in parser"):
+    """
+    Group entries by their per-row fleet/class label (e['div']) and decide
+    single vs multi:
+      - one distinct label (or none)         → single result
+      - several labels, all colour-splits     → merge into one championship
+      - several genuine fleets/classes        → multi: one competition per fleet
+    """
+    from collections import OrderedDict
+    groups, seen = OrderedDict(), {}
+    for e in all_entries:
+        key = (e.get('div') or '').strip() or '__main__'
+        if key not in groups:
+            groups[key] = []; seen[key] = set()
+        sk = (e['helm'].lower(), e.get('sail', ''))
+        if sk in seen[key]:
+            continue
+        seen[key].add(sk); groups[key].append(e)
+    for k in groups:
+        groups[k].sort(key=lambda e: (e.get('pdf_rank') if e.get('pdf_rank') is not None else 9999))
+
+    real = [k for k in groups if groups[k]]
+    n_total = sum(len(groups[k]) for k in real)
+    n_gender = sum(1 for k in real for e in groups[k] if e.get('gender'))
+    n_cat    = sum(1 for k in real for e in groups[k] if e.get('category'))
+    notes = list(base_notes)
+    if n_gender: notes.append(f"Detected gender on {n_gender} of {n_total} rows.")
+    if n_cat:    notes.append(f"Detected age category on {n_cat} of {n_total} rows.")
+
+    # Single fleet (or only the unlabelled bucket) → one result
+    if len(real) <= 1:
+        ents = groups[real[0]] if real else []
+        return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
+                'discards':discards,'entries':ents,'notes':notes}
+
+    non_main = [k for k in real if k != '__main__']
+    # Every labelled group is a Gold/Silver/Bronze split → merge to one championship
+    if non_main and '__main__' not in real and all(_is_colour_fleet(k) for k in non_main):
+        merged, mseen = [], set()
+        for k in sorted(non_main):
+            for e in groups[k]:
+                sk = (e['helm'].lower(), e.get('sail', ''))
+                if sk not in mseen:
+                    mseen.add(sk); merged.append(e)
+        notes.append(f"Merged {len(non_main)} qualifying/final fleets into one result.")
+        return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
+                'discards':discards,'entries':merged,'notes':notes}
+
+    # Genuine separate fleets/classes → one competition each
+    fleets = [{'name': (k if k != '__main__' else ''),
+               'entries': groups[k], 'discards': discards, 'count': len(groups[k])}
+              for k in real]
+    labels = [f['name'] or 'Main' for f in fleets]
+    notes.append(f"Separated into {len(fleets)} fleets: {', '.join(labels)}.")
+    return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,'fleets':fleets}
+
+
 def _rule_based_parse(pdf_bytes: bytes) -> dict:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         full_text = '\n'.join(p.extract_text() or '' for p in pdf.pages)
@@ -868,9 +938,9 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
     results  = []
 
     # ── pdfplumber table extraction ───────────────────────────────
+    all_parsed = []
     if all_tables:
         detected_fleets = detect_fleets_in_text(full_text)
-        fleet_groups = {}
         current_fleet = detected_fleets[0] if len(detected_fleets) == 1 else ''
 
         for tbl in all_tables:
@@ -886,81 +956,35 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
             if fleet_sec:
                 current_fleet = fleet_sec.group(1)
 
+            # fleet_hint fills e['div'] only when the row has no class/fleet column,
+            # so a per-row "Dinghy Class / Fleet" column always wins.
             parsed = parse_table(tbl, current_fleet)
             if parsed and parsed['entries']:
-                grp = current_fleet or 'main'
-                if grp not in fleet_groups:
-                    fleet_groups[grp] = []
-                seen_keys = {(e['helm'].lower(), e['sail']) for e in fleet_groups[grp]}
-                for e in parsed['entries']:
-                    k = (e['helm'].lower(), e['sail'])
-                    if k not in seen_keys:
-                        seen_keys.add(k); fleet_groups[grp].append(e)
-
-        for fname, entries in fleet_groups.items():
-            if entries:
-                results.append({'fleet': fname if fname != 'main' else '', 'entries': entries, 'discards': discards})
+                all_parsed.extend(parsed['entries'])
 
     # ── Clubspot fallback ─────────────────────────────────────────
-    if not results:
+    if not all_parsed:
         cs = try_clubspot(full_text)
         if cs:
-            results.append({'fleet': '', 'entries': cs, 'discards': discards})
+            all_parsed.extend(cs)
 
-    if not results:
+    if not all_parsed:
         raise ValueError(
             'No results table found. Supported: Sailwave, Manage2sail, SailingResults.net, Clubspot. '
             'For other formats use Manual entry.'
         )
 
-    results = [r for r in results if r.get('entries')]
-
-    # Resolve any age-based birth years now that the event year is known, then
-    # drop the temporary _age keys so they never reach the client/DB.
+    # Resolve age → birth year now that the event year is known.
     ym = re.search(r'\b(20[0-2]\d|19[5-9]\d)\b', (ev_date or '') + ' ' + (ev_name or '') + ' ' + full_text[:400])
     ev_year = int(ym.group(0)) if ym else None
-    for r in results:
-        for e in r['entries']:
-            if e.get('birth_year') is None and e.get('_age') and ev_year:
-                e['birth_year'] = ev_year - e['_age']
-            if e.get('crew_birth_year') is None and e.get('_crew_age') and ev_year:
-                e['crew_birth_year'] = ev_year - e['_crew_age']
-            e.pop('_age', None); e.pop('_crew_age', None)
+    _resolve_birth_years(all_parsed, ev_year)
 
-    # Build a short status trail for the AI/import thinking stream.
-    all_entries = [e for r in results for e in r['entries']]
-    n_gender = sum(1 for e in all_entries if e.get('gender'))
-    n_cat    = sum(1 for e in all_entries if e.get('category'))
-    notes = [
+    base_notes = [
         "Recognised a known results format — used the built-in parser.",
-        f"Read {len(all_entries)} competitor rows across {len(results)} table(s).",
+        f"Read {len(all_parsed)} competitor rows.",
     ]
-    if n_gender:
-        notes.append(f"Detected gender on {n_gender} of {len(all_entries)} rows.")
-    if n_cat:
-        notes.append(f"Detected age category on {n_cat} of {len(all_entries)} rows.")
+    return _finalize(all_parsed, ev_name, ev_date, discards, base_notes)
 
-    # Merge Gold/Silver/Bronze/Emerald fleet sections into one event
-    gsb = [r for r in results if re.search(r'Gold|Silver|Bronze|Emerald|Sapphire', r.get('fleet',''), re.IGNORECASE)]
-    other = [r for r in results if r not in gsb]
-    if gsb and not other:
-        merged = []
-        seen = set()
-        for r in sorted(gsb, key=lambda x: x.get('fleet','')):
-            for e in r['entries']:
-                k = (e['helm'].lower(), e['sail'])
-                if k not in seen:
-                    seen.add(k); merged.append(e)
-        return {'ok':True,'multi':False,'name':ev_name,'discards':discards,'date':ev_date,'entries':merged,'notes':notes}
-
-    if len(results) == 1:
-        r = results[0]
-        return {'ok':True,'multi':False,'name':ev_name,'discards':r['discards'],'date':ev_date,'entries':r['entries'],'notes':notes}
-
-    return {
-        'ok': True, 'multi': True, 'name': ev_name, 'date': ev_date, 'notes': notes,
-        'fleets': [{'name':r['fleet'],'entries':r['entries'],'discards':r['discards'],'count':len(r['entries'])} for r in results],
-    }
 
 def _detect_mime(data: bytes) -> str:
     """Sniff file type from magic bytes. Returns a mime type string."""
@@ -1073,7 +1097,7 @@ def _parse_html_string(html_text: str) -> dict:
     discards = extract_discards(plain)
     detected_fleets = detect_fleets_in_text(plain)
 
-    results = []
+    all_parsed = []
     for ti, tbl in enumerate(hv.tables):
         anchor = hv._table_anchor_text[ti] if ti < len(hv._table_anchor_text) else ''
         fleet = ''
@@ -1087,46 +1111,20 @@ def _parse_html_string(html_text: str) -> dict:
                     fleet = f; break
         parsed = parse_table(tbl, fleet)
         if parsed and parsed['entries']:
-            results.append({'fleet': fleet, 'entries': parsed['entries'], 'discards': discards})
+            all_parsed.extend(parsed['entries'])
 
-    if not results:
+    if not all_parsed:
         raise ValueError("Found tables in the page, but none looked like a results table.")
 
-    # resolve ages → birth years
     ym = re.search(r'\b(20[0-2]\d|19[5-9]\d)\b', (ev_date or '') + ' ' + (ev_name or '') + ' ' + plain[:400])
     ev_year = int(ym.group(0)) if ym else None
-    for r in results:
-        for e in r['entries']:
-            if e.get('birth_year') is None and e.get('_age') and ev_year:
-                e['birth_year'] = ev_year - e['_age']
-            if e.get('crew_birth_year') is None and e.get('_crew_age') and ev_year:
-                e['crew_birth_year'] = ev_year - e['_crew_age']
-            e.pop('_age', None); e.pop('_crew_age', None)
+    _resolve_birth_years(all_parsed, ev_year)
 
-    all_entries = [e for r in results for e in r['entries']]
-    n_gender = sum(1 for e in all_entries if e.get('gender'))
-    n_cat    = sum(1 for e in all_entries if e.get('category'))
-    notes = [
+    base_notes = [
         "Fetched the page and read its source HTML directly.",
-        f"Read {len(all_entries)} competitor rows from {len(results)} table(s).",
+        f"Read {len(all_parsed)} competitor rows.",
     ]
-    if n_gender: notes.append(f"Detected gender on {n_gender} rows.")
-    if n_cat:    notes.append(f"Detected age category on {n_cat} rows.")
-
-    # merge gold/silver/bronze
-    gsb = [r for r in results if re.search(r'gold|silver|bronze|emerald', r.get('fleet',''), re.IGNORECASE)]
-    other = [r for r in results if r not in gsb]
-    if (gsb and not other) or len(results) == 1:
-        merged, seen = [], set()
-        for r in (sorted(gsb, key=lambda x: x.get('fleet','')) if (gsb and not other) else results):
-            for e in r['entries']:
-                k = (e['helm'].lower(), e['sail'])
-                if k not in seen:
-                    seen.add(k); merged.append(e)
-        return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,'discards':discards,'entries':merged,'notes':notes}
-
-    return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,
-            'fleets':[{'name':r['fleet'],'entries':r['entries'],'discards':r['discards'],'count':len(r['entries'])} for r in results]}
+    return _finalize(all_parsed, ev_name, ev_date, discards, base_notes)
 
 
 _ALLOWED_FETCH_SCHEMES = ('http://', 'https://')
