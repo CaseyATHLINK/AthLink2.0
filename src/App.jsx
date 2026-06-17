@@ -4396,6 +4396,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {importStep==="preview"&&editResultsEv&&<button className="x" onClick={()=>{closeImport();setEditResultsEv(null);}} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           <Upload size={18}/>
           <h3>{importStep==="picker"?"Select fleet":importStep==="preview"?"Preview & edit results":"Import a competition"}</h3>
+          {pdfLoading&&importStep==="preview"&&(
+            <span style={{display:"inline-flex",alignItems:"center",gap:7,marginLeft:10,color:"var(--accent)",fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif"}}>
+              <Loader2 size={15} className="spin"/>
+              {parseProgress.total>1?`Parsing ${parseProgress.done}/${parseProgress.total}…`:"Parsing…"}
+            </span>
+          )}
           <button className="x" onClick={closeImport}><X size={16}/></button>
         </div>
 
