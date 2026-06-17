@@ -2181,6 +2181,45 @@ export default function AthLinkMVP(){
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
   const athleteTitle=isGlobal?"All Athletes":(cls?`${cls.short} Athletes`:`${portalName} Athletes`);
+  // Precompute every athlete's card stats in ONE pass (events count, best rank,
+  // nationality, most-recent class/subclass). Avoids calling aggregate()/athleteNat()
+  // — each O(events) — once per card, which was making All Athletes very slow.
+  const statScope=isGlobal?events:classEvents;
+  const cardStats=useMemo(()=>{
+    const m=new Map();
+    for(const ev of statScope){
+      if(ev.status==="Draft") continue;
+      const s=scoreEvent(ev);
+      const dk=(ev.date||"").split("/").reverse().join("");
+      for(const row of s.rows){
+        [row.helm,row.crew].forEach(nm=>{
+          if(!nm) return;const k=canonName(nm);if(!k) return;
+          let o=m.get(k);if(!o){o={evset:new Set(),best:Infinity,nat:{},recentDK:"",recentCls:null,recentSub:null};m.set(k,o);}
+          const sig=`${eventKey(ev)}|${row.sail||""}|${row.rank}|${row.net}|${(row.races||[]).join(",")}`;
+          if(!o.evset.has(sig)){o.evset.add(sig);if(row.rank&&row.rank<o.best)o.best=row.rank;}
+          if(row.nat)o.nat[row.nat]=(o.nat[row.nat]||0)+1;
+          if(dk>=o.recentDK){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
+        });
+      }
+    }
+    const out=new Map();
+    for(const[k,o]of m){
+      const nat=Object.keys(o.nat).length?Object.entries(o.nat).sort((a,b)=>b[1]-a[1])[0][0]:(META[displayNameFor(k)]?.nat||"");
+      out.set(k,{events:o.evset.size,best:o.best===Infinity?null:o.best,nat,recentCls:o.recentCls,recentSub:o.recentSub});
+    }
+    return out;
+  },[statScope]);
+  const statOf=nm=>cardStats.get(canonName(nm))||{events:0,best:null,nat:"",recentCls:null,recentSub:null};
+  // Progressive reveal so the page paints immediately and fills in as you scroll.
+  const[athLimit,setAthLimit]=useState(120);
+  const athSentinelRef=React.useRef(null);
+  useEffect(()=>{setAthLimit(120);},[isGlobal,portal,view.name,filter,q,athleteSmart]);
+  useEffect(()=>{
+    if(view.name!=="athletes") return;
+    const el=athSentinelRef.current;if(!el) return;
+    const io=new IntersectionObserver(es=>{if(es[0].isIntersecting) setAthLimit(l=>l+120);},{rootMargin:"600px"});
+    io.observe(el);return()=>io.disconnect();
+  },[view.name,athLimit,filter,q]);
   const evLoc=ev=>[ev.country].filter(Boolean).join(" · ");
   const manualReady=!!mf.rows.filter(r=>r.helm.trim()).length;
 
@@ -3973,7 +4012,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         // group by nationality, country groups alphabetical, names alphabetical within
         const byCountry={};
         shown.forEach(p=>{
-          const nat=athleteNat(p.name,isGlobal?events:classEvents);
+          const nat=statOf(p.name).nat;
           const key=nat||"ZZZ";
           if(!byCountry[key])byCountry[key]={nat,cname:GLOBE_NAMES[IOC_ISO[nat]]||nat||"Unknown",people:[]};
           byCountry[key].people.push(p);
@@ -3981,8 +4020,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         const groups=Object.values(byCountry).sort((a,b)=>a.cname.localeCompare(b.cname));
         groups.forEach(g=>g.people.sort((a,b)=>a.name.localeCompare(b.name)));
         if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No athletes match.</p>;
-        let gi=0;
-        return groups.map(g=>(
+        let gi=0,rendered=0;                       // cap total cards rendered for fast paint
+        const out=[];
+        for(const g of groups){
+          if(rendered>=athLimit) break;
+          const slice=g.people.slice(0,Math.max(0,athLimit-rendered));rendered+=slice.length;
+          out.push(
           <div key={g.cname} style={{marginBottom:22}}>
             <div style={{display:"flex",alignItems:"center",gap:9,margin:"4px 0 11px"}}>
               <span style={{fontSize:18}}>{g.nat?iocFlag(g.nat):""}</span>
@@ -3991,31 +4034,30 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div style={{flex:1,height:1,background:"var(--line)"}}/>
             </div>
             <div className="agrid">
-              {g.people.map(p=>{
-                const ag=aggregate(p.name,isGlobal?events:classEvents);
-                const nat=athleteNat(p.name,isGlobal?events:classEvents);
-                const clsLabel=isGlobal?CLASSES.find(c=>c.id===p.cls)?.short:cls?.short;
-                // Most-recent subclass this athlete sailed in this class (e.g. ILCA 6)
-                const clsId=isGlobal?p.cls:cls?.id;
-                const recentSub=(()=>{const t=canonName(p.name);const evs=(isGlobal?events:classEvents).filter(e=>e.cls===clsId&&e.subclass&&e.entries.some(en=>canonName(en.helm)===t||canonName(en.crew)===t));if(!evs.length)return null;evs.sort((a,b)=>((b.date||"").split("/").reverse().join("")).localeCompare((a.date||"").split("/").reverse().join("")));return evs[0].subclass;})();
-                const nug=clsId&&recentSub?nuggetFor(clsId,recentSub):null;
-                return(<div className="acard" key={p.name} style={{animationDelay:`${(gi++)*16}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
+              {slice.map(p=>{
+                const st=statOf(p.name);
+                const nat=st.nat;
+                // Boat-class nugget = most-recent competition's class (ILCA 6 etc. if subclass present)
+                const nug=st.recentCls?nuggetFor(st.recentCls,st.recentSub):null;
+                return(<div className="acard" key={p.name} style={{animationDelay:`${(Math.min(gi++,40))*12}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
                   <div className="achead">
                     <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
                     <div style={{minWidth:0,flex:1}}>
                       <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {p.name}</div>
-                      <div className="cn" style={{marginTop:2}}>{nat?(ag.events>1?"Multi-event":(clsLabel||"")):(clsLabel||"")}{!nat&&ag.events>1?" · multi-event":""}</div>
+                      <div className="cn" style={{marginTop:2}}>{st.events>1?"Multi-event":"\u00a0"}</div>
                     </div>
-                    {nug&&<span className="cls" style={{background:nug.color,fontSize:9.5,alignSelf:"flex-start",flex:"none"}}>{nug.label}</span>}
                   </div>
                   <div className="acstat">
-                    <div><b>{ag.events}</b>competitions</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
+                    <div><b>{st.events}</b>competitions</div><div><b>{st.best?"#"+st.best:"—"}</b>best</div>
+                    {nug&&<span className="cls" style={{background:nug.color,fontSize:9.5,marginLeft:"auto"}}>{nug.label}</span>}
                   </div>
                 </div>);
               })}
             </div>
-          </div>
-        ));
+          </div>);
+        }
+        out.push(<div key="__sentinel" ref={athSentinelRef} style={{height:1}}/>);
+        return out;
       })()}
     </div>
   )}
