@@ -452,57 +452,52 @@ function classFromFleetName(name){
   if(/opti/.test(s)) return "optimist";
   return null;
 }
-// Interactive liquid-glass background: a soft blue field, theme-matched to the navy header,
-// that the cursor pushes around like water in a tray, then springs back. Heavily blurred + low-res = smooth & cheap.
+// Interactive ocean-wave background: muted navy wave bands (matched to the header) that the
+// cursor pushes like a swell, settling back. Low-res + blurred = smooth, cheap, non-distracting.
 function LiquidBackground(){
   const ref=React.useRef(null);
-  const mouse=React.useRef({x:-9999,y:-9999,active:false});
+  const mouse=React.useRef({x:-9999,y:-9999,t:-9999});
   useEffect(()=>{
     const canvas=ref.current; if(!canvas) return;
     const ctx=canvas.getContext("2d"); if(!ctx) return;
-    const SCALE=0.22; let W=1,H=1,raf=0,t=0;
-    const blobs=[];
-    // Blue family tuned to the platform header (navy → sky), with a couple of brighter sheens.
-    const palette=[[58,120,205],[34,86,165],[96,160,230],[24,66,130],[128,184,240],[46,104,188]];
-    function resize(){
-      W=Math.max(1,Math.round(window.innerWidth*SCALE));
-      H=Math.max(1,Math.round(window.innerHeight*SCALE));
-      canvas.width=W; canvas.height=H;
-      if(blobs.length===0){
-        const base=Math.max(W,H);
-        for(let i=0;i<7;i++) blobs.push({hx:(0.1+0.8*Math.random())*W,hy:(0.1+0.8*Math.random())*H,x:Math.random()*W,y:Math.random()*H,vx:0,vy:0,r:base*(0.42+Math.random()*0.4),c:i%palette.length,ph:Math.random()*6.283,sp:0.07+Math.random()*0.12});
-      }
-    }
+    const SCALE=0.30; let W=1,H=1,raf=0,t=0;
+    // Stacked navy wave layers, dark (back/top) -> mid (front/bottom).
+    const layers=[
+      {col:[14,38,64],  amp:0.09, yo:0.34, sp:0.20, fr:1.3, ph:0.0, a:0.34},
+      {col:[20,52,92],  amp:0.12, yo:0.50, sp:0.26, fr:1.0, ph:1.7, a:0.32},
+      {col:[31,78,128], amp:0.15, yo:0.66, sp:0.32, fr:0.8, ph:3.1, a:0.30},
+      {col:[46,104,170],amp:0.18, yo:0.83, sp:0.22, fr:0.6, ph:4.6, a:0.26},
+    ];
+    function resize(){W=Math.max(1,Math.round(window.innerWidth*SCALE));H=Math.max(1,Math.round(window.innerHeight*SCALE));canvas.width=W;canvas.height=H;}
     resize();
     const onResize=()=>resize();
-    const onMove=e=>{const cx=("touches"in e&&e.touches[0])?e.touches[0].clientX:e.clientX;const cy=("touches"in e&&e.touches[0])?e.touches[0].clientY:e.clientY;mouse.current.x=cx*SCALE;mouse.current.y=cy*SCALE;mouse.current.active=true;};
-    const onLeave=()=>{mouse.current.active=false;};
+    const onMove=e=>{const cx=("touches"in e&&e.touches[0])?e.touches[0].clientX:e.clientX;const cy=("touches"in e&&e.touches[0])?e.touches[0].clientY:e.clientY;mouse.current.x=cx*SCALE;mouse.current.y=cy*SCALE;mouse.current.t=performance.now();};
     window.addEventListener("resize",onResize);
     window.addEventListener("pointermove",onMove,{passive:true});
-    window.addEventListener("pointerleave",onLeave);
+    const step=()=>Math.max(2,Math.round(W/70));
     function frame(){
-      t+=0.01; ctx.clearRect(0,0,W,H);
-      ctx.globalCompositeOperation="lighter";
-      const mx=mouse.current.x,my=mouse.current.y,R=Math.max(W,H)*0.34;
-      for(const b of blobs){
-        const tx=b.hx+Math.cos(t*b.sp+b.ph)*W*0.07, ty=b.hy+Math.sin(t*b.sp*0.9+b.ph*1.3)*H*0.09;
-        let fx=0,fy=0;
-        if(mouse.current.active){
-          const dx=b.x-mx,dy=b.y-my,d2=dx*dx+dy*dy;
-          if(d2<R*R){const d=Math.sqrt(d2)||1,f=1-d/R;fx+=(dx/d)*f*R*0.11;fy+=(dy/d)*f*R*0.11;}
+      t+=0.0045; ctx.clearRect(0,0,W,H);
+      const mx=mouse.current.x;
+      const since=(performance.now()-mouse.current.t)/1000;   // seconds since last move
+      const decay=Math.max(0,1-since/1.4);                    // ripple fades ~1.4s
+      const st=step();
+      for(const L of layers){
+        ctx.beginPath(); ctx.moveTo(0,H);
+        for(let x=0;x<=W;x+=st){
+          let y=H*L.yo + Math.sin(x/W*Math.PI*2*L.fr + t*L.sp*6 + L.ph)*H*L.amp;
+          if(decay>0){ const dx=(x-mx)/(W*0.16); y += -Math.exp(-dx*dx)*decay*H*0.11; }  // swell lifts toward cursor
+          ctx.lineTo(x,y);
         }
-        b.vx=(b.vx+(tx-b.x)*0.012+fx)*0.90; b.vy=(b.vy+(ty-b.y)*0.012+fy)*0.90;
-        b.x+=b.vx; b.y+=b.vy;
-        const c=palette[b.c], g=ctx.createRadialGradient(b.x,b.y,0,b.x,b.y,b.r);
-        g.addColorStop(0,`rgba(${c[0]},${c[1]},${c[2]},0.40)`);
-        g.addColorStop(0.6,`rgba(${c[0]},${c[1]},${c[2]},0.11)`);
-        g.addColorStop(1,`rgba(${c[0]},${c[1]},${c[2]},0)`);
-        ctx.fillStyle=g; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,6.283); ctx.fill();
+        ctx.lineTo(W,H); ctx.closePath();
+        const g=ctx.createLinearGradient(0,H*L.yo-H*L.amp,0,H);
+        g.addColorStop(0,`rgba(${L.col[0]},${L.col[1]},${L.col[2]},${L.a})`);
+        g.addColorStop(1,`rgba(${L.col[0]},${L.col[1]},${L.col[2]},${L.a*0.4})`);
+        ctx.fillStyle=g; ctx.fill();
       }
       raf=requestAnimationFrame(frame);
     }
     frame();
-    return ()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",onResize);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerleave",onLeave);};
+    return ()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",onResize);window.removeEventListener("pointermove",onMove);};
   },[]);
   return <canvas ref={ref} className="al-liquid" aria-hidden="true"/>;
 }
@@ -584,7 +579,8 @@ function scoreEvent(ev){
       prev=r;
     });
   }
-  return{rows,fleet,races:Math.max(...ev.entries.map(e=>e.races.length))};
+  const countries=new Set(ev.entries.map(e=>(e.nat||"").trim().toUpperCase()).filter(Boolean)).size;
+  return{rows,fleet,races:Math.max(...ev.entries.map(e=>e.races.length)),countries};
 }
 
 function scorePreview(ev){
@@ -634,7 +630,7 @@ function aggregate(name,evList){
     row.races.forEach(c=>{if(c===1) wins++;});
     if(row.rank<=3) podiums++;
     if(row.rank<best) best=row.rank;
-    history.push({ev,row:{...row,nat:e.nat||""},role,partner,fleet:s.fleet});
+    history.push({ev,row:{...row,nat:e.nat||""},role,partner,fleet:s.fleet,countries:s.countries});
   }
   history.sort((a,b)=>new Date(b.ev.date)-new Date(a.ev.date));
   return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
@@ -1648,6 +1644,7 @@ function FootprintModal({name,ag,countryCounts,onClose}){
                     <div style={{display:"flex",flexWrap:"wrap",gap:"4px 12px",fontSize:12.5,color:"#9fbdd9"}}>
                       <span style={{color:h.row.rank<=3?"#ffd86b":"#cfe0f2",fontWeight:700}}>
                         #{h.row.rank}<span style={{color:"#9fbdd9",fontWeight:500}}> of {h.fleet} boats</span></span>
+                      {h.countries>0&&<span>{h.countries} countr{h.countries===1?"y":"ies"}</span>}
                       <span>{formatDate(h.ev.date)}</span>
                       {h.ev.class?<span style={{background:"rgba(120,160,210,.2)",color:"#cfe0f2",borderRadius:5,padding:"1px 7px",fontWeight:600,fontSize:11.5}}>{h.ev.class}</span>:null}
                     </div>
@@ -3184,7 +3181,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       position:relative;z-index:0;isolation:isolate;
       background:linear-gradient(165deg,#e6eefa 0%,#eef3fb 45%,#f3f5fa 100%);
       background-attachment:fixed;}
-    .al-liquid{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;filter:blur(34px) saturate(135%);opacity:.9;}
+    .al-liquid{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;filter:blur(24px) saturate(115%);opacity:.5;}
     .al-root *{box-sizing:border-box;}
     /* SF Pro everywhere — overrides the inline Barlow/DM Sans refs to get the platform feel */
     .al-root *:not(svg):not(svg *){font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif !important;}
@@ -3207,7 +3204,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .pill{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#9fbdd9;}
     .pill b{color:#fff;font-family:'Barlow',sans-serif;font-size:19px;}
     .sec{padding:24px 0 60px;}
-    .seclabel{font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--mut);margin:0 0 14px;display:flex;align-items:center;gap:8px;}
+    .seclabel{font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#33425e;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
     .ev{background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:var(--radius);padding:18px 20px;margin-bottom:12px;cursor:pointer;transition:.18s;display:flex;align-items:center;gap:14px;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .ev:hover{transform:translateY(-2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.4),0 12px 30px -14px rgba(0,0,0,.22);}
     .ev.draft{opacity:.72;}
@@ -3290,8 +3287,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .acstat{display:flex;gap:16px;font-size:10.5px;color:var(--mut);border-top:1px solid var(--line);padding-top:11px;align-items:center;}
     .acstat b{display:block;font-family:'Barlow',sans-serif;font-size:14px;color:var(--ink);font-weight:800;}
     .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
-    .srch{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.60);backdrop-filter:blur(22px) saturate(190%);-webkit-backdrop-filter:blur(22px) saturate(190%);border:0;border-radius:12px;padding:10px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.5);transition:background .16s,box-shadow .16s;}
-    .srch:hover,.srch:focus-within{background:rgba(255,255,255,0.82);box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 4px var(--halo);}
+    .srch{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:12px;padding:10px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35);transition:background .16s,box-shadow .16s;}
+    .srch:hover,.srch:focus-within{background:rgba(255,255,255,0.66);box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 4px var(--halo);}
     .srch input{border:0;outline:0;font:inherit;font-size:14px;width:100%;background:none;color:var(--ink);}
     .seg{display:flex;background:var(--grouped);border:0;border-radius:10px;padding:3px;}
     .seg button{font:inherit;font-size:13px;font-weight:600;border:0;background:none;color:var(--mut);padding:6px 12px;border-radius:8px;cursor:pointer;transition:.12s;}
@@ -3299,7 +3296,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .btn{font-weight:600;font-size:14px;border:0;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:10px 18px;transition:transform .18s cubic-bezier(.4,0,.2,1),filter .18s,background .18s,box-shadow .18s;letter-spacing:-.01em;}
     .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 3px rgba(10,132,255,.35);}.btn.cta:hover{background:var(--accent2);}
     .btn.ghost{background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.06);}.btn.ghost:hover{background:rgba(255,255,255,.85);}
-    .btn.sky{background:rgba(10,132,255,.13);backdrop-filter:blur(26px) saturate(195%);-webkit-backdrop-filter:blur(26px) saturate(195%);color:var(--accent);border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.45);}.btn.sky:hover{background:rgba(10,132,255,.2);}
+    .btn.sky{background:rgba(10,132,255,.20);backdrop-filter:blur(26px) saturate(195%);-webkit-backdrop-filter:blur(26px) saturate(195%);color:var(--navy);border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.45);}.btn.sky:hover{background:rgba(10,132,255,.2);}
     .btn.amber{background:rgba(255,149,0,.16);backdrop-filter:blur(14px);color:#a85c00;border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}.btn.amber:hover{background:rgba(255,149,0,.24);}
     .btn.green{background:rgba(52,199,89,.18);backdrop-filter:blur(14px);color:#0a7a3f;border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}.btn.green:hover{background:rgba(52,199,89,.28);}
     .btn:hover{transform:translateY(-1px);filter:brightness(1.04);}
@@ -3484,8 +3481,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .del-confirm .del-name{color:var(--navy);font-family:'Barlow',sans-serif;}
     .del-confirm-btns{display:flex;gap:8px;}
     /* AI search */
-    .ai-srch{display:flex;align-items:center;gap:8px;background:#fff;border:1.5px solid var(--line);border-radius:10px;overflow:hidden;padding-left:12px;transition:.2s;}
-    .ai-srch:focus-within{border-color:var(--accent);}
+    .ai-srch{display:flex;align-items:center;gap:8px;background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:12px;overflow:hidden;padding-left:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35);transition:.2s;}
+    .ai-srch:focus-within{box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 4px var(--halo);}
     .ai-srch input{flex:1;border:0;outline:0;font:inherit;font-size:13px;padding:9px 10px 9px 0;background:none;color:var(--ink);}
     .ai-srch input::placeholder{color:#9fb2c8;}
     .filter-chip{display:inline-flex;align-items:center;gap:6px;background:#eef4fb;border:1px solid #b9cee4;border-radius:20px;padding:4px 10px 4px 12px;font-size:12px;font-weight:600;color:var(--navy);margin-bottom:12px;}
@@ -3599,8 +3596,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
         {/* Standard header: host-type label (left) + class nugget(s) (right) */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:10,minHeight:22}}>
-          <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
-            color:"var(--mut)",border:"1px solid var(--line)",borderRadius:6,padding:"2px 7px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
+          {(()=>{const tc=a.type==="federation"?"#13314e":a.type==="club"?"#2f6db0":"#6a5acd";
+            return <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
+            color:"#fff",border:0,borderRadius:980,padding:"3px 10px",background:tc,boxShadow:"inset 0 1px 0 rgba(255,255,255,.3),0 1px 2px rgba(0,0,0,.15)",whiteSpace:"nowrap"}}>{typeLabel}</span>;})()}
           <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end"}}>
             {nuggets.map(c=><span key={c.id} className="cls" style={{background:classColor(c.id)}}>{c.short}</span>)}
           </div>
@@ -3636,13 +3634,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           const solid=classColor(c.id);
           return(
             <button key={c.id} onClick={()=>enterPortal("class:"+c.id)}
-              style={{border:`1px solid ${classColorA(c.id,.45)}`,borderRadius:16,background:`linear-gradient(${classColorA(c.id,.20)},${classColorA(c.id,.20)}),rgba(255,255,255,0.80)`,color:solid,cursor:"pointer",
+              style={{border:`1px solid ${classColorA(c.id,.5)}`,borderRadius:16,background:`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`,color:solid,cursor:"pointer",
                 backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
-                boxShadow:"inset 0 1px 0 rgba(255,255,255,.7)",
+                boxShadow:"inset 0 1px 0 rgba(255,255,255,.6)",
                 padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,
                 fontFamily:"'Barlow',sans-serif",transition:".15s"}}
               onMouseEnter={e=>{e.currentTarget.style.background=solid;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=solid;}}
-              onMouseLeave={e=>{e.currentTarget.style.background=`linear-gradient(${classColorA(c.id,.20)},${classColorA(c.id,.20)}),rgba(255,255,255,0.80)`;e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.45);}}>
+              onMouseLeave={e=>{e.currentTarget.style.background=`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`;e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.5);}}>
               <span style={{fontWeight:800,fontSize:16,letterSpacing:".01em"}}>{c.short}</span>
               <span style={{fontSize:11,opacity:.85,fontWeight:600}}>{n} competition{n!==1?"s":""}</span>
             </button>
@@ -3730,9 +3728,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {CLASSES.map(c=>{
             const on=rankCls===c.id;const solid=classColor(c.id);
             return(<button key={c.id} onClick={()=>{setRankCls(c.id);setRankSourceOpen(null);setRankExpanded(new Set());}}
-              style={{border:`1px solid ${on?solid:classColorA(c.id,.45)}`,borderRadius:16,background:on?solid:`linear-gradient(${classColorA(c.id,.20)},${classColorA(c.id,.20)}),rgba(255,255,255,0.80)`,color:on?"#fff":solid,cursor:"pointer",
-                backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.7)",
-                padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Barlow',sans-serif",transition:".15s"}}>
+              style={{border:`1px solid ${on?solid:classColorA(c.id,.5)}`,borderRadius:16,background:on?solid:`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`,color:on?"#fff":solid,cursor:"pointer",
+                backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.6)",
+                padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Barlow',sans-serif",transition:".15s"}}
+              onMouseEnter={e=>{if(on)return;e.currentTarget.style.background=solid;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=solid;}}
+              onMouseLeave={e=>{if(on)return;e.currentTarget.style.background=`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`;e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.5);}}>
               <span style={{fontWeight:800,fontSize:16}}>{c.short}</span>
               <span style={{fontSize:11,opacity:.85,fontWeight:600}}>Ranking</span>
             </button>);
@@ -3763,7 +3763,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   title={ev.name}
                   style={{border:"1px solid "+(sel?classColor(rankCls):classColorA(rankCls,.45)),background:sel?classColor(rankCls):`linear-gradient(${classColorA(rankCls,.18)},${classColorA(rankCls,.18)}),rgba(255,255,255,0.80)`,color:sel?"#fff":classColor(rankCls),
                     backdropFilter:"blur(18px) saturate(185%)",WebkitBackdropFilter:"blur(18px) saturate(185%)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.6)",
-                    borderRadius:980,padding:"5px 12px",fontSize:12,fontWeight:600,cursor:"pointer",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:5,transition:".12s"}}>
+                    borderRadius:980,padding:"5px 12px",fontSize:12,fontWeight:600,cursor:"pointer",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:5,transition:".12s"}}
+                  onMouseEnter={e=>e.currentTarget.style.filter="brightness(1.06)"}
+                  onMouseLeave={e=>e.currentTarget.style.filter="none"}>
                   {sel?<CheckCircle size={12}/>:<Plus size={12}/>}{ev.name}
                 </button>;
               })}
@@ -3777,7 +3779,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {!rankSourceOpen&&<div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
             {comps.map(c=>(
               <button key={c.id} onClick={()=>setRankSelected(prev=>{const n=new Set(prev);n.delete(c.id);return n;})} title="Remove from ranking"
-                style={{border:"1px solid "+classColor(rankCls),background:classColor(rankCls),color:"#fff",borderRadius:7,padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:5}}>
+                style={{border:"1px solid "+classColor(rankCls),background:classColor(rankCls),color:"#fff",borderRadius:980,padding:"5px 12px",fontSize:12,fontWeight:600,cursor:"pointer",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:5,boxShadow:"inset 0 1px 0 rgba(255,255,255,.35)",transition:".12s"}}
+                onMouseEnter={e=>e.currentTarget.style.filter="brightness(1.08)"}
+                onMouseLeave={e=>e.currentTarget.style.filter="none"}>
                 {c.name}<X size={12}/>
               </button>
             ))}
@@ -3984,7 +3988,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   <div className="evmeta">
                     <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
                     <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-                    <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
+                    <span><Users size={13}/>{s.fleet} boats · {s.races} races{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
                   </div>
                 </div>
                 {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
