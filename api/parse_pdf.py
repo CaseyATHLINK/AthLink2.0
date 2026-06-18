@@ -157,6 +157,7 @@ def is_race_hdr(cell):
     return bool(
         re.match(r'^[RFOQ]\d{1,2}$', s) or   # Q1-Q6, F1-F7, O1, R1
         re.match(r'^[FQ]\d{1,2}$', s) or
+        re.match(r'^\d{1,2}[PEQF]$', s) or     # Sailti: 1P (qualifying), 8E (final)
         re.match(r'^(RACE\s*\d{1,2})$', s) or
         re.match(r'^\d{1,2}$', s) or
         re.match(r'^M\d{1,2}$', s) or          # M10 = medal race 10
@@ -165,7 +166,7 @@ def is_race_hdr(cell):
 
 
 def hdr_key(cell):
-    return re.sub(r"[\s\n_()/\\']+", '', fix_doubled(str(cell or '')).lower())
+    return re.sub(r"[\s\n_()/\\'#.]+", '', fix_doubled(str(cell or '')).lower())
 
 # ── name helpers ───────────────────────────────────────────────────────────
 def strip_birth_year(name):
@@ -404,7 +405,7 @@ def detect_cols(header_rows):
             cols['crew'] = i
         elif h in ('sailors','name','helmcrew','name(s)','helmandsailors'):
             cols.setdefault('sailors', i)
-        elif h in ('sailno','sail','sailnum','sailnumber','no.','boatno','sailno.','number'):
+        elif h in ('sailno','sail','sailnum','sailnumber','no','boatno','number'):
             cols.setdefault('sail', i)
         elif h in ('division','div','category','agegroup','agecategory','agecat',
                    'group','catgory'):
@@ -433,9 +434,17 @@ def detect_cols(header_rows):
             cols.setdefault('age', i)
         elif h in ('crewage',):
             cols['crewage'] = i
+        elif h in ('cf','cfps','ps','carryforward','cfpts'):
+            # Sailti carry-forward / points-situation columns are cumulative,
+            # NOT individual races — mark them to skip in the race loop.
+            cols.setdefault('_skip', set()).add(i)
         if is_race_hdr(cell):
             cols.setdefault('race_start', i)
             cols['race_end'] = i
+    # A lone "Crew" column (no Helm/Name/Sailors) actually holds both sailors —
+    # treat it as the combined names column (Sailti "Crew", some 49er pages).
+    if 'crew' in cols and 'helm' not in cols and 'sailors' not in cols:
+        cols['sailors'] = cols.pop('crew')
     return cols
 
 # ── row parsing ────────────────────────────────────────────────────────────
@@ -469,19 +478,24 @@ def parse_row_with_cols(row, cols):
             category = norm_category(div_raw)
         div_raw = ''
 
-    if 'sailors' in cols and not helm_raw:
-        # Combined column: split into helm + crew
+    if 'sailors' in cols and not helm_raw and 'crew' not in cols:
+        # A single combined "Name" column with NO separate crew column → split
+        # it into helm + crew (SailingResults.net, some 49er.org pages).
         helm_raw, crew_raw = split_combined_names(get('sailors'))
     else:
-        # Dedicated helm/crew columns: just join wrapped lines
+        # Dedicated columns. "Name" is the helm when a separate "Crew" column
+        # exists (manage2sail, pya.org.pl); otherwise use the helm column.
+        if not helm_raw and 'sailors' in cols:
+            helm_raw = get('sailors')
+        helm_src = helm_raw
         if helm_raw:
             helm_raw = join_wrapped(helm_raw)
         if crew_raw:
             crew_raw = join_wrapped(crew_raw)
-        # Check if helm cell has two people (manage2sail combined despite dedicated col)
-        if helm_raw and '\n' in get('helm') and not crew_raw:
-            raw_helm_cell = get('helm')
-            h, c = split_combined_names(raw_helm_cell)
+        # A helm cell that itself stacks two people, with no crew column at all
+        # (manage2sail combined-in-one-column variant).
+        if helm_raw and '\n' in helm_src and not crew_raw and 'crew' not in cols:
+            h, c = split_combined_names(helm_src)
             helm_raw, crew_raw = h, c
 
     extracted_nat, clean_sail = parse_sail_country(sail_raw)
@@ -493,7 +507,7 @@ def parse_row_with_cols(row, cols):
     races = []
     race_codes = []  # parallel array: code annotation when a numeric score had a code label
     if race_start is not None and race_end is not None:
-        skip_cols = {cols.get('total'), cols.get('net')}
+        skip_cols = {cols.get('total'), cols.get('net')} | set(cols.get('_skip', set()))
         for i in range(race_start, race_end + 1):
             if i >= len(row) or i in skip_cols:
                 continue
@@ -1100,13 +1114,16 @@ class _TableHarvester(_HTMLParser):
         self._heading_buf = []
         self._table_anchor_text = []   # text seen just before each table (fleet label)
         self._recent_text = []
+        self._last_heading = ''        # most recent heading (best fleet/class anchor)
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == 'table':
             self._tbl = []
-            # remember the most recent heading-ish text as a fleet anchor
-            self._table_anchor_text.append(' '.join(self._recent_text[-4:]))
+            # The closest preceding heading (e.g. "Klasa: 49erFX") is the most
+            # reliable fleet/class label; fall back to recent stray text.
+            self._table_anchor_text.append(
+                self._last_heading or ' '.join(self._recent_text[-4:]))
         elif tag == 'tr' and self._tbl is not None:
             self._row = []
         elif tag in ('td', 'th') and self._row is not None:
@@ -1149,6 +1166,7 @@ class _TableHarvester(_HTMLParser):
             if txt:
                 self.headings.append((tag, txt))
                 self._recent_text.append(txt)
+                self._last_heading = txt
             self._heading_tag = None
 
     def handle_data(self, data):
@@ -1160,6 +1178,10 @@ class _TableHarvester(_HTMLParser):
             t = data.strip()
             if t:
                 self._recent_text.append(t)
+                # "Klasa: 49erFX" / "Class: ILCA 6" act as a fleet/class label even
+                # when they aren't a formal heading element.
+                if re.match(r'(?i)^(klasa|class)\b\s*[:\-]', t):
+                    self._last_heading = t
 
 
 def _parse_html_string(html_text: str) -> dict:
