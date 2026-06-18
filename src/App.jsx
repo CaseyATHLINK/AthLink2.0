@@ -2327,11 +2327,12 @@ export default function AthLinkMVP(){
   /* ── event ops ────────────────────────────────────────────── */
   const deleteEvent=(evId,evName,e)=>{
     e.stopPropagation();
+    if(!canEdit) return;   // guests have no delete access (dev mode / editors only)
     const rect=e.currentTarget.getBoundingClientRect();
     setDeleteConfirm({id:evId,name:evName,x:rect.right,y:rect.bottom});
   };
   const confirmDelete=async()=>{
-    if(!deleteConfirm) return;
+    if(!deleteConfirm||!canEdit) return;
     const target=events.find(ev=>ev.id===deleteConfirm.id);
     // Delete this event AND every duplicate row of the same competition, so no
     // ghost copy survives on the global class page or another association.
@@ -2756,6 +2757,18 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     });
     setActivePending(idx);
   };
+  // Remove a single pending result from the import (without discarding the rest).
+  const removePending=idx=>{
+    const remaining=pending.filter((_,i)=>i!==idx);
+    if(!remaining.length){closeImport();return;}
+    setPending(remaining);
+    const ni=Math.min(idx<=activePending?activePending-1:activePending,remaining.length-1);
+    const safe=Math.max(0,ni);
+    setActivePending(safe);
+    const t=remaining[safe];
+    if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
+    else setPreviewEv(null);
+  };
   // Merge all pending tabs that share a fleetGroupId into one combined tab.
   const combineFleetGroup=(groupId)=>{
     const groupItems=pending.filter(p=>p.fleetGroupId===groupId);
@@ -2867,9 +2880,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     setPdfError("");setPdfLoading(true);
     setParseProgress({done:0,total:files.length});
     setParseLog(files.map(f=>({name:f.name,status:"queued",notes:[]})));
-    // seed placeholders
+    // Stay on the upload screen (with its live progress list) while parsing —
+    // don't flash a blank preview. We switch to preview once results are in.
     const seed=files.map((f,i)=>({id:"pf_"+Date.now()+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]}));
-    setPending(seed);setActivePending(0);setImportStep("preview");
+    setPending(seed);setActivePending(0);
     const results=[];
     for(let i=0;i<files.length;i++){
       setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:[mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]}:l));
@@ -2894,7 +2908,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     }
     setPending(results);setActivePending(0);
     const firstOk=results.findIndex(r=>r.status==="ok");
-    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);}
+    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);setImportStep("preview");}
+    // If every file errored, stay on the upload screen so the error list is visible.
     setPdfLoading(false);
   };
 
@@ -2905,7 +2920,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     setPdfError("");setPdfLoading(true);
     setParseProgress({done:0,total:1});
     setParseLog([{name:u,status:"parsing",notes:["Fetching the page server-side…"]}]);
-    setImportStep("preview");
     const data=await parseLink(u,mode);
     if(!data.ok){
       setPending([{id:"link_"+Date.now(),name:u,status:"error",error:data.error,previewEv:null,subclass:null,collabs:[]}]);
@@ -2928,7 +2942,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     }
     setPending(results);
     const firstOk=results.findIndex(r=>r.status==="ok");
-    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);}
+    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);setImportStep("preview");}
     setParseLog([{name:u,status:"ok",notes:data.notes||["Parsed."]}]);
     setParseProgress({done:1,total:1});setPdfLoading(false);
   };
@@ -3458,7 +3472,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         </button>
       )}
       {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Competitions</button>}
-      {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>{cls?.short||"Class"} Athletes</button>}
+      {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>{fed?"All Athletes":`${cls?.short||"Class"} Athletes`}</button>}
+      {fed&&<button onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</button>}
       {auth
         ? <div style={{position:"relative"}}>
             <button onClick={()=>setAccountOpen(o=>!o)} style={{display:"inline-flex",alignItems:"center",gap:6}}>
@@ -3895,7 +3910,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 </div>
                 {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
                 {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
-                <button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>
+                {canEdit&&<button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>}
                 <ChevronRight size={18} color="#9fb2c8"/>
               </div>);
             })}
@@ -4613,13 +4628,21 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             {pending.length>1&&(
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,borderBottom:"1px solid var(--line)",paddingBottom:10}}>
                 {pending.map((p,i)=>(
-                  <button key={p.id} onClick={()=>switchPending(i)}
-                    style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:200,border:"1px solid "+(i===activePending?"var(--accent)":"var(--line)"),
+                  <span key={p.id}
+                    style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:220,border:"1px solid "+(i===activePending?"var(--accent)":"var(--line)"),
                       background:i===activePending?"var(--accent)":(p.status==="error"?"#fdeceA":"#fff"),color:i===activePending?"#fff":(p.status==="error"?"#b3261e":"var(--navy)"),
-                      borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",overflow:"hidden"}}>
-                    {p.status==="error"?<AlertCircle size={12} style={{flex:"none"}}/>:p.status==="parsing"?<Loader2 size={12} className="spin" style={{flex:"none"}}/>:<FileText size={12} style={{flex:"none"}}/>}
-                    <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{p.previewEv?.name||p.name}</span>
-                  </button>
+                      borderRadius:8,padding:"6px 6px 6px 10px",fontSize:12,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden"}}>
+                    <button onClick={()=>switchPending(i)} title="Edit this result"
+                      style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:170,background:"none",border:0,padding:0,margin:0,cursor:"pointer",color:"inherit",font:"inherit",fontWeight:600,overflow:"hidden"}}>
+                      {p.status==="error"?<AlertCircle size={12} style={{flex:"none"}}/>:p.status==="parsing"?<Loader2 size={12} className="spin" style={{flex:"none"}}/>:<FileText size={12} style={{flex:"none"}}/>}
+                      <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{p.previewEv?.name||p.name}</span>
+                    </button>
+                    <button onClick={()=>removePending(i)} title="Remove this result from the import"
+                      style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,borderRadius:5,border:0,cursor:"pointer",
+                        background:i===activePending?"rgba(255,255,255,.22)":"transparent",color:i===activePending?"#fff":"#9aa7b6"}}>
+                      <X size={12}/>
+                    </button>
+                  </span>
                 ))}
                 {/* Combine fleets button — shown per fleet group */}
                 {fleetGroupIds.map(gid=>{
@@ -4751,7 +4774,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </div>
             <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
             <div className="mfoot" style={{marginTop:14}}>
-              <button className="btn ghost" onClick={()=>{closeImport();setEditResultsEv(null);}}>Cancel</button>
               <button className="btn amber" onClick={()=>editResultsEv?saveEditedResults(true):importPreview(true)}><Clock size={16}/>Save as Draft</button>
               <button className="btn cta" onClick={()=>editResultsEv?saveEditedResults(false):importPreview(false)}><CheckCircle size={16}/>{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</button>
             </div>
