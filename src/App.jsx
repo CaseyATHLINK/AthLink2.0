@@ -3174,9 +3174,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&display=swap');
     .al-root{
       --navy:#13314e;--navy2:#1f4e80;--accent:#0a84ff;--accent2:#409cff;--sky:#e8f1fc;
-      --paper:#eef3fb;--ink:#1d1d1f;--mut:rgba(60,60,67,0.62);--line:rgba(60,60,67,0.12);
-      --card:#ffffff;--gold:#c8920b;
-      --mat-thin:rgba(255,255,255,0.40);--mat-reg:rgba(255,255,255,0.55);--mat-thick:rgba(250,251,253,0.72);
+      --paper:#eef3fb;--ink:#1d1d1f;--mut:rgba(44,52,68,0.86);--line:rgba(60,60,67,0.12);
+      --card:#ffffff;--gold:#c8920b;--link:#0a4fb0;
+      --mat-thin:rgba(255,255,255,0.40);--mat-reg:rgba(255,255,255,0.55);--mat-thick:rgba(250,251,253,0.85);
       --mat-dark:rgba(17,40,66,0.58);--grouped:rgba(118,118,128,0.10);--halo:rgba(10,132,255,0.20);
       --radius:16px;
       font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif;
@@ -3224,7 +3224,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .cls{font-family:'Barlow',sans-serif;font-weight:700;font-size:12px;color:#fff;background:var(--navy2);padding:4px 10px;border-radius:980px;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.12);}
     .delbtn{background:none;border:0;color:#c0392b;cursor:pointer;padding:6px;border-radius:7px;display:grid;place-items:center;opacity:.45;transition:.15s;flex:none;}
     .delbtn:hover{opacity:1;background:#fbe7e4;}
-    .panel{background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:var(--radius);overflow:auto;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.3),0 1px 2px rgba(0,0,0,.05);}
+    .panel{background:rgba(255,255,255,0.85);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:var(--radius);overflow:auto;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);}
     table{width:100%;border-collapse:collapse;font-size:13px;min-width:680px;}
     thead th{background:linear-gradient(180deg,rgba(31,78,128,.92),rgba(19,49,78,.94));backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);color:#fff;font-family:'Barlow',sans-serif;font-weight:600;text-align:center;padding:11px 5px;font-size:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.12);}
     thead th.l{text-align:left;padding-left:18px;}
@@ -3268,7 +3268,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .boat{display:flex;align-items:center;gap:10px;}
     .av{width:30px;height:30px;border-radius:50%;color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none;font-family:'Barlow',sans-serif;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),inset 0 0 0 1px rgba(255,255,255,.18);}
     .cn{font-size:11.5px;color:var(--mut);}
-    .namelink{color:var(--accent);font-weight:600;cursor:pointer;}.namelink:hover{text-decoration:underline;}
+    .namelink{color:var(--link);font-weight:700;cursor:pointer;text-decoration:underline;text-underline-offset:2px;}.namelink:hover{color:#063a85;}
     .disc{color:var(--mut);}.code{color:#c0392b;font-weight:600;font-size:11px;}
     .net{font-family:'Barlow',sans-serif;font-weight:700;color:var(--navy);}
     .sailcol{font-size:12px;color:var(--mut);white-space:nowrap;}
@@ -3280,18 +3280,18 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .divtag.junior{color:#0a6b41;background:#d4f0e0;}
     .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px;font:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
     .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px;}
-    .acard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;}
-    .acard:hover{border-color:#b9cee4;transform:translateY(-2px);box-shadow:0 12px 28px -16px rgba(22,58,99,.55);}
+    .acard{background:rgba(255,255,255,0.80);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border:0;border-radius:16px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);}
+    .acard:hover{transform:translateY(-2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.85),0 12px 28px -16px rgba(0,0,0,.22);}
     .achead{display:flex;align-items:center;gap:11px;margin-bottom:12px;}
     .achead>.av{flex:none;}
     .achead .vb-spacer{margin-left:auto;}
     .achead .av{width:42px;height:42px;font-size:14px;}
     .acn{font-family:'Barlow',sans-serif;font-weight:800;font-size:16.5px;line-height:1.12;color:var(--ink);}
-    .acstat{display:flex;gap:16px;font-size:10.5px;color:var(--mut);border-top:1px solid var(--line);padding-top:11px;align-items:center;opacity:.72;}
-    .acstat b{display:block;font-family:'Barlow',sans-serif;font-size:14px;color:var(--mut);font-weight:700;}
+    .acstat{display:flex;gap:16px;font-size:10.5px;color:var(--mut);border-top:1px solid var(--line);padding-top:11px;align-items:center;}
+    .acstat b{display:block;font-family:'Barlow',sans-serif;font-size:14px;color:var(--ink);font-weight:800;}
     .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
-    .srch{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:var(--grouped);border:0;border-radius:10px;padding:10px 13px;transition:box-shadow .15s;}
-    .srch:focus-within{box-shadow:0 0 0 4px var(--halo);}
+    .srch{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.60);backdrop-filter:blur(22px) saturate(190%);-webkit-backdrop-filter:blur(22px) saturate(190%);border:0;border-radius:12px;padding:10px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.5);transition:background .16s,box-shadow .16s;}
+    .srch:hover,.srch:focus-within{background:rgba(255,255,255,0.82);box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 0 0 4px var(--halo);}
     .srch input{border:0;outline:0;font:inherit;font-size:14px;width:100%;background:none;color:var(--ink);}
     .seg{display:flex;background:var(--grouped);border:0;border-radius:10px;padding:3px;}
     .seg button{font:inherit;font-size:13px;font-weight:600;border:0;background:none;color:var(--mut);padding:6px 12px;border-radius:8px;cursor:pointer;transition:.12s;}
@@ -3636,13 +3636,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           const solid=classColor(c.id);
           return(
             <button key={c.id} onClick={()=>enterPortal("class:"+c.id)}
-              style={{border:`.5px solid ${classColorA(c.id,.4)}`,borderRadius:16,background:classColorA(c.id,.16),color:solid,cursor:"pointer",
-                backdropFilter:"blur(30px) saturate(195%)",WebkitBackdropFilter:"blur(30px) saturate(195%)",
-                boxShadow:"inset 0 1px 0 rgba(255,255,255,.5)",
+              style={{border:`1px solid ${classColorA(c.id,.45)}`,borderRadius:16,background:`linear-gradient(${classColorA(c.id,.20)},${classColorA(c.id,.20)}),rgba(255,255,255,0.80)`,color:solid,cursor:"pointer",
+                backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
+                boxShadow:"inset 0 1px 0 rgba(255,255,255,.7)",
                 padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,
                 fontFamily:"'Barlow',sans-serif",transition:".15s"}}
               onMouseEnter={e=>{e.currentTarget.style.background=solid;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=solid;}}
-              onMouseLeave={e=>{e.currentTarget.style.background=classColorA(c.id,.16);e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.4);}}>
+              onMouseLeave={e=>{e.currentTarget.style.background=`linear-gradient(${classColorA(c.id,.20)},${classColorA(c.id,.20)}),rgba(255,255,255,0.80)`;e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.45);}}>
               <span style={{fontWeight:800,fontSize:16,letterSpacing:".01em"}}>{c.short}</span>
               <span style={{fontSize:11,opacity:.85,fontWeight:600}}>{n} competition{n!==1?"s":""}</span>
             </button>
@@ -3730,8 +3730,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {CLASSES.map(c=>{
             const on=rankCls===c.id;const solid=classColor(c.id);
             return(<button key={c.id} onClick={()=>{setRankCls(c.id);setRankSourceOpen(null);setRankExpanded(new Set());}}
-              style={{border:`.5px solid ${on?solid:classColorA(c.id,.4)}`,borderRadius:16,background:on?solid:classColorA(c.id,.16),color:on?"#fff":solid,cursor:"pointer",
-                backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.5)",
+              style={{border:`1px solid ${on?solid:classColorA(c.id,.45)}`,borderRadius:16,background:on?solid:`linear-gradient(${classColorA(c.id,.20)},${classColorA(c.id,.20)}),rgba(255,255,255,0.80)`,color:on?"#fff":solid,cursor:"pointer",
+                backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.7)",
                 padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Barlow',sans-serif",transition:".15s"}}>
               <span style={{fontWeight:800,fontSize:16}}>{c.short}</span>
               <span style={{fontSize:11,opacity:.85,fontWeight:600}}>Ranking</span>
@@ -3743,8 +3743,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           {[["federation","Federation",fedEvents.length],["international","International",intEvents.length]].map(([id,label,n])=>{
             const on=rankSourceOpen===id;
             return<button key={id} onClick={()=>setRankSourceOpen(o=>o===id?null:id)}
-              style={{border:"1.5px solid "+(on?"var(--accent)":"var(--line)"),background:on?"var(--accent)":"#fff",color:on?"#fff":"var(--navy)",
-                borderRadius:9,padding:"8px 14px",fontSize:13,fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6}}>
+              style={{border:"0",background:on?"var(--accent)":"rgba(255,255,255,0.62)",color:on?"#fff":"var(--navy)",
+                backdropFilter:"blur(22px) saturate(190%)",WebkitBackdropFilter:"blur(22px) saturate(190%)",
+                boxShadow:on?"inset 0 1px 0 rgba(255,255,255,.4),0 1px 3px rgba(10,132,255,.3)":"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5)",
+                borderRadius:980,padding:"8px 15px",fontSize:13,fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,transition:".15s"}}>
               {label}<span style={{fontSize:11,opacity:.75,fontWeight:600}}>{n}</span>{on?<ChevronRight size={14} style={{transform:"rotate(90deg)"}}/>:<ChevronRight size={14}/>}
             </button>;
           })}
@@ -3759,8 +3761,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 const sel=rankSelected.has(ev.id);
                 return<button key={ev.id} onClick={()=>setRankSelected(prev=>{const n=new Set(prev);n.has(ev.id)?n.delete(ev.id):n.add(ev.id);return n;})}
                   title={ev.name}
-                  style={{border:"1px solid "+(sel?classColor(rankCls):classColorA(rankCls,.45)),background:sel?classColor(rankCls):classColorA(rankCls,.16),color:sel?"#fff":classColor(rankCls),
-                    borderRadius:7,padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:5,transition:".12s"}}>
+                  style={{border:"1px solid "+(sel?classColor(rankCls):classColorA(rankCls,.45)),background:sel?classColor(rankCls):`linear-gradient(${classColorA(rankCls,.18)},${classColorA(rankCls,.18)}),rgba(255,255,255,0.80)`,color:sel?"#fff":classColor(rankCls),
+                    backdropFilter:"blur(18px) saturate(185%)",WebkitBackdropFilter:"blur(18px) saturate(185%)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.6)",
+                    borderRadius:980,padding:"5px 12px",fontSize:12,fontWeight:600,cursor:"pointer",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:5,transition:".12s"}}>
                   {sel?<CheckCircle size={12}/>:<Plus size={12}/>}{ev.name}
                 </button>;
               })}
@@ -3779,10 +3782,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               </button>
             ))}
           </div>}
-          <div style={{overflowX:"auto",border:"1px solid var(--line)",borderRadius:12}}>
+          <div style={{overflowX:"auto",background:"rgba(255,255,255,0.85)",backdropFilter:"blur(34px) saturate(195%)",WebkitBackdropFilter:"blur(34px) saturate(195%)",borderRadius:16,boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06)"}}>
             <table style={{borderCollapse:"collapse",width:"100%",fontSize:13,minWidth:640}}>
               <thead>
-                <tr style={{background:"var(--navy)",color:"#fff",textAlign:"left"}}>
+                <tr style={{background:"linear-gradient(180deg,rgba(31,78,128,.92),rgba(19,49,78,.94))",color:"#fff",textAlign:"left"}}>
                   <th style={{padding:"10px 12px"}}>#</th>
                   <th style={{padding:"10px 10px",textAlign:"center"}}>Div</th>
                   <th style={{padding:"10px 12px"}}>{dh?"Team":"Name"}</th>
@@ -4061,13 +4064,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       {/* Revealable, sponsor-focused competition summary */}
       <div style={{marginBottom:16}}>
         <button onClick={()=>{const open=!eventSummaryOpen[ev.id];setEventSummaryOpen(m=>({...m,[ev.id]:open}));if(open)fetchEventSummary(ev);}}
-          style={{display:"inline-flex",alignItems:"center",gap:7,background:"var(--sky)",color:"var(--navy)",border:"0",borderRadius:9,
-            fontSize:12.5,fontWeight:600,fontFamily:"'Barlow',sans-serif",padding:"7px 13px",cursor:"pointer"}}>
+          style={{display:"inline-flex",alignItems:"center",gap:7,background:"rgba(10,132,255,.12)",backdropFilter:"blur(18px) saturate(185%)",WebkitBackdropFilter:"blur(18px) saturate(185%)",color:"var(--navy)",border:"0",borderRadius:980,boxShadow:"inset 0 1px 0 rgba(255,255,255,.5)",
+            fontSize:12.5,fontWeight:600,fontFamily:"'Barlow',sans-serif",padding:"7px 14px",cursor:"pointer"}}>
           <Sparkles size={14}/>About this competition
           <ChevronRight size={14} style={{transform:eventSummaryOpen[ev.id]?"rotate(90deg)":"none",transition:".15s"}}/>
         </button>
         {eventSummaryOpen[ev.id]&&(
-          <div style={{marginTop:10,background:"var(--navy)",borderRadius:12,padding:"14px 16px",animation:"calFade .26s both"}}>
+          <div style={{marginTop:10,background:"rgba(17,40,66,0.55)",backdropFilter:"blur(28px) saturate(180%)",WebkitBackdropFilter:"blur(28px) saturate(180%)",borderRadius:16,padding:"14px 16px",boxShadow:"inset 0 1px 0 rgba(255,255,255,.16)",animation:"calFade .26s both"}}>
             <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 6px",fontSize:11}}><Sparkles size={12}/>Competition overview</p>
             {eventSummaries[ev.id]===null
               ? <div style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",opacity:.75,display:"flex",alignItems:"center",gap:6}}><Loader2 size={13} className="spin"/>Researching this competition…</div>
