@@ -2801,21 +2801,30 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   // Parse a single file → {ok, name, date, entries, discards, multi, fleets, notes, error}
   const parseOneFile=async(file,mode="ai")=>{
-    if(file.name.toLowerCase().endsWith(".html")||file.type==="text/html"){
+    const isHtml=file.name.toLowerCase().endsWith(".html")||file.type==="text/html";
+    // Server parser handles PDF, HTML and images, and carries the full format
+    // support (fleet splitting, crew columns, Sailti, sail-number headers…), so
+    // send everything there first. For HTML, fall back to the in-browser parser
+    // only if the server is unreachable or can't read the page.
+    try{
+      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const data=await res.json();
+      if(data.ok) return data;
+      if(!isHtml) return{ok:false,error:data.error||"Could not parse this file."};
+      // server reachable but couldn't read the HTML → try the browser parser below
+    }catch{
+      if(!isHtml) return{ok:false,error:"Upload failed. Check api/parse_pdf.py is deployed."};
+    }
+    if(isHtml){
       try{
         const buf=await file.arrayBuffer();
         const html=new TextDecoder('iso-8859-1').decode(buf);
         const data=parseHtml(html);
         if(!data.ok) return{ok:false,error:data.error||"Could not parse this HTML file."};
-        return{...data,notes:data.notes||["Parsed the Sailwave HTML in your browser."]};
+        return{...data,notes:data.notes||["Parsed the HTML in your browser."]};
       }catch(err){return{ok:false,error:"HTML parse failed: "+err.message};}
     }
-    try{
-      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
-      const data=await res.json();
-      if(!data.ok) return{ok:false,error:data.error||"Could not parse this file."};
-      return data;
-    }catch{return{ok:false,error:"Upload failed. Check api/parse_pdf.py is deployed."};}
+    return{ok:false,error:"Could not parse this file."};
   };
 
   // Fetch + parse a live results link server-side (browser can't, due to CORS).
