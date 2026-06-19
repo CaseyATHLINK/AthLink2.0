@@ -771,6 +771,13 @@ async function upsertProfile(profile,tok){
     body:JSON.stringify(profile)});
   if(!r.ok) return null; const rows=await r.json(); return rows[0]||null;
 }
+// Kick off Google OAuth — redirects to Google then back to the app.
+// On return, the URL hash contains the session; AthLinkMVP picks it up on mount.
+function authGoogleOAuth(){
+  if(!SB_URL||!SB_KEY) return;
+  const redirectTo=encodeURIComponent(window.location.origin+window.location.pathname);
+  window.location.href=`${SB_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectTo}`;
+}
 
 // Run schema migration for nat column (idempotent)
 async function ensureSchema(){
@@ -1861,76 +1868,371 @@ function CountrySelect({value,onChange,placeholder="Select country..."}){
 }
 
 
-/* ═════════════════════════════════════════════════════════════════════ */
-/* -- Sign-in / sign-up modal -- */
-function SignInModal({onClose,onAuthed}){
-  const [mode,setMode]=React.useState("signin");
-  const [email,setEmail]=React.useState("");
-  const [pw,setPw]=React.useState("");
-  const [role,setRole]=React.useState("athlete");
-  const [classId,setClassId]=React.useState("29er");
-  const [name,setName]=React.useState("");
-  const [busy,setBusy]=React.useState(false);
-  const [err,setErr]=React.useState("");
-  const [info,setInfo]=React.useState("");
-  const submit=async()=>{
-    setErr("");setInfo("");setBusy(true);
+/* ═══════════════════════════════════════════════════════════════════════
+   Multi-step Sign-in / Sign-up modal
+   ───────────────────────────────────────────────────────────────────────
+   Sign-in path:  email+pw → done (or Google OAuth redirect)
+   Sign-up path:  Step 1 credentials → Step 2 role → Step 3 details → done
+   Google OAuth:  redirect → on return, check profile → if none → Step 2+3
+   Guardian path: athlete under 16 → guardian email collected → pending note
+   ═══════════════════════════════════════════════════════════════════════ */
+function SignInModal({onClose,onAuthed,googleOnboarding}){
+  /* ── mode: "signin" | "signup" ── */
+  // If arriving from Google OAuth with no profile yet, jump straight to role-pick
+  const[mode,setMode]=React.useState(googleOnboarding?"signup":"signin");
+  /* ── multi-step signup state ── */
+  const[step,setStep]=React.useState(googleOnboarding?2:1);   // 1=credentials 2=role 3=details
+  const STEPS=3;
+  /* step 1 */
+  const[email,setEmail]=React.useState("");
+  const[pw,setPw]=React.useState("");
+  /* step 2 */
+  const[role,setRole]=React.useState("athlete"); // athlete|association|club|federation
+  /* step 3 — athlete */
+  const[firstName,setFirstName]=React.useState("");
+  const[lastName,setLastName]=React.useState("");
+  const[birthYear,setBirthYear]=React.useState("");
+  const[guardianEmail,setGuardianEmail]=React.useState("");
+  /* step 3 — host */
+  const[displayName,setDisplayName]=React.useState("");
+  const[classId,setClassId]=React.useState("29er");
+  const[hostCountry,setHostCountry]=React.useState("HKG");
+  /* shared */
+  const[busy,setBusy]=React.useState(false);
+  const[err,setErr]=React.useState("");
+  const[info,setInfo]=React.useState("");
+
+  const curYear=new Date().getFullYear();
+  const athleteAge=birthYear&&/^\d{4}$/.test(birthYear)?curYear-parseInt(birthYear):null;
+  const isMinor=athleteAge!==null&&athleteAge<16;
+
+  const fullAthleteNameStr=`${firstName.trim()} ${lastName.trim()}`.trim();
+  const athleteDisplayName=fullAthleteNameStr||email.split("@")[0];
+
+  /* ── helpers ── */
+  const resetToSignin=()=>{setMode("signin");setStep(1);setErr("");setInfo("");};
+
+  const step1Valid=mode==="signin"?(email.trim()&&pw):(email.trim()&&pw.length>=8);
+  const step2Valid=true; // role always has a default
+  const step3Valid=role==="athlete"
+    ?(firstName.trim()&&lastName.trim()&&(isMinor?guardianEmail.trim():true))
+    :(displayName.trim());
+
+  /* ── sign-in submit ── */
+  const doSignIn=async()=>{
+    setErr("");setBusy(true);
     try{
-      if(!AUTH_BASE) throw new Error("Auth not configured (missing Supabase env vars).");
-      if(mode==="signup"){
-        const d=await authSignUp(email.trim(),pw);
-        const tok=d.access_token||d.session?.access_token;
-        const user=d.user||d;
-        if(!tok){ setInfo("Account created. Check your email to confirm, then sign in."); setMode("signin"); setBusy(false); return; }
-        await upsertProfile({user_id:user.id,role,display_name:name||email.split("@")[0],
-          class_id:role==="association"?classId:null,athlete_name:role==="athlete"?(name||null):null},tok);
-        onAuthed({token:tok,user,profile:{role,display_name:name,class_id:role==="association"?classId:null,athlete_name:role==="athlete"?name:null}});
-      } else {
-        const d=await authSignIn(email.trim(),pw);
-        const tok=d.access_token;const user=d.user;
-        const prof=await fetchProfile(user.id,tok)||{role:"guest"};
-        onAuthed({token:tok,user,profile:prof});
-      }
-    }catch(e){ setErr(e.message||"Something went wrong."); }
-    finally{ setBusy(false); }
+      if(!AUTH_BASE) throw new Error("Auth not configured.");
+      const d=await authSignIn(email.trim(),pw);
+      const tok=d.access_token;const user=d.user;
+      const prof=await fetchProfile(user.id,tok)||{role:"guest"};
+      onAuthed({token:tok,user,profile:prof});
+    }catch(e){setErr(e.message||"Sign-in failed.");}
+    finally{setBusy(false);}
   };
-  const F={width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"9px 11px",font:"inherit",fontSize:13.5,background:"#fff",outline:"none",marginBottom:10};
+
+  /* ── final sign-up submit (step 3 → done) ── */
+  const doSignUp=async()=>{
+    setErr("");setBusy(true);
+    try{
+      if(!AUTH_BASE) throw new Error("Auth not configured.");
+      // ── Google OAuth path: token + user already exist, just write profile ──
+      if(googleOnboarding){
+        const{token:tok,user}=googleOnboarding;
+        const profilePayload={user_id:user.id,role,
+          display_name:role==="athlete"?athleteDisplayName:displayName.trim(),
+          class_id:role==="association"?classId:null,
+          athlete_name:role==="athlete"?fullAthleteNameStr||null:null};
+        if(role==="athlete"&&birthYear) profilePayload.birth_year=parseInt(birthYear);
+        if(isMinor&&guardianEmail.trim()){profilePayload.guardian_pending=true;profilePayload.guardian_email=guardianEmail.trim();}
+        await upsertProfile(profilePayload,tok);
+        if(isMinor&&guardianEmail.trim()){
+          setInfo(`Guardian consent email sent to ${guardianEmail.trim()}. Profile activates once approved.`);
+          setTimeout(onClose,5000);setBusy(false);return;
+        }
+        onAuthed({token:tok,user,profile:profilePayload});return;
+      }
+      // ── Email/password path ──────────────────────────────────────────────────
+      const d=await authSignUp(email.trim(),pw);
+      const tok=d.access_token||d.session?.access_token;
+      const user=d.user||d;
+      if(!tok){
+        setInfo("Account created — check your email to confirm, then sign in.");
+        resetToSignin();setBusy(false);return;
+      }
+      const profilePayload={user_id:user.id,role,
+        display_name:role==="athlete"?athleteDisplayName:displayName.trim(),
+        class_id:role==="association"?classId:null,
+        athlete_name:role==="athlete"?fullAthleteNameStr||null:null};
+      if(role==="athlete"&&birthYear) profilePayload.birth_year=parseInt(birthYear);
+      await upsertProfile(profilePayload,tok);
+      if(isMinor&&guardianEmail.trim()){
+        await upsertProfile({...profilePayload,guardian_pending:true,guardian_email:guardianEmail.trim()},tok);
+        setInfo(`Guardian consent email sent to ${guardianEmail.trim()}. Your profile will be activated once approved.`);
+        setTimeout(onClose,5000);setBusy(false);return;
+      }
+      onAuthed({token:tok,user,profile:profilePayload});
+    }catch(e){setErr(e.message||"Sign-up failed.");}
+    finally{setBusy(false);}
+  };
+
+  /* ── Google OAuth ── */
+  const doGoogle=()=>{
+    if(!SB_URL||!SB_KEY){setErr("Auth not configured.");return;}
+    authGoogleOAuth();
+  };
+
+  /* ── input style ── */
+  const F={width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"11px 13px",
+    font:"inherit",fontSize:14,background:"rgba(255,255,255,.82)",outline:"none",
+    transition:"box-shadow .15s",marginBottom:0};
+  const FW=(extra={})=>({...F,...extra});
+  const Label=({children})=><p style={{fontSize:11.5,fontWeight:700,color:"var(--mut)",letterSpacing:".05em",textTransform:"uppercase",margin:"0 0 6px"}}>{children}</p>;
+
+  /* ── role option cards ── */
+  const RoleCard=({id,label,desc,icon})=>{
+    const on=role===id;
+    return(
+      <button type="button" onClick={()=>setRole(id)}
+        style={{flex:"1 1 140px",border:"1.5px solid "+(on?"var(--accent)":"var(--line)"),
+          background:on?"rgba(10,132,255,.08)":"rgba(255,255,255,.6)",
+          backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",
+          borderRadius:14,padding:"14px 12px",cursor:"pointer",textAlign:"left",transition:".15s",
+          boxShadow:on?"0 0 0 3px var(--halo)":"none"}}>
+        <div style={{fontSize:22,marginBottom:6}}>{icon}</div>
+        <div style={{fontWeight:700,fontSize:14,color:on?"var(--accent)":"var(--navy)"}}>{label}</div>
+        <div style={{fontSize:12,color:"var(--mut)",marginTop:3,lineHeight:1.4}}>{desc}</div>
+      </button>
+    );
+  };
+
+  /* ── progress bar ── */
+  const pct=mode==="signup"?Math.round(((step-1)/(STEPS-1))*100):0;
+
   return(
     <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:400}}>
-        <div className="mhead"><Link2 size={17}/><h3>{mode==="signin"?"Sign in":"Create account"}</h3>
-          <button className="x" onClick={onClose}><X size={16}/></button></div>
-        <div style={{padding:"18px 20px"}}>
+      <div className="modal" onClick={e=>e.stopPropagation()}
+        style={{maxWidth:440,overflow:"visible"}}>
+
+        {/* ── Header ── */}
+        <div className="mhead" style={{flexDirection:"column",alignItems:"stretch",gap:0,padding:"20px 24px 0"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1}}>
+              <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"rgba(255,255,255,.55)"}}>
+                {mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":"Your details"}
+              </p>
+              <h3 style={{marginTop:2}}>
+                {mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose your role":"Almost done"}
+              </h3>
+            </div>
+            <button className="x" onClick={onClose}><X size={16}/></button>
+          </div>
+          {/* progress bar — only during signup after step 1 */}
           {mode==="signup"&&(
-            <>
-              <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:6}}>I am a...</label>
-              <div style={{display:"flex",gap:8,marginBottom:12}}>
-                {[["athlete","Athlete"],["association","Association"]].map(([id,lab])=>(
-                  <button key={id} onClick={()=>setRole(id)}
-                    style={{flex:1,border:"1px solid "+(role===id?"var(--accent)":"var(--line)"),background:role===id?"var(--sky)":"#fff",
-                      color:role===id?"var(--navy)":"var(--mut)",borderRadius:8,padding:"8px",fontWeight:600,fontSize:13,cursor:"pointer"}}>{lab}</button>
-                ))}
+            <div style={{marginTop:14,height:3,borderRadius:3,background:"rgba(255,255,255,.18)",overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${pct}%`,background:"rgba(255,255,255,.75)",borderRadius:3,transition:"width .4s cubic-bezier(.4,0,.2,1)"}}/>
+            </div>
+          )}
+          <div style={{height:16}}/>
+        </div>
+
+        {/* ── Body ── */}
+        <div style={{padding:"4px 24px 24px",display:"flex",flexDirection:"column",gap:14}}>
+
+          {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#c0392b",display:"flex",alignItems:"center",gap:8}}><AlertCircle size={14} style={{flex:"none"}}/>{err}</div>}
+          {info&&<div style={{background:"rgba(10,132,255,.08)",border:"1px solid rgba(10,132,255,.2)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"var(--accent)"}}>{info}</div>}
+
+          {/* ════ SIGN-IN ════ */}
+          {mode==="signin"&&(<>
+            {/* Google */}
+            <button type="button" onClick={doGoogle} disabled={busy}
+              style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:10,
+                border:"1px solid var(--line)",borderRadius:10,padding:"11px",background:"rgba(255,255,255,.82)",
+                backdropFilter:"blur(20px)",cursor:"pointer",fontSize:14,fontWeight:600,color:"var(--navy)",transition:".15s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,.96)"}
+              onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,.82)"}>
+              <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/><path fill="none" d="M0 0h48v48H0z"/></svg>
+              Continue with Google
+            </button>
+
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{flex:1,height:1,background:"var(--line)"}}/>
+              <span style={{fontSize:11.5,fontWeight:700,color:"var(--mut)",letterSpacing:".04em"}}>OR</span>
+              <div style={{flex:1,height:1,background:"var(--line)"}}/>
+            </div>
+
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <div><Label>Email</Label>
+                <input style={FW()} type="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+              </div>
+              <div><Label>Password</Label>
+                <input style={FW()} type="password" placeholder="••••••••" value={pw} onChange={e=>setPw(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
+                  onKeyDown={e=>{if(e.key==="Enter"&&email&&pw)doSignIn();}}/>
+              </div>
+            </div>
+
+            <button className="btn cta" style={{width:"100%",justifyContent:"center"}}
+              disabled={busy||!email.trim()||!pw} onClick={doSignIn}>
+              {busy?<Loader2 size={15} className="spin"/>:null}Sign in
+            </button>
+
+            <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
+              No account?{" "}
+              <button type="button" onClick={()=>{setMode("signup");setStep(1);setErr("");}}
+                style={{border:0,background:"none",color:"var(--accent)",fontWeight:700,cursor:"pointer",fontSize:13}}>
+                Create one
+              </button>
+            </p>
+          </>)}
+
+          {/* ════ SIGN-UP STEP 1: credentials ════ */}
+          {mode==="signup"&&step===1&&(<>
+            <button type="button" onClick={doGoogle} disabled={busy}
+              style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:10,
+                border:"1px solid var(--line)",borderRadius:10,padding:"11px",background:"rgba(255,255,255,.82)",
+                backdropFilter:"blur(20px)",cursor:"pointer",fontSize:14,fontWeight:600,color:"var(--navy)",transition:".15s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,.96)"}
+              onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,.82)"}>
+              <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/><path fill="none" d="M0 0h48v48H0z"/></svg>
+              Continue with Google
+            </button>
+
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{flex:1,height:1,background:"var(--line)"}}/>
+              <span style={{fontSize:11.5,fontWeight:700,color:"var(--mut)",letterSpacing:".04em"}}>OR</span>
+              <div style={{flex:1,height:1,background:"var(--line)"}}/>
+            </div>
+
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <div><Label>Email</Label>
+                <input style={FW()} type="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+              </div>
+              <div><Label>Password <span style={{fontWeight:400,textTransform:"none",fontSize:10.5}}>(min 8 characters)</span></Label>
+                <input style={FW()} type="password" placeholder="Choose a password" value={pw} onChange={e=>setPw(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
+                  onKeyDown={e=>{if(e.key==="Enter"&&step1Valid)setStep(2);}}/>
+              </div>
+            </div>
+
+            <button className="btn cta" style={{width:"100%",justifyContent:"center"}}
+              disabled={busy||!step1Valid} onClick={()=>{setErr("");setStep(2);}}>
+              Continue <ChevronRight size={16}/>
+            </button>
+
+            <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
+              Already have an account?{" "}
+              <button type="button" onClick={resetToSignin}
+                style={{border:0,background:"none",color:"var(--accent)",fontWeight:700,cursor:"pointer",fontSize:13}}>
+                Sign in
+              </button>
+            </p>
+          </>)}
+
+          {/* ════ SIGN-UP STEP 2: role ════ */}
+          {mode==="signup"&&step===2&&(<>
+            <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
+              <RoleCard id="athlete" label="Athlete" icon="🏆" desc="Build your profile from your results."/>
+              <RoleCard id="association" label="Association" icon="⚓" desc="Manage results for your class association."/>
+              <RoleCard id="club" label="Club" icon="🌊" desc="Host regattas for your yacht club."/>
+              <RoleCard id="federation" label="Federation" icon="🏳️" desc="Govern your national sailing federation."/>
+            </div>
+
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(1)}>
+                <ArrowLeft size={15}/>Back
+              </button>
+              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={()=>{setErr("");setStep(3);}}>
+                Continue <ChevronRight size={16}/>
+              </button>
+            </div>
+          </>)}
+
+          {/* ════ SIGN-UP STEP 3: details ════ */}
+          {mode==="signup"&&step===3&&(<>
+
+            {/* ── Athlete details ── */}
+            {role==="athlete"&&(<>
+              <div style={{display:"flex",gap:10}}>
+                <div style={{flex:1}}>
+                  <Label>First name</Label>
+                  <input style={FW()} placeholder="Casey" value={firstName} onChange={e=>setFirstName(e.target.value)}
+                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                </div>
+                <div style={{flex:1}}>
+                  <Label>Last name</Label>
+                  <input style={FW()} placeholder="Smith" value={lastName} onChange={e=>setLastName(e.target.value)}
+                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                </div>
+              </div>
+              <p style={{fontSize:12,color:"var(--mut)",margin:"-4px 0 0",lineHeight:1.5}}>
+                Use your name <b>exactly as it appears in results</b> — this is how AthLink links your profile to your race history.
+              </p>
+
+              <div>
+                <Label>Year of birth</Label>
+                <input style={FW({maxWidth:140})} type="number" placeholder="e.g. 2003" min="1930" max={curYear}
+                  value={birthYear} onChange={e=>setBirthYear(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                {athleteAge!==null&&<span style={{marginLeft:10,fontSize:13,color:"var(--mut)",fontWeight:600}}>Age {athleteAge}</span>}
+              </div>
+
+              {/* Minor / guardian consent */}
+              {isMinor&&(
+                <div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:12,padding:"14px 16px"}}>
+                  <p style={{margin:"0 0 10px",fontSize:13,fontWeight:700,color:"#a85c00",display:"flex",alignItems:"center",gap:7}}>
+                    <Clock size={14}/>Guardian approval required
+                  </p>
+                  <p style={{margin:"0 0 10px",fontSize:12.5,color:"#a85c00",lineHeight:1.5}}>
+                    Athletes under 16 need a parent or guardian to approve their profile before it goes live. Enter their email and we'll send an approval link.
+                  </p>
+                  <Label>Guardian email</Label>
+                  <input style={FW()} type="email" placeholder="parent@example.com" value={guardianEmail}
+                    onChange={e=>setGuardianEmail(e.target.value)}
+                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px rgba(255,149,0,.3)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                </div>
+              )}
+            </>)}
+
+            {/* ── Host details (association / club / federation) ── */}
+            {role!=="athlete"&&(<>
+              <div>
+                <Label>Your name</Label>
+                <input style={FW()} placeholder="Full name" value={displayName} onChange={e=>setDisplayName(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
               </div>
               {role==="association"&&(
-                <div style={{marginBottom:10}}>
-                  <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:6}}>Class you manage</label>
+                <div>
+                  <Label>Boat class you manage</Label>
                   <ClassPicker value={classId} onChange={setClassId}/>
                 </div>
               )}
-              <input style={F} placeholder={role==="association"?"Association / your name":"Your full name (as in results)"} value={name} onChange={e=>setName(e.target.value)}/>
-            </>
-          )}
-          <input style={F} type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)}/>
-          <input style={F} type="password" placeholder="Password" value={pw} onChange={e=>setPw(e.target.value)}
-            onKeyDown={e=>{if(e.key==="Enter")submit();}}/>
-          {err&&<div style={{color:"#c0392b",fontSize:12.5,marginBottom:10}}>{err}</div>}
-          {info&&<div style={{color:"var(--accent)",fontSize:12.5,marginBottom:10}}>{info}</div>}
-          <button className="btn cta" style={{width:"100%",justifyContent:"center"}} disabled={busy||!email||!pw} onClick={submit}>
-            {busy?<Loader2 size={15} className="spin"/>:null}{mode==="signin"?"Sign in":"Create account"}</button>
-          <p style={{fontSize:12.5,color:"var(--mut)",textAlign:"center",marginTop:12}}>
-            {mode==="signin"?<>No account? <button onClick={()=>{setMode("signup");setErr("");}} style={{border:0,background:"none",color:"var(--accent)",fontWeight:600,cursor:"pointer"}}>Create one</button></>
-              :<>Have an account? <button onClick={()=>{setMode("signin");setErr("");}} style={{border:0,background:"none",color:"var(--accent)",fontWeight:600,cursor:"pointer"}}>Sign in</button></>}
-          </p>
+              {role==="federation"&&(
+                <div>
+                  <Label>Governing country (IOC code)</Label>
+                  <input style={FW({maxWidth:120,textTransform:"uppercase"})} placeholder="HKG" maxLength={3}
+                    value={hostCountry} onChange={e=>setHostCountry(e.target.value.toUpperCase().slice(0,3))}
+                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                </div>
+              )}
+              <div style={{background:"rgba(10,132,255,.06)",border:"1px solid rgba(10,132,255,.16)",borderRadius:12,padding:"12px 14px",fontSize:12.5,color:"var(--navy)",lineHeight:1.5}}>
+                <b>Note:</b> Host accounts are verified by the AthLink team before import access is granted. You'll be able to view results immediately, and we'll follow up to complete verification.
+              </div>
+            </>)}
+
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(2)}>
+                <ArrowLeft size={15}/>Back
+              </button>
+              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
+                {busy?<Loader2 size={15} className="spin"/>:null}
+                {isMinor?"Send guardian approval":"Create account"}
+              </button>
+            </div>
+          </>)}
+
         </div>
       </div>
     </div>
@@ -1975,8 +2277,37 @@ export default function AthLinkMVP(){
   const role=effectiveRole;
   const canEditRole=effectiveRole==="association";
   const canEditProfileOf=(nm)=>devMode||(effectiveRole==="athlete"&&auth?.profile?.athlete_name&&auth.profile.athlete_name.toLowerCase()===String(nm||"").toLowerCase());
+  // googleOnboarding: {token, user} — set when a Google sign-in returns with no profile yet
+  const[googleOnboarding,setGoogleOnboarding]=useState(null);
   useEffect(()=>{
     if(!AUTH_BASE) return;
+    // ── Detect Supabase OAuth return (access_token in URL hash) ──────────────
+    const hash=window.location.hash;
+    if(hash&&hash.includes("access_token")){
+      const params=new URLSearchParams(hash.replace(/^#/,""));
+      const tok=params.get("access_token");
+      // Clean the hash from the URL immediately
+      window.history.replaceState(null,"",window.location.pathname+window.location.search);
+      if(tok){
+        (async()=>{
+          try{
+            const u=await authUser(tok);
+            if(!u) return;
+            const prof=await fetchProfile(u.id,tok);
+            if(prof){
+              // Returning Google user with an existing profile → sign straight in
+              onAuthed({token:tok,user:u,profile:prof});
+            } else {
+              // New Google user — needs role/name onboarding
+              setGoogleOnboarding({token:tok,user:u});
+              setShowSignIn(true);
+            }
+          }catch(e){console.error("OAuth return error:",e);}
+        })();
+        return; // skip localStorage restore below
+      }
+    }
+    // ── Restore persisted session ─────────────────────────────────────────────
     try{
       const raw=localStorage.getItem("athlink_auth");
       if(!raw) return;
@@ -1988,7 +2319,7 @@ export default function AthLinkMVP(){
       })();
     }catch{}
   },[]);
-  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false);
+  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null);
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{} };
   const signOut=()=>{ setAuth(null); setAccountOpen(false); try{localStorage.removeItem("athlink_auth");}catch{} };
   const[portal,setPortal]=useState(null);
@@ -3660,7 +3991,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     </div>
   </div>
   <div style={{height:74}}/>
-  {showSignIn&&<SignInModal onClose={()=>setShowSignIn(false)} onAuthed={onAuthed}/>}
+  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}/>}
   {(gSearchOpen||menuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setMenuOpen(false);}}/>}
 
   {/* ── HOME HERO (no portal) ── */}
