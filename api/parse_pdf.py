@@ -752,53 +752,47 @@ def detect_fleets_in_text(text):
 # ── Gemini AI fallback ─────────────────────────────────────────────────────
 _GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
-_GEMINI_PROMPT = """Parse this sailing regatta results PDF and return ONLY a JSON object — no markdown, no explanation.
+_GEMINI_PROMPT = """Parse this sailing regatta results file. Return ONLY a JSON object, no markdown/explanation.
 
-Return exactly this structure:
-{
-  "name": "event name string",
-  "date": "dd/mm/yyyy or empty string",
-  "discards": 1,
-  "entries": [
-    {
-      "helm": "First Last",
-      "crew": "First Last or empty string",
-      "sail": "sail number e.g. 88 or NZL 7",
-      "nat": "3-letter IOC country code e.g. NZL or empty",
-      "div": "fleet or division label or empty",
-      "gender": "M, F, or Mix (boat gender) or empty",
-      "category": "age category e.g. U17, U19, U23, Jr or empty",
-      "pdf_rank": 1,
-      "pdf_net": 67.0,
-      "birth_year": 2005,
-      "crew_birth_year": 2004,
-      "races": [5, 12, 4, "DNF", 7],
-      "race_codes": [null, null, null, null, null]
-    }
-  ]
-}
+Structure:
+{"name":"event name","date":"dd/mm/yyyy or empty","discards":1,"entries":[{"helm":"First Last","crew":"First Last or empty","sail":"88 or NZL 7","nat":"3-letter IOC or empty","div":"fleet/division or empty","gender":"M/F/Mix or empty","category":"U17/U19/U23/Jr or empty","pdf_rank":1,"pdf_net":67.0,"birth_year":2005,"crew_birth_year":2004,"races":[5,12,4,"DNF",7],"race_codes":[null,null,null,null,null]}]}
 
 RULES:
-- Extract the OVERALL / FINAL results table (skip preliminary per-fleet tables if present)
-- helm/crew: title case "First Last". Convert "SMITH, John" to "John Smith"
-- sail: country prefix + number if present (e.g. "NZL 7"), else just the number
-- nat: 3-letter IOC code (NZL, AUS, GBR, HKG, POL etc.) — empty if unknown
-- gender: the competitor's / boat's gender as "M", "F", or "Mix". Read any
-  Gender / Sex / Boat Gender / M-F column. For a two-person boat with separate
-  helm + crew gender columns, combine them: both male -> "M", both female ->
-  "F", one of each -> "Mix". Empty string if no gender information is shown.
-- category: age group or division if shown — e.g. "U17", "U19", "U23", "Jr".
-  Normalise "Under 17"/"U-17" to "U17" and "Junior" to "Jr". Do NOT put fleet
-  colours (Gold/Silver/Bronze) or "Open" here — leave empty if none.
-- birth_year/crew_birth_year: 4-digit year of birth if a YOB column is shown. If only an AGE is shown, compute birth_year = (event year) - age. If neither is available, use null.
-- races: ALL race scores in order as numbers or string codes.
-  Penalty codes as strings: DNF, DNC, DNS, UFD, BFD, DSQ, OCS, RET, NSC, SCP, STP, RDG
-  Discarded scores: include as plain numbers (no parentheses)
-- race_codes: null for clean/plain scores; the code string when a numeric score has a code annotation
-- pdf_rank: finishing position as integer (1 = winner)
-- pdf_net: net score after discards, as a number
-- discards: number of discards applied (integer, usually 1)
+- Use the OVERALL/FINAL table (skip preliminary per-fleet tables).
+- helm/crew: title case "First Last"; convert "SMITH, John" to "John Smith".
+- sail: country prefix + number if present ("NZL 7"), else number only.
+- nat: 3-letter IOC code, empty if unknown.
+- gender: "M"/"F"/"Mix" from any Gender/Sex/Boat Gender column. Two-person boat with separate helm+crew gender: both male->"M", both female->"F", mixed->"Mix". Empty if none.
+- category: age group only - "U17"/"U19"/"U23"/"Jr". Normalise "Under 17"/"U-17"->"U17", "Junior"->"Jr". Never put fleet colours (Gold/Silver/Bronze) or "Open" here.
+- birth_year/crew_birth_year: 4-digit YOB if shown; if only AGE shown compute (event year - age); else null.
+- races: all scores in order as numbers or string codes (DNF,DNC,DNS,UFD,BFD,DSQ,OCS,RET,NSC,SCP,STP,RDG). Discards as plain numbers (no parentheses).
+- race_codes: null for plain scores; the code string when a numeric score has a code annotation.
+- pdf_rank: finishing position integer (1=winner). pdf_net: net score after discards. discards: integer (usually 1).
 """
+
+def _downscale_image(file_bytes: bytes, mime_type: str, max_dim: int = 2200, quality: int = 82):
+    """Shrink oversized images before the AI call to cut upload + token cost.
+    Returns (new_bytes, new_mime). No-op (returns originals) if Pillow is
+    missing, the image is already small, or anything goes wrong."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return file_bytes, mime_type
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        w, h = img.size
+        if max(w, h) <= max_dim:
+            return file_bytes, mime_type
+        scale = max_dim / float(max(w, h))
+        img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+        if img.mode in ("RGBA", "P", "LA"):
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=quality, optimize=True)
+        return out.getvalue(), "image/jpeg"
+    except Exception:
+        return file_bytes, mime_type
+
 
 def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict:
     key = os.environ.get("GEMINI_API_KEY", "")
@@ -807,13 +801,17 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict
     if urlopen is None:
         raise ValueError("urllib not available.")
 
+    # Downscale large images before sending (PDFs pass through untouched).
+    if mime_type.startswith("image/"):
+        file_bytes, mime_type = _downscale_image(file_bytes, mime_type)
+
     payload = json.dumps({
         "contents": [{"parts": [
             {"text": _GEMINI_PROMPT},
             {"inline_data": {"mime_type": mime_type,
                              "data": base64.b64encode(file_bytes).decode()}}
         ]}],
-        "generationConfig": {"temperature": 0}
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 65536}
     }).encode()
 
     req = UrlRequest(
@@ -825,9 +823,19 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict
     with urlopen(req, timeout=90) as resp:
         result = json.loads(resp.read())
 
-    raw = result["candidates"][0]["content"]["parts"][0]["text"]
+    cand = (result.get("candidates") or [{}])[0]
+    finish = cand.get("finishReason", "")
+    parts = (cand.get("content") or {}).get("parts") or [{}]
+    raw = parts[0].get("text", "")
+    if not raw:
+        raise ValueError(f"AI parser returned no text (finishReason={finish or 'unknown'}).")
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        if finish == "MAX_TOKENS":
+            raise ValueError("This results file is too large for the AI parser in one pass. Try splitting it by fleet, or use a Sailwave HTML export.")
+        raise ValueError("AI parser returned malformed JSON.")
 
     entries = []
     for e in (data.get("entries") or []):
