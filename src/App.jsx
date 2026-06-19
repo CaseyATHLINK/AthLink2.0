@@ -3,7 +3,7 @@ import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
-  CheckCircle, Clock, Eye, Home, Globe
+  CheckCircle, Clock, Eye, Home, Globe, Menu, User
 } from "lucide-react";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
@@ -516,6 +516,15 @@ function LiquidBackground(){
   return <canvas ref={ref} className="al-liquid" aria-hidden="true"/>;
 }
 const GENDER_COLOR={M:"#2d6cc9",F:"#c2477f",Mix:"#7c3aed"};
+// Magnetic hover: the label eases toward the cursor and springs back — the "warp around the cursor" feel.
+function MagneticItem({children,onClick,className,strength=0.35}){
+  const ref=React.useRef(null);
+  const onMove=e=>{const el=ref.current;if(!el)return;const r=el.getBoundingClientRect();el.style.transform=`translate(${(e.clientX-(r.left+r.width/2))*strength}px,${(e.clientY-(r.top+r.height/2))*strength}px)`;};
+  const reset=()=>{if(ref.current)ref.current.style.transform="translate(0,0)";};
+  return <button type="button" className={className} onClick={onClick} onMouseMove={onMove} onMouseLeave={reset}>
+    <span ref={ref} style={{display:"inline-block",transition:"transform .28s cubic-bezier(.2,.9,.2,1)",willChange:"transform"}}>{children}</span>
+  </button>;
+}
 // Gender + category nuggets shown on every result page + the preview.
 function ResultNuggets({entry,size="md"}){
   const {gender,category}=genderCatOf(entry);
@@ -1939,6 +1948,8 @@ export default function AthLinkMVP(){
   const[auth,setAuth]=useState(null);
   const[showSignIn,setShowSignIn]=useState(false);
   const[accountOpen,setAccountOpen]=useState(false);
+  const[menuOpen,setMenuOpen]=useState(false);   // floating menu pill expanded
+  const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
   // Lets Casey edit the platform pre-launch without signing in. Forces full
   // (association) access. Enable with ?dev=1 in the URL or Ctrl/Cmd+Shift+D;
@@ -2376,6 +2387,19 @@ export default function AthLinkMVP(){
   const go=v=>{pushNav();setView(v);setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
   const goHome=()=>{pushNav();setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
   const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  // Floating top bar: hide on scroll-down, reveal on scroll-up. Reset to shown on page change.
+  useEffect(()=>{
+    let lastY=window.scrollY;
+    const onScroll=()=>{
+      const y=window.scrollY;
+      if(y>lastY+6&&y>90){setBarHidden(true);setMenuOpen(false);}
+      else if(y<lastY-6){setBarHidden(false);}
+      lastY=y;
+    };
+    window.addEventListener("scroll",onScroll,{passive:true});
+    return()=>window.removeEventListener("scroll",onScroll);
+  },[]);
+  useEffect(()=>{setBarHidden(false);setMenuOpen(false);},[view.name,portal]);
   const navBack=()=>{
     setNavStack(s=>{
       if(!s.length){setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);return s;}
@@ -3225,10 +3249,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .nav button.on{color:#fff;background:var(--accent);}
     .nav button.sm{color:#9fbdd9;font-size:13px;}
     .nav button.sm:hover{color:#fff;}
-    .strip{background:linear-gradient(140deg,rgba(31,78,128,.96),rgba(19,49,78,.96));backdrop-filter:blur(34px) saturate(180%);-webkit-backdrop-filter:blur(34px) saturate(180%);color:#cfe0f1;padding:28px 0 22px;box-shadow:inset 0 1px 0 rgba(255,255,255,.12);}
+    .strip{background:none;color:var(--ink);padding:8px 0 18px;}
     .strip h1{font-family:'Barlow',sans-serif;color:#fff;font-size:28px;font-weight:800;margin:0 0 14px;}
     .pillbar{display:flex;gap:20px;flex-wrap:wrap;}
-    .pill{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#9fbdd9;}
+    .pill{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--mut);}
     .pill b{color:#fff;font-family:'Barlow',sans-serif;font-size:19px;}
     .sec{padding:24px 0 60px;}
     .seclabel{font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#33425e;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
@@ -3355,9 +3379,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .rc.g2{background:#d4e8f5;color:#1a5e8a;}
     .rc.g3{background:#f5d4d4;color:#8a1a1a;}
     /* Home */
-    .home-hero{background:linear-gradient(140deg,rgba(31,78,128,.97),rgba(19,49,78,.98));backdrop-filter:blur(34px) saturate(180%);-webkit-backdrop-filter:blur(34px) saturate(180%);padding:36px 0 0;box-shadow:inset 0 1px 0 rgba(255,255,255,.14);}
+    .home-hero{background:none;color:var(--ink);padding:8px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:#fff;font-size:36px;font-weight:800;margin:0 0 6px;}
-    .home-hero p{color:#bcd2e8;font-size:15px;margin:0 0 20px;}
+    .home-hero p{color:var(--mut);font-size:15px;margin:0 0 20px;}
     .home-search{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:9px 14px;max-width:380px;margin-bottom:20px;}
     .home-search input{border:0;outline:0;font:inherit;font-size:14px;background:none;color:#fff;width:100%;}
     .home-search input::placeholder{color:#9fbdd9;}
@@ -3369,6 +3393,36 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .pagetabs button{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;border:0;background:none;color:var(--mut);padding:13px 18px;border-bottom:2.5px solid transparent;margin-bottom:-1px;cursor:pointer;transition:.15s;}
     .pagetabs button.on{color:var(--navy);border-bottom-color:var(--accent);}
     .pagetabs button:hover:not(.on){color:var(--navy);}
+    /* ── Floating top bar ── */
+    .topbar2{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 20px;pointer-events:none;transition:transform .42s cubic-bezier(.2,.85,.2,1),opacity .42s;}
+    .topbar2.hidden{transform:translateY(-135%);opacity:0;}
+    .topbar2>*{pointer-events:auto;}
+    .tb-brand{display:inline-flex;align-items:center;gap:9px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:7px 16px 7px 7px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);transition:.18s;flex:none;}
+    .tb-brand:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
+    .tb-logo{width:32px;height:32px;border-radius:980px;background:var(--accent);color:#fff;display:grid;place-items:center;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}
+    .tb-sport{font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.01em;}
+    .tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
+    .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:border-radius .32s cubic-bezier(.2,.85,.2,1),background .32s;}
+    .menupill.open{border-radius:24px;background:rgba(255,255,255,.70);}
+    .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
+    .mp-burger{flex:none;width:38px;height:38px;border-radius:980px;border:0;background:transparent;color:var(--navy);display:grid;place-items:center;cursor:pointer;transition:.15s;}
+    .mp-burger:hover{background:rgba(255,255,255,.5);}
+    .mp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.45);border-radius:980px;padding:8px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
+    .mp-star{color:var(--accent);flex:none;}
+    .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);}
+    .mp-search input::placeholder{color:var(--mut);}
+    .mp-clear{flex:none;border:0;background:none;cursor:pointer;color:var(--mut);display:flex;padding:0;}
+    .mp-panel{max-height:0;overflow:hidden;opacity:0;display:flex;flex-direction:column;gap:1px;padding:0 12px;transition:max-height .36s cubic-bezier(.2,.85,.2,1),opacity .26s,padding .3s;}
+    .menupill.open .mp-panel{max-height:340px;opacity:1;padding:2px 12px 13px;}
+    .mp-link{text-align:left;border:0;background:none;cursor:pointer;font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;color:var(--ink);padding:8px 6px;border-radius:12px;transition:color .15s;}
+    .mp-link:hover,.mp-link.on{color:var(--accent);}
+    .mp-dev{margin-top:8px;align-self:flex-start;display:inline-flex;align-items:center;gap:5px;background:rgba(124,58,237,.16);color:#7c3aed;border:0;border-radius:980px;font-weight:700;font-size:11px;padding:5px 11px;cursor:pointer;}
+    .mp-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:340px;overflow:auto;z-index:5;}
+    .tb-right{flex:none;}
+    .tb-profile{width:44px;height:44px;border-radius:980px;border:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);transition:.18s;}
+    .tb-profile:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
+    .tb-acct{position:absolute;right:0;top:calc(100% + 8px);background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;min-width:200px;z-index:80;}
+    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}}
     .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
     .class-card{background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border:0;border-radius:16px;padding:24px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .class-card:hover{transform:translateY(-3px);box-shadow:inset 0 1px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.45),0 16px 36px -18px rgba(0,0,0,.28);}
@@ -3521,77 +3575,69 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .filter-chip button:hover{color:#c0392b;}
   `}</style>
 
-  {/* ── TOPBAR ── */}
-  <div className="topbar"><div className="topin">
-    <div className="brand" onClick={goHome}><Link2 size={15}/></div>
-    <span className="topsite" style={{cursor:"pointer"}} onClick={goHome}>Sailing</span>
-    <div className="gsrch-wrap" onClick={e=>e.stopPropagation()}>
-      <div className="gsrch">
-        <Search size={14} color="#9fbdd9"/>
-        <input
-          placeholder="Search athletes, events, pages..."
-          value={gSearch}
-          onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
-          onFocus={()=>setGSearchOpen(true)}
-          onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
-          onKeyDown={e=>{
-            if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}
-            if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}
-          }}
-        />
-        {gSearch&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fbdd9",padding:0,display:"flex"}} onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={14}/></button>}
-      </div>
-      {gSearchOpen&&gSearchResults.length>0&&(
-        <div className="gsrch-drop">
-          {gSearchResults.map((r,i)=>(
-            <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
-              <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
-                {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
-              </div>
-              <div>
-                <div className="gi-label">{r.label}</div>
-                <div className="gi-sub">{r.sub}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+  {/* ── FLOATING TOP BAR (no frame; glass pills that hide on scroll-down) ── */}
+  <div className={`topbar2${barHidden?" hidden":""}`}>
+    {/* left: logo + sport → home */}
+    <div className="tb-brand" onClick={goHome} title="Home">
+      <span className="tb-logo"><Link2 size={15}/></span>
+      <span className="tb-sport">Sailing</span>
     </div>
-    <nav className="nav">
-      {DEV_VIEW_ENABLED&&devMode&&(
-        <button onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}
-          title="Developer view is ON — click to turn off (or Ctrl/Cmd+Shift+D)"
-          style={{display:"inline-flex",alignItems:"center",gap:5,background:"#7c3aed",color:"#fff",border:0,borderRadius:7,fontWeight:700,fontSize:11,letterSpacing:".04em",padding:"4px 9px",cursor:"pointer"}}>
-          <Pencil size={11}/>DEV
-        </button>
-      )}
+    {/* center: floating menu pill */}
+    <div className="tb-center">
+      <div className={`menupill${menuOpen?" open":""}`} onClick={e=>e.stopPropagation()}>
+        <div className="mp-bar">
+          <button className="mp-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu">{menuOpen?<X size={17}/>:<Menu size={17}/>}</button>
+          <div className="mp-search">
+            <Sparkles size={14} className="mp-star"/>
+            <input placeholder="Search athletes, events, pages…" value={gSearch}
+              onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
+              onFocus={()=>setGSearchOpen(true)}
+              onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
+              onKeyDown={e=>{if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}}}/>
+            {gSearch&&<button className="mp-clear" onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={13}/></button>}
+          </div>
+        </div>
+        <div className="mp-panel">
+          {!portal&&<MagneticItem className={`mp-link${view.name==="portals"?" on":""}`} onClick={()=>{setMenuOpen(false);goHome();}}>Class Portals</MagneticItem>}
+          <MagneticItem className={`mp-link${view.name==="athletes"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"athletes"});}}>All Athletes</MagneticItem>
+          <MagneticItem className={`mp-link${view.name==="calendar"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"calendar"});}}>Calendar</MagneticItem>
+          {(!portal||fed)&&<MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>}
+          {DEV_VIEW_ENABLED&&devMode&&<button className="mp-dev" onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}><Pencil size={11}/>Dev view ON — turn off</button>}
+        </div>
+        {gSearchOpen&&gSearchResults.length>0&&(
+          <div className="mp-drop">
+            {gSearchResults.map((r,i)=>(
+              <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
+                <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
+                  {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
+                </div>
+                <div><div className="gi-label">{r.label}</div><div className="gi-sub">{r.sub}</div></div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+    {/* right: profile → sign in / sign up */}
+    <div className="tb-right">
       {auth
         ? <div style={{position:"relative"}}>
-            <button onClick={()=>setAccountOpen(o=>!o)} style={{display:"inline-flex",alignItems:"center",gap:6}}>
-              <span style={{width:24,height:24,borderRadius:"50%",background:"var(--accent)",color:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{(auth.profile?.display_name||auth.user?.email||"?").slice(0,1).toUpperCase()}</span>
-              <span style={{textTransform:"capitalize"}}>{role}</span>
+            <button className="tb-profile" onClick={()=>setAccountOpen(o=>!o)} title={role}>
+              <span style={{fontSize:14,fontWeight:800}}>{(auth.profile?.display_name||auth.user?.email||"?").slice(0,1).toUpperCase()}</span>
             </button>
-            {accountOpen&&(<div style={{position:"absolute",right:0,top:"calc(100% + 6px)",background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.25)",padding:8,minWidth:180,zIndex:80}}>
+            {accountOpen&&(<div className="tb-acct">
               <div style={{padding:"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>
-              {role==="association"&&auth.profile?.class_id&&<div style={{padding:"2px 10px 8px",fontSize:12,color:"var(--mut)"}}>Manages: <b style={{color:"var(--navy)"}}>{(CLASSES.find(c=>c.id===auth.profile.class_id)?.short)||auth.profile.class_id}</b></div>}
-              <button onClick={signOut} style={{width:"100%",textAlign:"left",border:0,background:"none",padding:"8px 10px",fontSize:13,cursor:"pointer",color:"var(--ink)",borderRadius:6}}>Sign out</button>
+              <div style={{padding:"0 10px 6px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}>Role: <b style={{color:"var(--navy)"}}>{role}</b></div>
+              {role==="association"&&auth.profile?.class_id&&<div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Manages: <b style={{color:"var(--navy)"}}>{(CLASSES.find(c=>c.id===auth.profile.class_id)?.short)||auth.profile.class_id}</b></div>}
+              <button onClick={signOut} style={{width:"100%",textAlign:"left",border:0,background:"none",padding:"8px 10px",fontSize:13,cursor:"pointer",color:"var(--ink)",borderRadius:8}}>Sign out</button>
             </div>)}
           </div>
-        : <button onClick={()=>setShowSignIn(true)}>Sign in</button>}
-    </nav>
-  </div></div>
+        : <button className="tb-profile" onClick={()=>setShowSignIn(true)} title="Sign in / sign up"><User size={18}/></button>}
+    </div>
+  </div>
+  <div style={{height:74}}/>
   {showSignIn&&<SignInModal onClose={()=>setShowSignIn(false)} onAuthed={onAuthed}/>}
-  {gSearchOpen&&<div style={{position:"fixed",inset:0,zIndex:45}} onClick={()=>setGSearchOpen(false)}/>}
-
-  {/* ── CONSTANT PAGE HEADER TABS (all pages except athlete profile) ── */}
-  {view.name!=="profile"&&(
-    <div className="pagetabs"><div className="wrap">
-      {!portal&&<button className={view.name==="portals"?"on":""} onClick={goHome}>Class Portals</button>}
-      <button className={view.name==="athletes"?"on":""} onClick={()=>go({name:"athletes"})}>All Athletes</button>
-      <button className={view.name==="calendar"?"on":""} onClick={()=>go({name:"calendar"})}>Calendar</button>
-      {(!portal||fed)&&<button className={view.name==="ranking"?"on":""} onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</button>}
-    </div></div>
-  )}
+  {(gSearchOpen||menuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setMenuOpen(false);}}/>}
 
   {/* ── HOME HERO (no portal) ── */}
   {!portal&&view.name==="portals"&&(
