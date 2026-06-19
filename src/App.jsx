@@ -1633,7 +1633,7 @@ function FootprintModal({name,ag,countryCounts,onClose}){
   return(
     <div className="ov" onClick={onClose}>
       <div className="modal wide" onClick={e=>e.stopPropagation()}
-        style={{maxWidth:1000,background:"linear-gradient(160deg,#0d2340,#091a31)",border:"1px solid rgba(120,160,210,.22)"}}>
+        style={{maxWidth:1000,background:"linear-gradient(160deg,rgba(13,35,64,0.82),rgba(9,26,49,0.82))",border:"1px solid rgba(120,160,210,.22)"}}>
         <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
           <Flag size={18}/><h3>{name} — Competition footprint</h3>
           {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
@@ -1722,7 +1722,7 @@ function RegattaFootprintModal({event,onClose,homeCountry={},onPickAthlete}){
   return(
     <div className="ov" onClick={onClose}>
       <div className="modal wide" onClick={e=>e.stopPropagation()}
-        style={{maxWidth:1000,background:"linear-gradient(160deg,#0d2340,#091a31)",border:"1px solid rgba(120,160,210,.22)"}}>
+        style={{maxWidth:1000,background:"linear-gradient(160deg,rgba(13,35,64,0.82),rgba(9,26,49,0.82))",border:"1px solid rgba(120,160,210,.22)"}}>
         <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
           <Flag size={18}/><h3>{event.name}</h3>
           {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
@@ -1950,6 +1950,7 @@ export default function AthLinkMVP(){
   const[accountOpen,setAccountOpen]=useState(false);
   const[menuOpen,setMenuOpen]=useState(false);   // floating menu pill expanded
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
+  const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
   // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
   // Lets Casey edit the platform pre-launch without signing in. Forces full
   // (association) access. Enable with ?dev=1 in the URL or Ctrl/Cmd+Shift+D;
@@ -2632,7 +2633,7 @@ Partial query: "${q}"`;
     if("home all classes portals sailing associations".includes(ql))
       results.push({type:"nav",label:"Sailing — Home",sub:"Navigate",nav:{type:"home"}});
     if("all athletes".includes(ql)||ql.includes("athlete"))
-      results.push({type:"nav",label:"All Athletes",sub:"Navigate",nav:{type:"athletes"}});
+      results.push({type:"nav",label:"Athletes",sub:"Navigate",nav:{type:"athletes"}});
     setGSearchResults(results.slice(0,10));
   };
 
@@ -3230,9 +3231,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif;
       color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased;font-optical-sizing:auto;letter-spacing:-.01em;
       position:relative;z-index:0;isolation:isolate;
-      background:linear-gradient(165deg,#e6eefa 0%,#eef3fb 45%,#f3f5fa 100%);
+      background:linear-gradient(165deg,#d5deee 0%,#dfe8f5 45%,#e6eaf3 100%);
       background-attachment:fixed;}
-    .al-liquid{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;filter:blur(28px) saturate(125%);opacity:.45;}
+    .al-liquid{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;filter:blur(28px) saturate(125%);opacity:.55;}
     .al-root *{box-sizing:border-box;}
     /* SF Pro everywhere — overrides the inline Barlow/DM Sans refs to get the platform feel */
     .al-root *:not(svg):not(svg *){font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif !important;}
@@ -3250,10 +3251,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .nav button.sm{color:#9fbdd9;font-size:13px;}
     .nav button.sm:hover{color:#fff;}
     .strip{background:none;color:var(--ink);padding:8px 0 18px;}
-    .strip h1{font-family:'Barlow',sans-serif;color:#fff;font-size:28px;font-weight:800;margin:0 0 14px;}
+    .strip h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:28px;font-weight:800;margin:0 0 14px;}
     .pillbar{display:flex;gap:20px;flex-wrap:wrap;}
     .pill{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--mut);}
-    .pill b{color:#fff;font-family:'Barlow',sans-serif;font-size:19px;}
+    .pill b{color:var(--navy);font-family:'Barlow',sans-serif;font-size:19px;}
     .sec{padding:24px 0 60px;}
     .seclabel{font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#33425e;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
     .ev{background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:var(--radius);padding:18px 20px;margin-bottom:12px;cursor:pointer;transition:.18s;display:flex;align-items:center;gap:14px;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
@@ -3598,10 +3599,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           </div>
         </div>
         <div className="mp-panel">
-          {!portal&&<MagneticItem className={`mp-link${view.name==="portals"?" on":""}`} onClick={()=>{setMenuOpen(false);goHome();}}>Class Portals</MagneticItem>}
-          <MagneticItem className={`mp-link${view.name==="athletes"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"athletes"});}}>All Athletes</MagneticItem>
+          <MagneticItem className={`mp-link${view.name==="portals"?" on":""}`} onClick={()=>{setMenuOpen(false);goHome();}}>Class Portals</MagneticItem>
+          <MagneticItem className={`mp-link${view.name==="athletes"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"athletes"});}}>Athletes</MagneticItem>
           <MagneticItem className={`mp-link${view.name==="calendar"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"calendar"});}}>Calendar</MagneticItem>
-          {(!portal||fed)&&<MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>}
+          <MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>
           {DEV_VIEW_ENABLED&&devMode&&<button className="mp-dev" onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}><Pencil size={11}/>Dev view ON — turn off</button>}
         </div>
         {gSearchOpen&&gSearchResults.length>0&&(
@@ -3660,7 +3661,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <p style={{marginTop:6}}>Results, athlete profiles and class standings for competitive sailing</p>
         <div className="home-tabs">
           <button className={view.name==="portals"?"on":""} onClick={()=>go({name:"portals"})}>Class Portals</button>
-          <button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>All Athletes</button>
+          <button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>Athletes</button>
           <button className={view.name==="ranking"?"on":""} onClick={()=>go({name:"ranking"})}>Ranking</button>
         </div>
       </div>
@@ -3981,6 +3982,35 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div className="strip"><div className="wrap">
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
           <h1 className="disp">{portalName}</h1>
+          {/* ── In-portal context menu ── */}
+          <div style={{position:"relative",flexShrink:0,alignSelf:"center"}}>
+            <button
+              onClick={()=>setPortalMenuOpen(o=>!o)}
+              style={{display:"flex",alignItems:"center",gap:8,background:"var(--mat-reg)",backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",border:"0",borderRadius:12,padding:"9px 14px",cursor:"pointer",color:"var(--ink)",fontWeight:600,fontSize:13,boxShadow:"inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06)",transition:".15s"}}
+              title={`${portalName} menu`}>
+              <Menu size={16}/>{portalName}
+            </button>
+            {portalMenuOpen&&(<>
+              <div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>setPortalMenuOpen(false)}/>
+              <div style={{position:"absolute",top:"calc(100% + 8px)",right:0,minWidth:210,background:"rgba(255,255,255,0.92)",backdropFilter:"blur(40px) saturate(200%)",WebkitBackdropFilter:"blur(40px) saturate(200%)",borderRadius:14,border:"0",boxShadow:"inset 0 1px 0 rgba(255,255,255,.8),0 12px 32px -10px rgba(0,0,0,.22),0 0 0 .5px rgba(60,60,67,.1)",zIndex:60,overflow:"hidden",animation:"rise .15s both"}}>
+                <div style={{padding:"10px 14px 6px",borderBottom:"1px solid rgba(60,60,67,.08)"}}>
+                  <span style={{fontSize:11,fontWeight:800,letterSpacing:".1em",textTransform:"uppercase",color:"var(--mut)"}}>{portalName}</span>
+                </div>
+                {[
+                  {icon:<Users size={15}/>,label:"Athletes",action:()=>{setPortalMenuOpen(false);go({name:"athletes"});}},
+                  {icon:<Calendar size={15}/>,label:"Calendar",action:()=>{setPortalMenuOpen(false);go({name:"calendar"});}},
+                  {icon:<Trophy size={15}/>,label:"Ranking",action:()=>{setPortalMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}},
+                ].map(item=>(
+                  <button key={item.label} onClick={item.action}
+                    style={{display:"flex",alignItems:"center",gap:10,width:"100%",border:0,background:"none",padding:"11px 16px",fontSize:14,fontWeight:600,color:"var(--ink)",cursor:"pointer",textAlign:"left",transition:".1s"}}
+                    onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="none"}>
+                    <span style={{color:"var(--navy)",opacity:.7,display:"flex"}}>{item.icon}</span>{item.label}
+                  </button>
+                ))}
+              </div>
+            </>)}
+          </div>
         </div>
         <div className="pillbar">
           <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
@@ -4261,7 +4291,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:4,flexWrap:"wrap"}}>
         <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle} <span style={{fontSize:17,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
         {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
-          <Users size={14}/>All Athletes</button>}
+          <Users size={14}/>Athletes</button>}
       </div>
       <p style={{color:"var(--mut)",fontSize:14,margin:"0 0 18px"}}>One profile per athlete, built automatically from results.</p>
       <div className="toolbar">
