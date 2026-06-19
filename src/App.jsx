@@ -2093,6 +2093,7 @@ export default function AthLinkMVP(){
   const[gSearch,setGSearch]=useState("");
   // Calendar
   const[showCalendar,setShowCalendar]=useState(false);
+  const[calScopePortal,setCalScopePortal]=useState(null); // null = global; else portal id for popup scope
   // Ranking page
   const[rankCls,setRankCls]=useState("29er");
   const[rankSourceOpen,setRankSourceOpen]=useState(null);   // collapsed by default
@@ -2336,7 +2337,7 @@ export default function AthLinkMVP(){
   },[previewEv]);
 
   const cls=assoc?CLASSES.find(c=>c.id===assoc.cls):(isClassPortal?CLASSES.find(c=>c.id===portalCls):null);
-  const portalName=host?host.name:(isClassPortal?`${CLASSES.find(c=>c.id===portalCls)?.short||portalCls} — All Results`:"");
+  const portalName=host?host.name:(isClassPortal?`All ${CLASSES.find(c=>c.id===portalCls)?.short||portalCls} Results`:"");
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
   const athleteTitle=isGlobal?"All Athletes":(cls?`${cls.short} Athletes`:`${portalName} Athletes`);
@@ -2414,7 +2415,7 @@ export default function AthLinkMVP(){
   const navLabelFor=(snap)=>{
     if(!snap) return "Back";
     const v=snap.view||{};
-    const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`${CLASSES.find(c=>c.id===id.slice(6))?.short||""} — All Results`;return null;};
+    const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`All ${CLASSES.find(c=>c.id===id.slice(6))?.short||""} Results`;return null;};
     if(v.name==="portals") return "Sailing";
     if(v.name==="athletes") return snap.portal?`${pName(snap.portal)||""} Athletes`:"All Athletes";
     if(v.name==="events") return pName(snap.portal)||"Competitions";
@@ -2771,7 +2772,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     if(!p||p.length!==3) return;
     const mo=parseInt(p[1])-1;const yr=parseInt(p[2]);
     if(isNaN(mo)||isNaN(yr)) return;
+    setCalScopePortal(portal||null);
     setCalMonth(mo);setCalYear(yr);setShowCalendar(true);
+  };
+  // Open the calendar popup, scoped to a given portal (null = global/all events).
+  const openCalendar=(scopePortal)=>{
+    setCalScopePortal(scopePortal??null);
+    setShowCalendar(true);
   };
   const openSailorCalAt=(dateStr,name)=>{
     const p=dateStr?.split('/');
@@ -3250,7 +3257,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .nav button.on{color:#fff;background:var(--accent);}
     .nav button.sm{color:#9fbdd9;font-size:13px;}
     .nav button.sm:hover{color:#fff;}
-    .strip{background:none;color:var(--ink);padding:8px 0 18px;}
+    .strip{background:none;color:var(--ink);padding:18px 0 18px;}
     .strip h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:28px;font-weight:800;margin:0 0 14px;}
     /* ── Standardized page header (back on top, then title) ── */
     .page-head{padding-top:8px;margin-bottom:18px;}
@@ -3516,10 +3523,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
     /* Calendar — Apple Calendar style */
     .cal-modal{background:var(--paper);width:100%;max-width:1020px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;max-height:92vh;display:flex;flex-direction:column;}
-    .cal-head{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:10px;flex:none;}
-    .cal-head h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:18px;margin:0;flex:1;}
-    .cal-head .x{background:none;border:0;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;display:grid;place-items:center;opacity:.85;transition:.12s;}
-    .cal-head .x:hover{opacity:1;background:rgba(255,255,255,.14);}
+    .cal-head{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:flex-start;gap:10px;flex:none;}
+    .cal-head h3{font-family:'Barlow',sans-serif;font-weight:800;font-size:22px;margin:0;}
+    .cal-head .x{background:rgba(255,255,255,.12);border:0;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;display:grid;place-items:center;opacity:.85;transition:.12s;flex:none;}
+    .cal-head .x:hover{opacity:1;background:rgba(255,255,255,.22);}
+    .cal-back{display:inline-flex;align-items:center;gap:6px;background:none;border:0;color:#bcd2e8;font-weight:600;font-size:13px;cursor:pointer;padding:0;transition:color .12s;}
+    .cal-back:hover{color:#fff;}
     .cal-body{padding:0;overflow-y:auto;flex:1;display:flex;flex-direction:column;}
     .cal-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap;}
     .cal-nav{display:flex;align-items:center;gap:4px;}
@@ -3615,7 +3624,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <div className="mp-panel">
           <MagneticItem className={`mp-link${view.name==="portals"?" on":""}`} onClick={()=>{setMenuOpen(false);goHome();}}>Class Portals</MagneticItem>
           <MagneticItem className={`mp-link${view.name==="athletes"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"athletes"});}}>Athletes</MagneticItem>
-          <MagneticItem className={`mp-link${view.name==="calendar"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"calendar"});}}>Calendar</MagneticItem>
+          <MagneticItem className={`mp-link`} onClick={()=>{setMenuOpen(false);openCalendar(portal||null);}}>Calendar</MagneticItem>
           <MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>
           {DEV_VIEW_ENABLED&&devMode&&<button className="mp-dev" onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}><Pencil size={11}/>Dev view ON — turn off</button>}
         </div>
@@ -3682,55 +3691,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     </div>
   )}
 
-  {/* ── CALENDAR (full page) — scoped to the current portal's events ── */}
-  {view.name==="calendar"&&(()=>{
-    const scope=portal?classEvents:events;
-    const calEvs=scope.filter(ev=>calClsSet.size===0||calClsSet.has(ev.cls));
-    const toggleCls=(id)=>{if(id==="all"){setCalClsSet(new Set());return;}setCalClsSet(prev=>{const s=new Set(prev);s.has(id)?s.delete(id):s.add(id);return s;});};
-    const calTitle=`${portal?portalName:"Global"} Calendar`;
-    return(
-      <div style={{paddingBottom:40}}>
-        {/* Back button — small, above the title */}
-        <div className="wrap" style={{paddingTop:8}}>
-          <button className="back" onClick={navBack}><ArrowLeft size={15}/>Back</button>
-        </div>
-        {/* ── Sticky liquid-glass calendar header ── */}
-        <div style={{position:"sticky",top:74,zIndex:50}}>
-          <div className="wrap" style={{paddingTop:2,paddingBottom:10}}>
-            <div className="cal-head-glass">
-              {/* Top row: title (left) + class selector pill (right) */}
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,flexWrap:"wrap"}}>
-                <h1 className="page-title" style={{fontSize:24}}>{calTitle}</h1>
-                <div className="cal-cls-box">
-                  <button className={`cal-cls-mini${calClsSet.size===0?" on":""}`} onClick={()=>toggleCls("all")}
-                    style={calClsSet.size===0?{background:"var(--navy)",color:"#fff",borderColor:"var(--navy)"}:{}}>All</button>
-                  {CLASSES.map(({id,short})=>{const on=calClsSet.has(id);return(
-                    <button key={id} className={`cal-cls-mini${on?" on":""}`} onClick={()=>toggleCls(id)}
-                      style={on?{background:classColor(id),color:"#fff",borderColor:classColor(id)}:{color:classColor(id),borderColor:classColorA(id,.5)}}>{short}</button>);})}
-                </div>
-              </div>
-              {/* Bottom row: Year / Month+Year toggle pill */}
-              <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10,flexWrap:"wrap"}}>
-                <button className="cal-toggle-pill" onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>
-                  {calViewMode==="year"?calYear:`${MON[calMonth]} ${calYear}`}
-                  <ChevronRight size={13} style={{transform:"rotate(90deg)",opacity:.6}}/>
-                </button>
-                <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{calViewMode==="year"?"Year view":"Month view"} · tap to switch</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        {/* Calendar body */}
-        <div className="wrap" style={{paddingTop:14}}>
-          <div className="panel" style={{padding:0}}>
-            <CalendarBody events={calEvs} allEvents={scope} year={calYear} month={calMonth}
-              setYear={setCalYear} setMonth={setCalMonth} viewMode={calViewMode} setViewMode={setCalViewMode}
-              onPick={(ev)=>{setPortal(ev.owner||null);go({name:"event",id:ev.id});}}/>
-          </div>
-        </div>
-      </div>
-    );
-  })()}
+  {/* (Calendar is now a popup modal — see RACE CALENDAR MODAL below) */}
 
   {/* ── HOME: Association portals grid ── */}
   {!portal&&view.name==="portals"&&(()=>{
@@ -3881,8 +3842,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     })();
     const Nug=({children,color})=><span style={{display:"inline-block",fontSize:10,fontWeight:700,color:"#fff",background:color||"var(--mut)",borderRadius:5,padding:"2px 6px",marginRight:4}}>{children}</span>;
     return(
-      <div className="wrap sec">
-        <div className="page-head"><h1 className="page-title">Ranking</h1></div>
+      <div className="wrap sec" style={{paddingTop:16}}>
+        <div className="page-head">
+          <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
+          <h1 className="page-title">Ranking</h1>
+        </div>
         {/* Class tabs */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
           {CLASSES.map(c=>{
@@ -4034,7 +3998,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
               <Users size={14} style={{flex:"none"}}/> Athletes
             </MagneticItem>
-            <MagneticItem className="portal-pill" onClick={()=>go({name:"calendar"})} strength={0.28}>
+            <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
               <Calendar size={14} style={{flex:"none"}}/> Calendar
             </MagneticItem>
             {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
@@ -4179,7 +4143,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {/* ── PORTAL: Event detail ── */}
   {portal&&view.name==="event"&&(()=>{
     const ev=events.find(e=>e.id===view.id);
-    const notFound=(msg)=>(<div className="wrap sec" style={{paddingTop:26}}>
+    const notFound=(msg)=>(<div className="wrap sec" style={{paddingTop:18}}>
       <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
       <div style={{padding:"40px 0",color:"var(--mut)"}}>{msg} <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"events"})}>Back to competitions</button></div>
     </div>);
@@ -4188,11 +4152,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     if(!s) return notFound("Couldn't read this competition's scores.");
     const isDraft=ev.status==="Draft";
     return(<ErrorBoundary resetKey={ev.id} fallback={
-      <div className="wrap sec" style={{paddingTop:26}}>
+      <div className="wrap sec" style={{paddingTop:18}}>
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{padding:"40px 0",color:"var(--mut)"}}>Couldn't render this competition. <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"events"})}>Go back</button></div>
       </div>}>
-      <div className="wrap sec" style={{paddingTop:26}}>
+      <div className="wrap sec" style={{paddingTop:18}}>
       <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
       {isDraft&&(
         <div className="draft-banner">
@@ -4311,9 +4275,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   {/* ── ATHLETES (portal + global) ── */}
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
-    <div className="wrap sec" style={{paddingTop:26}}>
+    <div className="wrap sec" style={{paddingTop:16}}>
       <div className="page-head">
-        {portal&&<button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>}
+        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{display:"flex",alignItems:"baseline",gap:16,flexWrap:"wrap"}}>
           <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
           {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
@@ -5040,7 +5004,16 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   {/* ── RACE CALENDAR MODAL ── */}
   {showCalendar&&(()=>{
-    const calEvs=events.filter(ev=>calClsSet.size===0||calClsSet.has(ev.cls));
+    // Scope to a portal when opened from one, else all events.
+    const sp=calScopePortal;
+    const isClsScope=typeof sp==="string"&&sp.startsWith("class:");
+    const scopeName=!sp?"Global"
+      :isClsScope?`All ${CLASSES.find(c=>c.id===sp.slice(6))?.short||sp.slice(6)} Results`
+      :(hostById(sp)?.name||"Global");
+    const scopeEvents=!sp?events
+      :isClsScope?events.filter(ev=>ev.cls===sp.slice(6))
+      :events.filter(ev=>eventAssocs(ev).includes(sp)||ev.owner===sp);
+    const calEvs=scopeEvents.filter(ev=>calClsSet.size===0||calClsSet.has(ev.cls));
     const prevMonth=()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);};
     const nextMonth=()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);};
     const goToday=()=>{const n=new Date();setCalYear(n.getFullYear());setCalMonth(n.getMonth());};
@@ -5051,11 +5024,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     return(
       <div className="ov" onClick={()=>setShowCalendar(false)}>
         <div className="cal-modal" onClick={e=>e.stopPropagation()}>
+          {/* Header: back button above the title */}
           <div className="cal-head">
-            <Calendar size={18}/>
-            <h3>Calendar</h3>
+            <div style={{flex:1,minWidth:0}}>
+              <button className="cal-back" onClick={()=>setShowCalendar(false)}><ArrowLeft size={15}/>Back</button>
+              <h3 style={{marginTop:6}}>{scopeName} Calendar</h3>
+            </div>
             <button className="x" onClick={()=>setShowCalendar(false)}><X size={16}/></button>
           </div>
+          {/* Toolbar: month nav + view toggle + floating class pills */}
           <div className="cal-toolbar">
             <div className="cal-nav">
               <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y-1):prevMonth();}}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
@@ -5063,23 +5040,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y+1):nextMonth();}}><ChevronRight size={14}/></button>
             </div>
             <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
-            <div className="cal-filters">
-              <div className="seg">
-                <button className={calClsSet.size===0?"on":""} onClick={()=>toggleCls("all")}
-                  style={calClsSet.size===0?{background:"var(--navy)",color:"#fff"}:{}}>All</button>
-                {CLASSES.map(({id,short})=>{
-                  const on=calClsSet.has(id);
-                  return<button key={id} className={on?"on":""} onClick={()=>toggleCls(id)}
-                    style={on?{background:classColor(id),color:"#fff"}:{color:classColor(id)}}>{short}</button>;
-                })}
-              </div>
+            <div className="cal-cls-box" style={{marginLeft:"auto"}}>
+              <button className={`cal-cls-mini${calClsSet.size===0?" on":""}`} onClick={()=>toggleCls("all")}
+                style={calClsSet.size===0?{background:"var(--navy)",color:"#fff",borderColor:"var(--navy)"}:{}}>All</button>
+              {CLASSES.map(({id,short})=>{const on=calClsSet.has(id);return(
+                <button key={id} className={`cal-cls-mini${on?" on":""}`} onClick={()=>toggleCls(id)}
+                  style={on?{background:classColor(id),color:"#fff",borderColor:classColor(id)}:{color:classColor(id),borderColor:classColorA(id,.5)}}>{short}</button>);})}
             </div>
           </div>
-          <div className="cal-legend" style={{padding:"8px 16px",borderBottom:"1px solid var(--line)",flex:"none"}}>
-            <span style={{fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",fontSize:10.5,color:"var(--mut)"}}>Class</span>
-            {CLASSES.map(cl=><span key={cl.id} className="lg"><span className="dot" style={{background:classColor(cl.id)}}/>{cl.short}</span>)}
-          </div>
-          <CalendarBody events={calEvs} allEvents={events} year={calYear} month={calMonth}
+          <CalendarBody events={calEvs} allEvents={scopeEvents} year={calYear} month={calMonth}
             setYear={setCalYear} setMonth={setCalMonth} viewMode={calViewMode} setViewMode={setCalViewMode}
             onPick={(ev)=>{setShowCalendar(false);setPortal(ev.owner||null);go({name:"event",id:ev.id});}}/>
         </div>
