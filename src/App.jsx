@@ -475,9 +475,9 @@ function LiquidBackground(){
       canvas.width=W; canvas.height=H;
       if(balls.length===0){
         const base=Math.max(W,H);
-        for(let i=0;i<7;i++) balls.push({x:Math.random()*W,y:Math.random()*H,
-          vx:(Math.random()-0.5)*W*0.0016,vy:(Math.random()-0.5)*H*0.0016,
-          r:base*(0.34+Math.random()*0.32),c:i%palette.length});
+        for(let i=0;i<13;i++) balls.push({x:Math.random()*W,y:Math.random()*H,
+          vx:(Math.random()-0.5)*W*0.0018,vy:(Math.random()-0.5)*H*0.0018,
+          r:base*(0.22+Math.random()*0.24),c:i%palette.length});
       }
     }
     resize();
@@ -3258,7 +3258,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .sec{padding:24px 0 60px;}
     .seclabel{font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#33425e;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
     .ev{background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:var(--radius);padding:18px 20px;margin-bottom:12px;cursor:pointer;transition:.18s;display:flex;align-items:center;gap:14px;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
-    .ev:hover{transform:translateY(-2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.4),0 12px 30px -14px rgba(0,0,0,.22);}
+    .ev:hover{transform:translateY(-3px) scale(1.008);box-shadow:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 .5px rgba(255,255,255,.5),0 18px 40px -16px rgba(0,0,0,.28);}
     .ev.draft{opacity:.72;}
     .evicon{width:44px;height:44px;border-radius:13px;background:var(--sky);color:var(--navy);display:grid;place-items:center;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.6);}
     .evicon-date{width:48px;height:48px;border-radius:12px;background:var(--sky);display:flex;flex-direction:column;align-items:center;justify-content:center;flex:none;gap:0;}
@@ -3330,7 +3330,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px;font:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
     .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px;}
     .acard{background:rgba(255,255,255,0.80);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border:0;border-radius:16px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);}
-    .acard:hover{transform:translateY(-2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.85),0 12px 28px -16px rgba(0,0,0,.22);}
+    .acard:hover{transform:translateY(-4px) scale(1.015);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.92),0 20px 40px -18px rgba(0,0,0,.28);}
     .achead{display:flex;align-items:center;gap:11px;margin-bottom:12px;}
     .achead>.av{flex:none;}
     .achead .vb-spacer{margin-left:auto;}
@@ -3351,7 +3351,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .btn.sky{background:rgba(10,132,255,.20);backdrop-filter:blur(26px) saturate(195%);-webkit-backdrop-filter:blur(26px) saturate(195%);color:var(--navy);border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.45);}.btn.sky:hover{background:rgba(10,132,255,.2);}
     .btn.amber{background:rgba(255,149,0,.16);backdrop-filter:blur(14px);color:#a85c00;border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}.btn.amber:hover{background:rgba(255,149,0,.24);}
     .btn.green{background:rgba(52,199,89,.18);backdrop-filter:blur(14px);color:#0a7a3f;border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}.btn.green:hover{background:rgba(52,199,89,.28);}
-    .btn:hover{transform:translateY(-1px);filter:brightness(1.04);}
+    .btn:hover{transform:translateY(-2px) scale(1.025);filter:brightness(1.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 12px 28px -10px rgba(0,0,0,.22);}
     .btn:active{transform:translateY(0) scale(.975);filter:brightness(.99);}
     .btn:disabled{opacity:.45;cursor:default;transform:none;filter:none;}
     .phead{background:linear-gradient(135deg,rgba(31,78,128,.95),rgba(19,49,78,.96));backdrop-filter:blur(38px) saturate(185%);-webkit-backdrop-filter:blur(38px) saturate(185%);border-radius:22px;padding:26px;color:#fff;display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 10px 30px -16px rgba(0,0,0,.4);}
@@ -3381,7 +3381,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .rc.g3{background:#f5d4d4;color:#8a1a1a;}
     /* Home */
     .home-hero{background:none;color:var(--ink);padding:8px 0 0;}
-    .home-hero h1{font-family:'Barlow',sans-serif;color:#fff;font-size:36px;font-weight:800;margin:0 0 6px;}
+    .home-hero h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:36px;font-weight:800;margin:0 0 6px;}
     .home-hero p{color:var(--mut);font-size:15px;margin:0 0 20px;}
     .home-search{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:9px 14px;max-width:380px;margin-bottom:20px;}
     .home-search input{border:0;outline:0;font:inherit;font-size:14px;background:none;color:#fff;width:100%;}
@@ -3426,7 +3426,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}}
     .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
     .class-card{background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border:0;border-radius:16px;padding:24px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
-    .class-card:hover{transform:translateY(-3px);box-shadow:inset 0 1px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.45),0 16px 36px -18px rgba(0,0,0,.28);}
+    .class-card:hover{transform:translateY(-5px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),inset 0 0 0 .5px rgba(255,255,255,.55),0 24px 48px -20px rgba(0,0,0,.34);}
     .class-tag{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:rgba(10,132,255,.12);padding:4px 11px;border-radius:7px;display:inline-block;margin-bottom:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.5);}
     .class-name{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0 0 14px;line-height:1.25;color:var(--ink);}
     .class-stats{display:flex;gap:20px;font-size:12px;color:var(--mut);margin-bottom:18px;}
@@ -3457,11 +3457,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .notice .ico{background:var(--accent);color:#fff;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;}
     .back{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:14px;color:var(--navy2);background:none;border:0;cursor:pointer;margin-bottom:16px;padding:0;}
     .back:hover{color:var(--accent);}
+    .portal-pill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.58);backdrop-filter:blur(32px) saturate(195%);-webkit-backdrop-filter:blur(32px) saturate(195%);border:0;border-radius:980px;padding:9px 18px;font-size:13.5px;font-weight:700;color:var(--navy);cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 4px 14px -6px rgba(0,0,0,.14);transition:.22s cubic-bezier(.2,.85,.2,1);}
+    .portal-pill:hover{background:rgba(255,255,255,.82);transform:translateY(-2px) scale(1.05);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 12px 28px -10px rgba(0,0,0,.22);}
     .foot{font-size:12px;color:var(--mut);text-align:center;padding:30px 0;}
     .ov{position:fixed;inset:0;background:rgba(0,0,0,.3);backdrop-filter:blur(4px) saturate(140%);-webkit-backdrop-filter:blur(4px) saturate(140%);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;animation:fade .2s both;}
-    .modal{background:var(--mat-thick);backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);width:100%;max-width:900px;border-radius:18px;overflow:hidden;box-shadow:0 30px 80px -24px rgba(0,0,0,.4);animation:rise .3s both;}
+    .modal{background:rgba(252,253,255,0.88);backdrop-filter:blur(56px) saturate(210%);-webkit-backdrop-filter:blur(56px) saturate(210%);width:100%;max-width:900px;border-radius:22px;overflow:hidden;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 40px 90px -28px rgba(0,0,0,.45),0 0 0 .5px rgba(60,60,67,.08);animation:rise .3s both;}
     .modal.wide{max-width:1140px;}
-    .mhead{background:linear-gradient(135deg,rgba(31,78,128,.85),rgba(19,49,78,.9));backdrop-filter:blur(34px) saturate(180%);-webkit-backdrop-filter:blur(34px) saturate(180%);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);}
+    .mhead{background:linear-gradient(135deg,rgba(31,78,128,.78),rgba(19,49,78,.84));backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);}
     .mhead h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
     .mhead .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:34px;height:34px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;}
     .mhead .x:hover{background:rgba(255,255,255,.26);transform:scale(1.05);}
@@ -3677,31 +3679,46 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const goToday=()=>{const n=new Date();setCalYear(n.getFullYear());setCalMonth(n.getMonth());};
     const toggleCls=(id)=>{if(id==="all"){setCalClsSet(new Set());return;}setCalClsSet(prev=>{const s=new Set(prev);s.has(id)?s.delete(id):s.add(id);return s;});};
     return(
-      <div className="wrap" style={{paddingTop:24,paddingBottom:40}}>
-        <h1 className="disp" style={{margin:"0 0 4px",fontSize:26}}>Calendar</h1>
-        <p style={{color:"var(--mut)",margin:"0 0 18px",fontSize:14}}>{portal?`Competitions hosted or co-hosted by ${portalName}`:"All competitions across the platform"}</p>
-        <div className="panel" style={{padding:0}}>
-          <div className="cal-toolbar">
-            <div className="cal-nav">
-              <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y-1):prevMonth();}}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
-              <button className="cal-title-btn" onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>{calViewMode==="year"?calYear:`${MON[calMonth]} ${calYear}`}</button>
-              <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y+1):nextMonth();}}><ChevronRight size={14}/></button>
-            </div>
-            <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
-            <div className="cal-filters">
-              <div className="seg">
+      <div style={{paddingBottom:40}}>
+        {/* ── Sticky calendar header ── */}
+        <div style={{position:"sticky",top:74,zIndex:50,background:"rgba(213,222,238,0.82)",backdropFilter:"blur(44px) saturate(200%)",WebkitBackdropFilter:"blur(44px) saturate(200%)",borderBottom:"1px solid rgba(255,255,255,.5)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.6),0 4px 24px -8px rgba(0,0,0,.1)"}}>
+          <div className="wrap" style={{padding:"14px 22px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <button className="back" style={{margin:0}} onClick={navBack}><ArrowLeft size={16}/>Back</button>
+              <h1 className="disp" style={{margin:"0 8px 0 0",fontSize:22,flex:"none"}}>Calendar</h1>
+              <div style={{fontSize:13,color:"var(--mut)",flex:1,minWidth:120}}>{portal?`${portalName}`:"All competitions"}</div>
+              {/* Nav */}
+              <div className="cal-nav">
+                <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y-1):prevMonth();}}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
+                <button className="cal-title-btn" style={{fontSize:15,minWidth:120}} onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>{calViewMode==="year"?calYear:`${MON[calMonth]} ${calYear}`}</button>
+                <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y+1):nextMonth();}}><ChevronRight size={14}/></button>
+              </div>
+              <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
+              {/* View toggle */}
+              <div className="seg" style={{flex:"none"}}>
+                <button className={calViewMode==="month"?"on":""} onClick={()=>setCalViewMode("month")}>Month</button>
+                <button className={calViewMode==="year"?"on":""} onClick={()=>setCalViewMode("year")}>Year</button>
+              </div>
+              {/* Class filter */}
+              <div className="seg" style={{flex:"none"}}>
                 <button className={calClsSet.size===0?"on":""} onClick={()=>toggleCls("all")} style={calClsSet.size===0?{background:"var(--navy)",color:"#fff"}:{}}>All</button>
                 {CLASSES.map(({id,short})=>{const on=calClsSet.has(id);return<button key={id} className={on?"on":""} onClick={()=>toggleCls(id)} style={on?{background:classColor(id),color:"#fff"}:{color:classColor(id)}}>{short}</button>;})}
               </div>
             </div>
+            {/* Legend */}
+            <div className="cal-legend" style={{marginTop:8,paddingTop:8,borderTop:"1px solid rgba(60,60,67,.08)"}}>
+              <span style={{fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",fontSize:10.5,color:"var(--mut)"}}>Class</span>
+              {CLASSES.map(cl=><span key={cl.id} className="lg"><span className="dot" style={{background:classColor(cl.id)}}/>{cl.short}</span>)}
+            </div>
           </div>
-          <div className="cal-legend" style={{padding:"8px 16px",borderBottom:"1px solid var(--line)",flex:"none"}}>
-            <span style={{fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",fontSize:10.5,color:"var(--mut)"}}>Class</span>
-            {CLASSES.map(cl=><span key={cl.id} className="lg"><span className="dot" style={{background:classColor(cl.id)}}/>{cl.short}</span>)}
+        </div>
+        {/* Calendar body */}
+        <div className="wrap" style={{paddingTop:20}}>
+          <div className="panel" style={{padding:0}}>
+            <CalendarBody events={calEvs} allEvents={scope} year={calYear} month={calMonth}
+              setYear={setCalYear} setMonth={setCalMonth} viewMode={calViewMode} setViewMode={setCalViewMode}
+              onPick={(ev)=>{setPortal(ev.owner||null);go({name:"event",id:ev.id});}}/>
           </div>
-          <CalendarBody events={calEvs} allEvents={scope} year={calYear} month={calMonth}
-            setYear={setCalYear} setMonth={setCalMonth} viewMode={calViewMode} setViewMode={setCalViewMode}
-            onPick={(ev)=>{setPortal(ev.owner||null);go({name:"event",id:ev.id});}}/>
         </div>
       </div>
     );
@@ -3848,6 +3865,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const Nug=({children,color})=><span style={{display:"inline-block",fontSize:10,fontWeight:700,color:"#fff",background:color||"var(--mut)",borderRadius:5,padding:"2px 6px",marginRight:4}}>{children}</span>;
     return(
       <div className="wrap sec">
+        <h1 className="disp" style={{margin:"0 0 18px",fontSize:26}}>Ranking</h1>
         {/* Class tabs */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
           {CLASSES.map(c=>{
@@ -3982,34 +4000,17 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div className="strip"><div className="wrap">
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
           <h1 className="disp">{portalName}</h1>
-          {/* ── In-portal context menu ── */}
-          <div style={{position:"relative",flexShrink:0,alignSelf:"center"}}>
-            <button
-              onClick={()=>setPortalMenuOpen(o=>!o)}
-              style={{display:"flex",alignItems:"center",gap:8,background:"var(--mat-reg)",backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",border:"0",borderRadius:12,padding:"9px 14px",cursor:"pointer",color:"var(--ink)",fontWeight:600,fontSize:13,boxShadow:"inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06)",transition:".15s"}}
-              title={`${portalName} menu`}>
-              <Menu size={16}/>{portalName}
-            </button>
-            {portalMenuOpen&&(<>
-              <div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>setPortalMenuOpen(false)}/>
-              <div style={{position:"absolute",top:"calc(100% + 8px)",right:0,minWidth:210,background:"rgba(255,255,255,0.92)",backdropFilter:"blur(40px) saturate(200%)",WebkitBackdropFilter:"blur(40px) saturate(200%)",borderRadius:14,border:"0",boxShadow:"inset 0 1px 0 rgba(255,255,255,.8),0 12px 32px -10px rgba(0,0,0,.22),0 0 0 .5px rgba(60,60,67,.1)",zIndex:60,overflow:"hidden",animation:"rise .15s both"}}>
-                <div style={{padding:"10px 14px 6px",borderBottom:"1px solid rgba(60,60,67,.08)"}}>
-                  <span style={{fontSize:11,fontWeight:800,letterSpacing:".1em",textTransform:"uppercase",color:"var(--mut)"}}>{portalName}</span>
-                </div>
-                {[
-                  {icon:<Users size={15}/>,label:"Athletes",action:()=>{setPortalMenuOpen(false);go({name:"athletes"});}},
-                  {icon:<Calendar size={15}/>,label:"Calendar",action:()=>{setPortalMenuOpen(false);go({name:"calendar"});}},
-                  {icon:<Trophy size={15}/>,label:"Ranking",action:()=>{setPortalMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}},
-                ].map(item=>(
-                  <button key={item.label} onClick={item.action}
-                    style={{display:"flex",alignItems:"center",gap:10,width:"100%",border:0,background:"none",padding:"11px 16px",fontSize:14,fontWeight:600,color:"var(--ink)",cursor:"pointer",textAlign:"left",transition:".1s"}}
-                    onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
-                    onMouseLeave={e=>e.currentTarget.style.background="none"}>
-                    <span style={{color:"var(--navy)",opacity:.7,display:"flex"}}>{item.icon}</span>{item.label}
-                  </button>
-                ))}
-              </div>
-            </>)}
+          {/* ── In-portal pill buttons ── */}
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",alignSelf:"center"}}>
+            <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
+              <Users size={14} style={{flex:"none"}}/> Athletes
+            </MagneticItem>
+            <MagneticItem className="portal-pill" onClick={()=>go({name:"calendar"})} strength={0.28}>
+              <Calendar size={14} style={{flex:"none"}}/> Calendar
+            </MagneticItem>
+            {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
+              <Trophy size={14} style={{flex:"none"}}/> Ranking
+            </MagneticItem>}
           </div>
         </div>
         <div className="pillbar">
