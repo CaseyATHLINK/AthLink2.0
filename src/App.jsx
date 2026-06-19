@@ -240,6 +240,11 @@ function addHostLocal(h){
   const arr=h.type==="association"?ASSOCIATIONS:h.type==="club"?CLUBS:FEDERATIONS;
   if(!arr.some(x=>x.id===h.id)) arr.unshift(h);
 }
+function removeHostLocal(id){
+  ASSOCIATIONS=ASSOCIATIONS.filter(a=>a.id!==id);
+  CLUBS=CLUBS.filter(c=>c.id!==id);
+  FEDERATIONS=FEDERATIONS.filter(f=>f.id!==id);
+}
 const assocById=id=>ASSOCIATIONS.find(a=>a.id===id);
 const clubById=id=>CLUBS.find(c=>c.id===id);
 const fedById=id=>FEDERATIONS.find(f=>f.id===id);
@@ -452,52 +457,61 @@ function classFromFleetName(name){
   if(/opti/.test(s)) return "optimist";
   return null;
 }
-// Interactive ocean-wave background: muted navy wave bands (matched to the header) that the
-// cursor pushes like a swell, settling back. Low-res + blurred = smooth, cheap, non-distracting.
+// Interactive background: soft navy balls drifting & bouncing, pushed away by the cursor.
+// Navy family matched to the header; low-res + blurred = smooth, cheap, muted.
 function LiquidBackground(){
   const ref=React.useRef(null);
-  const mouse=React.useRef({x:-9999,y:-9999,t:-9999});
+  const mouse=React.useRef({x:-9999,y:-9999,active:false});
   useEffect(()=>{
     const canvas=ref.current; if(!canvas) return;
     const ctx=canvas.getContext("2d"); if(!ctx) return;
-    const SCALE=0.30; let W=1,H=1,raf=0,t=0;
-    // Stacked navy wave layers, dark (back/top) -> mid (front/bottom).
-    const layers=[
-      {col:[14,38,64],  amp:0.09, yo:0.34, sp:0.20, fr:1.3, ph:0.0, a:0.34},
-      {col:[20,52,92],  amp:0.12, yo:0.50, sp:0.26, fr:1.0, ph:1.7, a:0.32},
-      {col:[31,78,128], amp:0.15, yo:0.66, sp:0.32, fr:0.8, ph:3.1, a:0.30},
-      {col:[46,104,170],amp:0.18, yo:0.83, sp:0.22, fr:0.6, ph:4.6, a:0.26},
-    ];
-    function resize(){W=Math.max(1,Math.round(window.innerWidth*SCALE));H=Math.max(1,Math.round(window.innerHeight*SCALE));canvas.width=W;canvas.height=H;}
+    const SCALE=0.24; let W=1,H=1,raf=0;
+    const balls=[];
+    // Navy header family (dark -> mid blue).
+    const palette=[[19,49,78],[31,78,128],[15,40,70],[40,92,150],[23,58,98],[28,70,120]];
+    function resize(){
+      W=Math.max(1,Math.round(window.innerWidth*SCALE));
+      H=Math.max(1,Math.round(window.innerHeight*SCALE));
+      canvas.width=W; canvas.height=H;
+      if(balls.length===0){
+        const base=Math.max(W,H);
+        for(let i=0;i<7;i++) balls.push({x:Math.random()*W,y:Math.random()*H,
+          vx:(Math.random()-0.5)*W*0.0016,vy:(Math.random()-0.5)*H*0.0016,
+          r:base*(0.34+Math.random()*0.32),c:i%palette.length});
+      }
+    }
     resize();
     const onResize=()=>resize();
-    const onMove=e=>{const cx=("touches"in e&&e.touches[0])?e.touches[0].clientX:e.clientX;const cy=("touches"in e&&e.touches[0])?e.touches[0].clientY:e.clientY;mouse.current.x=cx*SCALE;mouse.current.y=cy*SCALE;mouse.current.t=performance.now();};
+    const onMove=e=>{const cx=("touches"in e&&e.touches[0])?e.touches[0].clientX:e.clientX;const cy=("touches"in e&&e.touches[0])?e.touches[0].clientY:e.clientY;mouse.current.x=cx*SCALE;mouse.current.y=cy*SCALE;mouse.current.active=true;};
+    const onLeave=()=>{mouse.current.active=false;};
     window.addEventListener("resize",onResize);
     window.addEventListener("pointermove",onMove,{passive:true});
-    const step=()=>Math.max(2,Math.round(W/70));
+    window.addEventListener("pointerleave",onLeave);
     function frame(){
-      t+=0.0045; ctx.clearRect(0,0,W,H);
-      const mx=mouse.current.x;
-      const since=(performance.now()-mouse.current.t)/1000;   // seconds since last move
-      const decay=Math.max(0,1-since/1.4);                    // ripple fades ~1.4s
-      const st=step();
-      for(const L of layers){
-        ctx.beginPath(); ctx.moveTo(0,H);
-        for(let x=0;x<=W;x+=st){
-          let y=H*L.yo + Math.sin(x/W*Math.PI*2*L.fr + t*L.sp*6 + L.ph)*H*L.amp;
-          if(decay>0){ const dx=(x-mx)/(W*0.16); y += -Math.exp(-dx*dx)*decay*H*0.11; }  // swell lifts toward cursor
-          ctx.lineTo(x,y);
+      ctx.clearRect(0,0,W,H); ctx.globalCompositeOperation="lighter";
+      const mx=mouse.current.x,my=mouse.current.y,R=Math.max(W,H)*0.32;
+      for(const b of balls){
+        // mouse repulsion (push the balls away)
+        if(mouse.current.active){
+          const dx=b.x-mx,dy=b.y-my,d2=dx*dx+dy*dy;
+          if(d2<R*R){const d=Math.sqrt(d2)||1,f=(1-d/R);b.vx+=(dx/d)*f*0.6;b.vy+=(dy/d)*f*0.6;}
         }
-        ctx.lineTo(W,H); ctx.closePath();
-        const g=ctx.createLinearGradient(0,H*L.yo-H*L.amp,0,H);
-        g.addColorStop(0,`rgba(${L.col[0]},${L.col[1]},${L.col[2]},${L.a})`);
-        g.addColorStop(1,`rgba(${L.col[0]},${L.col[1]},${L.col[2]},${L.a*0.4})`);
-        ctx.fillStyle=g; ctx.fill();
+        b.x+=b.vx; b.y+=b.vy; b.vx*=0.985; b.vy*=0.985;
+        // gentle drift floor + bounce off edges
+        const sp=Math.hypot(b.vx,b.vy), minSp=W*0.0006;
+        if(sp<minSp){const a=Math.random()*6.283;b.vx+=Math.cos(a)*minSp;b.vy+=Math.sin(a)*minSp;}
+        if(b.x<0&&b.vx<0)b.vx=-b.vx; if(b.x>W&&b.vx>0)b.vx=-b.vx;
+        if(b.y<0&&b.vy<0)b.vy=-b.vy; if(b.y>H&&b.vy>0)b.vy=-b.vy;
+        const c=palette[b.c], g=ctx.createRadialGradient(b.x,b.y,0,b.x,b.y,b.r);
+        g.addColorStop(0,`rgba(${c[0]},${c[1]},${c[2]},0.42)`);
+        g.addColorStop(0.6,`rgba(${c[0]},${c[1]},${c[2]},0.12)`);
+        g.addColorStop(1,`rgba(${c[0]},${c[1]},${c[2]},0)`);
+        ctx.fillStyle=g; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,6.283); ctx.fill();
       }
       raf=requestAnimationFrame(frame);
     }
     frame();
-    return ()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",onResize);window.removeEventListener("pointermove",onMove);};
+    return ()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",onResize);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerleave",onLeave);};
   },[]);
   return <canvas ref={ref} className="al-liquid" aria-hidden="true"/>;
 }
@@ -2011,7 +2025,7 @@ export default function AthLinkMVP(){
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
   const[note,setNote]=useState(null);
   const[open,setOpen]=useState(false);
-  const[tab,setTab]=useState("rule");  // "rule" | "ai" | "manual"
+  const[tab,setTab]=useState("ai");  // "ai" | "manual"
   const[mf,setMf]=useState(emptyForm());
   const manualCalc=useMemo(()=>{
     const maxPer=Array.from({length:mf.numRaces},(_,j)=>{
@@ -2124,6 +2138,15 @@ export default function AthLinkMVP(){
       if(r) await reloadHosts();
       else console.error("saveNewHost: Supabase save failed — host won't survive reload (run hosts_migration.sql).");
     }catch(err){console.error("saveNewHost: background save error",err);}
+  };
+  const deleteHost=async(id,name,e)=>{
+    if(e)e.stopPropagation();
+    if(!devMode) return;
+    if(!window.confirm(`Delete host/portal "${name}"?\n\nThis removes the portal only — imported results stay intact and will simply no longer be grouped under this host.`)) return;
+    removeHostLocal(id);
+    setHostsVersion(v=>v+1);
+    if(portal===id){setPortal(null);setView({name:"portals"});}
+    try{await sbDel("hosts","id=eq."+encodeURIComponent(id));}catch(err){console.error("deleteHost: DB delete error",err);}
   };
   const[calClsSet,setCalClsSet]=useState(new Set()); // empty = All
   const[calQ,setCalQ]=useState("");
@@ -2355,7 +2378,7 @@ export default function AthLinkMVP(){
   const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
   const navBack=()=>{
     setNavStack(s=>{
-      if(!s.length) return s;
+      if(!s.length){setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);return s;}
       const prev=s[s.length-1];
       setPortal(prev.portal??null);
       setView(prev.view||{name:"portals"});
@@ -2788,7 +2811,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     setPending([]);setActivePending(0);
     setLiveUrl("");setParseLog([]);setParseProgress({done:0,total:0});
   };
-  const closeImport=()=>{setOpen(false);resetImport();setTab("rule");};
+  const closeImport=()=>{setOpen(false);resetImport();setTab("ai");};
 
   // Snapshot current editor (previewEv + class/subclass/collab) into the active pending slot.
   const syncActivePending=()=>{
@@ -2930,33 +2953,37 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     if(!files.length) return;
     setPdfError("");setPdfLoading(true);
     setParseProgress({done:0,total:files.length});
-    setParseLog(files.map(f=>({name:f.name,status:"queued",notes:[]})));
-    // Stay on the upload screen (with its live progress list) while parsing —
-    // don't flash a blank preview. We switch to preview once results are in.
+    setParseLog(files.map(f=>({name:f.name,status:"parsing",notes:[mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]})));
     const seed=files.map((f,i)=>({id:"pf_"+Date.now()+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]}));
     setPending(seed);setActivePending(0);
-    const results=[];
-    for(let i=0;i<files.length;i++){
-      setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:[mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]}:l));
+    // Parse files concurrently (was sequential). Total time ≈ slowest file, not the sum.
+    // Cap concurrency so a large batch doesn't fire dozens of simultaneous AI calls.
+    let done=0;
+    const handleOne=async(i)=>{
       const data=await parseOneFile(files[i],mode);
+      let rows;
       if(!data.ok){
-        results.push({...seed[i],status:"error",error:data.error});
+        rows=[{...seed[i],status:"error",error:data.error}];
         setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"error",notes:[data.error]}:l));
       }else if(data.multi&&data.fleets?.length){
         const groupId="fg_"+Date.now()+"_"+i;
         const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
-        data.fleets.forEach((fl,fi)=>{
-          results.push({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-            previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false),subclass:null,collabs:[],
-            fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc});
-        });
+        rows=data.fleets.map((fl,fi)=>({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false),subclass:null,collabs:[],
+          fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc}));
         setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]}:l));
       }else{
-        results.push({...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false)});
+        rows=[{...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false)}];
         setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:data.notes||["Done."]}:l));
       }
-      setParseProgress({done:i+1,total:files.length});
-    }
+      done++; setParseProgress({done,total:files.length});
+      return rows;
+    };
+    const perFile=new Array(files.length);
+    let next=0;
+    const worker=async()=>{ while(next<files.length){ const i=next++; perFile[i]=await handleOne(i); } };
+    await Promise.all(Array.from({length:Math.min(6,files.length)},worker));
+    const results=perFile.flat();
     setPending(results);setActivePending(0);
     const firstOk=results.findIndex(r=>r.status==="ok");
     if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);setImportStep("preview");}
@@ -3181,7 +3208,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       position:relative;z-index:0;isolation:isolate;
       background:linear-gradient(165deg,#e6eefa 0%,#eef3fb 45%,#f3f5fa 100%);
       background-attachment:fixed;}
-    .al-liquid{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;filter:blur(24px) saturate(115%);opacity:.5;}
+    .al-liquid{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;filter:blur(28px) saturate(125%);opacity:.45;}
     .al-root *{box-sizing:border-box;}
     /* SF Pro everywhere — overrides the inline Barlow/DM Sans refs to get the platform feel */
     .al-root *:not(svg):not(svg *){font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif !important;}
@@ -3265,7 +3292,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .boat{display:flex;align-items:center;gap:10px;}
     .av{width:30px;height:30px;border-radius:50%;color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none;font-family:'Barlow',sans-serif;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),inset 0 0 0 1px rgba(255,255,255,.18);}
     .cn{font-size:11.5px;color:var(--mut);}
-    .namelink{color:var(--link);font-weight:700;cursor:pointer;text-decoration:underline;text-underline-offset:2px;}.namelink:hover{color:#063a85;}
+    .namelink{color:var(--link);font-weight:700;cursor:pointer;text-decoration:none;}.namelink:hover{color:#063a85;}
     .disc{color:var(--mut);}.code{color:#c0392b;font-weight:600;font-size:11px;}
     .net{font-family:'Barlow',sans-serif;font-weight:700;color:var(--navy);}
     .sailcol{font-size:12px;color:var(--mut);white-space:nowrap;}
@@ -3334,10 +3361,14 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .home-search{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:9px 14px;max-width:380px;margin-bottom:20px;}
     .home-search input{border:0;outline:0;font:inherit;font-size:14px;background:none;color:#fff;width:100%;}
     .home-search input::placeholder{color:#9fbdd9;}
-    .home-tabs{display:flex;gap:0;}
-    .home-tabs button{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;border:0;background:none;color:#9fbdd9;padding:12px 20px;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer;transition:.15s;}
+    .home-tabs{display:flex;gap:0;}    .home-tabs button{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;border:0;background:none;color:#9fbdd9;padding:12px 20px;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer;transition:.15s;}
     .home-tabs button.on{color:#fff;border-bottom-color:#fff;}
     .home-tabs button:hover:not(.on){color:#d0e4f4;}
+    .pagetabs{background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-bottom:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.5);}
+    .pagetabs .wrap{display:flex;gap:0;flex-wrap:wrap;}
+    .pagetabs button{font-family:'Barlow',sans-serif;font-weight:700;font-size:15px;border:0;background:none;color:var(--mut);padding:13px 18px;border-bottom:2.5px solid transparent;margin-bottom:-1px;cursor:pointer;transition:.15s;}
+    .pagetabs button.on{color:var(--navy);border-bottom-color:var(--accent);}
+    .pagetabs button:hover:not(.on){color:var(--navy);}
     .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
     .class-card{background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border:0;border-radius:16px;padding:24px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .class-card:hover{transform:translateY(-3px);box-shadow:inset 0 1px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.45),0 16px 36px -18px rgba(0,0,0,.28);}
@@ -3494,13 +3525,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   <div className="topbar"><div className="topin">
     <div className="brand" onClick={goHome}><Link2 size={15}/></div>
     <span className="topsite" style={{cursor:"pointer"}} onClick={goHome}>Sailing</span>
-    {navStack.length>0&&(
-      <button onClick={navBack} title="Go back"
-        style={{display:"inline-flex",alignItems:"center",gap:5,maxWidth:200,background:"rgba(255,255,255,.12)",color:"#fff",border:"1px solid rgba(255,255,255,.18)",borderRadius:8,padding:"6px 11px",fontSize:12.5,fontWeight:600,cursor:"pointer",marginLeft:4,whiteSpace:"nowrap",overflow:"hidden"}}>
-        <ArrowLeft size={14} style={{flex:"none"}}/>
-        <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{navLabelFor(navStack[navStack.length-1])}</span>
-      </button>
-    )}
     <div className="gsrch-wrap" onClick={e=>e.stopPropagation()}>
       <div className="gsrch">
         <Search size={14} color="#9fbdd9"/>
@@ -3541,9 +3565,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <Pencil size={11}/>DEV
         </button>
       )}
-      {portal&&<button className={view.name==="events"?"on":""} onClick={()=>go({name:"events"})}>Competitions</button>}
-      {portal&&<button className={(view.name==="athletes"||view.name==="profile")?"on":""} onClick={()=>go({name:"athletes"})}>{fed?"All Athletes":`${cls?.short||"Class"} Athletes`}</button>}
-      {fed&&<button onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</button>}
       {auth
         ? <div style={{position:"relative"}}>
             <button onClick={()=>setAccountOpen(o=>!o)} style={{display:"inline-flex",alignItems:"center",gap:6}}>
@@ -3562,8 +3583,26 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {showSignIn&&<SignInModal onClose={()=>setShowSignIn(false)} onAuthed={onAuthed}/>}
   {gSearchOpen&&<div style={{position:"fixed",inset:0,zIndex:45}} onClick={()=>setGSearchOpen(false)}/>}
 
+  {/* ── CONSTANT PAGE HEADER TABS (all pages except athlete profile) ── */}
+  {view.name!=="profile"&&(
+    <div className="pagetabs"><div className="wrap">
+      {!portal&&<button className={view.name==="portals"?"on":""} onClick={goHome}>Class Portals</button>}
+      <button className={view.name==="athletes"?"on":""} onClick={()=>go({name:"athletes"})}>All Athletes</button>
+      <button className={view.name==="calendar"?"on":""} onClick={()=>go({name:"calendar"})}>Calendar</button>
+      {(!portal||fed)&&<button className={view.name==="ranking"?"on":""} onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</button>}
+    </div></div>
+  )}
+
   {/* ── HOME HERO (no portal) ── */}
-  {!portal&&(
+  {!portal&&view.name==="portals"&&(
+    <div className="home-hero">
+      <div className="wrap">
+        <h1 className="disp" style={{margin:0}}>Sailing</h1>
+        <p style={{marginTop:6,marginBottom:18}}>Results, athlete profiles and class standings for competitive sailing</p>
+      </div>
+    </div>
+  )}
+  {false&&(
     <div className="home-hero">
       <div className="wrap">
         <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
@@ -3582,6 +3621,45 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     </div>
   )}
 
+  {/* ── CALENDAR (full page) — scoped to the current portal's events ── */}
+  {view.name==="calendar"&&(()=>{
+    const scope=portal?classEvents:events;
+    const calEvs=scope.filter(ev=>calClsSet.size===0||calClsSet.has(ev.cls));
+    const prevMonth=()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);};
+    const nextMonth=()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);};
+    const goToday=()=>{const n=new Date();setCalYear(n.getFullYear());setCalMonth(n.getMonth());};
+    const toggleCls=(id)=>{if(id==="all"){setCalClsSet(new Set());return;}setCalClsSet(prev=>{const s=new Set(prev);s.has(id)?s.delete(id):s.add(id);return s;});};
+    return(
+      <div className="wrap" style={{paddingTop:24,paddingBottom:40}}>
+        <h1 className="disp" style={{margin:"0 0 4px",fontSize:26}}>Calendar</h1>
+        <p style={{color:"var(--mut)",margin:"0 0 18px",fontSize:14}}>{portal?`Competitions hosted or co-hosted by ${portalName}`:"All competitions across the platform"}</p>
+        <div className="panel" style={{padding:0}}>
+          <div className="cal-toolbar">
+            <div className="cal-nav">
+              <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y-1):prevMonth();}}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
+              <button className="cal-title-btn" onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>{calViewMode==="year"?calYear:`${MON[calMonth]} ${calYear}`}</button>
+              <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y+1):nextMonth();}}><ChevronRight size={14}/></button>
+            </div>
+            <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
+            <div className="cal-filters">
+              <div className="seg">
+                <button className={calClsSet.size===0?"on":""} onClick={()=>toggleCls("all")} style={calClsSet.size===0?{background:"var(--navy)",color:"#fff"}:{}}>All</button>
+                {CLASSES.map(({id,short})=>{const on=calClsSet.has(id);return<button key={id} className={on?"on":""} onClick={()=>toggleCls(id)} style={on?{background:classColor(id),color:"#fff"}:{color:classColor(id)}}>{short}</button>;})}
+              </div>
+            </div>
+          </div>
+          <div className="cal-legend" style={{padding:"8px 16px",borderBottom:"1px solid var(--line)",flex:"none"}}>
+            <span style={{fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",fontSize:10.5,color:"var(--mut)"}}>Class</span>
+            {CLASSES.map(cl=><span key={cl.id} className="lg"><span className="dot" style={{background:classColor(cl.id)}}/>{cl.short}</span>)}
+          </div>
+          <CalendarBody events={calEvs} allEvents={scope} year={calYear} month={calMonth}
+            setYear={setCalYear} setMonth={setCalMonth} viewMode={calViewMode} setViewMode={setCalViewMode}
+            onPick={(ev)=>{setPortal(ev.owner||null);go({name:"event",id:ev.id});}}/>
+        </div>
+      </div>
+    );
+  })()}
+
   {/* ── HOME: Association portals grid ── */}
   {!portal&&view.name==="portals"&&(()=>{
     const matchA=a=>!homeQ||a.name.toLowerCase().includes(homeQ.toLowerCase())||(a.cls||"").toLowerCase().includes(homeQ.toLowerCase());
@@ -3596,11 +3674,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
         {/* Standard header: host-type label (left) + class nugget(s) (right) */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:10,minHeight:22}}>
-          {(()=>{const tc=a.type==="federation"?"#13314e":a.type==="club"?"#2f6db0":"#6a5acd";
-            return <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
-            color:"#fff",border:0,borderRadius:980,padding:"3px 10px",background:tc,boxShadow:"inset 0 1px 0 rgba(255,255,255,.3),0 1px 2px rgba(0,0,0,.15)",whiteSpace:"nowrap"}}>{typeLabel}</span>;})()}
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end"}}>
+          <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
+            color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center"}}>
             {nuggets.map(c=><span key={c.id} className="cls" style={{background:classColor(c.id)}}>{c.short}</span>)}
+            {devMode&&<button onClick={e=>deleteHost(a.id,a.name,e)} title="Delete host/portal (dev)" style={{border:0,background:"rgba(232,72,85,.15)",color:"#c0392b",borderRadius:980,width:26,height:26,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Trash2 size={14}/></button>}
           </div>
         </div>
         <p className="class-name">{a.name}</p>
@@ -3857,14 +3935,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div className="strip"><div className="wrap">
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
           <h1 className="disp">{portalName}</h1>
-          <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
-            {fed&&<button className="btn sky" style={{fontSize:13,padding:"7px 13px"}} onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});window.scrollTo(0,0);}}>
-              <Trophy size={15}/>Ranking
-            </button>}
-            <button className="btn sky" style={{fontSize:13,padding:"7px 13px"}} onClick={()=>{setCalClsSet(cls?new Set([cls.id]):new Set());setShowCalendar(true);}}>
-              <Calendar size={15}/>Calendar
-            </button>
-          </div>
         </div>
         <div className="pillbar">
           <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
@@ -3872,7 +3942,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         </div>
       </div></div>
       <div className="wrap sec">
-        <button className="back" onClick={goHome}><ArrowLeft size={16}/>Sailing</button>
+        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         {fed&&(()=>{
           const feAssoc=ASSOCIATIONS.filter(a=>a.scope===fed.scope);
           if(!feAssoc.length) return null;
@@ -3987,7 +4057,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   <p className="evname">{ev.name}</p>
                   <div className="evmeta">
                     <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
-                    <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
+                    <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
                     <span><Users size={13}/>{s.fleet} boats · {s.races} races{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
                   </div>
                 </div>
@@ -4009,7 +4079,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {portal&&view.name==="event"&&(()=>{
     const ev=events.find(e=>e.id===view.id);
     const notFound=(msg)=>(<div className="wrap sec" style={{paddingTop:26}}>
-      <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All competitions</button>
+      <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
       <div style={{padding:"40px 0",color:"var(--mut)"}}>{msg} <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"events"})}>Back to competitions</button></div>
     </div>);
     if(!ev) return notFound("This competition couldn't be found — it may have just been updated or removed.");
@@ -4018,11 +4088,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const isDraft=ev.status==="Draft";
     return(<ErrorBoundary resetKey={ev.id} fallback={
       <div className="wrap sec" style={{paddingTop:26}}>
-        <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All competitions</button>
+        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{padding:"40px 0",color:"var(--mut)"}}>Couldn't render this competition. <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"events"})}>Go back</button></div>
       </div>}>
       <div className="wrap sec" style={{paddingTop:26}}>
-      <button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>All competitions</button>
+      <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
       {isDraft&&(
         <div className="draft-banner">
           <Clock size={22} color="#e8921a"/>
@@ -4047,7 +4117,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
             <div className="evmeta" style={{marginTop:8}}>
               <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
-              <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
+              <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
               {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
             </div>
             {eventAssocs(ev).length>0&&(
@@ -4055,7 +4125,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 <Anchor size={12} style={{flex:"none"}}/>
                 <span>Organized by {eventAssocs(ev).map((aid,i)=><React.Fragment key={aid}>
                   {i>0&&<span style={{color:"var(--mut)"}}> & </span>}
-                  <b style={{color:"var(--accent)",fontWeight:600,cursor:"pointer"}} onClick={()=>enterPortal(aid)}>{assocName(aid)}</b>
+                  <b style={{color:"var(--link)",fontWeight:600,cursor:"pointer"}} onClick={()=>enterPortal(aid)}>{assocName(aid)}</b>
                 </React.Fragment>)}</span>
               </div>
             )}
@@ -4141,7 +4211,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {/* ── ATHLETES (portal + global) ── */}
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:26}}>
-      {portal&&<button className="back" onClick={()=>go({name:"events"})}><ArrowLeft size={16}/>{portalName}</button>}
+      {portal&&<button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>}
       <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:4,flexWrap:"wrap"}}>
         <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle} <span style={{fontSize:17,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
         {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
@@ -4326,15 +4396,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const age=birthYear?(new Date().getFullYear()-birthYear):null;
     return(<ErrorBoundary resetKey={name} fallback={
       <div className="wrap sec" style={{paddingTop:22}}>
-        <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
+        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{padding:"40px 0",color:"var(--mut)"}}>Couldn't render this profile. <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"athletes"})}>Go back</button></div>
       </div>}>
       <div className="wrap sec" style={{paddingTop:22}}>
       {view.fromRegatta
-        ? (()=>{const rev=events.find(e=>e.id===view.fromRegatta);return rev?<button className="back" onClick={()=>{go({name:"event",id:view.fromRegatta});setTimeout(()=>setRegattaFootprint(rev),0);}}><ArrowLeft size={16}/>{rev.name} — Who's racing</button>:null;})()
+        ? <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         : view.fromEvent
-        ? (()=>{const fev=events.find(e=>e.id===view.fromEvent);return fev?<button className="back" onClick={()=>go({name:"event",id:view.fromEvent})}><ArrowLeft size={16}/>{fev.name}</button>:null;})()
-        : <button className="back" onClick={()=>go({name:"athletes"})}><ArrowLeft size={16}/>{athleteTitle}</button>
+        ? <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
+        : <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
       }
       {(()=>{
         // compute footprint + overview once, used by both the globe (right) and the strip (below)
@@ -4474,8 +4544,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
                 </div>
                 <div className="evmeta" style={{marginTop:3}}>
-                  <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--accent)",textDecoration:"underline dotted"}} onClick={(e)=>{e.stopPropagation();openSailorCalAt(h.ev.date,name);}}>{formatDate(h.ev.date)}</span></span>
-                  <span><MapPin size={13}/>{h.ev.country?<CountryTag code={h.ev.country}/>:evLoc(h.ev)}</span>
+                  <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} onClick={(e)=>{e.stopPropagation();openSailorCalAt(h.ev.date,name);}}>{formatDate(h.ev.date)}</span></span>
+                  <span><MapPin size={13}/>{h.ev.country?<CountryTag code={h.ev.country}/>:evLoc(h.ev)}{h.countries>1?<span style={{color:"var(--mut)",marginLeft:6}}>· {h.countries} countries</span>:null}</span>
                   {h.partner?<span><Users size={13}/>with <span className="namelink" onClick={(e)=>{e.stopPropagation();go({name:"profile",id:h.partner});}}>{h.partner}</span></span>:null}
                 </div>
                 <div className="miniraces">{h.row.races.map((rc2,j)=>{
@@ -4514,7 +4584,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
         {importStep==="upload"&&(<>
           <div className="mtabs">
-            <button className={tab==="rule"?"on":""} onClick={()=>setTab("rule")}><FileText size={15}/>Non-AI parser</button>
             <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI parser</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
           </div>
@@ -4832,7 +4901,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                       </td>
                       <td style={{padding:"4px 6px",textAlign:"center"}}>
                         <div style={{display:"flex",flexDirection:"column",gap:5,alignItems:"center"}}>
-                          <ResultNuggets entry={entry} size="sm"/>
                           <DivisionToggle value={divFromEntry(entry)} onChange={v=>applyPreviewDiv(idx,v)} noMix={singleHanded}/>
                         </div>
                       </td>
