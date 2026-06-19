@@ -3252,6 +3252,18 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .nav button.sm:hover{color:#fff;}
     .strip{background:none;color:var(--ink);padding:8px 0 18px;}
     .strip h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:28px;font-weight:800;margin:0 0 14px;}
+    /* ── Standardized page header (back on top, then title) ── */
+    .page-head{padding-top:8px;margin-bottom:18px;}
+    .page-title{font-family:'Barlow',sans-serif;color:var(--ink);font-size:28px;font-weight:800;margin:0;letter-spacing:-.022em;line-height:1.1;}
+    .page-sub{color:var(--mut);font-size:14px;margin:6px 0 0;}
+    /* ── Calendar liquid-glass header ── */
+    .cal-head-glass{background:rgba(255,255,255,.55);backdrop-filter:blur(40px) saturate(200%);-webkit-backdrop-filter:blur(40px) saturate(200%);border-radius:22px;padding:16px 20px;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 10px 30px -14px rgba(0,0,0,.22);}
+    .cal-cls-box{display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.5);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);border-radius:980px;padding:5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.45);}
+    .cal-cls-mini{border:1px solid var(--line);background:rgba(255,255,255,.4);border-radius:980px;padding:5px 13px;font-size:12.5px;font-weight:700;font-family:'Barlow',sans-serif;color:var(--mut);cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);}
+    .cal-cls-mini:hover{transform:translateY(-1px) scale(1.05);filter:brightness(1.05);}
+    .cal-cls-mini.on{box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 3px 10px -4px rgba(0,0,0,.25);}
+    .cal-toggle-pill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.6);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;border-radius:980px;padding:9px 18px;font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 4px 14px -6px rgba(0,0,0,.16);transition:.22s cubic-bezier(.2,.85,.2,1);}
+    .cal-toggle-pill:hover{background:rgba(255,255,255,.82);transform:translateY(-2px) scale(1.04);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 12px 28px -10px rgba(0,0,0,.22);}
     .pillbar{display:flex;gap:20px;flex-wrap:wrap;}
     .pill{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--mut);}
     .pill b{color:var(--navy);font-family:'Barlow',sans-serif;font-size:19px;}
@@ -3455,9 +3467,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .notice{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:60;background:var(--mat-dark);backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;border-radius:980px;padding:14px 22px;display:flex;gap:13px;align-items:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 20px 50px -18px rgba(0,0,0,.6);animation:rise .4s both;max-width:92%;}
     .notice b{font-family:'Barlow',sans-serif;}
     .notice .ico{background:var(--accent);color:#fff;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;}
-    .back{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:14px;color:var(--navy2);background:none;border:0;cursor:pointer;margin-bottom:16px;padding:0;}
+    .back{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13.5px;color:var(--navy2);background:none;border:0;cursor:pointer;margin-bottom:10px;padding:0;}
     .back:hover{color:var(--accent);}
-    .portal-pill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.58);backdrop-filter:blur(32px) saturate(195%);-webkit-backdrop-filter:blur(32px) saturate(195%);border:0;border-radius:980px;padding:9px 18px;font-size:13.5px;font-weight:700;color:var(--navy);cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 4px 14px -6px rgba(0,0,0,.14);transition:.22s cubic-bezier(.2,.85,.2,1);}
+    .portal-pill{display:inline-flex;align-items:center;gap:7px;justify-content:flex-start;min-width:140px;background:rgba(255,255,255,.58);backdrop-filter:blur(32px) saturate(195%);-webkit-backdrop-filter:blur(32px) saturate(195%);border:0;border-radius:980px;padding:9px 18px;font-size:13.5px;font-weight:700;color:var(--navy);cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 4px 14px -6px rgba(0,0,0,.14);transition:.22s cubic-bezier(.2,.85,.2,1);}
     .portal-pill:hover{background:rgba(255,255,255,.82);transform:translateY(-2px) scale(1.05);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 12px 28px -10px rgba(0,0,0,.22);}
     .foot{font-size:12px;color:var(--mut);text-align:center;padding:30px 0;}
     .ov{position:fixed;inset:0;background:rgba(0,0,0,.3);backdrop-filter:blur(4px) saturate(140%);-webkit-backdrop-filter:blur(4px) saturate(140%);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;animation:fade .2s both;}
@@ -3674,46 +3686,42 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {view.name==="calendar"&&(()=>{
     const scope=portal?classEvents:events;
     const calEvs=scope.filter(ev=>calClsSet.size===0||calClsSet.has(ev.cls));
-    const prevMonth=()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);};
-    const nextMonth=()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);};
-    const goToday=()=>{const n=new Date();setCalYear(n.getFullYear());setCalMonth(n.getMonth());};
     const toggleCls=(id)=>{if(id==="all"){setCalClsSet(new Set());return;}setCalClsSet(prev=>{const s=new Set(prev);s.has(id)?s.delete(id):s.add(id);return s;});};
+    const calTitle=`${portal?portalName:"Global"} Calendar`;
     return(
       <div style={{paddingBottom:40}}>
-        {/* ── Sticky calendar header ── */}
-        <div style={{position:"sticky",top:74,zIndex:50,background:"rgba(213,222,238,0.82)",backdropFilter:"blur(44px) saturate(200%)",WebkitBackdropFilter:"blur(44px) saturate(200%)",borderBottom:"1px solid rgba(255,255,255,.5)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.6),0 4px 24px -8px rgba(0,0,0,.1)"}}>
-          <div className="wrap" style={{padding:"14px 22px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <button className="back" style={{margin:0}} onClick={navBack}><ArrowLeft size={16}/>Back</button>
-              <h1 className="disp" style={{margin:"0 8px 0 0",fontSize:22,flex:"none"}}>Calendar</h1>
-              <div style={{fontSize:13,color:"var(--mut)",flex:1,minWidth:120}}>{portal?`${portalName}`:"All competitions"}</div>
-              {/* Nav */}
-              <div className="cal-nav">
-                <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y-1):prevMonth();}}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
-                <button className="cal-title-btn" style={{fontSize:15,minWidth:120}} onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>{calViewMode==="year"?calYear:`${MON[calMonth]} ${calYear}`}</button>
-                <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y+1):nextMonth();}}><ChevronRight size={14}/></button>
+        {/* Back button — small, above the title */}
+        <div className="wrap" style={{paddingTop:8}}>
+          <button className="back" onClick={navBack}><ArrowLeft size={15}/>Back</button>
+        </div>
+        {/* ── Sticky liquid-glass calendar header ── */}
+        <div style={{position:"sticky",top:74,zIndex:50}}>
+          <div className="wrap" style={{paddingTop:2,paddingBottom:10}}>
+            <div className="cal-head-glass">
+              {/* Top row: title (left) + class selector pill (right) */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,flexWrap:"wrap"}}>
+                <h1 className="page-title" style={{fontSize:24}}>{calTitle}</h1>
+                <div className="cal-cls-box">
+                  <button className={`cal-cls-mini${calClsSet.size===0?" on":""}`} onClick={()=>toggleCls("all")}
+                    style={calClsSet.size===0?{background:"var(--navy)",color:"#fff",borderColor:"var(--navy)"}:{}}>All</button>
+                  {CLASSES.map(({id,short})=>{const on=calClsSet.has(id);return(
+                    <button key={id} className={`cal-cls-mini${on?" on":""}`} onClick={()=>toggleCls(id)}
+                      style={on?{background:classColor(id),color:"#fff",borderColor:classColor(id)}:{color:classColor(id),borderColor:classColorA(id,.5)}}>{short}</button>);})}
+                </div>
               </div>
-              <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
-              {/* View toggle */}
-              <div className="seg" style={{flex:"none"}}>
-                <button className={calViewMode==="month"?"on":""} onClick={()=>setCalViewMode("month")}>Month</button>
-                <button className={calViewMode==="year"?"on":""} onClick={()=>setCalViewMode("year")}>Year</button>
+              {/* Bottom row: Year / Month+Year toggle pill */}
+              <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10,flexWrap:"wrap"}}>
+                <button className="cal-toggle-pill" onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>
+                  {calViewMode==="year"?calYear:`${MON[calMonth]} ${calYear}`}
+                  <ChevronRight size={13} style={{transform:"rotate(90deg)",opacity:.6}}/>
+                </button>
+                <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{calViewMode==="year"?"Year view":"Month view"} · tap to switch</span>
               </div>
-              {/* Class filter */}
-              <div className="seg" style={{flex:"none"}}>
-                <button className={calClsSet.size===0?"on":""} onClick={()=>toggleCls("all")} style={calClsSet.size===0?{background:"var(--navy)",color:"#fff"}:{}}>All</button>
-                {CLASSES.map(({id,short})=>{const on=calClsSet.has(id);return<button key={id} className={on?"on":""} onClick={()=>toggleCls(id)} style={on?{background:classColor(id),color:"#fff"}:{color:classColor(id)}}>{short}</button>;})}
-              </div>
-            </div>
-            {/* Legend */}
-            <div className="cal-legend" style={{marginTop:8,paddingTop:8,borderTop:"1px solid rgba(60,60,67,.08)"}}>
-              <span style={{fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",fontSize:10.5,color:"var(--mut)"}}>Class</span>
-              {CLASSES.map(cl=><span key={cl.id} className="lg"><span className="dot" style={{background:classColor(cl.id)}}/>{cl.short}</span>)}
             </div>
           </div>
         </div>
         {/* Calendar body */}
-        <div className="wrap" style={{paddingTop:20}}>
+        <div className="wrap" style={{paddingTop:14}}>
           <div className="panel" style={{padding:0}}>
             <CalendarBody events={calEvs} allEvents={scope} year={calYear} month={calMonth}
               setYear={setCalYear} setMonth={setCalMonth} viewMode={calViewMode} setViewMode={setCalViewMode}
@@ -3862,10 +3870,19 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     rows.forEach((r,i)=>r.rankNum=i+1);
     const podium=n=>n===1?"#e3b341":n===2?"#9aa6b2":n===3?"#c08457":"var(--navy)";
     const clsShort=CLASSES.find(c=>c.id===rankCls)?.short||rankCls;
+    // Cumulative tallies across the selected competitions (updates as comps change)
+    const rankAthleteCount=(()=>{
+      const set=new Set();
+      comps.forEach(ev=>scoreEvent(ev).rows.forEach(r=>{
+        if(r.helm){const k=canonName(r.helm);if(k)set.add(k);}
+        if(r.crew){const k=canonName(r.crew);if(k)set.add(k);}
+      }));
+      return set.size;
+    })();
     const Nug=({children,color})=><span style={{display:"inline-block",fontSize:10,fontWeight:700,color:"#fff",background:color||"var(--mut)",borderRadius:5,padding:"2px 6px",marginRight:4}}>{children}</span>;
     return(
       <div className="wrap sec">
-        <h1 className="disp" style={{margin:"0 0 18px",fontSize:26}}>Ranking</h1>
+        <div className="page-head"><h1 className="page-title">Ranking</h1></div>
         {/* Class tabs */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
           {CLASSES.map(c=>{
@@ -3918,6 +3935,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         {comps.length===0
           ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Total = sum of net points (lowest wins).</p>
           :<>
+          {/* Cumulative tallies for the current selection */}
+          <div className="pillbar" style={{marginBottom:12}}>
+            <div className="pill"><Trophy size={16}/><b>{comps.length}</b> competition{comps.length!==1?"s":""}</div>
+            <div className="pill"><Users size={16}/><b>{rankAthleteCount}</b> athlete{rankAthleteCount!==1?"s":""}</div>
+          </div>
           {/* When the source pickers are collapsed, show the selected competitions as removable nuggets */}
           {!rankSourceOpen&&<div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
             {comps.map(c=>(
@@ -3998,10 +4020,17 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {portal&&view.name==="events"&&(
     <>
       <div className="strip"><div className="wrap">
-        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
-          <h1 className="disp">{portalName}</h1>
-          {/* ── In-portal pill buttons ── */}
-          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",alignSelf:"center"}}>
+        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
+          <div style={{minWidth:0}}>
+            <h1 className="page-title">{portalName}</h1>
+            <div className="pillbar" style={{marginTop:12}}>
+              <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
+              <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
+            </div>
+          </div>
+          {/* ── In-portal pill buttons (vertical stack) ── */}
+          <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none"}}>
             <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
               <Users size={14} style={{flex:"none"}}/> Athletes
             </MagneticItem>
@@ -4013,13 +4042,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </MagneticItem>}
           </div>
         </div>
-        <div className="pillbar">
-          <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
-          <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
-        </div>
       </div></div>
-      <div className="wrap sec">
-        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
+      <div className="wrap sec" style={{paddingTop:0}}>
         {fed&&(()=>{
           const feAssoc=ASSOCIATIONS.filter(a=>a.scope===fed.scope);
           if(!feAssoc.length) return null;
@@ -4191,7 +4215,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </div>
           )}
           <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",justifyContent:"center"}}>
-            <h1 className="disp" style={{fontSize:24,margin:0}}>{ev.name}</h1>
+            <h1 className="page-title" style={{fontSize:26}}>{ev.name}</h1>
             <div className="evmeta" style={{marginTop:8}}>
               <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
               <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
@@ -4288,13 +4312,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {/* ── ATHLETES (portal + global) ── */}
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:26}}>
-      {portal&&<button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>}
-      <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:4,flexWrap:"wrap"}}>
-        <h1 className="disp" style={{fontSize:25,margin:0}}>{athleteTitle} <span style={{fontSize:17,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
-        {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
-          <Users size={14}/>Athletes</button>}
+      <div className="page-head">
+        {portal&&<button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>}
+        <div style={{display:"flex",alignItems:"baseline",gap:16,flexWrap:"wrap"}}>
+          <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
+          {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
+            <Users size={14}/>Athletes</button>}
+        </div>
+        <p className="page-sub">One profile per athlete, built automatically from results.</p>
       </div>
-      <p style={{color:"var(--mut)",fontSize:14,margin:"0 0 18px"}}>One profile per athlete, built automatically from results.</p>
       <div className="toolbar">
         <div className="srch" style={{position:"relative"}}>
           {athleteSmartLoading?<Loader2 size={16} className="spin" color="#0d8ecf"/>:<Search size={16} color="#9fb2c8"/>}
