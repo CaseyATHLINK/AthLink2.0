@@ -779,6 +779,35 @@ function authGoogleOAuth(){
   window.location.href=`${SB_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectTo}`;
 }
 
+/* ── Host trust (host_members / host_invites / host_audit) ────────────────────
+   All calls are token-scoped (RLS enforced). Helpers return parsed rows or null. */
+async function hostRest(path,opts={},tok){
+  if(!SB_URL||!SB_KEY) return null;
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${path}`,{
+      ...opts,
+      headers:{...authHeaders(tok),"Prefer":opts.method&&opts.method!=="GET"?"return=representation":undefined,...(opts.headers||{})},
+    });
+    if(!r.ok){console.error("hostRest error",r.status,await r.text().catch(()=>""));return null;}
+    const txt=await r.text(); return txt?JSON.parse(txt):[];
+  }catch(e){console.error("hostRest network error",e);return null;}
+}
+// All membership rows for a host (active + pending), newest first.
+const fetchHostMembers=(hostId,tok)=>hostRest(`host_members?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.asc`,{},tok);
+// Every membership for the current user (to compute their editable hosts).
+const fetchMyMemberships=(userId,tok)=>hostRest(`host_members?user_id=eq.${userId}&select=*`,{},tok);
+const fetchHostInvites=(hostId,tok)=>hostRest(`host_invites?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.desc`,{},tok);
+const fetchHostAudit=(hostId,tok)=>hostRest(`host_audit?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=ts.desc&limit=50`,{},tok);
+const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}&select=*`,{},tok);
+async function logHostAudit(hostId,actorId,action,targetId,detail,tok){
+  return hostRest("host_audit",{method:"POST",body:JSON.stringify({host_id:hostId,actor_user_id:actorId,action,target_user_id:targetId||null,detail:detail||null})},tok);
+}
+function randToken(){
+  // url-safe random token
+  const a=new Uint8Array(18); (window.crypto||window.msCrypto).getRandomValues(a);
+  return btoa(String.fromCharCode(...a)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+
 // Run schema migration for nat column (idempotent)
 async function ensureSchema(){
   if(!sbH) return;
@@ -2239,6 +2268,263 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Host members / trust management modal
+   ───────────────────────────────────────────────────────────────────────
+   - Claim: first signed-in user with no members becomes Owner (pending verify)
+   - Member list with role badges + active/pending status
+   - Grant / Deny pending requests
+   - Promote to Owner / Demote to Editor
+   - Revoke membership (can't remove the last Owner; only Owner can remove Owner)
+   - Create single-use, 7-day invite links
+   - Audit trail
+   ═══════════════════════════════════════════════════════════════════════ */
+function HostMembersModal({hostId,hostName,auth,myMembership,onClose,onChanged}){
+  const tok=auth?.token; const uid=auth?.user?.id;
+  const[members,setMembers]=React.useState(null);
+  const[invites,setInvites]=React.useState([]);
+  const[audit,setAudit]=React.useState([]);
+  const[busy,setBusy]=React.useState(false);
+  const[err,setErr]=React.useState("");
+  const[newInvite,setNewInvite]=React.useState(null); // {url,role}
+  const[inviteRole,setInviteRole]=React.useState("editor");
+  const[tab,setTab]=React.useState("members"); // members | audit
+
+  const iAmOwner=myMembership?.role==="owner"&&myMembership?.status==="active";
+  const iAmMember=!!myMembership&&myMembership.status==="active";
+  const ownerCount=(members||[]).filter(m=>m.role==="owner"&&m.status==="active").length;
+
+  const load=React.useCallback(async()=>{
+    const[m,inv,a]=await Promise.all([
+      fetchHostMembers(hostId,tok),
+      fetchHostInvites(hostId,tok),
+      fetchHostAudit(hostId,tok),
+    ]);
+    setMembers(m||[]); setInvites(inv||[]); setAudit(a||[]);
+  },[hostId,tok]);
+  React.useEffect(()=>{ load(); },[load]);
+
+  const refresh=async()=>{ await load(); onChanged&&onChanged(); };
+
+  // ── Claim host as first Owner ──
+  const claim=async()=>{
+    setErr("");setBusy(true);
+    try{
+      const r=await hostRest("host_members",{method:"POST",body:JSON.stringify({
+        host_id:hostId,user_id:uid,role:"owner",status:"active",verified:false})},tok);
+      if(!r) throw new Error("Couldn't claim this host.");
+      await logHostAudit(hostId,uid,"claim",uid,"first owner",tok);
+      await refresh();
+    }catch(e){setErr(e.message||"Claim failed.");}
+    finally{setBusy(false);}
+  };
+
+  // ── Grant / Deny a pending request ──
+  const grant=async(m)=>{
+    setBusy(true);
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"PATCH",body:JSON.stringify({status:"active"})},tok);
+    await logHostAudit(hostId,uid,"grant",m.user_id,m.role,tok);
+    await refresh();setBusy(false);
+  };
+  const deny=async(m)=>{
+    setBusy(true);
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"DELETE"},tok);
+    await logHostAudit(hostId,uid,"deny",m.user_id,null,tok);
+    await refresh();setBusy(false);
+  };
+  // ── Promote / Demote ──
+  const setMemberRole=async(m,role)=>{
+    if(role!=="owner"&&m.role==="owner"&&ownerCount<=1){setErr("Can't demote the last owner.");return;}
+    setBusy(true);
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"PATCH",body:JSON.stringify({role})},tok);
+    await logHostAudit(hostId,uid,role==="owner"?"promote":"demote",m.user_id,role,tok);
+    await refresh();setBusy(false);
+  };
+  // ── Revoke ──
+  const revoke=async(m)=>{
+    if(m.role==="owner"&&!iAmOwner){setErr("Only an owner can remove another owner.");return;}
+    if(m.role==="owner"&&ownerCount<=1){setErr("Can't remove the last owner.");return;}
+    setBusy(true);
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"DELETE"},tok);
+    await logHostAudit(hostId,uid,"revoke",m.user_id,m.role,tok);
+    await refresh();setBusy(false);
+  };
+  // ── Create invite link (single use, 7 days) ──
+  const createInvite=async()=>{
+    setErr("");setBusy(true);
+    try{
+      const token=randToken();
+      const expires=new Date(Date.now()+7*24*3600*1000).toISOString();
+      const r=await hostRest("host_invites",{method:"POST",body:JSON.stringify({
+        token,host_id:hostId,role:inviteRole,created_by:uid,expires_at:expires})},tok);
+      if(!r) throw new Error("Couldn't create invite.");
+      await logHostAudit(hostId,uid,"invite",null,inviteRole,tok);
+      const url=`${window.location.origin}${window.location.pathname}?invite=${token}`;
+      setNewInvite({url,role:inviteRole});
+      await load();
+    }catch(e){setErr(e.message||"Invite failed.");}
+    finally{setBusy(false);}
+  };
+  const revokeInvite=async(t)=>{
+    setBusy(true);
+    await hostRest(`host_invites?token=eq.${encodeURIComponent(t)}`,{method:"DELETE"},tok);
+    await load();setBusy(false);
+  };
+  const copy=(txt)=>{try{navigator.clipboard.writeText(txt);}catch{}};
+
+  const shortId=(id)=>id?id.slice(0,8):"—";
+  const RoleBadge=({role})=><span style={{fontSize:10,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",
+    color:role==="owner"?"#7a5600":"var(--navy)",background:role==="owner"?"rgba(255,200,40,.22)":"var(--sky)",
+    borderRadius:980,padding:"2px 9px"}}>{role}</span>;
+
+  const pending=(members||[]).filter(m=>m.status==="pending");
+  const active=(members||[]).filter(m=>m.status==="active");
+  const noMembers=members!==null&&members.length===0;
+
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:560}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <BadgeCheck size={18}/>
+          <h3 style={{flex:1}}>{hostName} — Members</h3>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+
+        <div style={{padding:"18px 24px 24px",display:"flex",flexDirection:"column",gap:16}}>
+          {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"9px 13px",fontSize:12.5,color:"#c0392b"}}>{err}</div>}
+
+          {members===null&&<div style={{display:"flex",alignItems:"center",gap:8,color:"var(--mut)",fontSize:13}}><Loader2 size={15} className="spin"/>Loading members…</div>}
+
+          {/* ── Claim panel (no members yet, I'm not a member) ── */}
+          {noMembers&&!myMembership&&(
+            <div style={{textAlign:"center",padding:"10px 0"}}>
+              <p style={{margin:"0 0 6px",fontWeight:700,fontSize:15,color:"var(--navy)"}}>This host has no owner yet</p>
+              <p style={{margin:"0 0 16px",fontSize:13,color:"var(--mut)",lineHeight:1.5}}>
+                Claim <b>{hostName}</b> to become its first Owner. Your access will be activated once the AthLink team verifies your account.
+              </p>
+              <button className="btn cta" style={{justifyContent:"center"}} disabled={busy} onClick={claim}>
+                {busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}Claim as Owner
+              </button>
+            </div>
+          )}
+
+          {/* ── My pending status ── */}
+          {myMembership?.status==="pending"&&(
+            <div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:12,padding:"12px 15px",fontSize:13,color:"#a85c00"}}>
+              <Clock size={14} style={{verticalAlign:"-2px",marginRight:6}}/>
+              Your request to join is pending approval from an owner.
+            </div>
+          )}
+          {iAmMember&&!myMembership?.verified&&(
+            <div style={{background:"rgba(10,132,255,.07)",border:"1px solid rgba(10,132,255,.2)",borderRadius:12,padding:"12px 15px",fontSize:13,color:"var(--navy)"}}>
+              You're an active <b>{myMembership.role}</b>, pending AthLink verification before import/edit access is enabled.
+            </div>
+          )}
+
+          {/* ── Tabs (only for active members) ── */}
+          {iAmMember&&members!==null&&(<>
+            <div className="seg" style={{alignSelf:"flex-start"}}>
+              <button className={tab==="members"?"on":""} onClick={()=>setTab("members")}>Members</button>
+              <button className={tab==="audit"?"on":""} onClick={()=>setTab("audit")}>Audit log</button>
+            </div>
+
+            {tab==="members"&&(<>
+              {/* Pending requests */}
+              {pending.length>0&&(
+                <div>
+                  <p className="seclabel" style={{margin:"0 0 8px"}}>Pending requests</p>
+                  {pending.map(m=>(
+                    <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:"1px solid var(--line)"}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>User {shortId(m.user_id)}</div>
+                        <div style={{fontSize:11.5,color:"var(--mut)"}}>requested {m.role}</div>
+                      </div>
+                      <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={busy} onClick={()=>grant(m)}><CheckCircle size={13}/>Grant</button>
+                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={busy} onClick={()=>deny(m)}>Deny</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Active members */}
+              <div>
+                <p className="seclabel" style={{margin:"0 0 8px"}}>Members</p>
+                {active.map(m=>{
+                  const isMe=m.user_id===uid;
+                  return(
+                    <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid var(--line)"}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>User {shortId(m.user_id)}{isMe?" (you)":""}{!m.verified&&<span style={{marginLeft:6,fontSize:10.5,color:"#a85c00",fontWeight:700}}>unverified</span>}</div>
+                      </div>
+                      <RoleBadge role={m.role}/>
+                      {!isMe&&(
+                        <>
+                          {m.role==="editor"
+                            ? <button className="btn ghost" style={{fontSize:11.5,padding:"4px 9px"}} disabled={busy} onClick={()=>setMemberRole(m,"owner")}>Make owner</button>
+                            : (iAmOwner&&ownerCount>1&&<button className="btn ghost" style={{fontSize:11.5,padding:"4px 9px"}} disabled={busy} onClick={()=>setMemberRole(m,"editor")}>Make editor</button>)}
+                          {!(m.role==="owner"&&(!iAmOwner||ownerCount<=1))&&(
+                            <button className="delbtn" title="Remove" disabled={busy} onClick={()=>revoke(m)}><Trash2 size={15}/></button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Invites */}
+              <div>
+                <p className="seclabel" style={{margin:"0 0 8px"}}>Invite a co-admin</p>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  <div className="seg">
+                    <button className={inviteRole==="editor"?"on":""} onClick={()=>setInviteRole("editor")}>Editor</button>
+                    <button className={inviteRole==="owner"?"on":""} onClick={()=>setInviteRole("owner")}>Owner</button>
+                  </div>
+                  <button className="btn cta" style={{fontSize:13,padding:"7px 13px"}} disabled={busy} onClick={createInvite}>
+                    <Link2 size={14}/>Create invite link
+                  </button>
+                </div>
+                {newInvite&&(
+                  <div style={{marginTop:10,display:"flex",gap:8,alignItems:"center",background:"var(--sky)",borderRadius:10,padding:"9px 12px"}}>
+                    <input readOnly value={newInvite.url} style={{flex:1,border:0,background:"none",font:"inherit",fontSize:12,color:"var(--navy)",outline:"none"}} onClick={e=>e.target.select()}/>
+                    <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} onClick={()=>copy(newInvite.url)}><ClipboardPaste size={13}/>Copy</button>
+                  </div>
+                )}
+                {invites.filter(i=>!i.used_at&&new Date(i.expires_at)>new Date()).length>0&&(
+                  <div style={{marginTop:10}}>
+                    {invites.filter(i=>!i.used_at&&new Date(i.expires_at)>new Date()).map(i=>(
+                      <div key={i.token} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--mut)",padding:"5px 0"}}>
+                        <Link2 size={12}/><span style={{flex:1}}>{i.role} · expires {new Date(i.expires_at).toLocaleDateString()}</span>
+                        <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} onClick={()=>copy(`${window.location.origin}${window.location.pathname}?invite=${i.token}`)}>Copy</button>
+                        <button className="delbtn" title="Revoke invite" onClick={()=>revokeInvite(i.token)}><X size={13}/></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>)}
+
+            {tab==="audit"&&(
+              <div>
+                {audit.length===0&&<p style={{fontSize:13,color:"var(--mut)"}}>No actions logged yet.</p>}
+                {audit.map(a=>(
+                  <div key={a.id} style={{display:"flex",gap:10,padding:"7px 0",borderBottom:"1px solid var(--line)",fontSize:12.5}}>
+                    <span style={{fontWeight:700,color:"var(--navy)",minWidth:64,textTransform:"capitalize"}}>{a.action}</span>
+                    <span style={{flex:1,color:"var(--mut)"}}>
+                      by {shortId(a.actor_user_id)}{a.target_user_id?` → ${shortId(a.target_user_id)}`:""}{a.detail?` · ${a.detail}`:""}
+                    </span>
+                    <span style={{color:"var(--mut)",whiteSpace:"nowrap"}}>{new Date(a.ts).toLocaleDateString()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
@@ -2250,6 +2536,9 @@ export default function AthLinkMVP(){
   const[auth,setAuth]=useState(null);
   const[showSignIn,setShowSignIn]=useState(false);
   const[accountOpen,setAccountOpen]=useState(false);
+  const[myMemberships,setMyMemberships]=useState([]);  // host_members rows for the signed-in user
+  const[showMembers,setShowMembers]=useState(false);   // members-management panel open
+  const[inviteRedeemed,setInviteRedeemed]=useState(null); // {hostId,status} after redeeming an invite link
   const[menuOpen,setMenuOpen]=useState(false);   // floating menu pill expanded
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
@@ -2321,7 +2610,39 @@ export default function AthLinkMVP(){
   },[]);
   const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null);
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{} };
-  const signOut=()=>{ setAuth(null); setAccountOpen(false); try{localStorage.removeItem("athlink_auth");}catch{} };
+  const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
+
+  // ── Load the signed-in user's host memberships whenever auth changes ──
+  const reloadMemberships=React.useCallback(async()=>{
+    if(!auth?.user?.id||!auth?.token){setMyMemberships([]);return;}
+    const rows=await fetchMyMemberships(auth.user.id,auth.token);
+    if(rows) setMyMemberships(rows);
+  },[auth]);
+  useEffect(()=>{ reloadMemberships(); },[reloadMemberships]);
+
+  // ── Redeem an invite link (?invite=TOKEN) once signed in ──
+  useEffect(()=>{
+    if(!auth?.user?.id||!auth?.token) return;
+    const params=new URLSearchParams(window.location.search);
+    const token=params.get("invite");
+    if(!token) return;
+    (async()=>{
+      const rows=await fetchInviteByToken(token,auth.token);
+      const inv=rows&&rows[0];
+      // strip the param from the URL regardless of outcome
+      const clean=new URL(window.location.href); clean.searchParams.delete("invite");
+      window.history.replaceState(null,"",clean.pathname+clean.search);
+      if(!inv){setInviteRedeemed({status:"invalid"});return;}
+      if(inv.used_at){setInviteRedeemed({status:"used"});return;}
+      if(new Date(inv.expires_at)<new Date()){setInviteRedeemed({status:"expired"});return;}
+      // Create a pending membership request for this user (idempotent on host_id+user_id)
+      await hostRest("host_members",{method:"POST",headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
+        body:JSON.stringify({host_id:inv.host_id,user_id:auth.user.id,role:inv.role,status:"pending",verified:false})},auth.token);
+      await logHostAudit(inv.host_id,auth.user.id,"request",auth.user.id,`via invite (${inv.role})`,auth.token);
+      setInviteRedeemed({status:"requested",hostId:inv.host_id});
+      reloadMemberships();
+    })();
+  },[auth]);
   const[portal,setPortal]=useState(null);
   const[view,setView]=useState({name:"portals"});
   const[navStack,setNavStack]=useState([]); // universal back-button history
@@ -2531,9 +2852,17 @@ export default function AthLinkMVP(){
   /* ── derived ──────────────────────────────────────────────── */
   const isClassPortal=typeof portal==="string"&&portal.startsWith("class:");
   const portalCls=isClassPortal?portal.slice(6):null; // base class id for a class portal
-  // Dev mode can edit everything. Otherwise associations edit their own portals
-  // (not the read-only global class portals).
-  const canEdit=devMode||(canEditRole&&!isClassPortal);
+  // Membership of the CURRENT portal for the signed-in user (if any).
+  const myPortalMembership=React.useMemo(
+    ()=>myMemberships.find(m=>m.host_id===portal&&m.status==="active")||null,
+    [myMemberships,portal]
+  );
+  const isPortalOwner=myPortalMembership?.role==="owner";
+  // Write access: dev mode, OR an active + VERIFIED member of this (non-class) portal.
+  const canEdit=devMode||(!isClassPortal&&!!myPortalMembership&&myPortalMembership.verified);
+  // Can manage members (invite / grant / promote): any active member; the owner
+  // gets the extra power to remove/demote — enforced per-action in the panel.
+  const canManageMembers=devMode||(!isClassPortal&&!!myPortalMembership);
   const assoc=ASSOCIATIONS.find(a=>a.id===portal);
   const club=CLUBS.find(c=>c.id===portal);
   const fed=FEDERATIONS.find(f=>f.id===portal);
@@ -3992,6 +4321,22 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   </div>
   <div style={{height:74}}/>
   {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}/>}
+  {showMembers&&host&&!isClassPortal&&(
+    <HostMembersModal hostId={portal} hostName={host.name} auth={auth} myMembership={myPortalMembership}
+      onClose={()=>setShowMembers(false)} onChanged={reloadMemberships}/>
+  )}
+  {inviteRedeemed&&(
+    <div className="notice"><div className="ico"><BadgeCheck size={18}/></div>
+      <div><b>{inviteRedeemed.status==="requested"?"Request sent":inviteRedeemed.status==="used"?"Invite already used":inviteRedeemed.status==="expired"?"Invite expired":"Invalid invite"}</b>
+      <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>
+        {inviteRedeemed.status==="requested"?"An owner will review your request to join.":
+         inviteRedeemed.status==="used"?"That invite link has already been redeemed.":
+         inviteRedeemed.status==="expired"?"That invite link is past its 7-day window.":
+         "That invite link isn't valid."}
+      </div></div>
+      <button className="x" style={{marginLeft:8}} onClick={()=>setInviteRedeemed(null)}><X size={15}/></button>
+    </div>
+  )}
   {(gSearchOpen||menuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setMenuOpen(false);}}/>}
 
   {/* ── HOME HERO (no portal) ── */}
@@ -4335,6 +4680,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
               <Trophy size={14} style={{flex:"none"}}/> Ranking
             </MagneticItem>}
+            {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowMembers(true)} strength={0.28}>
+              <BadgeCheck size={14} style={{flex:"none"}}/> Manage
+            </MagneticItem>}
+            {/* Claim: signed-in, not a member, host has no members yet → become first Owner */}
+            {auth&&!isClassPortal&&!myPortalMembership&&(
+              <MagneticItem className="portal-pill" onClick={()=>setShowMembers(true)} strength={0.28}>
+                <Plus size={14} style={{flex:"none"}}/> Claim host
+              </MagneticItem>
+            )}
           </div>
         </div>
       </div></div>
