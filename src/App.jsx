@@ -799,6 +799,8 @@ const fetchMyMemberships=(userId,tok)=>hostRest(`host_members?user_id=eq.${userI
 const fetchHostInvites=(hostId,tok)=>hostRest(`host_invites?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.desc`,{},tok);
 const fetchHostAudit=(hostId,tok)=>hostRest(`host_audit?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=ts.desc&limit=50`,{},tok);
 const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}&select=*`,{},tok);
+// Dev: every UNVERIFIED membership across all hosts (pending-approval queue).
+const fetchUnverifiedMembers=(tok)=>hostRest("host_members?verified=eq.false&select=*&order=created_at.desc",{},tok);
 async function logHostAudit(hostId,actorId,action,targetId,detail,tok){
   return hostRest("host_audit",{method:"POST",body:JSON.stringify({host_id:hostId,actor_user_id:actorId,action,target_user_id:targetId||null,detail:detail||null})},tok);
 }
@@ -1920,27 +1922,31 @@ function CountrySelect({value,onChange,placeholder="Select country..."}){
    Google OAuth:  redirect → on return, check profile → if none → Step 2+3
    Guardian path: athlete under 16 → guardian email collected → pending note
    ═══════════════════════════════════════════════════════════════════════ */
-function SignInModal({onClose,onAuthed,googleOnboarding}){
+function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[],federations=[],onCreateHost,onClaimHost}){
   /* ── mode: "signin" | "signup" ── */
   // If arriving from Google OAuth with no profile yet, jump straight to role-pick
   const[mode,setMode]=React.useState(googleOnboarding?"signup":"signin");
   /* ── multi-step signup state ── */
-  const[step,setStep]=React.useState(googleOnboarding?2:1);   // 1=credentials 2=role 3=details
-  const STEPS=3;
+  // Steps: 1=credentials 2=role 3=name(first/last)+athlete-extras 4=host "Find my club"
+  const[step,setStep]=React.useState(googleOnboarding?2:1);
   /* step 1 */
   const[email,setEmail]=React.useState("");
   const[pw,setPw]=React.useState("");
   /* step 2 */
   const[role,setRole]=React.useState("athlete"); // athlete|association|club|federation
-  /* step 3 — athlete */
+  /* step 3 — name (ALL roles use first + last now) */
   const[firstName,setFirstName]=React.useState("");
   const[lastName,setLastName]=React.useState("");
   const[birthYear,setBirthYear]=React.useState("");
   const[guardianEmail,setGuardianEmail]=React.useState("");
-  /* step 3 — host */
-  const[displayName,setDisplayName]=React.useState("");
-  const[classId,setClassId]=React.useState("29er");
-  const[hostCountry,setHostCountry]=React.useState("HKG");
+  /* step 4 — host "Find my club/association/federation" */
+  const[hostSearch,setHostSearch]=React.useState("");
+  const[selectedHostId,setSelectedHostId]=React.useState(null); // existing host being claimed
+  const[addingNew,setAddingNew]=React.useState(false);          // new-host form open
+  const[newHostName,setNewHostName]=React.useState("");
+  const[newHostScope,setNewHostScope]=React.useState("HK");     // HK | INT
+  const[classId,setClassId]=React.useState("29er");             // association only
+  const[hostCountry,setHostCountry]=React.useState("HKG");      // federation only
   /* shared */
   const[busy,setBusy]=React.useState(false);
   const[err,setErr]=React.useState("");
@@ -1950,17 +1956,21 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
   const athleteAge=birthYear&&/^\d{4}$/.test(birthYear)?curYear-parseInt(birthYear):null;
   const isMinor=athleteAge!==null&&athleteAge<16;
 
-  const fullAthleteNameStr=`${firstName.trim()} ${lastName.trim()}`.trim();
-  const athleteDisplayName=fullAthleteNameStr||email.split("@")[0];
+  const fullNameStr=`${firstName.trim()} ${lastName.trim()}`.trim();
+  const fallbackName=fullNameStr||email.split("@")[0];
+  const isHost=role!=="athlete";
+
+  // Which existing hosts to show in the "Find my ___" search, by role.
+  const hostPool=role==="club"?clubs:role==="federation"?federations:associations;
+  const hostKind=role==="club"?"club":role==="federation"?"federation":"association";
+  const filteredHosts=hostPool.filter(h=>!hostSearch.trim()||h.name.toLowerCase().includes(hostSearch.toLowerCase()));
 
   /* ── helpers ── */
   const resetToSignin=()=>{setMode("signin");setStep(1);setErr("");setInfo("");};
 
   const step1Valid=mode==="signin"?(email.trim()&&pw):(email.trim()&&pw.length>=8);
-  const step2Valid=true; // role always has a default
-  const step3Valid=role==="athlete"
-    ?(firstName.trim()&&lastName.trim()&&(isMinor?guardianEmail.trim():true))
-    :(displayName.trim());
+  const step3Valid=firstName.trim()&&lastName.trim()&&(role==="athlete"?(isMinor?guardianEmail.trim():true):true);
+  const step4Valid=addingNew?newHostName.trim():!!selectedHostId;
 
   /* ── sign-in submit ── */
   const doSignIn=async()=>{
@@ -1975,47 +1985,63 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
     finally{setBusy(false);}
   };
 
-  /* ── final sign-up submit (step 3 → done) ── */
+  /* ── final sign-up submit ── */
+  // Athletes finish at step 3; hosts finish at step 4 (after Find-my-club).
   const doSignUp=async()=>{
     setErr("");setBusy(true);
     try{
       if(!AUTH_BASE) throw new Error("Auth not configured.");
-      // ── Google OAuth path: token + user already exist, just write profile ──
+      // Obtain a session: Google path already has one; email path signs up now.
+      let tok,user;
       if(googleOnboarding){
-        const{token:tok,user}=googleOnboarding;
-        const profilePayload={user_id:user.id,role,
-          display_name:role==="athlete"?athleteDisplayName:displayName.trim(),
-          class_id:role==="association"?classId:null,
-          athlete_name:role==="athlete"?fullAthleteNameStr||null:null};
-        if(role==="athlete"&&birthYear) profilePayload.birth_year=parseInt(birthYear);
-        if(isMinor&&guardianEmail.trim()){profilePayload.guardian_pending=true;profilePayload.guardian_email=guardianEmail.trim();}
-        await upsertProfile(profilePayload,tok);
+        tok=googleOnboarding.token; user=googleOnboarding.user;
+      } else {
+        const d=await authSignUp(email.trim(),pw);
+        tok=d.access_token||d.session?.access_token;
+        user=d.user||d;
+        if(!tok){
+          setInfo("Account created — check your email to confirm, then sign in.");
+          resetToSignin();setBusy(false);return;
+        }
+      }
+
+      // ── Write the profile row (all roles capture first/last now) ──
+      const profilePayload={user_id:user.id,role,
+        display_name:fallbackName,
+        class_id:role==="association"?classId:null,
+        athlete_name:role==="athlete"?fullNameStr||null:null,
+        first_name:firstName.trim()||null,
+        last_name:lastName.trim()||null};
+      if(role==="athlete"&&birthYear) profilePayload.birth_year=parseInt(birthYear);
+      if(role==="athlete"&&isMinor&&guardianEmail.trim()){profilePayload.guardian_pending=true;profilePayload.guardian_email=guardianEmail.trim();}
+      await upsertProfile(profilePayload,tok);
+
+      // ── Athlete: minor guardian path or straight in ──
+      if(role==="athlete"){
         if(isMinor&&guardianEmail.trim()){
           setInfo(`Guardian consent email sent to ${guardianEmail.trim()}. Profile activates once approved.`);
           setTimeout(onClose,5000);setBusy(false);return;
         }
         onAuthed({token:tok,user,profile:profilePayload});return;
       }
-      // ── Email/password path ──────────────────────────────────────────────────
-      const d=await authSignUp(email.trim(),pw);
-      const tok=d.access_token||d.session?.access_token;
-      const user=d.user||d;
-      if(!tok){
-        setInfo("Account created — check your email to confirm, then sign in.");
-        resetToSignin();setBusy(false);return;
+
+      // ── Host: claim existing OR create new → pending Owner (guest access) ──
+      let hostId=selectedHostId;
+      if(addingNew){
+        const created=await onCreateHost?.({
+          type:hostKind,scope:newHostScope,name:newHostName.trim(),
+          cls:hostKind==="association"?classId:null,
+          country:hostKind==="federation"?(hostCountry||"HKG").toUpperCase():null,
+        },tok);
+        if(!created?.id) throw new Error("Couldn't create the host portal.");
+        hostId=created.id;
       }
-      const profilePayload={user_id:user.id,role,
-        display_name:role==="athlete"?athleteDisplayName:displayName.trim(),
-        class_id:role==="association"?classId:null,
-        athlete_name:role==="athlete"?fullAthleteNameStr||null:null};
-      if(role==="athlete"&&birthYear) profilePayload.birth_year=parseInt(birthYear);
-      await upsertProfile(profilePayload,tok);
-      if(isMinor&&guardianEmail.trim()){
-        await upsertProfile({...profilePayload,guardian_pending:true,guardian_email:guardianEmail.trim()},tok);
-        setInfo(`Guardian consent email sent to ${guardianEmail.trim()}. Your profile will be activated once approved.`);
-        setTimeout(onClose,5000);setBusy(false);return;
-      }
-      onAuthed({token:tok,user,profile:profilePayload});
+      if(!hostId) throw new Error("Please select or add a host.");
+      // Register the user as Owner, status active but verified=false (gated → guest UX).
+      await onClaimHost?.(hostId,user.id,tok);
+
+      // Sign them in as their (pending) profile; UI stays guest-level until verified.
+      onAuthed({token:tok,user,profile:profilePayload,pendingHostId:hostId});
     }catch(e){setErr(e.message||"Sign-up failed.");}
     finally{setBusy(false);}
   };
@@ -2050,8 +2076,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
     );
   };
 
-  /* ── progress bar ── */
-  const pct=mode==="signup"?Math.round(((step-1)/(STEPS-1))*100):0;
+  /* ── progress bar (athletes = 3 steps, hosts = 4) ── */
+  const totalSteps=isHost?4:3;
+  const pct=mode==="signup"?Math.round(((step-1)/(totalSteps-1))*100):0;
 
   return(
     <div className="ov" onClick={onClose}>
@@ -2063,10 +2090,10 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{flex:1}}>
               <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"rgba(255,255,255,.55)"}}>
-                {mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":"Your details"}
+                {mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":step===3?"Your name":hostKind==="club"?"Find your club":hostKind==="federation"?"Find your federation":"Find your association"}
               </p>
               <h3 style={{marginTop:2}}>
-                {mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose your role":"Almost done"}
+                {mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose your role":step===3?(isHost?"Your details":"Almost done"):"Link your portal"}
               </h3>
             </div>
             <button className="x" onClick={onClose}><X size={16}/></button>
@@ -2194,27 +2221,26 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
             </div>
           </>)}
 
-          {/* ════ SIGN-UP STEP 3: details ════ */}
+          {/* ════ SIGN-UP STEP 3: name (all roles) + athlete extras ════ */}
           {mode==="signup"&&step===3&&(<>
-
-            {/* ── Athlete details ── */}
-            {role==="athlete"&&(<>
-              <div style={{display:"flex",gap:10}}>
-                <div style={{flex:1}}>
-                  <Label>First name</Label>
-                  <input style={FW()} placeholder="Casey" value={firstName} onChange={e=>setFirstName(e.target.value)}
-                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-                </div>
-                <div style={{flex:1}}>
-                  <Label>Last name</Label>
-                  <input style={FW()} placeholder="Smith" value={lastName} onChange={e=>setLastName(e.target.value)}
-                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-                </div>
+            <div style={{display:"flex",gap:10}}>
+              <div style={{flex:1}}>
+                <Label>First name</Label>
+                <input style={FW()} placeholder="Casey" value={firstName} onChange={e=>setFirstName(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
               </div>
+              <div style={{flex:1}}>
+                <Label>Last name</Label>
+                <input style={FW()} placeholder="Smith" value={lastName} onChange={e=>setLastName(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+              </div>
+            </div>
+
+            {/* Athlete-only extras */}
+            {role==="athlete"&&(<>
               <p style={{fontSize:12,color:"var(--mut)",margin:"-4px 0 0",lineHeight:1.5}}>
                 Use your name <b>exactly as it appears in results</b> — this is how AthLink links your profile to your race history.
               </p>
-
               <div>
                 <Label>Year of birth</Label>
                 <input style={FW({maxWidth:140})} type="number" placeholder="e.g. 2003" min="1930" max={curYear}
@@ -2222,8 +2248,6 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
                   onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
                 {athleteAge!==null&&<span style={{marginLeft:10,fontSize:13,color:"var(--mut)",fontWeight:600}}>Age {athleteAge}</span>}
               </div>
-
-              {/* Minor / guardian consent */}
               {isMinor&&(
                 <div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:12,padding:"14px 16px"}}>
                   <p style={{margin:"0 0 10px",fontSize:13,fontWeight:700,color:"#a85c00",display:"flex",alignItems:"center",gap:7}}>
@@ -2240,39 +2264,109 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
               )}
             </>)}
 
-            {/* ── Host details (association / club / federation) ── */}
-            {role!=="athlete"&&(<>
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(2)}>
+                <ArrowLeft size={15}/>Back
+              </button>
+              {/* Athlete finishes here; host advances to "Find my ___" */}
+              {role==="athlete"
+                ? <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
+                    {busy?<Loader2 size={15} className="spin"/>:null}{isMinor?"Send guardian approval":"Create account"}
+                  </button>
+                : <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={()=>{setErr("");setStep(4);}}>
+                    Continue <ChevronRight size={16}/>
+                  </button>}
+            </div>
+          </>)}
+
+          {/* ════ SIGN-UP STEP 4: "Find my club/association/federation" (hosts) ════ */}
+          {mode==="signup"&&step===4&&isHost&&(<>
+            {!addingNew&&(<>
+              <p style={{fontSize:13,color:"var(--mut)",margin:0,lineHeight:1.5}}>
+                Search for your {hostKind} below and select it to request ownership. Can't find it? Add it.
+              </p>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <div style={{flex:1,position:"relative"}}>
+                  <Search size={15} color="#9fb2c8" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}/>
+                  <input style={FW({paddingLeft:34})} placeholder={`Search ${hostKind}s…`} value={hostSearch}
+                    onChange={e=>{setHostSearch(e.target.value);setSelectedHostId(null);}}
+                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                </div>
+                <button className="btn ghost" style={{fontSize:13,padding:"10px 13px",whiteSpace:"nowrap"}} onClick={()=>{setAddingNew(true);setNewHostName(hostSearch);setSelectedHostId(null);}}>
+                  <Plus size={15}/>Add a {hostKind}
+                </button>
+              </div>
+
+              {/* Results list */}
+              <div style={{maxHeight:240,overflowY:"auto",display:"flex",flexDirection:"column",gap:6,margin:"2px 0"}}>
+                {filteredHosts.length===0&&(
+                  <div style={{textAlign:"center",padding:"18px 0",color:"var(--mut)",fontSize:13}}>
+                    No {hostKind}s found.{" "}
+                    <button onClick={()=>{setAddingNew(true);setNewHostName(hostSearch);}} style={{border:0,background:"none",color:"var(--accent)",fontWeight:700,cursor:"pointer",fontSize:13}}>Add "{hostSearch||"new "+hostKind}"</button>
+                  </div>
+                )}
+                {filteredHosts.map(h=>{
+                  const on=selectedHostId===h.id;
+                  return(
+                    <button key={h.id} type="button" onClick={()=>setSelectedHostId(h.id)}
+                      style={{display:"flex",alignItems:"center",gap:10,textAlign:"left",
+                        border:"1.5px solid "+(on?"var(--accent)":"var(--line)"),
+                        background:on?"rgba(10,132,255,.08)":"rgba(255,255,255,.6)",
+                        borderRadius:12,padding:"11px 13px",cursor:"pointer",transition:".12s"}}>
+                      <span style={{fontSize:18}}>{hostKind==="club"?"🌊":hostKind==="federation"?"🏳️":"⚓"}</span>
+                      <span style={{flex:1,minWidth:0}}>
+                        <span style={{display:"block",fontWeight:700,fontSize:13.5,color:on?"var(--accent)":"var(--navy)"}}>{h.name}</span>
+                        <span style={{fontSize:11.5,color:"var(--mut)"}}>{h.scope==="INT"?"International":"Hong Kong"}</span>
+                      </span>
+                      {on&&<CheckCircle size={17} color="var(--accent)"/>}
+                    </button>
+                  );
+                })}
+              </div>
+            </>)}
+
+            {/* New host form */}
+            {addingNew&&(<>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                <button className="cal-back" style={{color:"var(--accent)"}} onClick={()=>{setAddingNew(false);}}><ArrowLeft size={14}/>Back to search</button>
+              </div>
               <div>
-                <Label>Your name</Label>
-                <input style={FW()} placeholder="Full name" value={displayName} onChange={e=>setDisplayName(e.target.value)}
+                <Label>{hostKind==="club"?"Club":hostKind==="federation"?"Federation":"Association"} name</Label>
+                <input style={FW()} placeholder={hostKind==="club"?"e.g. Aberdeen Boat Club":"Name"} value={newHostName}
+                  onChange={e=>setNewHostName(e.target.value)}
                   onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
               </div>
-              {role==="association"&&(
-                <div>
-                  <Label>Boat class you manage</Label>
-                  <ClassPicker value={classId} onChange={setClassId}/>
+              <div>
+                <Label>Region</Label>
+                <div className="seg" style={{alignSelf:"flex-start"}}>
+                  <button className={newHostScope==="HK"?"on":""} onClick={()=>setNewHostScope("HK")}>Hong Kong</button>
+                  <button className={newHostScope==="INT"?"on":""} onClick={()=>setNewHostScope("INT")}>International</button>
                 </div>
+              </div>
+              {hostKind==="association"&&(
+                <div><Label>Boat class</Label><ClassPicker value={classId} onChange={setClassId}/></div>
               )}
-              {role==="federation"&&(
-                <div>
-                  <Label>Governing country (IOC code)</Label>
+              {hostKind==="federation"&&(
+                <div><Label>Governing country (IOC code)</Label>
                   <input style={FW({maxWidth:120,textTransform:"uppercase"})} placeholder="HKG" maxLength={3}
                     value={hostCountry} onChange={e=>setHostCountry(e.target.value.toUpperCase().slice(0,3))}
                     onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
                 </div>
               )}
-              <div style={{background:"rgba(10,132,255,.06)",border:"1px solid rgba(10,132,255,.16)",borderRadius:12,padding:"12px 14px",fontSize:12.5,color:"var(--navy)",lineHeight:1.5}}>
-                <b>Note:</b> Host accounts are verified by the AthLink team before import access is granted. You'll be able to view results immediately, and we'll follow up to complete verification.
-              </div>
             </>)}
 
+            {/* Pending-approval note */}
+            <div style={{background:"rgba(10,132,255,.06)",border:"1px solid rgba(10,132,255,.16)",borderRadius:12,padding:"12px 14px",fontSize:12.5,color:"var(--navy)",lineHeight:1.5}}>
+              <b>Heads up:</b> your ownership request is reviewed by the AthLink team. Until it's approved you'll browse as a guest — you'll get full host access once we verify you.
+            </div>
+
             <div style={{display:"flex",gap:10}}>
-              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(2)}>
+              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>{addingNew?setAddingNew(false):setStep(3);}}>
                 <ArrowLeft size={15}/>Back
               </button>
-              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
-                {busy?<Loader2 size={15} className="spin"/>:null}
-                {isMinor?"Send guardian approval":"Create account"}
+              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step4Valid} onClick={doSignUp}>
+                {busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}
+                {addingNew?`Create ${hostKind} & request ownership`:"Request ownership"}
               </button>
             </div>
           </>)}
@@ -2566,6 +2660,103 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Dev-only "Pending approvals" panel
+   ───────────────────────────────────────────────────────────────────────
+   Lists every unverified host_members row across all hosts. For each:
+   - Approve  → set verified=true (host gains full access)
+   - Delete   → remove membership; if it was a newly-created host with no
+                results and no other members, delete the portal too
+   - Reassign → move the membership to a different host (wrong-club fix)
+   ═══════════════════════════════════════════════════════════════════════ */
+function DevApprovalsModal({auth,hosts,nameForHost,eventCountFor,memberCountFor,onApprove,onDelete,onReassign,onClose}){
+  const tok=auth?.token;
+  const[rows,setRows]=React.useState(null);
+  const[names,setNames]=React.useState({});
+  const[busyId,setBusyId]=React.useState(null);
+  const[reassignFor,setReassignFor]=React.useState(null); // membership row being reassigned
+  const[reassignSearch,setReassignSearch]=React.useState("");
+
+  const load=React.useCallback(async()=>{
+    const r=await fetchUnverifiedMembers(tok);
+    setRows(r||[]);
+    const nm=await fetchProfileNames((r||[]).map(x=>x.user_id),tok);
+    setNames(nm);
+  },[tok]);
+  React.useEffect(()=>{load();},[load]);
+
+  const nameFor=(id)=>id?(names[id]||`User ${id.slice(0,8)}`):"—";
+
+  const doApprove=async(m)=>{setBusyId(m.id);await onApprove(m);await load();setBusyId(null);};
+  const doDelete=async(m)=>{
+    if(!window.confirm(`Delete ${nameFor(m.user_id)}'s ${m.role} request for "${nameForHost(m.host_id)}"?`)) return;
+    setBusyId(m.id);await onDelete(m);await load();setBusyId(null);
+  };
+  const doReassign=async(m,newHostId)=>{
+    setBusyId(m.id);await onReassign(m,newHostId);setReassignFor(null);setReassignSearch("");await load();setBusyId(null);
+  };
+
+  const reassignOptions=(hosts||[]).filter(h=>!reassignSearch.trim()||h.name.toLowerCase().includes(reassignSearch.toLowerCase()));
+
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:600}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <BadgeCheck size={18}/>
+          <h3 style={{flex:1}}>Pending approvals <span style={{fontWeight:400,opacity:.6,fontSize:14}}>(dev)</span></h3>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div style={{padding:"18px 24px 24px"}}>
+          {rows===null&&<div style={{display:"flex",alignItems:"center",gap:8,color:"var(--mut)",fontSize:13}}><Loader2 size={15} className="spin"/>Loading…</div>}
+          {rows!==null&&rows.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:0}}>No pending host approvals.</p>}
+          {(rows||[]).map(m=>{
+            const evCount=eventCountFor(m.host_id);
+            const memCount=memberCountFor?memberCountFor(m.host_id):null;
+            const isReassigning=reassignFor===m.id;
+            return(
+              <div key={m.id} style={{borderBottom:"1px solid var(--line)",padding:"12px 0"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{nameForHost(m.host_id)}</div>
+                    <div style={{fontSize:12,color:"var(--mut)"}}>
+                      {nameFor(m.user_id)} · {m.role} · requested {new Date(m.created_at).toLocaleDateString()}
+                      {" · "}<span style={{color:evCount>0?"var(--mut)":"#c8860a"}}>{evCount} result{evCount===1?"":"s"}</span>
+                    </div>
+                  </div>
+                  <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={busyId===m.id} onClick={()=>doApprove(m)}>
+                    {busyId===m.id?<Loader2 size={13} className="spin"/>:<CheckCircle size={13}/>}Approve
+                  </button>
+                  <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={busyId===m.id} onClick={()=>{setReassignFor(isReassigning?null:m.id);setReassignSearch("");}}>
+                    <Pencil size={12}/>Reassign
+                  </button>
+                  <button className="delbtn" title="Delete request" disabled={busyId===m.id} onClick={()=>doDelete(m)}><Trash2 size={15}/></button>
+                </div>
+                {isReassigning&&(
+                  <div style={{marginTop:10,background:"var(--grouped)",borderRadius:10,padding:"10px 12px"}}>
+                    <p style={{margin:"0 0 7px",fontSize:12,color:"var(--mut)",fontWeight:600}}>Move this request to a different host:</p>
+                    <input style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 11px",font:"inherit",fontSize:13,marginBottom:8,outline:"none"}}
+                      placeholder="Search hosts…" value={reassignSearch} onChange={e=>setReassignSearch(e.target.value)}/>
+                    <div style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+                      {reassignOptions.map(h=>(
+                        <button key={h.id} disabled={h.id===m.host_id} onClick={()=>doReassign(m,h.id)}
+                          style={{textAlign:"left",border:"1px solid var(--line)",background:h.id===m.host_id?"var(--grouped)":"#fff",
+                            borderRadius:8,padding:"7px 10px",fontSize:12.5,cursor:h.id===m.host_id?"default":"pointer",
+                            color:h.id===m.host_id?"var(--mut)":"var(--navy)",fontWeight:600}}>
+                          {h.name} <span style={{fontWeight:400,color:"var(--mut)"}}>· {h.type}{h.id===m.host_id?" (current)":""}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
@@ -2582,6 +2773,8 @@ export default function AthLinkMVP(){
   const[inviteRedeemed,setInviteRedeemed]=useState(null); // {hostId,status} after redeeming an invite link
   const[allClaims,setAllClaims]=useState([]);          // every athlete_claims row (for badges + admin review)
   const[claimNote,setClaimNote]=useState(null);        // toast after submitting a claim
+  const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
+  const[showDevApprovals,setShowDevApprovals]=useState(false);  // dev-only pending-approvals panel
   const[menuOpen,setMenuOpen]=useState(false);   // floating menu pill expanded
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
@@ -2657,9 +2850,78 @@ export default function AthLinkMVP(){
       })();
     }catch{}
   },[]);
+  // Load memberships for a specific auth object (used right after sign-in,
+  // where the reloadMemberships closure would still hold the old/null auth).
+  const loadMembershipsFor=async(a2)=>{
+    if(!a2?.user?.id||!a2?.token){setMyMemberships([]);return;}
+    const rows=await fetchMyMemberships(a2.user.id,a2.token);
+    if(rows) setMyMemberships(rows);
+  };
   const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null);
-    try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{} };
+    if(a2.pendingHostId) setPendingHostNotice(a2.pendingHostId);
+    try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{}
+    loadMembershipsFor(a2); };
   const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
+
+  // ── Signup host callbacks (create new host / register pending owner) ──
+  // Creates a host row in `hosts` and adds it to the local registry; returns {id}.
+  const createHostFromSignup=async(spec,tok)=>{
+    const name=(spec.name||"").trim(); if(!name) return null;
+    const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"").slice(0,32)||"host";
+    const id=slug+"-"+Math.random().toString(36).slice(2,6);
+    const payload={id,type:spec.type,scope:spec.scope||"HK",name,
+      cls:spec.type==="association"?spec.cls:null,
+      country:spec.type==="federation"?(spec.country||"HKG").toUpperCase():null};
+    // Persist to DB (use the user's token so RLS allows it if configured), then registry.
+    try{ await sbPost("hosts",payload); }catch(e){ console.error("createHostFromSignup",e); }
+    addHostLocal({id,type:spec.type,scope:spec.scope||"HK",name,
+      ...(spec.type==="association"?{cls:spec.cls}:{}),
+      ...(spec.type==="federation"?{country:(spec.country||"HKG").toUpperCase()}:{})});
+    setHostsVersion(v=>v+1);
+    await reloadHosts();
+    return {id};
+  };
+  // Registers the signing-up user as Owner of a host, ACTIVE but verified=false
+  // (so the app treats them as guest until an admin flips verified=true).
+  const claimHostFromSignup=async(hostId,userId,tok)=>{
+    await hostRest("host_members",{method:"POST",headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
+      body:JSON.stringify({host_id:hostId,user_id:userId,role:"owner",status:"active",verified:false})},tok);
+    await logHostAudit(hostId,userId,"claim",userId,"signup — pending verification",tok);
+  };
+
+  // ── Dev approvals: approve / delete / reassign pending host memberships ──
+  const devApproveMember=async(m)=>{
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"PATCH",body:JSON.stringify({verified:true,status:"active"})},auth.token);
+    await logHostAudit(m.host_id,auth.user.id,"verify",m.user_id,"dev approval",auth.token);
+    await reloadMemberships();
+  };
+  const devDeleteMember=async(m)=>{
+    // Always remove the membership.
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"DELETE"},auth.token);
+    await logHostAudit(m.host_id,auth.user.id,"revoke",m.user_id,"dev delete",auth.token);
+    // If the host has no results AND no other members, delete the portal too.
+    const others=await hostRest(`host_members?host_id=eq.${encodeURIComponent(m.host_id)}&select=id`,{},auth.token);
+    const evCount=events.filter(e=>eventAssocs(e).includes(m.host_id)).length;
+    const isDefault=[...DEFAULT_ASSOCIATIONS,...DEFAULT_CLUBS,...DEFAULT_FEDERATIONS].some(h=>h.id===m.host_id);
+    if((others||[]).length===0&&evCount===0&&!isDefault){
+      removeHostLocal(m.host_id);setHostsVersion(v=>v+1);
+      try{await sbDel("hosts","id=eq."+encodeURIComponent(m.host_id));}catch(e){console.error("devDeleteMember portal delete",e);}
+    }
+    await reloadMemberships();
+  };
+  const devReassignMember=async(m,newHostId)=>{
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"PATCH",body:JSON.stringify({host_id:newHostId})},auth.token);
+    await logHostAudit(newHostId,auth.user.id,"reassign",m.user_id,`from ${m.host_id}`,auth.token);
+    // If the old host is now orphaned (newly-created, no results, no members), clean it up.
+    const others=await hostRest(`host_members?host_id=eq.${encodeURIComponent(m.host_id)}&select=id`,{},auth.token);
+    const evCount=events.filter(e=>eventAssocs(e).includes(m.host_id)).length;
+    const isDefault=[...DEFAULT_ASSOCIATIONS,...DEFAULT_CLUBS,...DEFAULT_FEDERATIONS].some(h=>h.id===m.host_id);
+    if((others||[]).length===0&&evCount===0&&!isDefault){
+      removeHostLocal(m.host_id);setHostsVersion(v=>v+1);
+      try{await sbDel("hosts","id=eq."+encodeURIComponent(m.host_id));}catch(e){console.error("devReassignMember cleanup",e);}
+    }
+    await reloadMemberships();
+  };
 
   // ── Load the signed-in user's host memberships whenever auth changes ──
   const reloadMemberships=React.useCallback(async()=>{
@@ -2922,11 +3184,16 @@ export default function AthLinkMVP(){
     [myMemberships,portal]
   );
   const isPortalOwner=myPortalMembership?.role==="owner";
+  // Does the signed-in user have ANY unverified host membership? (account badge)
+  const hasPendingHostMembership=myMemberships.some(m=>!m.verified);
+  // A pending (unverified) host owner of THIS portal — sees guest UX everywhere
+  // except a "pending approval" banner on their own portal page.
+  const isPendingHostHere=!isClassPortal&&!!myPortalMembership&&!myPortalMembership.verified;
   // Write access: dev mode, OR an active + VERIFIED member of this (non-class) portal.
   const canEdit=devMode||(!isClassPortal&&!!myPortalMembership&&myPortalMembership.verified);
-  // Can manage members (invite / grant / promote): any active member; the owner
-  // gets the extra power to remove/demote — enforced per-action in the panel.
-  const canManageMembers=devMode||(!isClassPortal&&!!myPortalMembership);
+  // Manage members: dev, OR a VERIFIED member. Unverified (pending) owners are
+  // treated as guests until the AthLink team approves them.
+  const canManageMembers=devMode||(!isClassPortal&&!!myPortalMembership&&myPortalMembership.verified);
   const assoc=ASSOCIATIONS.find(a=>a.id===portal);
   const club=CLUBS.find(c=>c.id===portal);
   const fed=FEDERATIONS.find(f=>f.id===portal);
@@ -4350,6 +4617,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <MagneticItem className={`mp-link${view.name==="athletes"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"athletes"});}}>Athletes</MagneticItem>
           <MagneticItem className={`mp-link`} onClick={()=>{setMenuOpen(false);openCalendar(portal||null);}}>Calendar</MagneticItem>
           <MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>
+          {DEV_VIEW_ENABLED&&devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevApprovals(true);}}>Pending approvals</MagneticItem>}
           {DEV_VIEW_ENABLED&&devMode&&<button className="mp-dev" onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}><Pencil size={11}/>Dev view ON — turn off</button>}
         </div>
         {gSearchOpen&&gSearchResults.length>0&&(
@@ -4370,13 +4638,20 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     <div className="tb-right">
       {auth
         ? <div style={{position:"relative"}}>
-            <button className="tb-profile" onClick={()=>setAccountOpen(o=>!o)} title={role}>
+            <button className="tb-profile" onClick={()=>setAccountOpen(o=>!o)} title={role} style={{position:"relative"}}>
               <span style={{fontSize:14,fontWeight:800}}>{(auth.profile?.display_name||auth.user?.email||"?").slice(0,1).toUpperCase()}</span>
+              {hasPendingHostMembership&&<span style={{position:"absolute",top:-2,right:-2,width:12,height:12,borderRadius:"50%",background:"#f5a623",border:"2px solid #fff"}} title="Host approval pending"/>}
             </button>
             {accountOpen&&(<div className="tb-acct">
               <div style={{padding:"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>
               <div style={{padding:"0 10px 6px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}>Role: <b style={{color:"var(--navy)"}}>{role}</b></div>
               {role==="association"&&auth.profile?.class_id&&<div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Manages: <b style={{color:"var(--navy)"}}>{(CLASSES.find(c=>c.id===auth.profile.class_id)?.short)||auth.profile.class_id}</b></div>}
+              {hasPendingHostMembership&&(
+                <div style={{margin:"2px 8px 8px",padding:"8px 10px",background:"rgba(255,149,0,.1)",border:"1px solid rgba(255,149,0,.3)",borderRadius:8,fontSize:11.5,color:"#a85c00",lineHeight:1.45,display:"flex",gap:7,alignItems:"flex-start"}}>
+                  <Clock size={13} style={{flex:"none",marginTop:1}}/>
+                  <span>Your host setup is pending AthLink approval. You're browsing as a guest until verified.</span>
+                </div>
+              )}
               <button onClick={signOut} style={{width:"100%",textAlign:"left",border:0,background:"none",padding:"8px 10px",fontSize:13,cursor:"pointer",color:"var(--ink)",borderRadius:8}}>Sign out</button>
             </div>)}
           </div>
@@ -4384,7 +4659,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     </div>
   </div>
   <div style={{height:74}}/>
-  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}/>}
+  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
+    clubs={CLUBS} associations={ASSOCIATIONS} federations={FEDERATIONS}
+    onCreateHost={createHostFromSignup} onClaimHost={claimHostFromSignup}/>}
   {showMembers&&host&&!isClassPortal&&(()=>{
     // Athlete names appearing in this host's events (for vouching scope)
     const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));
@@ -4418,6 +4695,20 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div><b>Claim submitted</b>
       <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>Your claim on <b>{claimNote.name}</b> is pending — a verified host admin will review it.</div></div>
       <button className="x" style={{marginLeft:8}} onClick={()=>setClaimNote(null)}><X size={15}/></button>
+    </div>
+  )}
+  {showDevApprovals&&devMode&&(
+    <DevApprovalsModal auth={auth} hosts={[...ASSOCIATIONS,...CLUBS,...FEDERATIONS]}
+      nameForHost={(id)=>hostById(id)?.name||id}
+      eventCountFor={(id)=>events.filter(e=>eventAssocs(e).includes(id)).length}
+      onApprove={devApproveMember} onDelete={devDeleteMember} onReassign={devReassignMember}
+      onClose={()=>setShowDevApprovals(false)}/>
+  )}
+  {pendingHostNotice&&(
+    <div className="notice"><div className="ico"><Clock size={18}/></div>
+      <div><b>Setup complete — pending approval</b>
+      <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>Your request to manage <b>{hostById(pendingHostNotice)?.name||"your host"}</b> is in. You'll browse as a guest until the AthLink team verifies you.</div></div>
+      <button className="x" style={{marginLeft:8}} onClick={()=>setPendingHostNotice(null)}><X size={15}/></button>
     </div>
   )}
   {(gSearchOpen||menuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setMenuOpen(false);}}/>}
@@ -4766,16 +5057,21 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowMembers(true)} strength={0.28}>
               <BadgeCheck size={14} style={{flex:"none"}}/> Manage
             </MagneticItem>}
-            {/* Claim: signed-in, not a member, host has no members yet → become first Owner */}
-            {auth&&!isClassPortal&&!myPortalMembership&&(
-              <MagneticItem className="portal-pill" onClick={()=>setShowMembers(true)} strength={0.28}>
-                <Plus size={14} style={{flex:"none"}}/> Claim host
-              </MagneticItem>
-            )}
           </div>
         </div>
       </div></div>
       <div className="wrap sec" style={{paddingTop:0}}>
+        {isPendingHostHere&&(
+          <div style={{display:"flex",alignItems:"center",gap:12,background:"rgba(255,149,0,.09)",border:"1px solid rgba(255,149,0,.32)",borderRadius:14,padding:"14px 18px",marginBottom:18}}>
+            <Clock size={20} color="#c8860a" style={{flex:"none"}}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:700,color:"#a85c00",fontSize:14}}>Your club is pending approval</div>
+              <div style={{fontSize:13,color:"#a85c00",marginTop:2,lineHeight:1.5}}>
+                Thanks for setting up {host?.name}. The AthLink team is reviewing your ownership request — until it's approved you'll browse as a guest. We'll notify you once you're verified.
+              </div>
+            </div>
+          </div>
+        )}
         {fed&&(()=>{
           const feAssoc=ASSOCIATIONS.filter(a=>a.scope===fed.scope);
           if(!feAssoc.length) return null;
@@ -5264,16 +5560,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                   <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
                     <Calendar size={13}/>Calendar
                   </button>
-                  {/* Claim this profile — shown to signed-in users who haven't claimed it and aren't already verified */}
-                  {(()=>{
-                    if(profileVerified(name)) return null;
-                    const myClaim=myClaimFor(name);
-                    if(myClaim?.status==="pending") return <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:600,color:"#a85c00",background:"rgba(255,149,0,.12)",borderRadius:980,padding:"5px 11px"}}><Clock size={12}/>Claim pending</span>;
-                    if(myClaim?.status==="denied") return <span style={{fontSize:12,color:"var(--mut)"}}>Claim declined</span>;
-                    return <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",fontWeight:600}} onClick={()=>auth?submitClaim(name):setShowSignIn(true)}>
-                      <BadgeCheck size={13}/>This is me — claim profile
-                    </button>;
-                  })()}
                 </h1>
                 <div className="pmeta">
                   {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
