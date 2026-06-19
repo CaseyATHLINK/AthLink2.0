@@ -808,6 +808,21 @@ function randToken(){
   return btoa(String.fromCharCode(...a)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 }
 
+/* ── Athlete claims (athlete_claims) ──────────────────────────────────────────
+   Athletes claim their auto-built profile; any verified host admin whose events
+   that athlete appears in can approve. Approved claims show a verified badge. */
+const fetchAllClaims=(tok)=>hostRest("athlete_claims?select=*",{},tok);
+const fetchMyClaims=(userId,tok)=>hostRest(`athlete_claims?user_id=eq.${userId}&select=*`,{},tok);
+async function createClaim(profileName,userId,tok){
+  return hostRest("athlete_claims",{method:"POST",headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
+    body:JSON.stringify({profile_name:profileName,user_id:userId,status:"pending"})},tok);
+}
+async function decideClaim(claimId,approve,vouchUserId,hostId,tok){
+  return hostRest(`athlete_claims?id=eq.${claimId}`,{method:"PATCH",body:JSON.stringify({
+    status:approve?"approved":"denied",vouched_by:approve?vouchUserId:null,host_id:approve?hostId:null,
+    decided_at:new Date().toISOString()})},tok);
+}
+
 // Run schema migration for nat column (idempotent)
 async function ensureSchema(){
   if(!sbH) return;
@@ -2279,7 +2294,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding}){
    - Create single-use, 7-day invite links
    - Audit trail
    ═══════════════════════════════════════════════════════════════════════ */
-function HostMembersModal({hostId,hostName,auth,myMembership,onClose,onChanged}){
+function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],canVouch=false,onDecideClaim,onClose,onChanged}){
   const tok=auth?.token; const uid=auth?.user?.id;
   const[members,setMembers]=React.useState(null);
   const[invites,setInvites]=React.useState([]);
@@ -2288,7 +2303,8 @@ function HostMembersModal({hostId,hostName,auth,myMembership,onClose,onChanged})
   const[err,setErr]=React.useState("");
   const[newInvite,setNewInvite]=React.useState(null); // {url,role}
   const[inviteRole,setInviteRole]=React.useState("editor");
-  const[tab,setTab]=React.useState("members"); // members | audit
+  const[tab,setTab]=React.useState("members"); // members | claims | audit
+  const[claimBusy,setClaimBusy]=React.useState(null); // claim id being decided
 
   const iAmOwner=myMembership?.role==="owner"&&myMembership?.status==="active";
   const iAmMember=!!myMembership&&myMembership.status==="active";
@@ -2425,6 +2441,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,onClose,onChanged})
           {iAmMember&&members!==null&&(<>
             <div className="seg" style={{alignSelf:"flex-start"}}>
               <button className={tab==="members"?"on":""} onClick={()=>setTab("members")}>Members</button>
+              <button className={tab==="claims"?"on":""} onClick={()=>setTab("claims")}>Profile claims{pendingClaims.length>0?` (${pendingClaims.length})`:""}</button>
               <button className={tab==="audit"?"on":""} onClick={()=>setTab("audit")}>Audit log</button>
             </div>
 
@@ -2504,6 +2521,30 @@ function HostMembersModal({hostId,hostName,auth,myMembership,onClose,onChanged})
               </div>
             </>)}
 
+            {tab==="claims"&&(
+              <div>
+                <p style={{fontSize:12.5,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.5}}>
+                  Athletes who've claimed a profile that appears in <b>{hostName}</b>'s results. Approving vouches for them and adds a verified badge.
+                </p>
+                {!canVouch&&<div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:10,padding:"9px 13px",fontSize:12.5,color:"#a85c00",marginBottom:10}}>Your account must be verified before you can vouch for athletes.</div>}
+                {pendingClaims.length===0&&<p style={{fontSize:13,color:"var(--mut)"}}>No pending profile claims for this host's athletes.</p>}
+                {pendingClaims.map(c=>(
+                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid var(--line)"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{c.profile_name}</div>
+                      <div style={{fontSize:11.5,color:"var(--mut)"}}>claimed by user {c.user_id?.slice(0,8)} · {new Date(c.created_at).toLocaleDateString()}</div>
+                    </div>
+                    <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
+                      onClick={async()=>{setClaimBusy(c.id);await onDecideClaim(c,true);setClaimBusy(null);}}>
+                      {claimBusy===c.id?<Loader2 size={13} className="spin"/>:<CheckCircle size={13}/>}Approve
+                    </button>
+                    <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
+                      onClick={async()=>{setClaimBusy(c.id);await onDecideClaim(c,false);setClaimBusy(null);}}>Deny</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {tab==="audit"&&(
               <div>
                 {audit.length===0&&<p style={{fontSize:13,color:"var(--mut)"}}>No actions logged yet.</p>}
@@ -2539,6 +2580,8 @@ export default function AthLinkMVP(){
   const[myMemberships,setMyMemberships]=useState([]);  // host_members rows for the signed-in user
   const[showMembers,setShowMembers]=useState(false);   // members-management panel open
   const[inviteRedeemed,setInviteRedeemed]=useState(null); // {hostId,status} after redeeming an invite link
+  const[allClaims,setAllClaims]=useState([]);          // every athlete_claims row (for badges + admin review)
+  const[claimNote,setClaimNote]=useState(null);        // toast after submitting a claim
   const[menuOpen,setMenuOpen]=useState(false);   // floating menu pill expanded
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
@@ -2565,7 +2608,13 @@ export default function AthLinkMVP(){
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
   const role=effectiveRole;
   const canEditRole=effectiveRole==="association";
-  const canEditProfileOf=(nm)=>devMode||(effectiveRole==="athlete"&&auth?.profile?.athlete_name&&auth.profile.athlete_name.toLowerCase()===String(nm||"").toLowerCase());
+  // A profile is "verified-claimed" if any approved claim exists for that name.
+  const profileVerified=(nm)=>allClaims.some(c=>c.status==="approved"&&c.profile_name?.toLowerCase()===String(nm||"").toLowerCase());
+  // The signed-in user's claim row for a given profile name (or null).
+  const myClaimFor=(nm)=>auth?.user?.id?allClaims.find(c=>c.user_id===auth.user.id&&c.profile_name?.toLowerCase()===String(nm||"").toLowerCase())||null:null;
+  const canEditProfileOf=(nm)=>devMode
+    ||(effectiveRole==="athlete"&&auth?.profile?.athlete_name&&auth.profile.athlete_name.toLowerCase()===String(nm||"").toLowerCase())
+    ||(!!myClaimFor(nm)&&myClaimFor(nm).status==="approved");
   // googleOnboarding: {token, user} — set when a Google sign-in returns with no profile yet
   const[googleOnboarding,setGoogleOnboarding]=useState(null);
   useEffect(()=>{
@@ -2619,6 +2668,21 @@ export default function AthLinkMVP(){
     if(rows) setMyMemberships(rows);
   },[auth]);
   useEffect(()=>{ reloadMemberships(); },[reloadMemberships]);
+
+  // ── Load all athlete claims (for verified badges + admin review) ──
+  const reloadClaims=React.useCallback(async()=>{
+    if(!auth?.token){setAllClaims([]);return;}
+    const rows=await fetchAllClaims(auth.token);
+    if(rows) setAllClaims(rows);
+  },[auth]);
+  useEffect(()=>{ reloadClaims(); },[reloadClaims]);
+
+  // ── Athlete submits a claim on their auto-built profile ──
+  const submitClaim=async(profileName)=>{
+    if(!auth?.user?.id||!auth?.token){setShowSignIn(true);return;}
+    const r=await createClaim(profileName,auth.user.id,auth.token);
+    if(r){setClaimNote({name:profileName,status:"pending"});setTimeout(()=>setClaimNote(null),6000);await reloadClaims();}
+  };
 
   // ── Redeem an invite link (?invite=TOKEN) once signed in ──
   useEffect(()=>{
@@ -4321,10 +4385,22 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   </div>
   <div style={{height:74}}/>
   {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}/>}
-  {showMembers&&host&&!isClassPortal&&(
+  {showMembers&&host&&!isClassPortal&&(()=>{
+    // Athlete names appearing in this host's events (for vouching scope)
+    const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));
+    const hostAthleteNames=new Set();
+    hostEvents.forEach(ev=>ev.entries.forEach(en=>{if(en.helm)hostAthleteNames.add(en.helm);if(en.crew)hostAthleteNames.add(en.crew);}));
+    const pendingClaimsHere=allClaims.filter(c=>c.status==="pending"&&[...hostAthleteNames].some(n=>n.toLowerCase()===c.profile_name?.toLowerCase()));
+    return(
     <HostMembersModal hostId={portal} hostName={host.name} auth={auth} myMembership={myPortalMembership}
+      pendingClaims={pendingClaimsHere} canVouch={!!myPortalMembership&&myPortalMembership.verified}
+      onDecideClaim={async(claim,approve)=>{
+        await decideClaim(claim.id,approve,auth.user.id,portal,auth.token);
+        await reloadClaims();
+      }}
       onClose={()=>setShowMembers(false)} onChanged={reloadMemberships}/>
-  )}
+    );
+  })()}
   {inviteRedeemed&&(
     <div className="notice"><div className="ico"><BadgeCheck size={18}/></div>
       <div><b>{inviteRedeemed.status==="requested"?"Request sent":inviteRedeemed.status==="used"?"Invite already used":inviteRedeemed.status==="expired"?"Invite expired":"Invalid invite"}</b>
@@ -4335,6 +4411,13 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
          "That invite link isn't valid."}
       </div></div>
       <button className="x" style={{marginLeft:8}} onClick={()=>setInviteRedeemed(null)}><X size={15}/></button>
+    </div>
+  )}
+  {claimNote&&(
+    <div className="notice"><div className="ico"><BadgeCheck size={18}/></div>
+      <div><b>Claim submitted</b>
+      <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>Your claim on <b>{claimNote.name}</b> is pending — a verified host admin will review it.</div></div>
+      <button className="x" style={{marginLeft:8}} onClick={()=>setClaimNote(null)}><X size={15}/></button>
     </div>
   )}
   {(gSearchOpen||menuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setMenuOpen(false);}}/>}
@@ -5174,10 +5257,23 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
               <div style={{flex:1,minWidth:0}}>
                 <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                  <span>{nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}</span>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
+                    {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
+                    {profileVerified(name)&&<VerifyBadge verified size={20} title="Verified athlete — claimed & vouched"/>}
+                  </span>
                   <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
                     <Calendar size={13}/>Calendar
                   </button>
+                  {/* Claim this profile — shown to signed-in users who haven't claimed it and aren't already verified */}
+                  {(()=>{
+                    if(profileVerified(name)) return null;
+                    const myClaim=myClaimFor(name);
+                    if(myClaim?.status==="pending") return <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:600,color:"#a85c00",background:"rgba(255,149,0,.12)",borderRadius:980,padding:"5px 11px"}}><Clock size={12}/>Claim pending</span>;
+                    if(myClaim?.status==="denied") return <span style={{fontSize:12,color:"var(--mut)"}}>Claim declined</span>;
+                    return <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",fontWeight:600}} onClick={()=>auth?submitClaim(name):setShowSignIn(true)}>
+                      <BadgeCheck size={13}/>This is me — claim profile
+                    </button>;
+                  })()}
                 </h1>
                 <div className="pmeta">
                   {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
