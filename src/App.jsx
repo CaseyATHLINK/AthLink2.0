@@ -271,6 +271,19 @@ const governingFeds=ev=>{
 };
 // All hosts that own/co-own an event, INCLUDING auto-collaborating federations.
 const eventAssocs=ev=>[...new Set([ev.owner,...(ev.collabs||[]),...governingFeds(ev).map(f=>f.id)].filter(Boolean))];
+// A host's display location (IOC code): its explicitly-set country, else the
+// most common country across the events it owns/co-owns. evList is all events.
+const hostLocation=(hostId,evList)=>{
+  const h=hostById(hostId);
+  if(h?.country) return String(h.country).toUpperCase();
+  const counts={};
+  (evList||[]).forEach(ev=>{
+    if(!eventAssocs(ev).includes(hostId)&&ev.owner!==hostId) return;
+    const cc=eventCountryCode(ev); if(cc) counts[cc]=(counts[cc]||0)+1;
+  });
+  const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+  return top?top[0]:null;
+};
 
 // ── Sub-classes (per-event) for ILCA and Optimist ──
 // ILCA: 3 rigs, varying shades of blue (ILCA 7 darkest → ILCA 4 lightest).
@@ -861,20 +874,12 @@ const fetchHostAudit=(hostId,tok)=>hostRest(`host_audit?host_id=eq.${encodeURICo
 const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}&select=*`,{},tok);
 // Dev: every UNVERIFIED membership across all hosts (pending-approval queue).
 const fetchUnverifiedMembers=(tok)=>hostRest("host_members?verified=eq.false&select=*&order=created_at.desc",{},tok);
-// Dev: every profile row (for the all-profiles cleanup panel).
-// Reads the admin_all_profiles VIEW (bypasses RLS → shows every profile whether
-// signed in or out). Falls back to the base table if the view isn't created yet.
-async function fetchAllProfiles(tok){
-  const v=await hostRest("admin_all_profiles?select=*&order=created_at.desc",{},tok);
-  if(v&&Array.isArray(v)) return v;
-  return hostRest("profiles?select=*&order=created_at.desc",{},tok);
-}
+// Dev: every profile row (for the all-profiles cleanup panel). Requires the
+// admin SELECT policy (dev_admin_select_migration.sql) + being signed in as
+// your admin account — otherwise RLS returns only your own row.
+const fetchAllProfiles=(tok)=>hostRest("profiles?select=*&order=created_at.desc",{},tok);
 // Dev: every host_members row (to show which hosts each profile belongs to).
-async function fetchAllMembers(tok){
-  const v=await hostRest("admin_all_members?select=*",{},tok);
-  if(v&&Array.isArray(v)) return v;
-  return hostRest("host_members?select=*",{},tok);
-}
+const fetchAllMembers=(tok)=>hostRest("host_members?select=*",{},tok);
 // Dev: hard-delete a profile and all its host memberships + claims.
 async function devDeleteProfile(userId,tok){
   await hostRest(`host_members?user_id=eq.${userId}`,{method:"DELETE"},tok);
@@ -894,9 +899,11 @@ async function fetchProfileNames(ids,tok){
   const got=new Set((rows||[]).map(r=>r.user_id));
   const missing=uniq.filter(id=>!got.has(id));
   let pub=[];
-  if(missing.length){
+  if(missing.length&&!fetchProfileNames._noPublicView){
     const pin="("+missing.map(encodeURIComponent).join(",")+")";
-    pub=await hostRest(`public_profiles?user_id=in.${pin}&select=user_id,display_name`,{},tok)||[];
+    const res=await hostRest(`public_profiles?user_id=in.${pin}&select=user_id,display_name`,{},tok);
+    if(res===null) fetchProfileNames._noPublicView=true; // view missing → stop retrying
+    else pub=res||[];
   }
   const nameOf=(r)=>{
     const full=`${r.first_name||""} ${r.last_name||""}`.trim();
@@ -1319,7 +1326,7 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
       for(const el of c.querySelectorAll("[data-yr]")){
         if(el.getBoundingClientRect().bottom>cr.top+10){
           const yr=parseInt(el.dataset.yr);
-          if(!isNaN(yr)&&yr!==yrRef.current) setYear(yr);
+          if(!isNaN(yr)){ yrRef.current=yr; const lbl=document.getElementById("cal-cur-label"); if(lbl) lbl.textContent=String(yr); }
           break;
         }
       }
@@ -1443,9 +1450,11 @@ const CalMonthList=React.memo(function CalMonthList({months,events,onPick,eventL
   // keep latest callbacks without re-rendering on their identity change
   const cbRef=React.useRef({onPick,eventLabel});
   cbRef.current={onPick,eventLabel};
-  return months.map(({year:y,month:m})=>(
+  return months.map(({year:y,month:m})=>{
+    const monthCount=events.filter(ev=>{const dp=(ev.date||"").split("/");return dp.length===3&&parseInt(dp[1])-1===m&&parseInt(dp[2])===y;}).length;
+    return(
     <div key={`${y}-${m}`} data-ym={`${y}-${m}`} className="cal-month-block">
-      <div className="cal-month-lbl">{MON[m]} {y}</div>
+      <div className="cal-month-lbl">{MON[m]} {y}{monthCount>0?<span style={{fontWeight:600,color:"var(--mut)",fontSize:13,marginLeft:8}}>· {monthCount} competition{monthCount!==1?"s":""}</span>:null}</div>
       <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
       <div className="cal-grid">
         {buildCalGrid(y,m,events).flat().map((cell,i)=>{
@@ -1465,7 +1474,7 @@ const CalMonthList=React.memo(function CalMonthList({months,events,onPick,eventL
         })}
       </div>
     </div>
-  ));
+  );});
 },(prev,next)=>prev.months===next.months&&prev.events===next.events&&prev.today===next.today&&prev.DAYS===next.DAYS);
 
 /* ── World SVG map fallback (no API key required) ───────────────────── */
@@ -2633,7 +2642,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
    - Create single-use, 7-day invite links
    - Audit trail
    ═══════════════════════════════════════════════════════════════════════ */
-function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],canVouch=false,onDecideClaim,onClose,onChanged}){
+function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],canVouch=false,onDecideClaim,onClose,onChanged,embedded=false,canManage=false}){
   const tok=auth?.token; const uid=auth?.user?.id;
   const[members,setMembers]=React.useState(null);
   const[invites,setInvites]=React.useState([]);
@@ -2646,8 +2655,8 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
   const[tab,setTab]=React.useState("members"); // members | claims | audit
   const[claimBusy,setClaimBusy]=React.useState(null); // claim id being decided
 
-  const iAmOwner=myMembership?.role==="owner"&&myMembership?.status==="active";
-  const iAmMember=!!myMembership&&myMembership.status==="active";
+  const iAmOwner=(myMembership?.role==="owner"&&myMembership?.status==="active")||canManage;
+  const iAmMember=(!!myMembership&&myMembership.status==="active")||canManage;
   const ownerCount=(members||[]).filter(m=>m.role==="owner"&&m.status==="active").length;
 
   const load=React.useCallback(async()=>{
@@ -2741,16 +2750,8 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
   const active=(members||[]).filter(m=>m.status==="active");
   const noMembers=members!==null&&members.length===0;
 
-  return(
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:560}}>
-        <div className="mhead" style={{padding:"18px 24px"}}>
-          <BadgeCheck size={18}/>
-          <h3 style={{flex:1}}>{hostName} — Members</h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-
-        <div style={{padding:"18px 24px 24px",display:"flex",flexDirection:"column",gap:16}}>
+  const body=(
+        <div style={{padding:embedded?0:"18px 24px 24px",display:"flex",flexDirection:"column",gap:16}}>
           {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"9px 13px",fontSize:12.5,color:"#c0392b"}}>{err}</div>}
 
           {members===null&&<div style={{display:"flex",alignItems:"center",gap:8,color:"var(--mut)",fontSize:13}}><Loader2 size={15} className="spin"/>Loading members…</div>}
@@ -2781,8 +2782,8 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
             </div>
           )}
 
-          {/* ── Tabs (only for active members) ── */}
-          {iAmMember&&members!==null&&(<>
+          {/* ── Tabs (active members or managers) ── */}
+          {iAmMember&&(<>
             <div className="seg" style={{alignSelf:"flex-start"}}>
               <button className={tab==="members"?"on":""} onClick={()=>setTab("members")}>Members</button>
               <button className={tab==="claims"?"on":""} onClick={()=>setTab("claims")}>Profile claims{pendingClaims.length>0?` (${pendingClaims.length})`:""}</button>
@@ -2920,6 +2921,17 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
             )}
           </>)}
         </div>
+  );
+  if(embedded) return body;
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:560}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <BadgeCheck size={18}/>
+          <h3 style={{flex:1}}>{hostName} — Members</h3>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        {body}
       </div>
     </div>
   );
@@ -3111,16 +3123,17 @@ function DevProfilesModal({auth,nameForHost,onClose}){
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Host portal edit modal — name, location (→ globe by title), and Manage entry.
-   Owners/editors of a portal use this to rename the host and set its location.
-   The location (IOC code) renders a SailingGlobe next to the portal title,
-   identical to the result-page globes.
+   Host portal edit modal — tabbed: Details (name + location + globe) and
+   Members (embedded member management). Owners/editors/dev use this to rename
+   the host, set its location (→ globe by the title), and manage co-admins.
    ═══════════════════════════════════════════════════════════════════════ */
-function HostEditModal({host,onSave,onOpenManage,onClose,canManage}){
+function HostEditModal({host,onSave,onClose,canManage,membersProps}){
+  const[tab,setTab]=React.useState("details");
   const[name,setName]=React.useState(host?.name||"");
   const[country,setCountry]=React.useState(host?.country||"");
   const[busy,setBusy]=React.useState(false);
   const iso=IOC_ISO[(country||"").toUpperCase()]||"";
+  const barStyle={width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"12px 14px",font:"inherit",fontSize:15,outline:"none",background:"rgba(255,255,255,.85)"};
   const save=async()=>{
     setBusy(true);
     await onSave({name:name.trim()||host.name,country:(country||"").toUpperCase()||null});
@@ -3128,37 +3141,51 @@ function HostEditModal({host,onSave,onOpenManage,onClose,canManage}){
   };
   return(
     <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:480}}>
-        <div className="mhead" style={{padding:"18px 24px"}}>
-          <Settings size={18}/><h3 style={{flex:1}}>Edit portal</h3>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:860}}>
+        <div className="mhead" style={{padding:"20px 28px"}}>
+          <Settings size={20}/><h3 style={{flex:1}}>Edit portal</h3>
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
-        <div style={{padding:"18px 24px 24px",display:"flex",flexDirection:"column",gap:16}}>
-          <div>
-            <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:5}}>Portal name</label>
-            <input value={name} onChange={e=>setName(e.target.value)}
-              style={{width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"10px 13px",font:"inherit",fontSize:14,outline:"none",background:"rgba(255,255,255,.85)"}}/>
+        {canManage&&(
+          <div className="seg" style={{margin:"16px 28px 0",alignSelf:"flex-start"}}>
+            <button className={tab==="details"?"on":""} onClick={()=>setTab("details")}>Details</button>
+            <button className={tab==="members"?"on":""} onClick={()=>setTab("members")}>Members</button>
           </div>
-          <div>
-            <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:5}}>Location <span style={{fontWeight:400}}>(IOC country code — shows a globe by your title)</span></label>
-            <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
-              <div style={{flex:1}}><NatInput value={country} onChange={setCountry}/></div>
-              {iso&&<div style={{flex:"0 0 120px",border:"1px solid var(--line)",borderRadius:12,overflow:"hidden",background:"var(--navy)"}}>
-                <SailingGlobe countryData={{[iso]:1}} height={108} dark mini bare hostIso={iso}/>
-              </div>}
+        )}
+        <div style={{padding:"22px 28px 28px"}}>
+          {tab==="details"&&(<>
+            {/* Globe left (top aligns with name bar, bottom aligns with country bar);
+                name top-right, country directly below it. */}
+            <div style={{display:"flex",gap:22,alignItems:"stretch"}}>
+              <div style={{flex:"0 0 200px",alignSelf:"stretch",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {iso
+                  ? <SailingGlobe countryData={{[iso]:1}} height={200} dark mini bare hostIso={iso}/>
+                  : <div style={{width:200,height:200,borderRadius:16,background:"rgba(31,78,128,.06)",border:"1px dashed rgba(31,78,128,.25)",display:"grid",placeItems:"center",color:"var(--mut)",fontSize:12,textAlign:"center",padding:16}}>Enter a location code to show a globe</div>}
+              </div>
+              <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",justifyContent:"space-between",gap:18}}>
+                <div>
+                  <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Portal name</label>
+                  <input value={name} onChange={e=>setName(e.target.value)} style={barStyle}/>
+                </div>
+                <div>
+                  <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Location <span style={{fontWeight:400}}>(IOC country code)</span></label>
+                  <div style={{position:"relative"}}>
+                    <input value={country} onChange={e=>setCountry(e.target.value.toUpperCase().slice(0,3))} placeholder="HKG" maxLength={3} style={{...barStyle,paddingRight:42}}/>
+                    {iso&&<span style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",fontSize:17,pointerEvents:"none"}}>{iocFlag(country)}</span>}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          {canManage&&(
-            <button className="btn ghost" style={{width:"100%",justifyContent:"center"}} onClick={()=>{onClose();onOpenManage();}}>
-              <BadgeCheck size={15}/>Manage members & invites
-            </button>
+            <div style={{display:"flex",gap:10,marginTop:24}}>
+              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={onClose}>Cancel</button>
+              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
+                {busy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes
+              </button>
+            </div>
+          </>)}
+          {tab==="members"&&canManage&&membersProps&&(
+            <HostMembersModal {...membersProps} embedded canManage/>
           )}
-          <div style={{display:"flex",gap:10}}>
-            <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={onClose}>Cancel</button>
-            <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
-              {busy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes
-            </button>
-          </div>
         </div>
       </div>
     </div>
@@ -4182,18 +4209,28 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
     try{
       const best=ag.best?"#"+ag.best:"unknown";
       const evs=ag.events;const pods=ag.podiums;const wins=ag.wins;
+      // First & most-recent event years (for "started together" / trajectory context).
+      const sorted=ag.history.slice().sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return da.localeCompare(db);});
+      const firstYr=sorted[0]?.ev.date?.split('/')?.[2]||"";
       let prompt;
       if(crew){
         const agCrew=aggregate(crew,events);
-        prompt=`Write 2 short sentences (max 35 words total) about this sailing team's combined achievements. Be specific and factual.
-Helm: ${name} (${evs} regattas, best: ${best}, ${pods} podiums, ${wins} race wins).
-Crew: ${crew} (${agCrew.events} regattas, best: ${agCrew.best?"#"+agCrew.best:"unknown"}).`;
+        // Events both sailed together (shared regattas with this partner).
+        const together=ag.history.filter(h=>h.partner&&canonName(h.partner)===canonName(crew));
+        const firstTog=together.slice().sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return da.localeCompare(db);})[0];
+        const togLine=together.length?`Sailed together in ${together.length} regatta(s) since ${firstTog?.ev.date?.split('/')?.[2]||"?"}; best together #${Math.min(...together.map(h=>h.row.rank))}.`:"First/few events as a pair.";
+        prompt=`Write a SHORT scouting blurb for a sailing PAIR (helm+crew): 2 sentences, MAX 38 words. Cover (a) when they started sailing together and how they've performed as a pair, (b) any standout milestone by either sailor, and (c) how they stack up against similar-calibre competition. Factual, no markdown, no heading.
+Helm: ${name} (${evs} regattas since ${firstYr||"?"}, best ${best}, ${pods} podiums, ${wins} race wins).
+Crew: ${crew} (${agCrew.events} regattas, best ${agCrew.best?"#"+agCrew.best:"unknown"}).
+Together: ${togLine}`;
       } else {
-        prompt=`Write 2 short sentences (max 30 words total) about this athlete. Be specific and factual.
-Athlete: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race wins: ${wins}.`;
+        // Comparison context: peers who finished near them in their events.
+        const peerNote=ag.history.slice(0,5).map(h=>`${h.ev.name}: #${h.row.rank}/${h.fleet}`).join('; ');
+        prompt=`Write a SHORT scouting blurb for a SINGLE-HANDED sailor: 2 sentences, MAX 32 words. Focus mainly on how they performed RELATIVE TO COMPETITORS OF SIMILAR CALIBRE — i.e. where they placed within the fleet at their events, and against peers who finished near them. Factual, no markdown, no heading.
+Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins} race wins. Placings: ${peerNote||"unknown"}.`;
       }
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt,max_tokens:80})});
+        body:JSON.stringify({prompt,max_tokens:90})});
       const data=await res.json();
       if(data.ok) setHoverSummaries(h=>({...h,[key]:cleanAISummary(data.text)}));
       else setHoverSummaries(h=>({...h,[key]:""}));
@@ -4219,20 +4256,17 @@ Athlete: ${name}. Regattas: ${evs}. Best result: ${best}. Podiums: ${pods}. Race
     }catch{}
     setProfileSummaries(h=>({...h,[name]:null})); // loading
     try{
-      const countries=new Set(ag.history.map(h=>h.ev.country).filter(Boolean));
-      const years=new Set(ag.history.map(h=>h.ev.date?.split('/')?.[2]).filter(Boolean));
-      const partners=[...new Set(ag.history.map(h=>h.partner).filter(Boolean))].slice(0,3);
-      const prompt=`${SPONSOR_LENS}
-Write a 2-3 sentence athlete bio for a sponsorship profile, in third person.
-STRICT RULES: Do NOT output any title, heading, markdown, or "#". Do NOT begin with the athlete's name. Mention the name at most once, naturally inside a sentence. Plain prose only — no bullet points, no bold. Use only the data provided. Be specific and factual. Where possible, frame results by the level of the events (e.g. a strong finish at an international championship vs a regional one).
-Name: ${name}.
-Regattas: ${ag.events}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. Race wins: ${ag.wins}.
-Countries competed in: ${[...countries].join(', ')||'unknown'}.
-Active years: ${[...years].sort().join(', ')||'unknown'}.
-Regular partners: ${partners.join(', ')||'unknown'}.
-Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join('; ')||'unknown'}.`;
+      const years=[...new Set(ag.history.map(h=>h.ev.date?.split('/')?.[2]).filter(Boolean))].sort();
+      // Class journey: class per year, to spot when they started / moved classes.
+      const clsByYear={};
+      ag.history.forEach(h=>{const y=h.ev.date?.split('/')?.[2];if(y)(clsByYear[y]=clsByYear[y]||new Set()).add((nuggetFor(h.ev.cls,h.ev.subclass).full)||h.ev.cls);});
+      const journey=Object.keys(clsByYear).sort().map(y=>`${y}: ${[...clsByYear[y]].join('/')}`).join('; ');
+      const recent=ag.history[0];
+      const recentLine=recent?`Most recent: ${recent.ev.name} (${recent.ev.date?.split('/')?.[2]||''}), finished #${recent.row.rank} of ${recent.fleet}.`:"";
+      const prompt=`Write a SHORT athlete bio: 2 sentences, MAX 45 words total, third person. Focus on the athlete's JOURNEY — when they started competing, any class change, the class they've excelled in, and where they place now. Do NOT list every stat. No heading, no markdown, no "#", do not begin with the name.
+Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${journey||'unknown'}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. ${recentLine}`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt,max_tokens:120})});
+        body:JSON.stringify({prompt,max_tokens:110})});
       const data=await res.json();
       if(data.ok){
         const text=cleanAISummary(data.text);
@@ -5223,12 +5257,21 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {showDevProfiles&&devMode&&(
     <DevProfilesModal auth={auth} nameForHost={(id)=>hostById(id)?.name||id} onClose={()=>setShowDevProfiles(false)}/>
   )}
-  {showHostEdit&&portal&&!isClassPortal&&hostById(portal)&&(
+  {showHostEdit&&portal&&!isClassPortal&&hostById(portal)&&(()=>{
+    const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));
+    const hostAthleteNames=new Set();
+    hostEvents.forEach(ev=>ev.entries.forEach(en=>{if(en.helm)hostAthleteNames.add(en.helm);if(en.crew)hostAthleteNames.add(en.crew);}));
+    const pendingClaimsHere=allClaims.filter(c=>c.status==="pending"&&[...hostAthleteNames].some(n=>n.toLowerCase()===c.profile_name?.toLowerCase()));
+    return(
     <HostEditModal host={hostById(portal)} canManage={canManageMembers}
       onSave={(patch)=>saveHost(portal,patch)}
-      onOpenManage={()=>setShowMembers(true)}
+      membersProps={{hostId:portal,hostName:hostById(portal).name,auth,myMembership:myPortalMembership,
+        pendingClaims:pendingClaimsHere,canVouch:!!myPortalMembership&&myPortalMembership.verified,
+        onDecideClaim:async(claim,approve)=>{await decideClaim(claim.id,approve,auth.user.id,portal,auth.token);await reloadClaims();},
+        onClose:()=>setShowHostEdit(false),onChanged:reloadMemberships}}
       onClose={()=>setShowHostEdit(false)}/>
-  )}
+    );
+  })()}
   {pendingHostNotice&&(
     <div className="notice"><div className="ico"><Clock size={18}/></div>
       <div><b>Setup complete — pending approval</b>
@@ -5590,17 +5633,23 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
   {/* ── PORTAL: Events list ── */}
   {portal&&view.name==="events"&&(
+    <ErrorBoundary resetKey={portal+(view.name||"")} fallback={
+      <div className="wrap sec" style={{paddingTop:18}}>
+        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
+        <div style={{padding:"40px 0",color:"var(--mut)"}}>Couldn't render this portal's results. <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>{setEvFilterChips([]);setEvFilter("");goHome();}}>Back home</button></div>
+      </div>}>
     <>
       <div className="strip"><div className="wrap">
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
           <div style={{minWidth:0,display:"flex",gap:16,alignItems:"flex-start"}}>
             {(()=>{
-              const hc=!isClassPortal?hostById(portal)?.country:null;
+              if(isClassPortal) return null;
+              const hc=hostLocation(portal,events);
               const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
               if(!hiso) return null;
-              return(<div style={{flex:"0 0 84px",borderRadius:14,overflow:"hidden",background:"var(--navy)",marginTop:2}} title={hc}>
-                <SailingGlobe countryData={{[hiso]:1}} height={84} dark mini bare hostIso={hiso}/>
+              return(<div style={{width:96,flex:"none",alignSelf:"center"}} title={hc}>
+                <SailingGlobe countryData={{[hiso]:1}} height={96} dark mini bare hostIso={hiso}/>
               </div>);
             })()}
             <div style={{minWidth:0}}>
@@ -5779,6 +5828,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         })()}
       </div>
     </>
+    </ErrorBoundary>
   )}
 
   {/* ── PORTAL: Event detail ── */}
@@ -5922,7 +5972,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <div style={{display:"flex",alignItems:"baseline",gap:16,flexWrap:"wrap"}}>
           <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
           {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
-            <Users size={14}/>Athletes</button>}
+            <Users size={14}/>All Athletes</button>}
         </div>
         <p className="page-sub">One profile per athlete, built automatically from results.</p>
       </div>
@@ -6705,8 +6755,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           </div>
           {/* Toolbar: month/day toggle + competition count + floating class pills */}
           <div className="cal-toolbar">
-            <button className="cal-viewtoggle" onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>
-              {calViewMode==="year"?<><Calendar size={13}/>Month</> : <><LayoutGrid size={13}/>Year</>}
+            <button className="cal-viewtoggle" onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")} title={calViewMode==="year"?"Switch to month view":"Switch to year view"}>
+              {calViewMode==="year"?<LayoutGrid size={13}/>:<Calendar size={13}/>}
+              <span id="cal-cur-label">{calViewMode==="year"?String(calYear):`${MON[calMonth]} ${calYear}`}</span>
             </button>
             <span style={{fontSize:13,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
               {calEvs.length} competition{calEvs.length!==1?"s":""}{calClsSet.size>0?" shown":""}
@@ -6747,8 +6798,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <button className="x" onClick={()=>setShowSailorCal(false)}><X size={16}/></button>
           </div>
           <div className="cal-toolbar">
-            <button className="cal-viewtoggle" onClick={()=>setSailorCalViewMode(v=>v==="year"?"month":"year")}>
-              {sailorCalViewMode==="year"?<><Calendar size={13}/>Month</> : <><LayoutGrid size={13}/>Year</>}
+            <button className="cal-viewtoggle" onClick={()=>setSailorCalViewMode(v=>v==="year"?"month":"year")} title={sailorCalViewMode==="year"?"Switch to month view":"Switch to year view"}>
+              {sailorCalViewMode==="year"?<LayoutGrid size={13}/>:<Calendar size={13}/>}
+              <span id="cal-cur-label">{sailorCalViewMode==="year"?String(sailorCalYear):`${MON[sailorCalMonth]} ${sailorCalYear}`}</span>
             </button>
             <span style={{fontSize:13,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
               {sailorEvs.length} competition{sailorEvs.length!==1?"s":""}{sailorCalClsSet.size>0?" shown":""}
