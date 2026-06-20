@@ -825,6 +825,11 @@ async function decideClaim(claimId,approve,vouchUserId,hostId,tok){
     decided_at:new Date().toISOString()})},tok);
 }
 
+// Fetch invite by short code (first 8 chars of token) — prefix match
+const fetchInviteByShortCode=(code,tok)=>hostRest(`host_invites?token=like.${code}%25&select=*`,{},tok);
+// Mark invite used (single-use enforcement)
+const markInviteUsed=(token,userId,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}`,{method:"PATCH",body:JSON.stringify({used_at:new Date().toISOString(),used_by:userId})},tok);
+
 // Run schema migration for nat column (idempotent)
 async function ensureSchema(){
   if(!sbH) return;
@@ -1922,7 +1927,7 @@ function CountrySelect({value,onChange,placeholder="Select country..."}){
    Google OAuth:  redirect → on return, check profile → if none → Step 2+3
    Guardian path: athlete under 16 → guardian email collected → pending note
    ═══════════════════════════════════════════════════════════════════════ */
-function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[],federations=[],onCreateHost,onClaimHost}){
+function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[],federations=[],onCreateHost,onClaimHost,pendingInviteToken=null}){
   /* ── mode: "signin" | "signup" ── */
   // If arriving from Google OAuth with no profile yet, jump straight to role-pick
   const[mode,setMode]=React.useState(googleOnboarding?"signup":"signin");
@@ -1951,6 +1956,26 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
   const[busy,setBusy]=React.useState(false);
   const[err,setErr]=React.useState("");
   const[info,setInfo]=React.useState("");
+  /* invite redemption state */
+  const[resolvedInvite,setResolvedInvite]=React.useState(null);  // fetched invite row (from link)
+  const[inviteCodeInput,setInviteCodeInput]=React.useState("");   // 8-char code user types
+  const[localInviteCtx,setLocalInviteCtx]=React.useState(null);  // {inv,token} from code lookup
+  const[inviteCodeErr,setInviteCodeErr]=React.useState("");
+  const[inviteCodeBusy,setInviteCodeBusy]=React.useState(false);
+
+  // Invite mode: either link token or code-based context is present
+  const isInviteMode=!!(pendingInviteToken||localInviteCtx);
+
+  // On mount: if arriving via invite link, pre-fetch the invite row (anon key)
+  React.useEffect(()=>{
+    if(!pendingInviteToken) return;
+    setMode("signup"); setStep(1);
+    (async()=>{
+      const rows=await fetchInviteByToken(pendingInviteToken,null);
+      const inv=rows&&rows[0];
+      if(inv&&!inv.used_at&&new Date(inv.expires_at)>new Date()) setResolvedInvite(inv);
+    })();
+  },[pendingInviteToken]);
 
   const curYear=new Date().getFullYear();
   const athleteAge=birthYear&&/^\d{4}$/.test(birthYear)?curYear-parseInt(birthYear):null;
@@ -1971,6 +1996,29 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
   const step1Valid=mode==="signin"?(email.trim()&&pw):(email.trim()&&pw.length>=8);
   const step3Valid=firstName.trim()&&lastName.trim()&&(role==="athlete"?(isMinor?guardianEmail.trim():true):true);
   const step4Valid=addingNew?newHostName.trim():!!selectedHostId;
+
+  /* ── apply invite code (step 4 fast-path) ── */
+  const applyInviteCode=async()=>{
+    const code=inviteCodeInput.trim().toLowerCase().replace(/[^a-z0-9]/g,"");
+    if(code.length<6){setInviteCodeErr("Enter the 8-character code from your invitation.");return;}
+    setInviteCodeBusy(true);setInviteCodeErr("");
+    try{
+      // Try anon lookup; if RLS blocks it we'll validate at submit with user token
+      const rows=await fetchInviteByShortCode(code,null);
+      if(rows&&rows.length>0){
+        const inv=rows[0];
+        if(inv.used_at){setInviteCodeErr("This invite code has already been used.");return;}
+        if(new Date(inv.expires_at)<new Date()){setInviteCodeErr("This invite code has expired.");return;}
+        setLocalInviteCtx({inv,token:inv.token});
+      } else {
+        // RLS may have blocked anon read — store code anyway, validate at doSignUp
+        setLocalInviteCtx({inv:{role:"editor",host_id:null,__needsValidation:true},token:code,__isShortCode:true});
+        // We'll re-validate with user token in doSignUp
+      }
+    }catch{
+      setInviteCodeErr("Couldn't validate code — please continue and we'll verify on account creation.");
+    }finally{setInviteCodeBusy(false);}
+  };
 
   /* ── sign-in submit ── */
   const doSignIn=async()=>{
@@ -2025,6 +2073,37 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
         onAuthed({token:tok,user,profile:profilePayload});return;
       }
 
+      // ── Invite path: link token or code → immediate verified access ──
+      const activeInvToken=resolvedInvite?pendingInviteToken:localInviteCtx?.token;
+      const activeInvRow=resolvedInvite||localInviteCtx?.inv;
+      if(activeInvToken&&activeInvRow){
+        // Re-validate with user token (handles cases where anon pre-fetch wasn't possible)
+        let inv=activeInvRow;
+        if(activeInvRow?.__needsValidation){
+          // Was a short code stored without pre-validation — look up by prefix now
+          const rows=await fetchInviteByShortCode(activeInvToken.toLowerCase(),tok);
+          inv=rows&&rows[0];
+        } else {
+          const recheck=await fetchInviteByToken(activeInvToken,tok);
+          if(recheck&&recheck[0]) inv=recheck[0];
+        }
+        if(!inv||inv.used_at||new Date(inv.expires_at)<new Date())
+          throw new Error("This invite link is no longer valid. Ask your host admin to send a new one.");
+        // Set profile role from host type
+        const hostRows=await sbGet(`hosts?id=eq.${encodeURIComponent(inv.host_id)}&select=type`);
+        const hostType=hostRows?.[0]?.type||"club";
+        profilePayload.role=hostType;
+        await upsertProfile(profilePayload,tok);
+        // Create membership: verified:true, active — immediate access
+        await hostRest("host_members",{method:"POST",
+          headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
+          body:JSON.stringify({host_id:inv.host_id,user_id:user.id,role:inv.role,status:"active",verified:true})},tok);
+        // Mark invite used (single-use)
+        await markInviteUsed(activeInvToken,user.id,tok);
+        onAuthed({token:tok,user,profile:{...profilePayload,role:hostType}});
+        return;
+      }
+
       // ── Host: claim existing OR create new → pending Owner (guest access) ──
       let hostId=selectedHostId;
       if(addingNew){
@@ -2077,7 +2156,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
   };
 
   /* ── progress bar (athletes = 3 steps, hosts = 4) ── */
-  const totalSteps=isHost?4:3;
+  const totalSteps=isInviteMode?2:isHost?4:3;
   const pct=mode==="signup"?Math.round(((step-1)/(totalSteps-1))*100):0;
 
   return(
@@ -2090,10 +2169,10 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{flex:1}}>
               <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"rgba(255,255,255,.55)"}}>
-                {mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":step===3?"Your name":hostKind==="club"?"Find your club":hostKind==="federation"?"Find your federation":"Find your association"}
+                {isInviteMode&&mode==="signup"?(step===1?"Accept invitation":"Your details"):mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":step===3?"Your name":hostKind==="club"?"Find your club":hostKind==="federation"?"Find your federation":"Find your association"}
               </p>
               <h3 style={{marginTop:2}}>
-                {mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose your role":step===3?(isHost?"Your details":"Almost done"):"Link your portal"}
+                {isInviteMode&&mode==="signup"?(step===1?"Create your account":"Complete your profile"):mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose your role":step===3?(isHost?"Your details":"Almost done"):"Link your portal"}
               </h3>
             </div>
             <button className="x" onClick={onClose}><X size={16}/></button>
@@ -2112,6 +2191,27 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
 
           {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#c0392b",display:"flex",alignItems:"center",gap:8}}><AlertCircle size={14} style={{flex:"none"}}/>{err}</div>}
           {info&&<div style={{background:"rgba(10,132,255,.08)",border:"1px solid rgba(10,132,255,.2)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"var(--accent)"}}>{info}</div>}
+
+          {/* ── Invite banner (shown when in invite mode) ── */}
+          {isInviteMode&&mode==="signup"&&(
+            <div style={{background:"rgba(80,180,100,.1)",border:"1px solid rgba(80,180,100,.35)",borderRadius:12,padding:"12px 15px",display:"flex",alignItems:"flex-start",gap:10}}>
+              <BadgeCheck size={16} style={{flex:"none",marginTop:1,color:"#3a9e55"}}/>
+              <div>
+                <div style={{fontWeight:700,fontSize:13,color:"#2a7a3e",marginBottom:2}}>You have an invitation</div>
+                {resolvedInvite
+                  ? <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
+                      Joining as <b>{resolvedInvite.role}</b>. Create your account below — you'll have immediate host access once done.
+                    </div>
+                  : localInviteCtx
+                    ? <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
+                        Joining as <b>{localInviteCtx.inv.role}</b> via invite code. Create your account to accept.
+                      </div>
+                    : <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
+                        Complete sign-up below — your invite will be verified and host access granted.
+                      </div>}
+              </div>
+            </div>
+          )}
 
           {/* ════ SIGN-IN ════ */}
           {mode==="signin"&&(<>
@@ -2189,7 +2289,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
             </div>
 
             <button className="btn cta" style={{width:"100%",justifyContent:"center"}}
-              disabled={busy||!step1Valid} onClick={()=>{setErr("");setStep(2);}}>
+              disabled={busy||!step1Valid} onClick={()=>{setErr("");setStep(isInviteMode?3:2);}}>
               Continue <ChevronRight size={16}/>
             </button>
 
@@ -2265,13 +2365,14 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
             </>)}
 
             <div style={{display:"flex",gap:10}}>
-              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(2)}>
+              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(isInviteMode?1:2)}>
                 <ArrowLeft size={15}/>Back
               </button>
-              {/* Athlete finishes here; host advances to "Find my ___" */}
-              {role==="athlete"
+              {/* Athlete finishes here; host advances to step 4; invite mode finishes here */}
+              {(role==="athlete"||isInviteMode)
                 ? <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
-                    {busy?<Loader2 size={15} className="spin"/>:null}{isMinor?"Send guardian approval":"Create account"}
+                    {busy?<Loader2 size={15} className="spin"/>:null}
+                    {isInviteMode?"Accept invitation":isMinor?"Send guardian approval":"Create account"}
                   </button>
                 : <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={()=>{setErr("");setStep(4);}}>
                     Continue <ChevronRight size={16}/>
@@ -2281,7 +2382,41 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
 
           {/* ════ SIGN-UP STEP 4: "Find my club/association/federation" (hosts) ════ */}
           {mode==="signup"&&step===4&&isHost&&(<>
-            {!addingNew&&(<>
+
+            {/* ── Invite code fast-path (top of step 4) ── */}
+            {!localInviteCtx&&!addingNew&&(
+              <div style={{background:"rgba(10,132,255,.05)",border:"1px solid rgba(10,132,255,.18)",borderRadius:12,padding:"13px 15px"}}>
+                <p style={{margin:"0 0 9px",fontWeight:700,fontSize:13,color:"var(--navy)",display:"flex",alignItems:"center",gap:7}}>
+                  <Link2 size={14}/>Got an invite code?
+                </p>
+                <div style={{display:"flex",gap:8}}>
+                  <input style={{flex:1,border:"1px solid var(--line)",borderRadius:8,padding:"9px 12px",font:"inherit",fontSize:13.5,
+                    letterSpacing:".08em",textTransform:"uppercase",outline:"none",fontFamily:"monospace",background:"rgba(255,255,255,.85)"}}
+                    placeholder="XXXXXXXX" maxLength={8} value={inviteCodeInput}
+                    onChange={e=>{ setInviteCodeInput(e.target.value.toUpperCase().replace(/[^A-Za-z0-9]/g,"")); setInviteCodeErr(""); }}
+                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
+                    onKeyDown={async e=>{ if(e.key==="Enter"&&inviteCodeInput.length>=6) await applyInviteCode(); }}/>
+                  <button className="btn cta" style={{fontSize:13,padding:"9px 14px",whiteSpace:"nowrap"}}
+                    disabled={inviteCodeBusy||inviteCodeInput.length<6} onClick={applyInviteCode}>
+                    {inviteCodeBusy?<Loader2 size={13} className="spin"/>:null}Apply
+                  </button>
+                </div>
+                {inviteCodeErr&&<p style={{margin:"7px 0 0",fontSize:12,color:"#c0392b"}}>{inviteCodeErr}</p>}
+              </div>
+            )}
+            {/* Accepted code: show success and skip the search UI */}
+            {localInviteCtx&&(
+              <div style={{background:"rgba(80,180,100,.1)",border:"1px solid rgba(80,180,100,.35)",borderRadius:12,padding:"13px 15px",display:"flex",alignItems:"center",gap:10}}>
+                <CheckCircle size={16} style={{flex:"none",color:"#3a9e55"}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:13,color:"#2a7a3e"}}>Invite code accepted</div>
+                  <div style={{fontSize:12.5,color:"#3a7048",marginTop:2}}>Joining as <b>{localInviteCtx.inv.role}</b>. Submit below to create your account with immediate access.</div>
+                </div>
+                <button className="btn ghost" style={{fontSize:11.5,padding:"4px 9px"}} onClick={()=>{setLocalInviteCtx(null);setInviteCodeInput("");}}>Change</button>
+              </div>
+            )}
+
+            {!addingNew&&!localInviteCtx&&(<>
               <p style={{fontSize:13,color:"var(--mut)",margin:0,lineHeight:1.5}}>
                 Search for your {hostKind} below and select it to request ownership. Can't find it? Add it.
               </p>
@@ -2364,9 +2499,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>{addingNew?setAddingNew(false):setStep(3);}}>
                 <ArrowLeft size={15}/>Back
               </button>
-              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step4Valid} onClick={doSignUp}>
+              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!(localInviteCtx||step4Valid)} onClick={doSignUp}>
                 {busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}
-                {addingNew?`Create ${hostKind} & request ownership`:"Request ownership"}
+                {localInviteCtx?"Accept invitation & create account":addingNew?`Create ${hostKind} & request ownership`:"Request ownership"}
               </button>
             </div>
           </>)}
@@ -2596,17 +2731,32 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
                   </button>
                 </div>
                 {newInvite&&(
-                  <div style={{marginTop:10,display:"flex",gap:8,alignItems:"center",background:"var(--sky)",borderRadius:10,padding:"9px 12px"}}>
-                    <input readOnly value={newInvite.url} style={{flex:1,border:0,background:"none",font:"inherit",fontSize:12,color:"var(--navy)",outline:"none"}} onClick={e=>e.target.select()}/>
-                    <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} onClick={()=>copy(newInvite.url)}><ClipboardPaste size={13}/>Copy</button>
+                  <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:8,background:"var(--sky)",borderRadius:10,padding:"10px 13px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:10.5,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",color:"var(--mut)",marginBottom:3}}>Invite link</div>
+                        <input readOnly value={newInvite.url} style={{width:"100%",border:0,background:"none",font:"inherit",fontSize:11.5,color:"var(--navy)",outline:"none"}} onClick={e=>e.target.select()}/>
+                      </div>
+                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",whiteSpace:"nowrap"}} onClick={()=>copy(newInvite.url)}><ClipboardPaste size={13}/>Copy link</button>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,borderTop:"1px solid var(--line)",paddingTop:8}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:10.5,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",color:"var(--mut)",marginBottom:2}}>Short code</div>
+                        <span style={{fontFamily:"monospace",fontSize:15,fontWeight:700,letterSpacing:".12em",color:"var(--navy)"}}>{newInvite.url.split("invite=")[1]?.slice(0,8).toUpperCase()}</span>
+                      </div>
+                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",whiteSpace:"nowrap"}} onClick={()=>copy(newInvite.url.split("invite=")[1]?.slice(0,8).toUpperCase()||"")}><ClipboardPaste size={13}/>Copy code</button>
+                    </div>
                   </div>
                 )}
                 {invites.filter(i=>!i.used_at&&new Date(i.expires_at)>new Date()).length>0&&(
                   <div style={{marginTop:10}}>
                     {invites.filter(i=>!i.used_at&&new Date(i.expires_at)>new Date()).map(i=>(
                       <div key={i.token} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--mut)",padding:"5px 0"}}>
-                        <Link2 size={12}/><span style={{flex:1}}>{i.role} · expires {new Date(i.expires_at).toLocaleDateString()}</span>
-                        <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} onClick={()=>copy(`${window.location.origin}${window.location.pathname}?invite=${i.token}`)}>Copy</button>
+                        <Link2 size={12}/>
+                        <span style={{flex:1}}>{i.role} · expires {new Date(i.expires_at).toLocaleDateString()}</span>
+                        <span style={{fontFamily:"monospace",fontWeight:700,fontSize:12,letterSpacing:".06em",color:"var(--navy)",marginRight:2}}>{i.token.slice(0,8).toUpperCase()}</span>
+                        <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} onClick={()=>copy(`${window.location.origin}${window.location.pathname}?invite=${i.token}`)}>Copy link</button>
+                        <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} onClick={()=>copy(i.token.slice(0,8).toUpperCase())}>Copy code</button>
                         <button className="delbtn" title="Revoke invite" onClick={()=>revokeInvite(i.token)}><X size={13}/></button>
                       </div>
                     ))}
@@ -2774,6 +2924,7 @@ export default function AthLinkMVP(){
   const[allClaims,setAllClaims]=useState([]);          // every athlete_claims row (for badges + admin review)
   const[claimNote,setClaimNote]=useState(null);        // toast after submitting a claim
   const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
+  const[pendingInviteToken,setPendingInviteToken]=useState(null); // raw token from ?invite= URL param
   const[showDevApprovals,setShowDevApprovals]=useState(false);  // dev-only pending-approvals panel
   const[menuOpen,setMenuOpen]=useState(false);   // floating menu pill expanded
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
@@ -2946,29 +3097,38 @@ export default function AthLinkMVP(){
     if(r){setClaimNote({name:profileName,status:"pending"});setTimeout(()=>setClaimNote(null),6000);await reloadClaims();}
   };
 
-  // ── Redeem an invite link (?invite=TOKEN) once signed in ──
+  // ── Detect invite link on mount ──
+  // Strips ?invite= from URL immediately, stores token in state.
+  // SignInModal handles the full redemption flow.
+  // If user is ALREADY signed in when they click the link, redeem directly.
   useEffect(()=>{
-    if(!auth?.user?.id||!auth?.token) return;
     const params=new URLSearchParams(window.location.search);
     const token=params.get("invite");
     if(!token) return;
+    const clean=new URL(window.location.href); clean.searchParams.delete("invite");
+    window.history.replaceState(null,"",clean.pathname+(clean.search||""));
+    setPendingInviteToken(token);
+    setShowSignIn(true); // open signup modal
+  },[]);
+
+  // If already signed in when invite arrives, redeem directly without going through signup
+  useEffect(()=>{
+    if(!pendingInviteToken||!auth?.user?.id||!auth?.token) return;
     (async()=>{
-      const rows=await fetchInviteByToken(token,auth.token);
+      const rows=await fetchInviteByToken(pendingInviteToken,auth.token);
       const inv=rows&&rows[0];
-      // strip the param from the URL regardless of outcome
-      const clean=new URL(window.location.href); clean.searchParams.delete("invite");
-      window.history.replaceState(null,"",clean.pathname+clean.search);
-      if(!inv){setInviteRedeemed({status:"invalid"});return;}
-      if(inv.used_at){setInviteRedeemed({status:"used"});return;}
-      if(new Date(inv.expires_at)<new Date()){setInviteRedeemed({status:"expired"});return;}
-      // Create a pending membership request for this user (idempotent on host_id+user_id)
+      if(!inv){setInviteRedeemed({status:"invalid"});setPendingInviteToken(null);return;}
+      if(inv.used_at){setInviteRedeemed({status:"used"});setPendingInviteToken(null);return;}
+      if(new Date(inv.expires_at)<new Date()){setInviteRedeemed({status:"expired"});setPendingInviteToken(null);return;}
+      // Already signed in — create membership directly, mark used
       await hostRest("host_members",{method:"POST",headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
-        body:JSON.stringify({host_id:inv.host_id,user_id:auth.user.id,role:inv.role,status:"pending",verified:false})},auth.token);
-      await logHostAudit(inv.host_id,auth.user.id,"request",auth.user.id,`via invite (${inv.role})`,auth.token);
-      setInviteRedeemed({status:"requested",hostId:inv.host_id});
-      reloadMemberships();
+        body:JSON.stringify({host_id:inv.host_id,user_id:auth.user.id,role:inv.role,status:"active",verified:true})},auth.token);
+      await markInviteUsed(pendingInviteToken,auth.user.id,auth.token);
+      setInviteRedeemed({status:"joined",hostId:inv.host_id,role:inv.role});
+      setPendingInviteToken(null);
+      await reloadMemberships();
     })();
-  },[auth]);
+  },[pendingInviteToken,auth]);
   const[portal,setPortal]=useState(null);
   const[view,setView]=useState({name:"portals"});
   const[navStack,setNavStack]=useState([]); // universal back-button history
@@ -4659,9 +4819,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     </div>
   </div>
   <div style={{height:74}}/>
-  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
+  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
     clubs={CLUBS} associations={ASSOCIATIONS} federations={FEDERATIONS}
-    onCreateHost={createHostFromSignup} onClaimHost={claimHostFromSignup}/>}
+    onCreateHost={createHostFromSignup} onClaimHost={claimHostFromSignup}
+    pendingInviteToken={pendingInviteToken}/>}
   {showMembers&&host&&!isClassPortal&&(()=>{
     // Athlete names appearing in this host's events (for vouching scope)
     const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));
@@ -4680,9 +4841,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   })()}
   {inviteRedeemed&&(
     <div className="notice"><div className="ico"><BadgeCheck size={18}/></div>
-      <div><b>{inviteRedeemed.status==="requested"?"Request sent":inviteRedeemed.status==="used"?"Invite already used":inviteRedeemed.status==="expired"?"Invite expired":"Invalid invite"}</b>
+      <div><b>{inviteRedeemed.status==="joined"?"You're in!":inviteRedeemed.status==="used"?"Invite already used":inviteRedeemed.status==="expired"?"Invite expired":"Invalid invite"}</b>
       <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>
-        {inviteRedeemed.status==="requested"?"An owner will review your request to join.":
+        {inviteRedeemed.status==="joined"?`You've joined as ${inviteRedeemed.role||"a host member"} — full access is active.`:
          inviteRedeemed.status==="used"?"That invite link has already been redeemed.":
          inviteRedeemed.status==="expired"?"That invite link is past its 7-day window.":
          "That invite link isn't valid."}
