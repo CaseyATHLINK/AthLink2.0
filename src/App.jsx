@@ -809,6 +809,13 @@ function randToken(){
   const a=new Uint8Array(18); (window.crypto||window.msCrypto).getRandomValues(a);
   return btoa(String.fromCharCode(...a)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 }
+// Human-typable short code: 8 chars from an unambiguous uppercase alphabet
+// (no 0/O, 1/I/L, etc.) — safe to read aloud, type, and copy.
+function randShortCode(){
+  const alphabet="ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const a=new Uint8Array(8); (window.crypto||window.msCrypto).getRandomValues(a);
+  return Array.from(a,b=>alphabet[b%alphabet.length]).join("");
+}
 
 /* ── Athlete claims (athlete_claims) ──────────────────────────────────────────
    Athletes claim their auto-built profile; any verified host admin whose events
@@ -825,8 +832,8 @@ async function decideClaim(claimId,approve,vouchUserId,hostId,tok){
     decided_at:new Date().toISOString()})},tok);
 }
 
-// Fetch invite by short code (first 8 chars of token) — prefix match
-const fetchInviteByShortCode=(code,tok)=>hostRest(`host_invites?token=like.${code}%25&select=*`,{},tok);
+// Fetch invite by dedicated short_code column (exact, case-insensitive)
+const fetchInviteByShortCode=(code,tok)=>hostRest(`host_invites?short_code=eq.${encodeURIComponent(code.toUpperCase())}&select=*`,{},tok);
 // Mark invite used (single-use enforcement)
 const markInviteUsed=(token,userId,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}`,{method:"PATCH",body:JSON.stringify({used_at:new Date().toISOString(),used_by:userId})},tok);
 
@@ -1999,11 +2006,10 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
 
   /* ── apply invite code (step 4 fast-path) ── */
   const applyInviteCode=async()=>{
-    const code=inviteCodeInput.trim().toLowerCase().replace(/[^a-z0-9]/g,"");
-    if(code.length<6){setInviteCodeErr("Enter the 8-character code from your invitation.");return;}
+    const code=inviteCodeInput.trim().toUpperCase().replace(/[^A-Z0-9]/g,"");
+    if(code.length<8){setInviteCodeErr("Enter the full 8-character code from your invitation.");return;}
     setInviteCodeBusy(true);setInviteCodeErr("");
     try{
-      // Try anon lookup; if RLS blocks it we'll validate at submit with user token
       const rows=await fetchInviteByShortCode(code,null);
       if(rows&&rows.length>0){
         const inv=rows[0];
@@ -2011,12 +2017,10 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
         if(new Date(inv.expires_at)<new Date()){setInviteCodeErr("This invite code has expired.");return;}
         setLocalInviteCtx({inv,token:inv.token});
       } else {
-        // RLS may have blocked anon read — store code anyway, validate at doSignUp
-        setLocalInviteCtx({inv:{role:"editor",host_id:null,__needsValidation:true},token:code,__isShortCode:true});
-        // We'll re-validate with user token in doSignUp
+        setInviteCodeErr("That code wasn't found. Check it and try again, or ask for the invite link instead.");
       }
     }catch{
-      setInviteCodeErr("Couldn't validate code — please continue and we'll verify on account creation.");
+      setInviteCodeErr("Couldn't validate that code. Please try again.");
     }finally{setInviteCodeBusy(false);}
   };
 
@@ -2074,32 +2078,26 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
       }
 
       // ── Invite path: link token or code → immediate verified access ──
-      const activeInvToken=resolvedInvite?pendingInviteToken:localInviteCtx?.token;
       const activeInvRow=resolvedInvite||localInviteCtx?.inv;
-      if(activeInvToken&&activeInvRow){
-        // Re-validate with user token (handles cases where anon pre-fetch wasn't possible)
+      if(activeInvRow){
+        // Re-validate with the user's token (RLS-safe) before committing.
         let inv=activeInvRow;
-        if(activeInvRow?.__needsValidation){
-          // Was a short code stored without pre-validation — look up by prefix now
-          const rows=await fetchInviteByShortCode(activeInvToken.toLowerCase(),tok);
-          inv=rows&&rows[0];
-        } else {
-          const recheck=await fetchInviteByToken(activeInvToken,tok);
-          if(recheck&&recheck[0]) inv=recheck[0];
-        }
+        const recheck=await fetchInviteByToken(inv.token,tok);
+        if(recheck&&recheck[0]) inv=recheck[0];
         if(!inv||inv.used_at||new Date(inv.expires_at)<new Date())
-          throw new Error("This invite link is no longer valid. Ask your host admin to send a new one.");
-        // Set profile role from host type
+          throw new Error("This invitation is no longer valid. Ask your host admin to send a new one.");
+        // Profile role mirrors the host type (club / association / federation).
         const hostRows=await sbGet(`hosts?id=eq.${encodeURIComponent(inv.host_id)}&select=type`);
-        const hostType=hostRows?.[0]?.type||"club";
+        const hostType=hostRows?.[0]?.type||hostById(inv.host_id)?.type||"club";
         profilePayload.role=hostType;
+        delete profilePayload.birth_year; delete profilePayload.guardian_pending; delete profilePayload.guardian_email;
+        profilePayload.athlete_name=null; profilePayload.class_id=hostType==="association"?(hostById(inv.host_id)?.cls||null):null;
         await upsertProfile(profilePayload,tok);
-        // Create membership: verified:true, active — immediate access
+        // Create membership: verified:true, active — immediate full access.
         await hostRest("host_members",{method:"POST",
           headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
           body:JSON.stringify({host_id:inv.host_id,user_id:user.id,role:inv.role,status:"active",verified:true})},tok);
-        // Mark invite used (single-use)
-        await markInviteUsed(activeInvToken,user.id,tok);
+        await markInviteUsed(inv.token,user.id,tok);
         onAuthed({token:tok,user,profile:{...profilePayload,role:hostType}});
         return;
       }
@@ -2192,8 +2190,8 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
           {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#c0392b",display:"flex",alignItems:"center",gap:8}}><AlertCircle size={14} style={{flex:"none"}}/>{err}</div>}
           {info&&<div style={{background:"rgba(10,132,255,.08)",border:"1px solid rgba(10,132,255,.2)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"var(--accent)"}}>{info}</div>}
 
-          {/* ── Invite banner (shown when in invite mode) ── */}
-          {isInviteMode&&mode==="signup"&&(
+          {/* ── Invite banner: LINK invites only (code invites show their own banner at step 4) ── */}
+          {(resolvedInvite||pendingInviteToken)&&!localInviteCtx&&mode==="signup"&&(
             <div style={{background:"rgba(80,180,100,.1)",border:"1px solid rgba(80,180,100,.35)",borderRadius:12,padding:"12px 15px",display:"flex",alignItems:"flex-start",gap:10}}>
               <BadgeCheck size={16} style={{flex:"none",marginTop:1,color:"#3a9e55"}}/>
               <div>
@@ -2202,13 +2200,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
                   ? <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
                       Joining as <b>{resolvedInvite.role}</b>. Create your account below — you'll have immediate host access once done.
                     </div>
-                  : localInviteCtx
-                    ? <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
-                        Joining as <b>{localInviteCtx.inv.role}</b> via invite code. Create your account to accept.
-                      </div>
-                    : <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
-                        Complete sign-up below — your invite will be verified and host access granted.
-                      </div>}
+                  : <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
+                      Complete sign-up below to accept your invitation and get host access.
+                    </div>}
               </div>
             </div>
           )}
@@ -2336,8 +2330,8 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               </div>
             </div>
 
-            {/* Athlete-only extras */}
-            {role==="athlete"&&(<>
+            {/* Athlete-only extras — never shown in invite mode (host co-admin) */}
+            {role==="athlete"&&!isInviteMode&&(<>
               <p style={{fontSize:12,color:"var(--mut)",margin:"-4px 0 0",lineHeight:1.5}}>
                 Use your name <b>exactly as it appears in results</b> — this is how AthLink links your profile to your race history.
               </p>
@@ -2490,10 +2484,12 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               )}
             </>)}
 
-            {/* Pending-approval note */}
-            <div style={{background:"rgba(10,132,255,.06)",border:"1px solid rgba(10,132,255,.16)",borderRadius:12,padding:"12px 14px",fontSize:12.5,color:"var(--navy)",lineHeight:1.5}}>
-              <b>Heads up:</b> your ownership request is reviewed by the AthLink team. Until it's approved you'll browse as a guest — you'll get full host access once we verify you.
-            </div>
+            {/* Pending-approval note — only for ownership claims, NOT invite-code joins (those are instant) */}
+            {!localInviteCtx&&(
+              <div style={{background:"rgba(10,132,255,.06)",border:"1px solid rgba(10,132,255,.16)",borderRadius:12,padding:"12px 14px",fontSize:12.5,color:"var(--navy)",lineHeight:1.5}}>
+                <b>Heads up:</b> your ownership request is reviewed by the AthLink team. Until it's approved you'll browse as a guest — you'll get full host access once we verify you.
+              </div>
+            )}
 
             <div style={{display:"flex",gap:10}}>
               <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>{addingNew?setAddingNew(false):setStep(3);}}>
@@ -2599,13 +2595,14 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
     setErr("");setBusy(true);
     try{
       const token=randToken();
+      const shortCode=randShortCode();
       const expires=new Date(Date.now()+7*24*3600*1000).toISOString();
       const r=await hostRest("host_invites",{method:"POST",body:JSON.stringify({
-        token,host_id:hostId,role:inviteRole,created_by:uid,expires_at:expires})},tok);
+        token,short_code:shortCode,host_id:hostId,role:inviteRole,created_by:uid,expires_at:expires})},tok);
       if(!r) throw new Error("Couldn't create invite.");
       await logHostAudit(hostId,uid,"invite",null,inviteRole,tok);
       const url=`${window.location.origin}${window.location.pathname}?invite=${token}`;
-      setNewInvite({url,role:inviteRole});
+      setNewInvite({url,role:inviteRole,shortCode});
       await load();
     }catch(e){setErr(e.message||"Invite failed.");}
     finally{setBusy(false);}
@@ -2742,9 +2739,9 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
                     <div style={{display:"flex",alignItems:"center",gap:8,borderTop:"1px solid var(--line)",paddingTop:8}}>
                       <div style={{flex:1}}>
                         <div style={{fontSize:10.5,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",color:"var(--mut)",marginBottom:2}}>Short code</div>
-                        <span style={{fontFamily:"monospace",fontSize:15,fontWeight:700,letterSpacing:".12em",color:"var(--navy)"}}>{newInvite.url.split("invite=")[1]?.slice(0,8).toUpperCase()}</span>
+                        <span style={{fontFamily:"monospace",fontSize:15,fontWeight:700,letterSpacing:".12em",color:"var(--navy)"}}>{newInvite.shortCode}</span>
                       </div>
-                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",whiteSpace:"nowrap"}} onClick={()=>copy(newInvite.url.split("invite=")[1]?.slice(0,8).toUpperCase()||"")}><ClipboardPaste size={13}/>Copy code</button>
+                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",whiteSpace:"nowrap"}} onClick={()=>copy(newInvite.shortCode||"")}><ClipboardPaste size={13}/>Copy code</button>
                     </div>
                   </div>
                 )}
@@ -2754,9 +2751,9 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
                       <div key={i.token} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--mut)",padding:"5px 0"}}>
                         <Link2 size={12}/>
                         <span style={{flex:1}}>{i.role} · expires {new Date(i.expires_at).toLocaleDateString()}</span>
-                        <span style={{fontFamily:"monospace",fontWeight:700,fontSize:12,letterSpacing:".06em",color:"var(--navy)",marginRight:2}}>{i.token.slice(0,8).toUpperCase()}</span>
+                        <span style={{fontFamily:"monospace",fontWeight:700,fontSize:12,letterSpacing:".06em",color:"var(--navy)",marginRight:2}}>{i.short_code||"—"}</span>
                         <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} onClick={()=>copy(`${window.location.origin}${window.location.pathname}?invite=${i.token}`)}>Copy link</button>
-                        <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} onClick={()=>copy(i.token.slice(0,8).toUpperCase())}>Copy code</button>
+                        <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} disabled={!i.short_code} onClick={()=>copy(i.short_code||"")}>Copy code</button>
                         <button className="delbtn" title="Revoke invite" onClick={()=>revokeInvite(i.token)}><X size={13}/></button>
                       </div>
                     ))}
@@ -3124,6 +3121,13 @@ export default function AthLinkMVP(){
       await hostRest("host_members",{method:"POST",headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
         body:JSON.stringify({host_id:inv.host_id,user_id:auth.user.id,role:inv.role,status:"active",verified:true})},auth.token);
       await markInviteUsed(pendingInviteToken,auth.user.id,auth.token);
+      // Upgrade profile role to the host type if they were a guest/athlete
+      const hostType=hostById(inv.host_id)?.type||"club";
+      if(auth.profile?.role!==hostType){
+        const newProf={...(auth.profile||{}),user_id:auth.user.id,role:hostType};
+        await upsertProfile(newProf,auth.token);
+        setAuth(a=>a?{...a,profile:{...a.profile,role:hostType}}:a);
+      }
       setInviteRedeemed({status:"joined",hostId:inv.host_id,role:inv.role});
       setPendingInviteToken(null);
       await reloadMemberships();
@@ -4804,7 +4808,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </button>
             {accountOpen&&(<div className="tb-acct">
               <div style={{padding:"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>
-              <div style={{padding:"0 10px 6px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}>Role: <b style={{color:"var(--navy)"}}>{role}</b></div>
+              <div style={{padding:"0 10px 6px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}>Role: <b style={{color:"var(--navy)"}}>{devMode?"Developer":role}</b></div>
               {role==="association"&&auth.profile?.class_id&&<div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Manages: <b style={{color:"var(--navy)"}}>{(CLASSES.find(c=>c.id===auth.profile.class_id)?.short)||auth.profile.class_id}</b></div>}
               {hasPendingHostMembership&&(
                 <div style={{margin:"2px 8px 8px",padding:"8px 10px",background:"rgba(255,149,0,.1)",border:"1px solid rgba(255,149,0,.3)",borderRadius:8,fontSize:11.5,color:"#a85c00",lineHeight:1.45,display:"flex",gap:7,alignItems:"flex-start"}}>
