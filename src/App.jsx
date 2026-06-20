@@ -191,7 +191,7 @@ const META={
 const CLASSES=[
   {id:"29er",    short:"29er"},
   {id:"ilca",    short:"ILCA"},
-  {id:"optimist",short:"Optimist"},
+  {id:"optimist",short:"OPTI",full:"Optimist"},
   {id:"49er",    short:"49er"},
 ];
 
@@ -282,18 +282,18 @@ const SUBCLASSES={
     {id:"ilca4", label:"ILCA 4", color:"#6db3ef"},
   ],
   optimist:[
-    {id:"opti",       label:"Optimist",              color:"#2b2b2b"},
-    {id:"opti-int",   label:"Optimist Intermediate", color:"#6b6b6b"},
-    {id:"opti-green", label:"Optimist Green",        color:"#a3a3a3"},
+    {id:"opti",       label:"Optimist",              short:"OPTI",       color:"#2b2b2b"},
+    {id:"opti-int",   label:"Optimist Intermediate", short:"OPTI Inter", color:"#6b6b6b"},
+    {id:"opti-green", label:"Optimist Green",        short:"OPTI Green", color:"#a3a3a3"},
   ],
 };
 const subById=(cls,id)=>(SUBCLASSES[cls]||[]).find(s=>s.id===id);
 // Nugget label + colour for an event (subclass overrides base class)
 const nuggetFor=(cls,subclass)=>{
   const s=subById(cls,subclass);
-  if(s) return{label:s.label,color:s.color};
+  if(s) return{label:s.short||s.label,full:s.label,color:s.color};
   const c=CLASSES.find(c=>c.id===cls);
-  return{label:c?.short||cls,color:classColor(cls)};
+  return{label:c?.short||cls,full:c?.full||c?.short||cls,color:classColor(cls)};
 };
 
 // Global class colour coding (used by calendar circles)
@@ -526,8 +526,10 @@ function MagneticItem({children,onClick,className,strength=0.35}){
   </button>;
 }
 // Gender + category nuggets shown on every result page + the preview.
-function ResultNuggets({entry,size="md"}){
-  const {gender,category}=genderCatOf(entry);
+// `doublehanded` lets the nugget combine helm+crew remembered genders → Mixed.
+function ResultNuggets({entry,size="md",doublehanded=false}){
+  const {category}=genderCatOf(entry);
+  const gender=resolvedEntryGender(entry,doublehanded);
   if(!gender&&!category) return <span style={{color:"#c8d4e0",fontSize:12}}>—</span>;
   const fs=size==="sm"?9.5:10.5;
   const pad=size==="sm"?"1px 5px":"2px 6px";
@@ -659,6 +661,63 @@ function aggregate(name,evList){
   return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
 }
 
+// ── Per-athlete attribute memory (gender, birth year, recent class) ──────────
+// Single pass over all events. For each athlete (by canonName), we remember:
+//   gender    — the most-frequently-stated single gender across all their entries
+//   birthYear — most-frequently-stated birth year
+//   recentCls/recentSub — class of their most recent competition
+// A person's own gender is a stable trait, so once stated anywhere it is applied
+// everywhere that athlete appears (including events whose PDF omitted gender).
+let ATHLETE_ATTRS=new Map();
+function buildAthleteAttrs(evList){
+  const m=new Map();
+  for(const ev of (evList||[])){
+    if(ev.status==="Draft") continue;
+    const dk=(ev.date||"").split("/").reverse().join("");
+    for(const e of (ev.entries||[])){
+      const gc=genderCatOf(e); // resolves real fields + legacy div
+      // helm + crew, each with their own stated gender where derivable
+      const pairs=[[e.helm,e.birth_year,gc.gender,"helm"],[e.crew,e.crew_birth_year,gc.gender,"crew"]];
+      // When an entry's div implies a single gender (M/F), it applies to both
+      // members; "Mix" does not pin either individual, so skip it for the registry.
+      for(const [nm,by,g,which] of pairs){
+        if(!nm) continue; const k=canonName(nm); if(!k) continue;
+        let o=m.get(k); if(!o){o={gender:{},birthYear:{},recentDK:"",recentCls:null,recentSub:null};m.set(k,o);}
+        if(g&&g!=="Mix") o.gender[g]=(o.gender[g]||0)+1;
+        if(by) o.birthYear[by]=(o.birthYear[by]||0)+1;
+        if(dk>=o.recentDK){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
+      }
+    }
+  }
+  const out=new Map();
+  const top=obj=>{const e=Object.entries(obj);return e.length?e.sort((a,b)=>b[1]-a[1])[0][0]:null;};
+  for(const [k,o] of m){
+    out.set(k,{gender:top(o.gender),birthYear:o.birthYear&&top(o.birthYear)?parseInt(top(o.birthYear)):null,recentCls:o.recentCls,recentSub:o.recentSub});
+  }
+  ATHLETE_ATTRS=out;
+  return out;
+}
+// Remembered gender for a single athlete name (or null).
+function rememberedGender(name){
+  const a=ATHLETE_ATTRS.get(canonName(name)); return a?.gender||null;
+}
+// Resolve the gender to SHOW for an entry, given a specific viewpoint:
+//   - singlehanded / solo: the helm's remembered/ stated gender
+//   - doublehanded: combine helm + crew remembered genders → M / F / Mix
+// Falls back to whatever the entry itself states.
+function resolvedEntryGender(e,doublehanded){
+  const stated=genderCatOf(e).gender;
+  if(doublehanded&&e.crew){
+    const gh=rememberedGender(e.helm)||(stated&&stated!=="Mix"?stated:null);
+    const gc=rememberedGender(e.crew)||(stated&&stated!=="Mix"?stated:null);
+    if(gh&&gc) return gh===gc?gh:"Mix";
+    if(stated) return stated;          // fall back to the entry's own div if we can't pin both
+    return gh||gc||null;
+  }
+  // Solo (or no crew): prefer the person's remembered gender, else stated.
+  return rememberedGender(e.helm)||stated||null;
+}
+
 // Derive athlete's primary nationality from their result history
 function athleteNat(name,evList){
   const counts={};
@@ -769,7 +828,8 @@ async function upsertProfile(profile,tok){
   const r=await fetch(`${SB_URL}/rest/v1/profiles`,{method:"POST",
     headers:{...authHeaders(tok),"Prefer":"resolution=merge-duplicates,return=representation"},
     body:JSON.stringify(profile)});
-  if(!r.ok) return null; const rows=await r.json(); return rows[0]||null;
+  if(!r.ok){ const txt=await r.text().catch(()=>""); console.error("upsertProfile",r.status,txt); upsertProfile._lastError=txt||`HTTP ${r.status}`; return null; }
+  upsertProfile._lastError=null; const rows=await r.json(); return rows[0]||null;
 }
 // Kick off Google OAuth — redirects to Google then back to the app.
 // On return, the URL hash contains the session; AthLinkMVP picks it up on mount.
@@ -801,6 +861,16 @@ const fetchHostAudit=(hostId,tok)=>hostRest(`host_audit?host_id=eq.${encodeURICo
 const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}&select=*`,{},tok);
 // Dev: every UNVERIFIED membership across all hosts (pending-approval queue).
 const fetchUnverifiedMembers=(tok)=>hostRest("host_members?verified=eq.false&select=*&order=created_at.desc",{},tok);
+// Dev: every profile row (for the all-profiles cleanup panel).
+const fetchAllProfiles=(tok)=>hostRest("profiles?select=*&order=created_at.desc",{},tok);
+// Dev: every host_members row (to show which hosts each profile belongs to).
+const fetchAllMembers=(tok)=>hostRest("host_members?select=*",{},tok);
+// Dev: hard-delete a profile and all its host memberships + claims.
+async function devDeleteProfile(userId,tok){
+  await hostRest(`host_members?user_id=eq.${userId}`,{method:"DELETE"},tok);
+  await hostRest(`athlete_claims?user_id=eq.${userId}`,{method:"DELETE"},tok);
+  await hostRest(`profiles?user_id=eq.${userId}`,{method:"DELETE"},tok);
+}
 // Resolve a set of user_ids to display names. Reads profiles (first/last/display_name);
 // falls back to the public_profiles view, then a short id. Returns {user_id: name}.
 async function fetchProfileNames(ids,tok){
@@ -1757,7 +1827,7 @@ function FootprintModal({name,ag,countryCounts,onClose}){
                     <div style={{fontWeight:700,color:"#eaf3fc",fontSize:14,marginBottom:3}}>{h.ev.name}</div>
                     <div style={{display:"flex",flexWrap:"wrap",gap:"4px 12px",fontSize:12.5,color:"#9fbdd9"}}>
                       <span style={{color:h.row.rank<=3?"#ffd86b":"#cfe0f2",fontWeight:700}}>
-                        #{h.row.rank}<span style={{color:"#9fbdd9",fontWeight:500}}> of {h.fleet} boats</span></span>
+                        {h.row.rank}<span style={{color:"#9fbdd9",fontWeight:500}}> of {h.fleet} boats</span></span>
                       {h.countries>0&&<span>{h.countries} countr{h.countries===1?"y":"ies"}</span>}
                       <span>{formatDate(h.ev.date)}</span>
                       {h.ev.class?<span style={{background:"rgba(120,160,210,.2)",color:"#cfe0f2",borderRadius:5,padding:"1px 7px",fontWeight:600,fontSize:11.5}}>{h.ev.class}</span>:null}
@@ -2934,6 +3004,94 @@ function DevApprovalsModal({auth,hosts,nameForHost,eventCountFor,memberCountFor,
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Dev-only "All profiles" panel
+   ───────────────────────────────────────────────────────────────────────
+   Lists every profile row across all hosts (for test cleanup). For each:
+   - shows name / email-less id / role / host memberships / created date
+   - Delete → removes the profile + its memberships + claims (hard delete)
+   Filter to quickly find empty test accounts.
+   ═══════════════════════════════════════════════════════════════════════ */
+function DevProfilesModal({auth,nameForHost,onClose}){
+  const tok=auth?.token;
+  const[profiles,setProfiles]=React.useState(null);
+  const[members,setMembers]=React.useState([]);
+  const[busyId,setBusyId]=React.useState(null);
+  const[q,setQ]=React.useState("");
+  const[onlyEmpty,setOnlyEmpty]=React.useState(false);
+
+  const load=React.useCallback(async()=>{
+    const[p,m]=await Promise.all([fetchAllProfiles(tok),fetchAllMembers(tok)]);
+    setProfiles(p||[]); setMembers(m||[]);
+  },[tok]);
+  React.useEffect(()=>{load();},[load]);
+
+  const membersFor=(uid)=>members.filter(m=>m.user_id===uid);
+  const nameOf=(p)=>`${p.first_name||""} ${p.last_name||""}`.trim()||p.display_name||(p.username?"@"+p.username:null)||`User ${String(p.user_id).slice(0,8)}`;
+
+  const del=async(p)=>{
+    if(!window.confirm(`Delete profile "${nameOf(p)}" and all its memberships? This cannot be undone.`)) return;
+    setBusyId(p.user_id); await devDeleteProfile(p.user_id,tok); await load(); setBusyId(null);
+  };
+
+  const rows=(profiles||[]).filter(p=>{
+    const mem=membersFor(p.user_id);
+    if(onlyEmpty&&mem.length>0) return false;
+    if(!q.trim()) return true;
+    const hay=`${nameOf(p)} ${p.username||""} ${p.role||""} ${mem.map(m=>nameForHost(m.host_id)).join(" ")}`.toLowerCase();
+    return hay.includes(q.toLowerCase());
+  });
+
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:640}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <Users size={18}/>
+          <h3 style={{flex:1}}>All profiles <span style={{fontWeight:400,opacity:.6,fontSize:14}}>(dev)</span></h3>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div style={{padding:"16px 24px 24px"}}>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
+            <div style={{flex:1,minWidth:180,position:"relative"}}>
+              <Search size={14} color="#9fb2c8" style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)"}}/>
+              <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search profiles…"
+                style={{width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"8px 11px 8px 32px",font:"inherit",fontSize:13,outline:"none",background:"rgba(255,255,255,.85)"}}/>
+            </div>
+            <button className={`btn ghost`} style={{fontSize:12.5,padding:"8px 12px",...(onlyEmpty?{background:"var(--accent)",color:"#fff"}:{})}} onClick={()=>setOnlyEmpty(v=>!v)}>
+              {onlyEmpty?<CheckCircle size={13}/>:<Minus size={13}/>}No memberships
+            </button>
+            <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{rows.length} shown</span>
+          </div>
+          {profiles===null&&<div style={{display:"flex",alignItems:"center",gap:8,color:"var(--mut)",fontSize:13}}><Loader2 size={15} className="spin"/>Loading profiles…</div>}
+          {profiles!==null&&rows.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:0}}>No profiles match.</p>}
+          <div style={{maxHeight:"60vh",overflowY:"auto"}}>
+            {rows.map(p=>{
+              const mem=membersFor(p.user_id);
+              return(
+                <div key={p.user_id} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 0",borderBottom:"1px solid var(--line)"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{nameOf(p)}{p.username&&<span style={{marginLeft:6,fontSize:11.5,color:"var(--mut)",fontWeight:600}}>@{p.username}</span>}</div>
+                    <div style={{fontSize:11.5,color:"var(--mut)",marginTop:2}}>
+                      <span style={{textTransform:"capitalize"}}>{p.role||"guest"}</span>
+                      {mem.length>0
+                        ? <> · {mem.map(m=>`${nameForHost(m.host_id)} (${m.role}${m.verified?"":", unverified"})`).join(", ")}</>
+                        : <span style={{color:"#c8860a"}}> · no memberships</span>}
+                      {p.created_at?<> · {new Date(p.created_at).toLocaleDateString()}</>:null}
+                    </div>
+                  </div>
+                  <button className="delbtn" title="Delete profile" disabled={busyId===p.user_id} onClick={()=>del(p)}>
+                    {busyId===p.user_id?<Loader2 size={15} className="spin"/>:<Trash2 size={15}/>}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
@@ -2953,6 +3111,7 @@ export default function AthLinkMVP(){
   const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
   const[pendingInviteToken,setPendingInviteToken]=useState(null); // raw token from ?invite= URL param
   const[showDevApprovals,setShowDevApprovals]=useState(false);  // dev-only pending-approvals panel
+  const[showDevProfiles,setShowDevProfiles]=useState(false);    // dev-only all-profiles panel
   const[showUsername,setShowUsername]=useState(false);          // username-creation modal
   const[usernameInput,setUsernameInput]=useState("");
   const[usernameBusy,setUsernameBusy]=useState(false);
@@ -3051,13 +3210,25 @@ export default function AthLinkMVP(){
     if(!auth?.user?.id||!auth?.token){setUsernameErr("Please sign in again.");return;}
     setUsernameBusy(true);setUsernameErr("");
     try{
-      // Check availability
-      const existing=await hostRest(`profiles?username=eq.${encodeURIComponent(u)}&select=user_id`,{},auth.token);
-      if(existing&&existing.length>0&&existing[0].user_id!==auth.user.id){
-        setUsernameErr("That username is taken. Try another.");setUsernameBusy(false);return;
-      }
+      // Availability check is best-effort (RLS may block reading others' rows).
+      // The DB unique index is the real guard, so a blocked check is non-fatal.
+      try{
+        const existing=await hostRest(`profiles?username=eq.${encodeURIComponent(u)}&select=user_id`,{},auth.token);
+        if(existing&&existing.length>0&&existing[0].user_id!==auth.user.id){
+          setUsernameErr("That username is taken. Try another.");setUsernameBusy(false);return;
+        }
+      }catch{}
       const saved=await upsertProfile({user_id:auth.user.id,username:u},auth.token);
-      if(saved===null) throw new Error("save failed");
+      if(saved===null){
+        const e=upsertProfile._lastError||"";
+        if(/username/i.test(e)&&/column|schema|does not exist|find/i.test(e))
+          setUsernameErr("The username field isn't set up yet — run profiles_username_migration.sql in Supabase.");
+        else if(/duplicate|unique/i.test(e))
+          setUsernameErr("That username is taken. Try another.");
+        else
+          setUsernameErr("Couldn't save: "+(e?e.slice(0,120):"unknown error")+".");
+        setUsernameBusy(false);return;
+      }
       setAuth(a=>a?{...a,profile:{...a.profile,username:u}}:a);
       try{const raw=localStorage.getItem("athlink_auth");if(raw){const s=JSON.parse(raw);s.profile={...(s.profile||{}),username:u};localStorage.setItem("athlink_auth",JSON.stringify(s));}}catch{}
       setShowUsername(false);setUsernameInput("");
@@ -3228,6 +3399,11 @@ export default function AthLinkMVP(){
     const[primary,...dupes]=names;
     for(const d of dupes) await mergeAthletes(primary,d);
   };
+  // Dev: rename an athlete everywhere (persists to every entry where they appear).
+  const renameAthlete=async(oldName,newName)=>{
+    const nn=(newName||"").trim(); if(!nn||nn===oldName) return;
+    await mergeAthletes(nn,oldName);
+  };
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
@@ -3278,6 +3454,8 @@ export default function AthLinkMVP(){
   const[profileFilterChips,setProfileFilterChips]=useState([]); // cumulative AND-ed filters
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
   const[footprintOpen,setFootprintOpen]=useState(false);
+  const[editingAthName,setEditingAthName]=useState(null); // {orig} when renaming on the profile page
+  const[athNameInput,setAthNameInput]=useState("");
   const[regattaFootprint,setRegattaFootprint]=useState(null);
   const[evSuggestions,setEvSuggestions]=useState([]);
   const[evSugLoading,setEvSugLoading]=useState(false);
@@ -3435,6 +3613,9 @@ export default function AthLinkMVP(){
     return dedupEvents(scoped);
   },[events,portal,isClassPortal,portalCls]);
   const homeCountry=useMemo(()=>buildHomeCountry(events),[events]);
+  // Rebuild the per-athlete attribute memory (gender/birth-year/recent class)
+  // whenever events change. Downstream gender chips read ATHLETE_ATTRS.
+  useMemo(()=>buildAthleteAttrs(events),[events]);
   // Pick the best display variant for a canonical group: the raw name that
   // appears in the most events (ties → the more "normal" mixed-case spelling).
   const displayNameFor=useMemo(()=>{
@@ -3824,7 +4005,7 @@ Partial query: "${q}"`;
       results.push({type:"event",label:ev.name,sub:formatDate(ev.date),nav:{type:"event",assoc:ev.owner||null,id:ev.id}});
     });
     // Global class portals
-    CLASSES.filter(c=>c.short.toLowerCase().includes(ql)).forEach(c=>{
+    CLASSES.filter(c=>c.short.toLowerCase().includes(ql)||(c.full||"").toLowerCase().includes(ql)).forEach(c=>{
       results.push({type:"portal",label:`${c.short} — All Results`,sub:"Global class portal",nav:{type:"portal",assoc:"class:"+c.id}});
     });
     // Club portals
@@ -4596,7 +4777,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .vbox b{color:#fff;display:flex;align-items:center;gap:6px;font-family:'Barlow',sans-serif;}
     .histrow{background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:13px;padding:15px 18px;margin-bottom:11px;display:flex;align-items:center;gap:16px;animation:rise .45s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.3),0 1px 2px rgba(0,0,0,.05);}
     .hrk{font-family:'Barlow',sans-serif;font-weight:800;font-size:22px;width:58px;text-align:center;flex:none;color:var(--navy);}
-    .hrk.p1{color:var(--gold);}.hrk.p2{color:#7d8a98;}.hrk.p3{color:#a86a32;}
+    .hrk.p1{color:#a87d00;}.hrk.p2{color:#1f6fb2;}.hrk.p3{color:#b23a3a;}
     .hrk small{display:block;font-size:10px;color:var(--mut);font-weight:600;}
     .rolechip{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:980px;text-transform:uppercase;font-family:'Barlow',sans-serif;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
     .rolechip.helm{color:#fff;background:var(--navy2);}.rolechip.crew{color:var(--navy2);background:var(--sky);}
@@ -4604,9 +4785,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .rc{width:24px;height:24px;border-radius:8px;background:rgba(118,118,128,.1);color:#2c3e50;font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;}
     .rc.c{background:#fbe3e0;color:#c0392b;}
     .rc.d{background:#f0f2f5;color:#8a99aa;}
-    .rc.g1{background:#f5e8b4;color:#8a6200;}
-    .rc.g2{background:#d4e8f5;color:#1a5e8a;}
-    .rc.g3{background:#f5d4d4;color:#8a1a1a;}
+    .rc.g1{background:#fbe7a6;color:#7a5600;border:1.5px solid #c79a16;}
+    .rc.g2{background:#bfe0fb;color:#0d5a96;border:1.5px solid #2a86d6;}
+    .rc.g3{background:#fbcaca;color:#9a2222;border:1.5px solid #d65050;}
     /* Home */
     .home-hero{background:none;color:var(--ink);padding:8px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:36px;font-weight:800;margin:0 0 6px;}
@@ -4733,15 +4914,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
 
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
     /* Calendar — Apple Calendar style */
-    .cal-modal{background:var(--paper);width:100%;max-width:1020px;border-radius:18px;overflow:hidden;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:rise .3s both;max-height:92vh;display:flex;flex-direction:column;}
-    .cal-head{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:flex-start;gap:10px;flex:none;}
+    .cal-modal{background:rgba(252,253,255,0.88);backdrop-filter:blur(56px) saturate(210%);-webkit-backdrop-filter:blur(56px) saturate(210%);width:100%;max-width:1020px;border-radius:22px;overflow:hidden;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 40px 90px -28px rgba(0,0,0,.45),0 0 0 .5px rgba(60,60,67,.08);animation:rise .3s both;max-height:92vh;display:flex;flex-direction:column;}
+    .cal-head{background:linear-gradient(135deg,rgba(31,78,128,.78),rgba(19,49,78,.84));backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;padding:14px 20px;display:flex;align-items:flex-start;gap:10px;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);}
     .cal-head h3{font-family:'Barlow',sans-serif;font-weight:800;font-size:22px;margin:0;}
     .cal-head .x{background:rgba(255,255,255,.12);border:0;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;display:grid;place-items:center;opacity:.85;transition:.12s;flex:none;}
     .cal-head .x:hover{opacity:1;background:rgba(255,255,255,.22);}
     .cal-back{display:inline-flex;align-items:center;gap:6px;background:none;border:0;color:#bcd2e8;font-weight:600;font-size:13px;cursor:pointer;padding:0;transition:color .12s;}
     .cal-back:hover{color:#fff;}
     .cal-body{padding:0;overflow-y:auto;flex:1;display:flex;flex-direction:column;}
-    .cal-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap;}
+    .cal-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.4);flex:none;flex-wrap:wrap;background:rgba(255,255,255,.28);}
     .cal-nav{display:flex;align-items:center;gap:4px;}
     .cal-nav button{border:1px solid var(--line);background:#fff;border-radius:7px;width:30px;height:30px;cursor:pointer;display:grid;place-items:center;color:var(--navy);transition:.1s;}
     .cal-nav button:hover{background:var(--sky);}
@@ -4838,6 +5019,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
           <MagneticItem className={`mp-link`} onClick={()=>{setMenuOpen(false);openCalendar(portal||null);}}>Calendar</MagneticItem>
           <MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>
           {DEV_VIEW_ENABLED&&devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevApprovals(true);}}>Pending approvals</MagneticItem>}
+          {DEV_VIEW_ENABLED&&devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevProfiles(true);}}>All profiles</MagneticItem>}
           {DEV_VIEW_ENABLED&&devMode&&<button className="mp-dev" onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}><Pencil size={11}/>Dev view ON — turn off</button>}
         </div>
         {gSearchOpen&&gSearchResults.length>0&&(
@@ -4949,6 +5131,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       onApprove={devApproveMember} onDelete={devDeleteMember} onReassign={devReassignMember}
       onClose={()=>setShowDevApprovals(false)}/>
   )}
+  {showDevProfiles&&devMode&&(
+    <DevProfilesModal auth={auth} nameForHost={(id)=>hostById(id)?.name||id} onClose={()=>setShowDevProfiles(false)}/>
+  )}
   {pendingHostNotice&&(
     <div className="notice"><div className="ico"><Clock size={18}/></div>
       <div><b>Setup complete — pending approval</b>
@@ -5026,19 +5211,25 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       // Class nuggets shown top-right: a club/federation shows every class it has
       // events in; an association shows its single class.
       const nuggets=isClub?CLASSES.filter(c=>ce.some(e=>e.cls===c.id)):CLASSES.filter(c=>c.id===a.cls);
+      // Purple host-role pill when the signed-in user is a verified member here.
+      const myHere=myMemberships.find(m=>m.host_id===a.id&&m.verified);
       return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
-        {/* Standard header: host-type label (left) + class nugget(s) (right) */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:10,minHeight:22}}>
-          <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
-            color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
+        {/* Header: host-type (or owner/editor) pill left, class nugget(s) right — all centered on one row */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
+          {myHere
+            ? <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
+                color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 10px",whiteSpace:"nowrap"}}>
+                <BadgeCheck size={11} style={{flex:"none"}}/>{myHere.role}
+              </span>
+            : <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
+                color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>}
           <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center"}}>
             {nuggets.map(c=><span key={c.id} className="cls" style={{background:classColor(c.id)}}>{c.short}</span>)}
             {devMode&&<button onClick={e=>deleteHost(a.id,a.name,e)} title="Delete host/portal (dev)" style={{border:0,background:"rgba(232,72,85,.15)",color:"#c0392b",borderRadius:980,width:26,height:26,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Trash2 size={14}/></button>}
           </div>
         </div>
         <p className="class-name">{a.name}</p>
-        <div className="class-stats"><div><b>{ce.length}</b>competitions</div><div><b>{cp.size}</b>athletes</div></div>
-        <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(a.id);}}>Enter portal <ChevronRight size={16}/></button>
+        <div className="class-stats" style={{marginBottom:0}}><div><b>{ce.length}</b>competitions</div><div><b>{cp.size}</b>athletes</div></div>
       </div>);
     };
     const hkFeds=FEDERATIONS.filter(f=>f.scope==="HK").filter(matchA);
@@ -5168,6 +5359,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <div className="page-head">
           <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
           <h1 className="page-title">Ranking</h1>
+          {/* Stats row directly under the title (mirrors the class-portal layout) */}
+          <div className="pillbar" style={{marginTop:12}}>
+            <div className="pill"><Trophy size={16}/><b>{comps.length}</b> competition{comps.length!==1?"s":""}</div>
+            <div className="pill"><Users size={16}/><b>{rankAthleteCount}</b> athlete{rankAthleteCount!==1?"s":""}</div>
+          </div>
         </div>
         {/* Class tabs */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
@@ -5221,11 +5417,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         {comps.length===0
           ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Total = sum of net points (lowest wins).</p>
           :<>
-          {/* Cumulative tallies for the current selection */}
-          <div className="pillbar" style={{marginBottom:12}}>
-            <div className="pill"><Trophy size={16}/><b>{comps.length}</b> competition{comps.length!==1?"s":""}</div>
-            <div className="pill"><Users size={16}/><b>{rankAthleteCount}</b> athlete{rankAthleteCount!==1?"s":""}</div>
-          </div>
           {/* When the source pickers are collapsed, show the selected competitions as removable nuggets */}
           {!rankSourceOpen&&<div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
             {comps.map(c=>(
@@ -5362,21 +5553,17 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 const ce=events.filter(e=>eventAssocs(e).includes(a.id));
                 const col=classColor(a.cls);const short=CLASSES.find(c=>c.id===a.cls)?.short||a.cls;
                 return <div className="class-card" key={a.id} style={{cursor:"pointer"}} onClick={()=>enterPortal(a.id)}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:10,minHeight:22}}>
-                    <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)",border:"1px solid var(--line)",borderRadius:6,padding:"2px 7px"}}>Association</span>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
+                    <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px"}}>Association</span>
                     <span className="cls" style={{background:col}}>{short}</span>
                   </div>
                   <p className="class-name">{a.name}</p>
-                  <div className="class-stats"><div><b>{ce.length}</b>competitions</div></div>
-                  <button className="btn cta" style={{width:"100%",justifyContent:"center"}} onClick={e=>{e.stopPropagation();enterPortal(a.id);}}>Enter portal <ChevronRight size={16}/></button>
+                  <div className="class-stats" style={{marginBottom:0}}><div><b>{ce.length}</b>competitions</div></div>
                 </div>;
               })}
             </div>
           </div>;
         })()}
-        <div className="toolbar" style={{marginBottom:8}}>
-          <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
-        </div>
         {evFilterActive&&(
           <div style={{marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <div className="filter-chip">
@@ -5586,7 +5773,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 {r.crew&&<div className="cn">with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></div>}
               </div>
             </div></td>
-            <td style={{textAlign:"center",whiteSpace:"nowrap"}}><ResultNuggets entry={r}/></td>
+            <td style={{textAlign:"center",whiteSpace:"nowrap"}}><ResultNuggets entry={r} doublehanded={!!ev.doublehanded}/></td>
             <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
             {Array.from({length:s.races}).map((_,i)=>{
               const c=r.races[i];
@@ -5832,16 +6019,34 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
               <div style={{flex:1,minWidth:0}}>
                 <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                  <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
-                    {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
-                    {profileVerified(name)&&<VerifyBadge verified size={20} title="Verified athlete — claimed & vouched"/>}
-                  </span>
-                  <button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
+                  {editingAthName?.orig===name
+                    ? <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
+                        <input autoFocus value={athNameInput} onChange={e=>setAthNameInput(e.target.value)}
+                          onKeyDown={async e=>{if(e.key==="Enter"&&athNameInput.trim()){const nn=athNameInput.trim();setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}if(e.key==="Escape")setEditingAthName(null);}}
+                          style={{font:"inherit",fontSize:"inherit",fontWeight:"inherit",fontFamily:"inherit",color:"var(--navy)",border:"2px solid var(--accent)",borderRadius:10,padding:"2px 10px",outline:"none",minWidth:240}}/>
+                        <button className="btn cta" style={{fontSize:12,padding:"6px 11px"}} onClick={async()=>{const nn=athNameInput.trim();if(!nn)return;setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}><CheckCircle size={13}/>Save</button>
+                        <button className="btn ghost" style={{fontSize:12,padding:"6px 11px"}} onClick={()=>setEditingAthName(null)}>Cancel</button>
+                      </span>
+                    : <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
+                        {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
+                        {profileVerified(name)&&<VerifyBadge verified size={20} title="Verified athlete — claimed & vouched"/>}
+                        {devMode&&<button title="Rename athlete (dev)" onClick={()=>{setEditingAthName({orig:name});setAthNameInput(name);}} style={{border:0,background:"var(--grouped)",color:"var(--accent)",borderRadius:980,width:30,height:30,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Pencil size={14}/></button>}
+                      </span>}
+                  {editingAthName?.orig!==name&&<button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
                     <Calendar size={13}/>Calendar
-                  </button>
+                  </button>}
                 </h1>
                 <div className="pmeta">
-                  {p.cls?<span><Anchor size={14}/>{CLASSES.find(c=>c.id===p.cls)?.short||p.cls}</span>:null}
+                  {(()=>{
+                    const attrs=ATHLETE_ATTRS.get(canonName(name));
+                    const rc=attrs?.recentCls; const rs=attrs?.recentSub;
+                    const nug=rc?nuggetFor(rc,rs):(p.cls?nuggetFor(p.cls,null):null);
+                    const g=attrs?.gender;
+                    return(<>
+                      {nug?<span><span className="cls" style={{background:nug.color,fontSize:10.5,padding:"2px 9px"}}>{nug.label}</span></span>:null}
+                      {g&&<span><span style={{background:GENDER_COLOR[g]||"var(--mut)",color:"#fff",borderRadius:980,fontSize:10.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"2px 9px"}} title={g==="Mix"?"Mixed":g==="F"?"Female":"Male"}>{g==="Mix"?"Mixed":g==="F"?"Female":"Male"}</span></span>}
+                    </>);
+                  })()}
                   {age!=null&&<span style={{fontWeight:600}}>Age {age}</span>}
                   {(()=>{
                     const recent=ag.history[0]?.row;
@@ -5891,9 +6096,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         </>);
       })()}
       <div style={{marginTop:22}}>
-        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
-          <p className="seclabel" style={{margin:0}}><Trophy size={14}/>Result history</p>
-          <div className="ai-srch-wrap" style={{flex:1,minWidth:220,maxWidth:420}}>
+        <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:10}}>
+          <div className="ai-srch-wrap" style={{width:"100%"}}>
             <div className="ai-srch">
               <Sparkles size={13} color={profileFilterLoading?"#0d8ecf":"#9fb2c8"}/>
               <input
@@ -5943,14 +6147,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               return db.localeCompare(da);
             });
           return rows.map((h,i)=>{
-            const dp=h.ev.date?.split('/');
-            const hasDate=dp&&dp.length===3&&dp[0]&&dp[2];
             return(
             <div className="ev" key={h.ev.id+i} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:h.ev.id})}>
-              <div className={`hrk ${h.row.rank<=3?"p"+h.row.rank:""}`} style={{flex:"none"}}>#{h.row.rank}<small>of {h.fleet}</small></div>
-              {hasDate
-                ?<div className="evicon-date"><span className="eid">{dp[0]}</span><span className="eim">{MON[parseInt(dp[1])-1]||""}</span></div>
-                :<div className="evicon"><Anchor size={20}/></div>}
+              <div className={`hrk ${h.row.rank<=3?"p"+h.row.rank:""}`} style={{flex:"none"}}>{h.row.rank}<small>of {h.fleet}</small></div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                   <p className="evname" style={{margin:0}}>{h.ev.name}</p>
@@ -6378,14 +6577,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </div>
             <button className="x" onClick={()=>setShowCalendar(false)}><X size={16}/></button>
           </div>
-          {/* Toolbar: month nav + view toggle + floating class pills */}
+          {/* Toolbar: competition count + floating class pills */}
           <div className="cal-toolbar">
-            <div className="cal-nav">
-              <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y-1):prevMonth();}}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
-              <button className="cal-title-btn" onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>{calViewMode==="year"?calYear:`${MON[calMonth]} ${calYear}`}</button>
-              <button onClick={()=>{calViewMode==="year"?setCalYear(y=>y+1):nextMonth();}}><ChevronRight size={14}/></button>
-            </div>
-            <button className="cal-today-btn" onClick={()=>{goToday();setCalViewMode("month");}}>Today</button>
+            <span style={{fontSize:13,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
+              {calEvs.length} competition{calEvs.length!==1?"s":""}{calClsSet.size>0?" shown":""}
+            </span>
             <div className="cal-cls-box" style={{marginLeft:"auto"}}>
               <button className={`cal-cls-mini${calClsSet.size===0?" on":""}`} onClick={()=>toggleCls("all")}
                 style={calClsSet.size===0?{background:"var(--navy)",color:"#fff",borderColor:"var(--navy)"}:{}}>All</button>
@@ -6422,13 +6618,10 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <button className="x" onClick={()=>setShowSailorCal(false)}><X size={16}/></button>
           </div>
           <div className="cal-toolbar">
-            <div className="cal-nav">
-              <button onClick={()=>{sailorCalViewMode==="year"?setSailorCalYear(y=>y-1):prevM();}}><ChevronRight size={14} style={{transform:"rotate(180deg)"}}/></button>
-              <button className="cal-title-btn" onClick={()=>setSailorCalViewMode(v=>v==="year"?"month":"year")}>{sailorCalViewMode==="year"?sailorCalYear:`${MON[sailorCalMonth]} ${sailorCalYear}`}</button>
-              <button onClick={()=>{sailorCalViewMode==="year"?setSailorCalYear(y=>y+1):nextM();}}><ChevronRight size={14}/></button>
-            </div>
-            <button className="cal-today-btn" onClick={()=>{goTodayS();setSailorCalViewMode("month");}}>Today</button>
-            <div className="cal-filters">
+            <span style={{fontSize:13,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
+              {sailorEvs.length} competition{sailorEvs.length!==1?"s":""}{sailorCalClsSet.size>0?" shown":""}
+            </span>
+            <div className="cal-filters" style={{marginLeft:"auto"}}>
               <div className="seg">
                 <button className={sailorCalClsSet.size===0?"on":""} onClick={()=>toggleSCls("all")}
                   style={sailorCalClsSet.size===0?{background:"var(--navy)",color:"#fff"}:{}}>All</button>
