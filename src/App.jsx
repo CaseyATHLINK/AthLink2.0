@@ -801,6 +801,32 @@ const fetchHostAudit=(hostId,tok)=>hostRest(`host_audit?host_id=eq.${encodeURICo
 const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}&select=*`,{},tok);
 // Dev: every UNVERIFIED membership across all hosts (pending-approval queue).
 const fetchUnverifiedMembers=(tok)=>hostRest("host_members?verified=eq.false&select=*&order=created_at.desc",{},tok);
+// Resolve a set of user_ids to display names. Reads profiles (first/last/display_name);
+// falls back to the public_profiles view, then a short id. Returns {user_id: name}.
+async function fetchProfileNames(ids,tok){
+  const uniq=[...new Set((ids||[]).filter(Boolean))];
+  if(!uniq.length) return {};
+  const inList="("+uniq.map(encodeURIComponent).join(",")+")";
+  const out={};
+  // Try the full profiles table first (RLS may scope this).
+  let rows=await hostRest(`profiles?user_id=in.${inList}&select=user_id,first_name,last_name,display_name,username`,{},tok);
+  // Fall back to the public_profiles view for any ids not resolved.
+  const got=new Set((rows||[]).map(r=>r.user_id));
+  const missing=uniq.filter(id=>!got.has(id));
+  let pub=[];
+  if(missing.length){
+    const pin="("+missing.map(encodeURIComponent).join(",")+")";
+    pub=await hostRest(`public_profiles?user_id=in.${pin}&select=user_id,display_name`,{},tok)||[];
+  }
+  const nameOf=(r)=>{
+    const full=`${r.first_name||""} ${r.last_name||""}`.trim();
+    return full||r.display_name||r.username||null;
+  };
+  (rows||[]).forEach(r=>{const n=nameOf(r); if(n) out[r.user_id]=n;});
+  (pub||[]).forEach(r=>{if(!out[r.user_id]&&r.display_name) out[r.user_id]=r.display_name;});
+  uniq.forEach(id=>{if(!out[id]) out[id]=`User ${id.slice(0,8)}`;});
+  return out;
+}
 async function logHostAudit(hostId,actorId,action,targetId,detail,tok){
   return hostRest("host_audit",{method:"POST",body:JSON.stringify({host_id:hostId,actor_user_id:actorId,action,target_user_id:targetId||null,detail:detail||null})},tok);
 }
@@ -2524,6 +2550,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
   const[members,setMembers]=React.useState(null);
   const[invites,setInvites]=React.useState([]);
   const[audit,setAudit]=React.useState([]);
+  const[memberNames,setMemberNames]=React.useState({});
   const[busy,setBusy]=React.useState(false);
   const[err,setErr]=React.useState("");
   const[newInvite,setNewInvite]=React.useState(null); // {url,role}
@@ -2542,7 +2569,10 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
       fetchHostAudit(hostId,tok),
     ]);
     setMembers(m||[]); setInvites(inv||[]); setAudit(a||[]);
+    const ids=[...new Set([...(m||[]).map(x=>x.user_id),...(a||[]).flatMap(x=>[x.actor_user_id,x.target_user_id])])].filter(Boolean);
+    if(ids.length){ const nm=await fetchProfileNames(ids,tok); setMemberNames(nm); }
   },[hostId,tok]);
+  const displayName=(id)=>id?(memberNames[id]||`User ${id.slice(0,8)}`):"—";
   React.useEffect(()=>{ load(); },[load]);
 
   const refresh=async()=>{ await load(); onChanged&&onChanged(); };
@@ -2679,7 +2709,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
                   {pending.map(m=>(
                     <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:"1px solid var(--line)"}}>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>User {shortId(m.user_id)}</div>
+                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{displayName(m.user_id)}</div>
                         <div style={{fontSize:11.5,color:"var(--mut)"}}>requested {m.role}</div>
                       </div>
                       <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={busy} onClick={()=>grant(m)}><CheckCircle size={13}/>Grant</button>
@@ -2697,7 +2727,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
                   return(
                     <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid var(--line)"}}>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>User {shortId(m.user_id)}{isMe?" (you)":""}{!m.verified&&<span style={{marginLeft:6,fontSize:10.5,color:"#a85c00",fontWeight:700}}>unverified</span>}</div>
+                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{displayName(m.user_id)}{isMe?" (you)":""}{!m.verified&&<span style={{marginLeft:6,fontSize:10.5,color:"#a85c00",fontWeight:700}}>unverified</span>}</div>
                       </div>
                       <RoleBadge role={m.role}/>
                       {!isMe&&(
@@ -2793,7 +2823,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
                   <div key={a.id} style={{display:"flex",gap:10,padding:"7px 0",borderBottom:"1px solid var(--line)",fontSize:12.5}}>
                     <span style={{fontWeight:700,color:"var(--navy)",minWidth:64,textTransform:"capitalize"}}>{a.action}</span>
                     <span style={{flex:1,color:"var(--mut)"}}>
-                      by {shortId(a.actor_user_id)}{a.target_user_id?` → ${shortId(a.target_user_id)}`:""}{a.detail?` · ${a.detail}`:""}
+                      by {displayName(a.actor_user_id)}{a.target_user_id?` → ${displayName(a.target_user_id)}`:""}{a.detail?` · ${a.detail}`:""}
                     </span>
                     <span style={{color:"var(--mut)",whiteSpace:"nowrap"}}>{new Date(a.ts).toLocaleDateString()}</span>
                   </div>
@@ -2923,6 +2953,10 @@ export default function AthLinkMVP(){
   const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
   const[pendingInviteToken,setPendingInviteToken]=useState(null); // raw token from ?invite= URL param
   const[showDevApprovals,setShowDevApprovals]=useState(false);  // dev-only pending-approvals panel
+  const[showUsername,setShowUsername]=useState(false);          // username-creation modal
+  const[usernameInput,setUsernameInput]=useState("");
+  const[usernameBusy,setUsernameBusy]=useState(false);
+  const[usernameErr,setUsernameErr]=useState("");
   const[menuOpen,setMenuOpen]=useState(false);   // floating menu pill expanded
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
@@ -3010,6 +3044,26 @@ export default function AthLinkMVP(){
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{}
     loadMembershipsFor(a2); };
   const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
+  // ── Save a username to the user's profile (unique, lowercase, alnum + underscore) ──
+  const saveUsername=async()=>{
+    const u=usernameInput.trim().toLowerCase().replace(/[^a-z0-9_]/g,"");
+    if(u.length<3){setUsernameErr("Usernames are at least 3 characters (letters, numbers, underscore).");return;}
+    if(!auth?.user?.id||!auth?.token){setUsernameErr("Please sign in again.");return;}
+    setUsernameBusy(true);setUsernameErr("");
+    try{
+      // Check availability
+      const existing=await hostRest(`profiles?username=eq.${encodeURIComponent(u)}&select=user_id`,{},auth.token);
+      if(existing&&existing.length>0&&existing[0].user_id!==auth.user.id){
+        setUsernameErr("That username is taken. Try another.");setUsernameBusy(false);return;
+      }
+      const saved=await upsertProfile({user_id:auth.user.id,username:u},auth.token);
+      if(saved===null) throw new Error("save failed");
+      setAuth(a=>a?{...a,profile:{...a.profile,username:u}}:a);
+      try{const raw=localStorage.getItem("athlink_auth");if(raw){const s=JSON.parse(raw);s.profile={...(s.profile||{}),username:u};localStorage.setItem("athlink_auth",JSON.stringify(s));}}catch{}
+      setShowUsername(false);setUsernameInput("");
+    }catch(e){setUsernameErr("Couldn't save that username — please try again.");}
+    finally{setUsernameBusy(false);}
+  };
 
   // ── Signup host callbacks (create new host / register pending owner) ──
   // Creates a host row in `hosts` and adds it to the local registry; returns {id}.
@@ -4639,6 +4693,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .modal.wide{max-width:1140px;}
     .mhead{background:linear-gradient(135deg,rgba(31,78,128,.78),rgba(19,49,78,.84));backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);}
     .mhead h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
+    .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:32px;height:32px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;flex:none;padding:0;}
+    .x:hover{background:rgba(255,255,255,.26);}
     .mhead .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:34px;height:34px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;}
     .mhead .x:hover{background:rgba(255,255,255,.26);transform:scale(1.05);}
     .mtabs{display:flex;gap:6px;padding:14px 22px 0;}
@@ -4807,9 +4863,33 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               {hasPendingHostMembership&&<span style={{position:"absolute",top:-2,right:-2,width:12,height:12,borderRadius:"50%",background:"#f5a623",border:"2px solid #fff"}} title="Host approval pending"/>}
             </button>
             {accountOpen&&(<div className="tb-acct">
-              <div style={{padding:"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>
-              <div style={{padding:"0 10px 6px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}>Role: <b style={{color:"var(--navy)"}}>{devMode?"Developer":role}</b></div>
-              {role==="association"&&auth.profile?.class_id&&<div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Manages: <b style={{color:"var(--navy)"}}>{(CLASSES.find(c=>c.id===auth.profile.class_id)?.short)||auth.profile.class_id}</b></div>}
+              {(()=>{
+                const fullName=`${auth.profile?.first_name||""} ${auth.profile?.last_name||""}`.trim()||auth.profile?.display_name||null;
+                // Host portals this user belongs to (verified) — shown as their identity instead of a generic role.
+                const myHostNames=myMemberships.filter(m=>m.verified).map(m=>hostById(m.host_id)?.name).filter(Boolean);
+                return(<>
+                  {fullName&&<div style={{padding:"6px 10px 1px",fontSize:13.5,fontWeight:700,color:"var(--navy)"}}>{fullName}</div>}
+                  <div style={{padding:fullName?"0 10px 6px":"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>
+                  {devMode
+                    ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Role: <b style={{color:"var(--navy)"}}>Developer</b></div>
+                    : myHostNames.length>0
+                      ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>{myHostNames.length>1?"Hosts":"Host"}: <b style={{color:"var(--navy)"}}>{myHostNames.join(", ")}</b></div>
+                      : role==="athlete"
+                        ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}><b style={{color:"var(--navy)"}}>Athlete</b></div>
+                        : null}
+                </>);
+              })()}
+              {/* Username reminder — gentle nudge, only if they haven't set one */}
+              {!auth.profile?.username&&!devMode&&(
+                <div style={{margin:"2px 8px 6px",padding:"9px 11px",background:"rgba(10,132,255,.07)",border:"1px solid rgba(10,132,255,.18)",borderRadius:9,fontSize:11.5,color:"var(--navy)",lineHeight:1.45}}>
+                  <div style={{display:"flex",gap:7,alignItems:"flex-start"}}>
+                    <User size={13} style={{flex:"none",marginTop:1,color:"var(--accent)"}}/>
+                    <span>Add a username so people can find and tell you apart from others with the same name.</span>
+                  </div>
+                  <button onClick={()=>{setAccountOpen(false);setShowUsername(true);}} style={{marginTop:7,width:"100%",border:0,background:"var(--accent)",color:"#fff",borderRadius:7,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Create username</button>
+                </div>
+              )}
+              {auth.profile?.username&&<div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Username: <b style={{color:"var(--navy)"}}>@{auth.profile.username}</b></div>}
               {hasPendingHostMembership&&(
                 <div style={{margin:"2px 8px 8px",padding:"8px 10px",background:"rgba(255,149,0,.1)",border:"1px solid rgba(255,149,0,.3)",borderRadius:8,fontSize:11.5,color:"#a85c00",lineHeight:1.45,display:"flex",gap:7,alignItems:"flex-start"}}>
                   <Clock size={13} style={{flex:"none",marginTop:1}}/>
@@ -4874,6 +4954,33 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div><b>Setup complete — pending approval</b>
       <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>Your request to manage <b>{hostById(pendingHostNotice)?.name||"your host"}</b> is in. You'll browse as a guest until the AthLink team verifies you.</div></div>
       <button className="x" style={{marginLeft:8}} onClick={()=>setPendingHostNotice(null)}><X size={15}/></button>
+    </div>
+  )}
+  {showUsername&&auth&&(
+    <div className="ov" onClick={()=>setShowUsername(false)}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:400}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <User size={18}/><h3 style={{flex:1}}>Create a username</h3>
+          <button className="x" onClick={()=>setShowUsername(false)}><X size={16}/></button>
+        </div>
+        <div style={{padding:"18px 24px 24px",display:"flex",flexDirection:"column",gap:14}}>
+          <p style={{margin:0,fontSize:13,color:"var(--mut)",lineHeight:1.5}}>
+            A username gives you a unique handle so people can find you and tell you apart from others with the same name.
+          </p>
+          {usernameErr&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"9px 13px",fontSize:12.5,color:"#c0392b"}}>{usernameErr}</div>}
+          <div style={{display:"flex",alignItems:"center",gap:0,border:"1px solid var(--line)",borderRadius:10,background:"rgba(255,255,255,.85)",overflow:"hidden"}}>
+            <span style={{padding:"11px 4px 11px 13px",color:"var(--mut)",fontSize:15,fontWeight:700}}>@</span>
+            <input autoFocus value={usernameInput}
+              onChange={e=>{setUsernameInput(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,""));setUsernameErr("");}}
+              onKeyDown={e=>{if(e.key==="Enter"&&usernameInput.trim().length>=3)saveUsername();}}
+              placeholder="your_handle" maxLength={24}
+              style={{flex:1,border:0,background:"none",outline:"none",font:"inherit",fontSize:14,padding:"11px 13px 11px 2px"}}/>
+          </div>
+          <button className="btn cta" style={{width:"100%",justifyContent:"center"}} disabled={usernameBusy||usernameInput.trim().length<3} onClick={saveUsername}>
+            {usernameBusy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save username
+          </button>
+        </div>
+      </div>
     </div>
   )}
   {(gSearchOpen||menuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setMenuOpen(false);}}/>}
@@ -5202,7 +5309,15 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
           <div style={{minWidth:0}}>
-            <h1 className="page-title">{portalName}</h1>
+            <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+              <h1 className="page-title">{portalName}</h1>
+              {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
+                <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
+                  color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
+                  <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
+                </span>
+              )}
+            </div>
             <div className="pillbar" style={{marginTop:12}}>
               <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
               <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
@@ -5261,7 +5376,6 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
         })()}
         <div className="toolbar" style={{marginBottom:8}}>
           <p className="seclabel" style={{margin:0,flex:1}}><Waves size={14}/>Results</p>
-          {canEdit&&<button className="btn cta" onClick={()=>setOpen(true)}><Upload size={16}/>Import a competition</button>}
         </div>
         {evFilterActive&&(
           <div style={{marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -5271,8 +5385,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </div>
           </div>
         )}
-        <div style={{marginBottom:12}}>
-          <div className="ai-srch-wrap">
+        <div style={{marginBottom:12,display:"flex",gap:10,alignItems:"stretch"}}>
+          <div className="ai-srch-wrap" style={{flex:1,minWidth:0}}>
             <div className="ai-srch">
               <Sparkles size={13} color={evFilterLoading?"#0d8ecf":"#9fb2c8"}/>
               <input
@@ -5302,7 +5416,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               </div>
             )}
           </div>
-
+          {canEdit&&<button className="btn cta" style={{whiteSpace:"nowrap",flex:"none"}} onClick={()=>setOpen(true)}><Upload size={16}/>Import a competition</button>}
         </div>
         {(()=>{
           const allFiltered=(evFilterActive
