@@ -3,7 +3,7 @@ import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
-  CheckCircle, Clock, Eye, Home, Globe, Menu, User
+  CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings
 } from "lucide-react";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
@@ -862,9 +862,19 @@ const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeUR
 // Dev: every UNVERIFIED membership across all hosts (pending-approval queue).
 const fetchUnverifiedMembers=(tok)=>hostRest("host_members?verified=eq.false&select=*&order=created_at.desc",{},tok);
 // Dev: every profile row (for the all-profiles cleanup panel).
-const fetchAllProfiles=(tok)=>hostRest("profiles?select=*&order=created_at.desc",{},tok);
+// Reads the admin_all_profiles VIEW (bypasses RLS → shows every profile whether
+// signed in or out). Falls back to the base table if the view isn't created yet.
+async function fetchAllProfiles(tok){
+  const v=await hostRest("admin_all_profiles?select=*&order=created_at.desc",{},tok);
+  if(v&&Array.isArray(v)) return v;
+  return hostRest("profiles?select=*&order=created_at.desc",{},tok);
+}
 // Dev: every host_members row (to show which hosts each profile belongs to).
-const fetchAllMembers=(tok)=>hostRest("host_members?select=*",{},tok);
+async function fetchAllMembers(tok){
+  const v=await hostRest("admin_all_members?select=*",{},tok);
+  if(v&&Array.isArray(v)) return v;
+  return hostRest("host_members?select=*",{},tok);
+}
 // Dev: hard-delete a profile and all its host memberships + claims.
 async function devDeleteProfile(userId,tok){
   await hostRest(`host_members?user_id=eq.${userId}`,{method:"DELETE"},tok);
@@ -1318,11 +1328,15 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
     return()=>c.removeEventListener("scroll",onScroll);
   },[viewMode]);
 
-  // ── Month view: scroll to a month ONLY when the change came from a nav button
-  //    or the year picker (navTargetRef), never from the user's own scrolling.
+  // ── Month view: scroll to a month ONLY on first entry into month view, or when
+  //    the change came from the year picker. NEVER re-scroll on scroll-driven
+  //    updates — that was the source of the year-jump jerkiness.
+  const didInitScrollRef=React.useRef(false);
   React.useEffect(()=>{
-    if(viewMode!=="month"||!monthScrollRef.current) return;
-    if(!navTargetRef.current){navTargetRef.current=true;return;} // change came from scrolling → skip, re-arm
+    if(viewMode!=="month"){didInitScrollRef.current=false;return;}
+    if(!monthScrollRef.current) return;
+    // Only auto-scroll when explicitly targeted (year-picker / nav), or once on enter.
+    if(didInitScrollRef.current&&!navTargetRef.current){navTargetRef.current=true;return;}
     const el=monthScrollRef.current.querySelector(`[data-ym="${year}-${month}"]`);
     if(el){
       progScrollRef.current=true;
@@ -1330,35 +1344,39 @@ function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,set
       el.scrollIntoView({block:"start",behavior:"instant"});
       scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},250);
     }
+    didInitScrollRef.current=true;
+    navTargetRef.current=false; // subsequent year/month changes are scroll-driven → no re-scroll
   },[year,month,viewMode]);
 
-  // ── Month view: update the header as the user scrolls (rAF-throttled, read-only).
+  // ── Month view: track the visible month WITHOUT triggering React re-renders or
+  //    scroll-to effects. We update a ref (used as the year-toggle target) and set
+  //    a tiny header label via direct DOM write — keeps the wheel perfectly smooth.
   React.useEffect(()=>{
     if(viewMode!=="month"||!monthScrollRef.current) return;
     const c=monthScrollRef.current;
     let ticking=false;
     const read=()=>{
       ticking=false;
-      if(progScrollRef.current) return;            // ignore our own programmatic scroll
       const cr=c.getBoundingClientRect();
       const anchor=cr.top+8;
       let pick=null;
       for(const el of c.querySelectorAll("[data-ym]")){
         const r=el.getBoundingClientRect();
         if(r.top<=anchor&&r.bottom>anchor){pick=el;break;}
-        if(r.top>anchor){pick=pick||el;break;}     // fallback: first below the anchor
+        if(r.top>anchor){pick=pick||el;break;}
       }
       if(!pick) return;
       const [ys,ms]=pick.dataset.ym.split("-");
       const y=parseInt(ys),m=parseInt(ms);
-      const cur=moRef.current;
-      if(!isNaN(y)&&!isNaN(m)&&(y!==cur.year||m!==cur.month)){
-        navTargetRef.current=false;                // header update from scroll, don't re-scroll
-        setYear(y);setMonth(m);
+      if(!isNaN(y)&&!isNaN(m)){
+        moRef.current={year:y,month:m}; yrRef.current=y;   // remember for year-toggle target
+        const lbl=document.getElementById("cal-cur-label");
+        if(lbl) lbl.textContent=`${MON[m]} ${y}`;
       }
     };
     const onScroll=()=>{ if(!ticking){ticking=true;requestAnimationFrame(read);} };
     c.addEventListener("scroll",onScroll,{passive:true});
+    read();
     return()=>c.removeEventListener("scroll",onScroll);
   },[viewMode]);
 
@@ -3092,8 +3110,65 @@ function DevProfilesModal({auth,nameForHost,onClose}){
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Host portal edit modal — name, location (→ globe by title), and Manage entry.
+   Owners/editors of a portal use this to rename the host and set its location.
+   The location (IOC code) renders a SailingGlobe next to the portal title,
+   identical to the result-page globes.
+   ═══════════════════════════════════════════════════════════════════════ */
+function HostEditModal({host,onSave,onOpenManage,onClose,canManage}){
+  const[name,setName]=React.useState(host?.name||"");
+  const[country,setCountry]=React.useState(host?.country||"");
+  const[busy,setBusy]=React.useState(false);
+  const iso=IOC_ISO[(country||"").toUpperCase()]||"";
+  const save=async()=>{
+    setBusy(true);
+    await onSave({name:name.trim()||host.name,country:(country||"").toUpperCase()||null});
+    setBusy(false); onClose();
+  };
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:480}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <Settings size={18}/><h3 style={{flex:1}}>Edit portal</h3>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div style={{padding:"18px 24px 24px",display:"flex",flexDirection:"column",gap:16}}>
+          <div>
+            <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:5}}>Portal name</label>
+            <input value={name} onChange={e=>setName(e.target.value)}
+              style={{width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"10px 13px",font:"inherit",fontSize:14,outline:"none",background:"rgba(255,255,255,.85)"}}/>
+          </div>
+          <div>
+            <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:5}}>Location <span style={{fontWeight:400}}>(IOC country code — shows a globe by your title)</span></label>
+            <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+              <div style={{flex:1}}><NatInput value={country} onChange={setCountry}/></div>
+              {iso&&<div style={{flex:"0 0 120px",border:"1px solid var(--line)",borderRadius:12,overflow:"hidden",background:"var(--navy)"}}>
+                <SailingGlobe countryData={{[iso]:1}} height={108} dark mini bare hostIso={iso}/>
+              </div>}
+            </div>
+          </div>
+          {canManage&&(
+            <button className="btn ghost" style={{width:"100%",justifyContent:"center"}} onClick={()=>{onClose();onOpenManage();}}>
+              <BadgeCheck size={15}/>Manage members & invites
+            </button>
+          )}
+          <div style={{display:"flex",gap:10}}>
+            <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={onClose}>Cancel</button>
+            <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
+              {busy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
+  const[showDevProfiles,setShowDevProfiles]=useState(false);    // dev-only all-profiles panel
+  const[showHostEdit,setShowHostEdit]=useState(false);          // host portal edit modal
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
   const reloadHosts=async()=>{
     const rows=await sbGet("hosts?select=*");
@@ -3111,7 +3186,6 @@ export default function AthLinkMVP(){
   const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
   const[pendingInviteToken,setPendingInviteToken]=useState(null); // raw token from ?invite= URL param
   const[showDevApprovals,setShowDevApprovals]=useState(false);  // dev-only pending-approvals panel
-  const[showDevProfiles,setShowDevProfiles]=useState(false);    // dev-only all-profiles panel
   const[showUsername,setShowUsername]=useState(false);          // username-creation modal
   const[usernameInput,setUsernameInput]=useState("");
   const[usernameBusy,setUsernameBusy]=useState(false);
@@ -3203,6 +3277,14 @@ export default function AthLinkMVP(){
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{}
     loadMembershipsFor(a2); };
   const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
+  // Save host portal edits (name + location). Persists to the hosts table and
+  // updates the in-memory registry so the change shows immediately.
+  const saveHost=async(hostId,patch)=>{
+    try{ await sbPatch("hosts",`id=eq.${encodeURIComponent(hostId)}`,patch); }catch(e){console.error("saveHost",e);}
+    const h=hostById(hostId);
+    if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country; }
+    setHostsVersion(v=>v+1);
+  };
   // ── Save a username to the user's profile (unique, lowercase, alnum + underscore) ──
   const saveUsername=async()=>{
     const u=usernameInput.trim().toLowerCase().replace(/[^a-z0-9_]/g,"");
@@ -3448,7 +3530,8 @@ export default function AthLinkMVP(){
   const[editEvMeta,setEditEvMeta]=useState(null);
   const[deleteConfirm,setDeleteConfirm]=useState(null); // {id, name, pos}
   const[evFilter,setEvFilter]=useState("");     // AI filter query for events list
-  const[evFilterActive,setEvFilterActive]=useState(null); // parsed filter fn + label
+  const[evFilterActive,setEvFilterActive]=useState(null); // (legacy single) kept for compatibility
+  const[evFilterChips,setEvFilterChips]=useState([]);      // cumulative AND-ed event filters
   const[evFilterLoading,setEvFilterLoading]=useState(false);
   const[profileFilter,setProfileFilter]=useState("");  // AI filter input for profile history
   const[profileFilterChips,setProfileFilterChips]=useState([]); // cumulative AND-ed filters
@@ -3777,8 +3860,8 @@ export default function AthLinkMVP(){
   // ── Navigation with universal history ───────────────────────
   const pushNav=()=>setNavStack(s=>[...s.slice(-19),{portal,view}]);
   const go=v=>{pushNav();setView(v);setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
-  const goHome=()=>{pushNav();setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
-  const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  const goHome=()=>{pushNav();setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
+  const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   // Floating top bar: hide on scroll-down, reveal on scroll-up. Reset to shown on page change.
   useEffect(()=>{
     let lastY=window.scrollY;
@@ -3852,28 +3935,32 @@ Context: ${context}
 Query: "${query}"`;
 
   const runEvFilter=async()=>{
-    if(!evFilter.trim()){setEvFilterActive(null);return;}
-    setEvFilterLoading(true);
+    const q=evFilter.trim();
+    if(!q){return;}
+    setEvFilterLoading(true);setEvSuggestions([]);
     try{
       const res=await fetch("/api/ai_filter",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt:buildFilterPrompt(evFilter,`Portal: ${host?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
+        body:JSON.stringify({prompt:buildFilterPrompt(q,`Portal: ${host?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
       });
       const data=await res.json();
       if(!data.ok) throw new Error(data.error||"API error");
-      const text=data.text;
-      const clean=text.replace(/```json|```/g,"").trim();
-      const parsed=JSON.parse(clean);
-      const fn=new Function("ev","scoreEvent","return "+parsed.code);
-      setEvFilterActive({label:parsed.label,fn});
+      const clean=data.text.replace(/```json|```/g,"").trim();
+      let parsed=JSON.parse(clean);
+      // Accept a single {label,code} or an array of them — push each as a chip.
+      if(!Array.isArray(parsed)) parsed=[parsed];
+      const chips=parsed.filter(x=>x&&x.code).map(x=>({label:x.label||q,fn:new Function("ev","scoreEvent","return "+x.code)}));
+      if(chips.length) setEvFilterChips(prev=>[...prev,...chips]);
+      setEvFilter("");
     }catch(err){
-      // Fallback: simple client-side text search
-      const ql=evFilter.toLowerCase();
+      // Fallback: simple client-side text search as a single chip
+      const ql=q.toLowerCase();
       const fn=(ev)=>ev.name.toLowerCase().includes(ql)||
         ev.entries.some(e=>e.helm.toLowerCase().includes(ql)||e.crew.toLowerCase().includes(ql))||
         (ev.country||"").toLowerCase().includes(ql);
-      setEvFilterActive({label:`"${evFilter}"`,fn});
+      setEvFilterChips(prev=>[...prev,{label:`"${q}"`,fn}]);
+      setEvFilter("");
     }finally{setEvFilterLoading(false);}
   };
 
@@ -4655,6 +4742,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     .page-sub{color:var(--mut);font-size:14px;margin:6px 0 0;}
     /* ── Calendar liquid-glass header ── */
     .cal-head-glass{background:rgba(255,255,255,.55);backdrop-filter:blur(40px) saturate(200%);-webkit-backdrop-filter:blur(40px) saturate(200%);border-radius:22px;padding:16px 20px;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 10px 30px -14px rgba(0,0,0,.22);}
+    .cal-viewtoggle{display:inline-flex;align-items:center;gap:6px;font-family:'Barlow',sans-serif;font-weight:700;font-size:13px;color:var(--navy);background:rgba(255,255,255,.6);border:0;border-radius:980px;padding:7px 14px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.45);transition:.15s;}
+    .cal-viewtoggle:hover{background:var(--navy);color:#fff;}
     .cal-cls-box{display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.5);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);border-radius:980px;padding:5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.45);}
     .cal-cls-mini{border:1px solid var(--line);background:rgba(255,255,255,.4);border-radius:980px;padding:5px 13px;font-size:12.5px;font-weight:700;font-family:'Barlow',sans-serif;color:var(--mut);cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);}
     .cal-cls-mini:hover{transform:translateY(-1px) scale(1.05);filter:brightness(1.05);}
@@ -5134,6 +5223,12 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
   {showDevProfiles&&devMode&&(
     <DevProfilesModal auth={auth} nameForHost={(id)=>hostById(id)?.name||id} onClose={()=>setShowDevProfiles(false)}/>
   )}
+  {showHostEdit&&portal&&!isClassPortal&&hostById(portal)&&(
+    <HostEditModal host={hostById(portal)} canManage={canManageMembers}
+      onSave={(patch)=>saveHost(portal,patch)}
+      onOpenManage={()=>setShowMembers(true)}
+      onClose={()=>setShowHostEdit(false)}/>
+  )}
   {pendingHostNotice&&(
     <div className="notice"><div className="ico"><Clock size={18}/></div>
       <div><b>Setup complete — pending approval</b>
@@ -5356,7 +5451,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
     const Nug=({children,color})=><span style={{display:"inline-block",fontSize:10,fontWeight:700,color:"#fff",background:color||"var(--mut)",borderRadius:5,padding:"2px 6px",marginRight:4}}>{children}</span>;
     return(
       <div className="wrap sec" style={{paddingTop:16}}>
-        <div className="page-head">
+        <div className="page-head" style={{paddingLeft:22}}>
           <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
           <h1 className="page-title">Ranking</h1>
           {/* Stats row directly under the title (mirrors the class-portal layout) */}
@@ -5499,7 +5594,16 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
       <div className="strip"><div className="wrap">
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
-          <div style={{minWidth:0}}>
+          <div style={{minWidth:0,display:"flex",gap:16,alignItems:"flex-start"}}>
+            {(()=>{
+              const hc=!isClassPortal?hostById(portal)?.country:null;
+              const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+              if(!hiso) return null;
+              return(<div style={{flex:"0 0 84px",borderRadius:14,overflow:"hidden",background:"var(--navy)",marginTop:2}} title={hc}>
+                <SailingGlobe countryData={{[hiso]:1}} height={84} dark mini bare hostIso={hiso}/>
+              </div>);
+            })()}
+            <div style={{minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
               <h1 className="page-title">{portalName}</h1>
               {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
@@ -5513,6 +5617,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
               <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
             </div>
+            </div>
           </div>
           {/* ── In-portal pill buttons (vertical stack) ── */}
           <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none"}}>
@@ -5525,8 +5630,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
               <Trophy size={14} style={{flex:"none"}}/> Ranking
             </MagneticItem>}
-            {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowMembers(true)} strength={0.28}>
-              <BadgeCheck size={14} style={{flex:"none"}}/> Manage
+            {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
+              <Settings size={14} style={{flex:"none"}}/> Edit portal
             </MagneticItem>}
           </div>
         </div>
@@ -5564,12 +5669,17 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </div>
           </div>;
         })()}
-        {evFilterActive&&(
-          <div style={{marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <div className="filter-chip">
-              <Sparkles size={11}/>{evFilterActive.label}
-              <button onClick={()=>{setEvFilterActive(null);setEvFilter("");}}><X size={13}/></button>
-            </div>
+        {evFilterChips.length>0&&(
+          <div style={{marginBottom:8,display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+            {evFilterChips.map((c,ci)=>(
+              <div className="filter-chip" key={ci}>
+                <Sparkles size={11}/>{c.label}
+                <button onClick={()=>setEvFilterChips(prev=>prev.filter((_,j)=>j!==ci))}><X size={13}/></button>
+              </div>
+            ))}
+            {evFilterChips.length>1&&(
+              <button onClick={()=>setEvFilterChips([])} style={{border:0,background:"none",color:"var(--mut)",fontSize:11.5,cursor:"pointer",textDecoration:"underline"}}>Clear all</button>
+            )}
           </div>
         )}
         <div style={{marginBottom:12,display:"flex",gap:10,alignItems:"stretch"}}>
@@ -5586,28 +5696,29 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 }}
                 onKeyDown={e=>{
                   if(e.key==="Enter"){setEvSuggestions([]);runEvFilter();}
-                  if(e.key==="Escape"){setEvFilter("");setEvSuggestions([]);setEvFilterActive(null);}
+                  if(e.key==="Escape"){setEvFilter("");setEvSuggestions([]);}
                 }}
                 onFocus={()=>{if(evFilter.length>=3)fetchEvSuggestions(evFilter);}}
               />
               {evFilterLoading&&<Loader2 size={13} className="spin" color="#0d8ecf"/>}
-              {evFilter&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setEvFilter("");setEvSuggestions([]);setEvFilterActive(null);}}><X size={13}/></button>}
+              {evFilter&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setEvFilter("");setEvSuggestions([]);}}><X size={13}/></button>}
             </div>
-            {evSuggestions.length>0&&(
-              <div className="sug-drop">
+            {evSuggestions.length>0&&(<>
+              <div style={{position:"fixed",inset:0,zIndex:1}} onClick={()=>setEvSuggestions([])}/>
+              <div className="sug-drop" style={{zIndex:2}}>
                 {evSuggestions.map((s,i)=>(
                   <div key={i} className="sug-item" onClick={()=>{setEvFilter(s);setEvSuggestions([]);setTimeout(runEvFilter,50);}}>
                     <Sparkles size={11} color="#0d8ecf"/>{s}
                   </div>
                 ))}
               </div>
-            )}
+            </>)}
           </div>
           {canEdit&&<button className="btn cta" style={{whiteSpace:"nowrap",flex:"none"}} onClick={()=>setOpen(true)}><Upload size={16}/>Import a competition</button>}
         </div>
         {(()=>{
-          const allFiltered=(evFilterActive
-            ?classEvents.filter(ev=>{try{return evFilterActive.fn(ev,scoreEvent);}catch{return true;}})
+          const allFiltered=(evFilterChips.length
+            ?classEvents.filter(ev=>evFilterChips.every(c=>{try{return c.fn(ev,scoreEvent);}catch{return true;}}))
             :classEvents)
             .slice().sort((a,b)=>{
               const da=a.date?.split('/').reverse().join('')||'';
@@ -5662,7 +5773,7 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                 <ChevronRight size={18} color="#9fb2c8"/>
               </div>);
             })}
-            {filtered.length===0&&classEvents.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No results match this filter. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setEvFilterActive(null);setEvFilter("");}}>Clear filter</button></p>}
+            {filtered.length===0&&classEvents.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No results match {evFilterChips.length>1?"these filters":"this filter"}. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setEvFilterChips([]);setEvFilter("");}}>Clear {evFilterChips.length>1?"filters":"filter"}</button></p>}
             {classEvents.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions yet. Import one to get started.</p>}
           </>);
         })()}
@@ -6032,8 +6143,8 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
                         {profileVerified(name)&&<VerifyBadge verified size={20} title="Verified athlete — claimed & vouched"/>}
                         {devMode&&<button title="Rename athlete (dev)" onClick={()=>{setEditingAthName({orig:name});setAthNameInput(name);}} style={{border:0,background:"var(--grouped)",color:"var(--accent)",borderRadius:980,width:30,height:30,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Pencil size={14}/></button>}
                       </span>}
-                  {editingAthName?.orig!==name&&<button className="btn sky" style={{fontSize:12,padding:"5px 10px",fontWeight:600}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
-                    <Calendar size={13}/>Calendar
+                  {editingAthName?.orig!==name&&<button className="btn sky" style={{fontSize:13,padding:"7px 13px"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
+                    <Calendar size={14} style={{flex:"none"}}/>Calendar
                   </button>}
                 </h1>
                 <div className="pmeta">
@@ -6116,15 +6227,16 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               {profileFilterLoading&&<Loader2 size={13} className="spin" color="#0d8ecf"/>}
               {profileFilter&&<button style={{border:0,background:"none",cursor:"pointer",color:"#9fb2c8",padding:0,display:"flex"}} onClick={()=>{setProfileFilter("");setProfileSuggestions([]);}}><X size={13}/></button>}
             </div>
-            {profileSuggestions.length>0&&(
-              <div className="sug-drop">
+            {profileSuggestions.length>0&&(<>
+              <div style={{position:"fixed",inset:0,zIndex:1}} onClick={()=>setProfileSuggestions([])}/>
+              <div className="sug-drop" style={{zIndex:2}}>
                 {profileSuggestions.map((s,i)=>(
                   <div key={i} className="sug-item" onClick={()=>{setProfileFilter(s);setProfileSuggestions([]);setTimeout(()=>runProfileFilter(),50);}}>
                     <Sparkles size={11} color="#0d8ecf"/>{s}
                   </div>
                 ))}
               </div>
-            )}
+            </>)}
           </div>
           {profileFilterChips.map((c,ci)=>(
             <div className="filter-chip" key={ci}>
@@ -6146,7 +6258,21 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
               const db=b.ev.date?.split('/').reverse().join('')||'';
               return db.localeCompare(da);
             });
-          return rows.map((h,i)=>{
+          // Group into year sections with dividers (same look as the host results list).
+          const items=[]; let lastYear=null;
+          rows.forEach((h,i)=>{
+            const yr=h.ev.date?.split('/')?.[2]||"—";
+            if(yr!==lastYear){items.push({type:'divider',year:yr});lastYear=yr;}
+            items.push({type:'row',h,i});
+          });
+          return items.map((item)=>{
+            if(item.type==='divider') return(
+              <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+                <span style={{fontSize:12,fontWeight:700,color:"var(--mut)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}>{item.year}</span>
+                <div style={{flex:1,height:1,background:"var(--line)"}}/>
+              </div>
+            );
+            const{h,i}=item;
             return(
             <div className="ev" key={h.ev.id+i} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:h.ev.id})}>
               <div className={`hrk ${h.row.rank<=3?"p"+h.row.rank:""}`} style={{flex:"none"}}>{h.row.rank}<small>of {h.fleet}</small></div>
@@ -6577,8 +6703,11 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             </div>
             <button className="x" onClick={()=>setShowCalendar(false)}><X size={16}/></button>
           </div>
-          {/* Toolbar: competition count + floating class pills */}
+          {/* Toolbar: month/day toggle + competition count + floating class pills */}
           <div className="cal-toolbar">
+            <button className="cal-viewtoggle" onClick={()=>setCalViewMode(v=>v==="year"?"month":"year")}>
+              {calViewMode==="year"?<><Calendar size={13}/>Month</> : <><LayoutGrid size={13}/>Year</>}
+            </button>
             <span style={{fontSize:13,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
               {calEvs.length} competition{calEvs.length!==1?"s":""}{calClsSet.size>0?" shown":""}
             </span>
@@ -6618,6 +6747,9 @@ Event names (for level context): ${ag.history.slice(0,8).map(h=>h.ev.name).join(
             <button className="x" onClick={()=>setShowSailorCal(false)}><X size={16}/></button>
           </div>
           <div className="cal-toolbar">
+            <button className="cal-viewtoggle" onClick={()=>setSailorCalViewMode(v=>v==="year"?"month":"year")}>
+              {sailorCalViewMode==="year"?<><Calendar size={13}/>Month</> : <><LayoutGrid size={13}/>Year</>}
+            </button>
             <span style={{fontSize:13,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
               {sailorEvs.length} competition{sailorEvs.length!==1?"s":""}{sailorCalClsSet.size>0?" shown":""}
             </span>
