@@ -1628,7 +1628,7 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
     const canvas=canvasRef.current; if(!canvas) return;
     const ctx=canvas.getContext('2d');
     let raf,W,H,baseR,R,cx,cy,dpr=Math.min(2,window.devicePixelRatio||1);
-    const size=()=>{const w=wrapRef.current.clientWidth,h=height;W=w;H=h;canvas.width=w*dpr;canvas.height=h*dpr;
+    const size=()=>{if(!wrapRef.current)return;const w=wrapRef.current.clientWidth||0,h=height;if(!w)return;W=w;H=h;canvas.width=w*dpr;canvas.height=h*dpr;
       canvas.style.width=w+'px';canvas.style.height=h+'px';ctx.setTransform(dpr,0,0,dpr,0,0);
       baseR=Math.min(W,H)/2-16;cx=W/2;cy=H/2;};
     size();
@@ -1805,7 +1805,7 @@ function FootprintLegend({label="Competitions / country",showHost=false,rank=fal
 }
 
 /* ── FootprintModal: dark popup · big globe · sticky country spotlight ──────── */
-function FootprintModal({name,ag,countryCounts,onClose}){
+function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffix="Competition footprint"}){
   const [sel,setSel]=React.useState(null); // selected ISO (sticky)
   const groups=React.useMemo(()=>{
     const m={};
@@ -1823,7 +1823,7 @@ function FootprintModal({name,ag,countryCounts,onClose}){
       <div className="modal wide" onClick={e=>e.stopPropagation()}
         style={{maxWidth:1000,background:"linear-gradient(160deg,rgba(13,35,64,0.82),rgba(9,26,49,0.82))",border:"1px solid rgba(120,160,210,.22)"}}>
         <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
-          <Flag size={18}/><h3>{name} — Competition footprint</h3>
+          <Flag size={18}/><h3>{name} — {titleSuffix}</h3>
           {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
@@ -1853,8 +1853,9 @@ function FootprintModal({name,ag,countryCounts,onClose}){
                       border:"1px solid "+(active?"rgba(120,180,235,.55)":"rgba(120,160,210,.16)")}}>
                     <div style={{fontWeight:700,color:"#eaf3fc",fontSize:14,marginBottom:3}}>{h.ev.name}</div>
                     <div style={{display:"flex",flexWrap:"wrap",gap:"4px 12px",fontSize:12.5,color:"#9fbdd9"}}>
-                      <span style={{color:h.row.rank<=3?"#ffd86b":"#cfe0f2",fontWeight:700}}>
-                        {h.row.rank}<span style={{color:"#9fbdd9",fontWeight:500}}> of {h.fleet} boats</span></span>
+                      {!hostMode&&<span style={{color:h.row.rank<=3?"#ffd86b":"#cfe0f2",fontWeight:700}}>
+                        {h.row.rank}<span style={{color:"#9fbdd9",fontWeight:500}}> of {h.fleet} boats</span></span>}
+                      {hostMode&&<span style={{color:"#cfe0f2",fontWeight:600}}>{h.fleet} boats</span>}
                       {h.countries>0&&<span>{h.countries} countr{h.countries===1?"y":"ies"}</span>}
                       <span>{formatDate(h.ev.date)}</span>
                       {h.ev.class?<span style={{background:"rgba(120,160,210,.2)",color:"#cfe0f2",borderRadius:5,padding:"1px 7px",fontWeight:600,fontSize:11.5}}>{h.ev.class}</span>:null}
@@ -2776,7 +2777,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
               Your request to join is pending approval from an owner.
             </div>
           )}
-          {iAmMember&&!myMembership?.verified&&(
+          {myMembership&&myMembership.status==="active"&&!myMembership.verified&&(
             <div style={{background:"rgba(10,132,255,.07)",border:"1px solid rgba(10,132,255,.2)",borderRadius:12,padding:"12px 15px",fontSize:13,color:"var(--navy)"}}>
               You're an active <b>{myMembership.role}</b>, pending AthLink verification before import/edit access is enabled.
             </div>
@@ -3042,13 +3043,16 @@ function DevApprovalsModal({auth,hosts,nameForHost,eventCountFor,memberCountFor,
    - Delete → removes the profile + its memberships + claims (hard delete)
    Filter to quickly find empty test accounts.
    ═══════════════════════════════════════════════════════════════════════ */
-function DevProfilesModal({auth,nameForHost,onClose}){
+function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
   const tok=auth?.token;
   const[profiles,setProfiles]=React.useState(null);
   const[members,setMembers]=React.useState([]);
   const[busyId,setBusyId]=React.useState(null);
   const[q,setQ]=React.useState("");
   const[onlyEmpty,setOnlyEmpty]=React.useState(false);
+  const[editId,setEditId]=React.useState(null);      // profile being reassigned
+  const[addHost,setAddHost]=React.useState("");       // host id to add membership to
+  const[addRole,setAddRole]=React.useState("editor");
 
   const load=React.useCallback(async()=>{
     const[p,m]=await Promise.all([fetchAllProfiles(tok),fetchAllMembers(tok)]);
@@ -3063,6 +3067,24 @@ function DevProfilesModal({auth,nameForHost,onClose}){
     if(!window.confirm(`Delete profile "${nameOf(p)}" and all its memberships? This cannot be undone.`)) return;
     setBusyId(p.user_id); await devDeleteProfile(p.user_id,tok); await load(); setBusyId(null);
   };
+  // ── Reassign helpers (persisted to host_members) ──
+  const patchMember=async(m,patch)=>{
+    setBusyId(m.user_id);
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"PATCH",body:JSON.stringify(patch)},tok);
+    await load(); setBusyId(null);
+  };
+  const removeMember=async(m)=>{
+    setBusyId(m.user_id);
+    await hostRest(`host_members?id=eq.${m.id}`,{method:"DELETE"},tok);
+    await load(); setBusyId(null);
+  };
+  const addMembership=async(p)=>{
+    if(!addHost) return;
+    setBusyId(p.user_id);
+    await hostRest("host_members",{method:"POST",body:JSON.stringify({
+      host_id:addHost,user_id:p.user_id,role:addRole,status:"active",verified:true})},tok);
+    setAddHost(""); await load(); setBusyId(null);
+  };
 
   const rows=(profiles||[]).filter(p=>{
     const mem=membersFor(p.user_id);
@@ -3074,7 +3096,7 @@ function DevProfilesModal({auth,nameForHost,onClose}){
 
   return(
     <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:640}}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:680}}>
         <div className="mhead" style={{padding:"18px 24px"}}>
           <Users size={18}/>
           <h3 style={{flex:1}}>All profiles <span style={{fontWeight:400,opacity:.6,fontSize:14}}>(dev)</span></h3>
@@ -3097,21 +3119,61 @@ function DevProfilesModal({auth,nameForHost,onClose}){
           <div style={{maxHeight:"60vh",overflowY:"auto"}}>
             {rows.map(p=>{
               const mem=membersFor(p.user_id);
+              const editing=editId===p.user_id;
               return(
-                <div key={p.user_id} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 0",borderBottom:"1px solid var(--line)"}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{nameOf(p)}{p.username&&<span style={{marginLeft:6,fontSize:11.5,color:"var(--mut)",fontWeight:600}}>@{p.username}</span>}</div>
-                    <div style={{fontSize:11.5,color:"var(--mut)",marginTop:2}}>
-                      <span style={{textTransform:"capitalize"}}>{p.role||"guest"}</span>
-                      {mem.length>0
-                        ? <> · {mem.map(m=>`${nameForHost(m.host_id)} (${m.role}${m.verified?"":", unverified"})`).join(", ")}</>
-                        : <span style={{color:"#c8860a"}}> · no memberships</span>}
-                      {p.created_at?<> · {new Date(p.created_at).toLocaleDateString()}</>:null}
+                <div key={p.user_id} style={{padding:"11px 0",borderBottom:"1px solid var(--line)"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{nameOf(p)}{p.username&&<span style={{marginLeft:6,fontSize:11.5,color:"var(--mut)",fontWeight:600}}>@{p.username}</span>}</div>
+                      <div style={{fontSize:11.5,color:"var(--mut)",marginTop:2}}>
+                        <span style={{textTransform:"capitalize"}}>{p.role||"guest"}</span>
+                        {mem.length>0
+                          ? <> · {mem.map(m=>`${nameForHost(m.host_id)} (${m.role}${m.verified?"":", unverified"})`).join(", ")}</>
+                          : <span style={{color:"#c8860a"}}> · no memberships</span>}
+                        {p.created_at?<> · {new Date(p.created_at).toLocaleDateString()}</>:null}
+                      </div>
                     </div>
+                    <button className="btn ghost" style={{fontSize:12,padding:"6px 10px",...(editing?{background:"var(--accent)",color:"#fff"}:{})}} onClick={()=>{setEditId(editing?null:p.user_id);setAddHost("");}}>
+                      <Pencil size={12}/>Reassign
+                    </button>
+                    <button className="delbtn" title="Delete profile" disabled={busyId===p.user_id} onClick={()=>del(p)}>
+                      {busyId===p.user_id?<Loader2 size={15} className="spin"/>:<Trash2 size={15}/>}
+                    </button>
                   </div>
-                  <button className="delbtn" title="Delete profile" disabled={busyId===p.user_id} onClick={()=>del(p)}>
-                    {busyId===p.user_id?<Loader2 size={15} className="spin"/>:<Trash2 size={15}/>}
-                  </button>
+                  {editing&&(
+                    <div style={{marginTop:10,background:"var(--grouped)",borderRadius:10,padding:"10px 12px"}}>
+                      {/* Existing memberships: change role, verify, remove */}
+                      {mem.length===0&&<div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>No memberships yet.</div>}
+                      {mem.map(m=>(
+                        <div key={m.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                          <span style={{fontSize:12.5,fontWeight:600,color:"var(--navy)",flex:1,minWidth:120}}>{nameForHost(m.host_id)}</span>
+                          <div className="seg" style={{fontSize:11}}>
+                            <button className={m.role==="owner"?"on":""} onClick={()=>patchMember(m,{role:"owner"})}>Owner</button>
+                            <button className={m.role==="editor"?"on":""} onClick={()=>patchMember(m,{role:"editor"})}>Editor</button>
+                          </div>
+                          <button className="btn ghost" style={{fontSize:11.5,padding:"5px 9px",...(m.verified?{color:"#2e9e5b"}:{})}} onClick={()=>patchMember(m,{verified:!m.verified})}>
+                            {m.verified?<><CheckCircle size={12}/>Verified</>:<><Clock size={12}/>Unverified</>}
+                          </button>
+                          <button className="delbtn" title="Remove from host" onClick={()=>removeMember(m)}><Trash2 size={13}/></button>
+                        </div>
+                      ))}
+                      {/* Add membership to a different host */}
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginTop:6,paddingTop:10,borderTop:"1px solid var(--line)"}}>
+                        <select value={addHost} onChange={e=>setAddHost(e.target.value)}
+                          style={{flex:1,minWidth:140,border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",font:"inherit",fontSize:12.5,background:"#fff"}}>
+                          <option value="">Add to host…</option>
+                          {hosts.filter(h=>!mem.some(m=>m.host_id===h.id)).map(h=><option key={h.id} value={h.id}>{h.name}</option>)}
+                        </select>
+                        <div className="seg" style={{fontSize:11}}>
+                          <button className={addRole==="owner"?"on":""} onClick={()=>setAddRole("owner")}>Owner</button>
+                          <button className={addRole==="editor"?"on":""} onClick={()=>setAddRole("editor")}>Editor</button>
+                        </div>
+                        <button className="btn cta" style={{fontSize:12,padding:"6px 11px"}} disabled={!addHost||busyId===p.user_id} onClick={()=>addMembership(p)}>
+                          <Plus size={13}/>Add
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -3153,36 +3215,36 @@ function HostEditModal({host,onSave,onClose,canManage,membersProps}){
           </div>
         )}
         <div style={{padding:"22px 28px 28px"}}>
-          {tab==="details"&&(<>
-            {/* Globe left (top aligns with name bar, bottom aligns with country bar);
-                name top-right, country directly below it. */}
-            <div style={{display:"flex",gap:22,alignItems:"stretch"}}>
-              <div style={{flex:"0 0 200px",alignSelf:"stretch",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          {tab==="details"&&(
+            <div style={{display:"flex",gap:24,alignItems:"flex-start"}}>
+              {/* Globe left — top aligns with name bar, bottom aligns with the buttons */}
+              <div style={{flex:"0 0 200px"}}>
                 {iso
                   ? <SailingGlobe countryData={{[iso]:1}} height={200} dark mini bare hostIso={iso}/>
                   : <div style={{width:200,height:200,borderRadius:16,background:"rgba(31,78,128,.06)",border:"1px dashed rgba(31,78,128,.25)",display:"grid",placeItems:"center",color:"var(--mut)",fontSize:12,textAlign:"center",padding:16}}>Enter a location code to show a globe</div>}
               </div>
-              <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",justifyContent:"space-between",gap:18}}>
+              {/* Right column: name → location (tight) → buttons (pushed to bottom = globe bottom) */}
+              <div style={{flex:1,minWidth:0,minHeight:200,display:"flex",flexDirection:"column"}}>
                 <div>
                   <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Portal name</label>
                   <input value={name} onChange={e=>setName(e.target.value)} style={barStyle}/>
                 </div>
-                <div>
+                <div style={{marginTop:14}}>
                   <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Location <span style={{fontWeight:400}}>(IOC country code)</span></label>
                   <div style={{position:"relative"}}>
                     <input value={country} onChange={e=>setCountry(e.target.value.toUpperCase().slice(0,3))} placeholder="HKG" maxLength={3} style={{...barStyle,paddingRight:42}}/>
                     {iso&&<span style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",fontSize:17,pointerEvents:"none"}}>{iocFlag(country)}</span>}
                   </div>
                 </div>
+                <div style={{display:"flex",gap:10,marginTop:"auto",paddingTop:18}}>
+                  <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={onClose}>Cancel</button>
+                  <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
+                    {busy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes
+                  </button>
+                </div>
               </div>
             </div>
-            <div style={{display:"flex",gap:10,marginTop:24}}>
-              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={onClose}>Cancel</button>
-              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
-                {busy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes
-              </button>
-            </div>
-          </>)}
+          )}
           {tab==="members"&&canManage&&membersProps&&(
             <HostMembersModal {...membersProps} embedded canManage/>
           )}
@@ -3564,8 +3626,10 @@ export default function AthLinkMVP(){
   const[profileFilterChips,setProfileFilterChips]=useState([]); // cumulative AND-ed filters
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
   const[footprintOpen,setFootprintOpen]=useState(false);
+  const[hostFootprintOpen,setHostFootprintOpen]=useState(false);
   const[editingAthName,setEditingAthName]=useState(null); // {orig} when renaming on the profile page
-  const[athNameInput,setAthNameInput]=useState("");
+  const[athNameFirst,setAthNameFirst]=useState("");
+  const[athNameLast,setAthNameLast]=useState("");
   const[regattaFootprint,setRegattaFootprint]=useState(null);
   const[evSuggestions,setEvSuggestions]=useState([]);
   const[evSugLoading,setEvSugLoading]=useState(false);
@@ -3766,6 +3830,24 @@ export default function AthLinkMVP(){
   };
   const people=useMemo(()=>buildPeople(classEvents),[classEvents,displayNameFor]);
   const allPeople=useMemo(()=>buildPeople(events),[events,displayNameFor]);
+
+  // ── Host competition footprint (for the clickable title globe) ──
+  // countryCounts (ISO → # competitions) drives the globe; hostHistory feeds the
+  // popup list in the same shape FootprintModal expects from an athlete.
+  const hostCountryCounts=useMemo(()=>{
+    if(!portal||isClassPortal) return {};
+    const m={};
+    classEvents.forEach(ev=>{const iso=IOC_ISO[eventCountryCode(ev)||""]||"";if(iso)m[iso]=(m[iso]||0)+1;});
+    // Always include the host's home location so the globe has a marker.
+    const hc=hostLocation(portal,events); const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+    if(hiso&&!m[hiso]) m[hiso]=0;
+    return m;
+  },[portal,isClassPortal,classEvents,events]);
+  const hostHistory=useMemo(()=>classEvents.map(ev=>{
+    const sc=(()=>{try{return scoreEvent(ev);}catch{return null;}})();
+    return {ev:{...ev,class:nuggetFor(ev.cls,ev.subclass).label},row:{rank:0},fleet:sc?sc.fleet:(ev.entries?.length||0),
+      countries:new Set(ev.entries.flatMap(e=>[e.nat]).filter(Boolean)).size};
+  }).sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return db.localeCompare(da);}),[classEvents]);
 
   // ── Duplicate detection (review pile) ───────────────────────
   // Exact canonical matches (word order / case / accents / hyphens / punctuation)
@@ -4874,9 +4956,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .srch{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:12px;padding:10px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35);transition:background .16s,box-shadow .16s;}
     .srch:hover,.srch:focus-within{background:rgba(255,255,255,0.66);box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 4px var(--halo);}
     .srch input{border:0;outline:0;font:inherit;font-size:14px;width:100%;background:none;color:var(--ink);}
-    .seg{display:flex;background:var(--grouped);border:0;border-radius:10px;padding:3px;}
-    .seg button{font:inherit;font-size:13px;font-weight:600;border:0;background:none;color:var(--mut);padding:6px 12px;border-radius:8px;cursor:pointer;transition:.12s;}
-    .seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+    .seg{display:flex;background:rgba(255,255,255,.4);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);border:0;border-radius:12px;padding:4px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.45);}
+    .seg button{font:inherit;font-size:13px;font-weight:600;border:0;background:none;color:var(--mut);padding:7px 14px;border-radius:9px;cursor:pointer;transition:.12s;}
+    .seg button.on{background:rgba(255,255,255,.85);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 1px 3px rgba(0,0,0,.1);}
     .btn{font-weight:600;font-size:14px;border:0;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:10px 18px;transition:transform .18s cubic-bezier(.4,0,.2,1),filter .18s,background .18s,box-shadow .18s;letter-spacing:-.01em;}
     .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 3px rgba(10,132,255,.35);}.btn.cta:hover{background:var(--accent2);}
     .btn.ghost{background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.06);}.btn.ghost:hover{background:rgba(255,255,255,.85);}
@@ -5255,7 +5337,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       onClose={()=>setShowDevApprovals(false)}/>
   )}
   {showDevProfiles&&devMode&&(
-    <DevProfilesModal auth={auth} nameForHost={(id)=>hostById(id)?.name||id} onClose={()=>setShowDevProfiles(false)}/>
+    <DevProfilesModal auth={auth} nameForHost={(id)=>hostById(id)?.name||id} hosts={[...ASSOCIATIONS,...CLUBS,...FEDERATIONS]} onClose={()=>setShowDevProfiles(false)}/>
   )}
   {showHostEdit&&portal&&!isClassPortal&&hostById(portal)&&(()=>{
     const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));
@@ -5648,8 +5730,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               const hc=hostLocation(portal,events);
               const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
               if(!hiso) return null;
-              return(<div style={{width:96,flex:"none",alignSelf:"center"}} title={hc}>
-                <SailingGlobe countryData={{[hiso]:1}} height={96} dark mini bare hostIso={hiso}/>
+              return(<div style={{width:150,flex:"none",alignSelf:"stretch",cursor:"pointer",display:"flex",alignItems:"center"}} title="Where this host competes — click to expand" onClick={()=>setHostFootprintOpen(true)}>
+                <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={hiso}/>
               </div>);
             })()}
             <div style={{minWidth:0}}>
@@ -6181,19 +6263,22 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div style={{flex:1,minWidth:0}}>
                 <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                   {editingAthName?.orig===name
-                    ? <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
-                        <input autoFocus value={athNameInput} onChange={e=>setAthNameInput(e.target.value)}
-                          onKeyDown={async e=>{if(e.key==="Enter"&&athNameInput.trim()){const nn=athNameInput.trim();setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}if(e.key==="Escape")setEditingAthName(null);}}
-                          style={{font:"inherit",fontSize:"inherit",fontWeight:"inherit",fontFamily:"inherit",color:"var(--navy)",border:"2px solid var(--accent)",borderRadius:10,padding:"2px 10px",outline:"none",minWidth:240}}/>
-                        <button className="btn cta" style={{fontSize:12,padding:"6px 11px"}} onClick={async()=>{const nn=athNameInput.trim();if(!nn)return;setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}><CheckCircle size={13}/>Save</button>
+                    ? <span style={{display:"inline-flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                        <input autoFocus value={athNameFirst} onChange={e=>setAthNameFirst(e.target.value)} placeholder="First name"
+                          onKeyDown={async e=>{if(e.key==="Enter"){const nn=`${athNameFirst} ${athNameLast}`.trim();if(nn){setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}if(e.key==="Escape")setEditingAthName(null);}}
+                          style={{font:"inherit",fontSize:"inherit",fontWeight:"inherit",fontFamily:"inherit",color:"var(--navy)",border:"2px solid var(--accent)",borderRadius:10,padding:"2px 10px",outline:"none",width:200}}/>
+                        <input value={athNameLast} onChange={e=>setAthNameLast(e.target.value)} placeholder="Last name"
+                          onKeyDown={async e=>{if(e.key==="Enter"){const nn=`${athNameFirst} ${athNameLast}`.trim();if(nn){setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}if(e.key==="Escape")setEditingAthName(null);}}
+                          style={{font:"inherit",fontSize:"inherit",fontWeight:"inherit",fontFamily:"inherit",color:"var(--navy)",border:"2px solid var(--accent)",borderRadius:10,padding:"2px 10px",outline:"none",width:200}}/>
+                        <button className="btn cta" style={{fontSize:12,padding:"6px 11px"}} onClick={async()=>{const nn=`${athNameFirst} ${athNameLast}`.trim();if(!nn)return;setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}><CheckCircle size={13}/>Save</button>
                         <button className="btn ghost" style={{fontSize:12,padding:"6px 11px"}} onClick={()=>setEditingAthName(null)}>Cancel</button>
                       </span>
                     : <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
                         {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
                         {profileVerified(name)&&<VerifyBadge verified size={20} title="Verified athlete — claimed & vouched"/>}
-                        {devMode&&<button title="Rename athlete (dev)" onClick={()=>{setEditingAthName({orig:name});setAthNameInput(name);}} style={{border:0,background:"var(--grouped)",color:"var(--accent)",borderRadius:980,width:30,height:30,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Pencil size={14}/></button>}
+                        {devMode&&<button title="Rename athlete (dev)" onClick={()=>{const parts=name.trim().split(/\s+/);setEditingAthName({orig:name});setAthNameFirst(parts.slice(0,-1).join(" ")||parts[0]||"");setAthNameLast(parts.length>1?parts[parts.length-1]:"");}} style={{border:0,background:"var(--grouped)",color:"var(--accent)",borderRadius:980,width:30,height:30,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Pencil size={14}/></button>}
                       </span>}
-                  {editingAthName?.orig!==name&&<button className="btn sky" style={{fontSize:13,padding:"7px 13px"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
+                  {editingAthName?.orig!==name&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
                     <Calendar size={14} style={{flex:"none"}}/>Calendar
                   </button>}
                 </h1>
@@ -6745,8 +6830,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
       <div className="ov" onClick={()=>setShowCalendar(false)}>
         <div className="cal-modal" onClick={e=>e.stopPropagation()}>
-          {/* Header: back button above the title */}
-          <div className="cal-head">
+          {/* Header: back button above the title; x vertically centered */}
+          <div className="cal-head" style={{alignItems:"center"}}>
             <div style={{flex:1,minWidth:0}}>
               <button className="cal-back" onClick={()=>setShowCalendar(false)}><ArrowLeft size={15}/>Back</button>
               <h3 style={{marginTop:6}}>{scopeName} Calendar</h3>
@@ -6792,9 +6877,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
       <div className="ov" onClick={()=>setShowSailorCal(false)}>
         <div className="cal-modal" onClick={e=>e.stopPropagation()}>
-          <div className="cal-head">
-            <Calendar size={18}/>
-            <h3>{sailorCalName} — Calendar</h3>
+          <div className="cal-head" style={{alignItems:"center"}}>
+            <div style={{flex:1,minWidth:0}}>
+              <button className="cal-back" onClick={()=>setShowSailorCal(false)}><ArrowLeft size={15}/>Back</button>
+              <h3 style={{marginTop:6}}>{sailorCalName} — Calendar</h3>
+            </div>
             <button className="x" onClick={()=>setShowSailorCal(false)}><X size={16}/></button>
           </div>
           <div className="cal-toolbar">
@@ -6805,21 +6892,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <span style={{fontSize:13,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
               {sailorEvs.length} competition{sailorEvs.length!==1?"s":""}{sailorCalClsSet.size>0?" shown":""}
             </span>
-            <div className="cal-filters" style={{marginLeft:"auto"}}>
-              <div className="seg">
-                <button className={sailorCalClsSet.size===0?"on":""} onClick={()=>toggleSCls("all")}
-                  style={sailorCalClsSet.size===0?{background:"var(--navy)",color:"#fff"}:{}}>All</button>
-                {CLASSES.map(({id,short})=>{
-                  const on=sailorCalClsSet.has(id);
-                  return<button key={id} className={on?"on":""} onClick={()=>toggleSCls(id)}
-                    style={on?{background:classColor(id),color:"#fff"}:{color:classColor(id)}}>{short}</button>;
-                })}
-              </div>
+            <div className="cal-cls-box" style={{marginLeft:"auto"}}>
+              <button className={`cal-cls-mini${sailorCalClsSet.size===0?" on":""}`} onClick={()=>toggleSCls("all")}
+                style={sailorCalClsSet.size===0?{background:"var(--navy)",color:"#fff",borderColor:"var(--navy)"}:{}}>All</button>
+              {CLASSES.map(({id,short})=>{const on=sailorCalClsSet.has(id);return(
+                <button key={id} className={`cal-cls-mini${on?" on":""}`} onClick={()=>toggleSCls(id)}
+                  style={on?{background:classColor(id),color:"#fff",borderColor:classColor(id)}:{color:classColor(id),borderColor:classColorA(id,.5)}}>{short}</button>);})}
             </div>
-          </div>
-          <div className="cal-legend" style={{padding:"8px 16px",borderBottom:"1px solid var(--line)",flex:"none"}}>
-            <span style={{fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",fontSize:10.5,color:"var(--mut)"}}>Class</span>
-            {CLASSES.map(cl=><span key={cl.id} className="lg"><span className="dot" style={{background:classColor(cl.id)}}/>{cl.short}</span>)}
           </div>
           <CalendarBody events={sailorEvs} allEvents={baseEvs} year={sailorCalYear} month={sailorCalMonth}
             setYear={setSailorCalYear} setMonth={setSailorCalMonth} viewMode={sailorCalViewMode} setViewMode={setSailorCalViewMode}
@@ -6830,6 +6909,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     );
   })()}
 
+  {hostFootprintOpen&&portal&&!isClassPortal&&(
+    <ErrorBoundary resetKey={portal} fallback={<div className="ov" onClick={()=>setHostFootprintOpen(false)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",fontWeight:600}}>Couldn't open this host's map.</p><button className="btn cta" onClick={()=>setHostFootprintOpen(false)}>Close</button></div></div>}>
+      <FootprintModal name={portalName} ag={{history:hostHistory}} countryCounts={hostCountryCounts} hostMode titleSuffix="Competitions" onClose={()=>setHostFootprintOpen(false)}/>
+    </ErrorBoundary>
+  )}
   {regattaFootprint&&(
     <ErrorBoundary resetKey={regattaFootprint.id}
       fallback={<div className="ov" onClick={()=>setRegattaFootprint(null)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",color:"var(--ink)",fontWeight:600}}>Couldn't open this regatta's map.</p><button className="btn cta" onClick={()=>setRegattaFootprint(null)}>Close</button></div></div>}>
