@@ -6639,7 +6639,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
             {tab==="ai"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Gemini AI</strong>. Review every AI-parsed result before publishing.</p>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Working…</>:<><Sparkles size={16}/>Choose files</>}
                 <input type="file" multiple accept="application/pdf,.html,text/html,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"ai")}/>
@@ -6874,7 +6874,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {previewEv?.ai_parsed&&<div style={{gridColumn:"1/-1",marginBottom:6,display:"flex",alignItems:"center",gap:6,background:"#f0f4ff",border:"1px solid #c5d3f8",borderRadius:7,padding:"5px 10px"}}>
                 <Sparkles size={13} style={{color:"#3b5bdb",flex:"none"}}/>
                 <span style={{fontSize:12,fontWeight:600,color:"#3b5bdb"}}>AI parsed</span>
-                <span style={{fontSize:11,color:"#6278b5"}}>— This result was parsed by Gemini AI. Review all cells before publishing.</span>
+                <span style={{fontSize:11,color:"#6278b5"}}>— This result was parsed by Claude AI. Review all cells before publishing.</span>
               </div>}
               <div><label>Event name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Event name"/></div>
               <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updPMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
