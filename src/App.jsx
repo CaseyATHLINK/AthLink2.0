@@ -229,7 +229,10 @@ function applyDbHosts(rows){
     id:r.id, type:r.type, scope:r.scope||"HK", name:r.name,
     ...(r.cls?{cls:r.cls}:{}), ...(r.country?{country:r.country}:{}),
   }));
-  const merge=(defs,extra)=>{const m=new Map();[...extra,...defs].forEach(h=>m.set(h.id,h));return[...m.values()];};
+  // DB rows are the source of truth: defaults seed first, DB overwrites on id clash.
+  // (Seeded once via hosts_seed_migration.sql; defaults remain only as an
+  //  emergency fallback if the hosts table is empty / unreachable.)
+  const merge=(defs,extra)=>{const m=new Map();[...defs,...extra].forEach(h=>m.set(h.id,h));return[...m.values()];};
   ASSOCIATIONS=merge(DEFAULT_ASSOCIATIONS,norm("association"));
   CLUBS=merge(DEFAULT_CLUBS,norm("club"));
   FEDERATIONS=merge(DEFAULT_FEDERATIONS,norm("federation"));
@@ -810,7 +813,14 @@ const sbPost=async(t,b)=>{
     return r.json();
   }catch(e){console.error("Supabase POST network error",e);return null;}
 };
-const sbPatch=async(t,f,b)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"PATCH",headers:sbH,body:JSON.stringify(b)});};
+const sbPatch=async(t,f,b)=>{
+  if(!sbH) return null;
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"PATCH",headers:sbH,body:JSON.stringify(b)});
+    if(!r.ok){const err=await r.text();console.error("Supabase PATCH error",r.status,err);return null;}
+    const txt=await r.text(); return txt?JSON.parse(txt):[];
+  }catch(e){console.error("Supabase PATCH network error",e);return null;}
+};
 const sbDel=async(t,f)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"DELETE",headers:{...sbH,"Prefer":""}});};
 
 /* ── Auth (Supabase GoTrue) — minimal, no extra deps ─────────────────────── */
@@ -1836,11 +1846,17 @@ function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffi
                onClick={e=>{if(e.target===e.currentTarget)setSel(null);}}>
             {groups.map(g=>(
               <div key={g.cname}>
-                <div style={{position:"sticky",top:0,background:"rgba(13,40,70,.96)",backdropFilter:"blur(4px)",color:"#dcecf8",fontWeight:700,
-                     fontFamily:"'Barlow',sans-serif",fontSize:13,letterSpacing:".04em",padding:"7px 18px",
-                     display:"flex",alignItems:"center",gap:8,zIndex:1,borderBottom:"1px solid rgba(120,160,210,.14)"}}>
-                  <span style={{fontSize:16}}>{g.iso?[...g.iso].map(ch=>String.fromCodePoint(0x1F1E6+ch.charCodeAt(0)-65)).join(""):""}</span>{g.cname}
-                  <span style={{marginLeft:"auto",color:"#7fa8d4",fontWeight:600}}>{g.items.length}</span>
+                <div style={{position:"sticky",top:0,backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",
+                     padding:"9px 14px 7px",zIndex:1,display:"flex"}}>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:8,
+                     background:"rgba(120,160,210,.16)",border:"1px solid rgba(120,160,210,.3)",
+                     borderRadius:980,padding:"5px 13px",color:"#eaf3fc",fontWeight:700,
+                     fontFamily:"'Barlow',sans-serif",fontSize:13,letterSpacing:".02em",
+                     boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)"}}>
+                    <span style={{fontSize:16,lineHeight:1}}>{g.iso?[...g.iso].map(ch=>String.fromCodePoint(0x1F1E6+ch.charCodeAt(0)-65)).join(""):""}</span>
+                    {g.cname}
+                    <span style={{color:"#9fc4ec",fontWeight:800,fontVariantNumeric:"tabular-nums"}}>{g.items.length}</span>
+                  </span>
                 </div>
                 {g.items.map((h,i)=>{
                   const active=sel&&sel===g.iso;
@@ -1858,7 +1874,9 @@ function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffi
                       {hostMode&&<span style={{color:"#cfe0f2",fontWeight:600}}>{h.fleet} boats</span>}
                       {h.countries>0&&<span>{h.countries} countr{h.countries===1?"y":"ies"}</span>}
                       <span>{formatDate(h.ev.date)}</span>
-                      {h.ev.class?<span style={{background:"rgba(120,160,210,.2)",color:"#cfe0f2",borderRadius:5,padding:"1px 7px",fontWeight:600,fontSize:11.5}}>{h.ev.class}</span>:null}
+                      {h.ev.cls?(()=>{const ng=nuggetFor(h.ev.cls,h.ev.subclass);return(
+                        <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif",letterSpacing:".01em",boxShadow:"inset 0 1px 0 rgba(255,255,255,.3)"}}>{ng.label}</span>
+                      );})():(h.ev.class?<span style={{background:"rgba(120,160,210,.2)",color:"#cfe0f2",borderRadius:980,padding:"2px 10px",fontWeight:600,fontSize:11.5}}>{h.ev.class}</span>:null)}
                     </div>
                   </div>);
                 })}
@@ -2305,11 +2323,11 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               <div style={{height:"100%",width:`${pct}%`,background:"rgba(255,255,255,.75)",borderRadius:3,transition:"width .4s cubic-bezier(.4,0,.2,1)"}}/>
             </div>
           )}
-          <div style={{height:16}}/>
+          <div style={{height:20}}/>
         </div>
 
         {/* ── Body ── */}
-        <div style={{padding:"4px 24px 24px",display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{padding:"12px 24px 26px",display:"flex",flexDirection:"column",gap:15}}>
 
           {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#c0392b",display:"flex",alignItems:"center",gap:8}}><AlertCircle size={14} style={{flex:"none"}}/>{err}</div>}
           {info&&<div style={{background:"rgba(10,132,255,.08)",border:"1px solid rgba(10,132,255,.2)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"var(--accent)"}}>{info}</div>}
@@ -3369,10 +3387,22 @@ export default function AthLinkMVP(){
   // Save host portal edits (name + location). Persists to the hosts table and
   // updates the in-memory registry so the change shows immediately.
   const saveHost=async(hostId,patch)=>{
-    try{ await sbPatch("hosts",`id=eq.${encodeURIComponent(hostId)}`,patch); }catch(e){console.error("saveHost",e);}
+    // Update local registry immediately (optimistic).
     const h=hostById(hostId);
     if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country; }
     setHostsVersion(v=>v+1);
+    // Persist. PATCH alone silently no-ops if the row was never inserted
+    // (the 11 defaults aren't in the hosts table until seeded), so UPSERT:
+    // a PATCH that affects 0 rows is followed by an INSERT carrying the full record.
+    try{
+      const patched=await sbPatch("hosts",`id=eq.${encodeURIComponent(hostId)}`,patch);
+      const hit=Array.isArray(patched)&&patched.length>0;
+      if(!hit&&h){
+        const row={id:h.id,type:h.type,scope:h.scope||"HK",name:h.name,
+          ...(h.cls?{cls:h.cls}:{}),...(h.country?{country:h.country}:{})};
+        await sbPost("hosts",row);
+      }
+    }catch(e){console.error("saveHost persist",e);}
   };
   // ── Save a username to the user's profile (unique, lowercase, alnum + underscore) ──
   const saveUsername=async()=>{
@@ -5077,7 +5107,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .ov{position:fixed;inset:0;background:rgba(0,0,0,.3);backdrop-filter:blur(4px) saturate(140%);-webkit-backdrop-filter:blur(4px) saturate(140%);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;animation:fade .2s both;}
     .modal{background:rgba(252,253,255,0.88);backdrop-filter:blur(56px) saturate(210%);-webkit-backdrop-filter:blur(56px) saturate(210%);width:100%;max-width:900px;border-radius:22px;overflow:hidden;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 40px 90px -28px rgba(0,0,0,.45),0 0 0 .5px rgba(60,60,67,.08);animation:rise .3s both;}
     .modal.wide{max-width:1140px;}
-    .mhead{background:linear-gradient(135deg,rgba(31,78,128,.78),rgba(19,49,78,.84));backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);}
+    .mhead{background:linear-gradient(135deg,rgba(31,78,128,.78),rgba(19,49,78,.84));backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);border-radius:22px 22px 0 0;}
     .mhead h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
     .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:32px;height:32px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;flex:none;padding:0;}
     .x:hover{background:rgba(255,255,255,.26);}
@@ -5724,17 +5754,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className="strip"><div className="wrap">
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
-          <div style={{minWidth:0,display:"flex",gap:16,alignItems:"flex-start"}}>
+          <div style={{minWidth:0,display:"flex",gap:18,alignItems:"center"}}>
             {(()=>{
               if(isClassPortal) return null;
               const hc=hostLocation(portal,events);
               const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
               if(!hiso) return null;
-              return(<div style={{width:150,flex:"none",alignSelf:"stretch",cursor:"pointer",display:"flex",alignItems:"center"}} title="Where this host competes — click to expand" onClick={()=>setHostFootprintOpen(true)}>
+              return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where this host competes — click to expand" onClick={()=>setHostFootprintOpen(true)}>
                 <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={hiso}/>
               </div>);
             })()}
-            <div style={{minWidth:0}}>
+            <div style={{minWidth:0,alignSelf:"center"}}>
             <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
               <h1 className="page-title">{portalName}</h1>
               {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
