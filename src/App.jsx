@@ -4638,27 +4638,30 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       return d;
     }
 
-    // 2) parse each page on its own request (bounded concurrency)
+    // 2) parse each page on its OWN request, strictly SEQUENTIAL with one retry.
+    //    (Firing pages concurrently tripped Anthropic's per-minute rate limit,
+    //    so only the final page survived — hence "last page only".)
     onProgress&&onProgress(0,pageCount);
     const pageResults=new Array(pageCount).fill(null);
     const pageErrors=[];
-    let done=0,next=0;
-    const worker=async()=>{
-      while(next<pageCount){
-        const pi=next++;
-        try{
-          const r=await fetch(`/api/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
-          const d=await r.json();
-          if(d.ok&&Array.isArray(d.entries)){
-            pageResults[pi]={entries:d.entries,name:d.name,date:d.date,discards:d.discards};
-          }else{
-            pageErrors.push({page:pi+1,error:(d&&d.error)||"page failed"});
-          }
-        }catch(e){ pageErrors.push({page:pi+1,error:"network/timeout"}); }
-        done++; onProgress&&onProgress(done,pageCount);
-      }
+    const fetchPage=async(pi)=>{
+      const r=await fetch(`/api/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      return r.json();
     };
-    await Promise.all(Array.from({length:Math.min(3,pageCount)},worker));
+    for(let pi=0;pi<pageCount;pi++){
+      let d=null,err="page failed";
+      for(let attempt=0;attempt<2;attempt++){
+        try{
+          d=await fetchPage(pi);
+          if(d&&d.ok&&Array.isArray(d.entries)) break;
+          err=(d&&d.error)||"page failed"; d=null;
+        }catch(e){ err="network/timeout"; d=null; }
+        if(attempt===0) await new Promise(r=>setTimeout(r,1200)); // brief backoff before retry
+      }
+      if(d) pageResults[pi]={entries:d.entries,name:d.name,date:d.date,discards:d.discards};
+      else pageErrors.push({page:pi+1,error:err});
+      onProgress&&onProgress(pi+1,pageCount);
+    }
 
     // 3) stitch: concat entries in page order; dedupe by helm+crew+sail
     const seen=new Set(); const entries=[];
@@ -4676,8 +4679,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     });
 
     if(!entries.length){
+      const firstErr=pageErrors.length?pageErrors[0].error:"";
       return{ok:false,error:pageErrors.length
-        ?`AI parser couldn't read this PDF (${pageErrors.length}/${pageCount} pages failed). Try the built-in parser, or a Sailwave/Manage2sail export.`
+        ?`AI parser couldn't read this PDF (${pageErrors.length}/${pageCount} pages failed). Reason: ${firstErr}. Try the built-in parser, or a Sailwave/Manage2sail export.`
         :"AI parser returned no entries."};
     }
     const notes=[`AI-parsed ${pageCount} pages → ${entries.length} competitors.`];
@@ -4736,12 +4740,22 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const isPdf=f.name.toLowerCase().endsWith(".pdf")||f.type==="application/pdf";
       let data;
       if(mode==="ai"&&isPdf){
-        // Page-chunked AI parse (each page is its own sub-10s request).
-        data=await parseOnePdfPaged(f,(p,t)=>{
-          setParseLog(prev=>prev.map((l,li)=>li===i
-            ?{...l,status:"parsing",notes:[t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"]}
-            :l));
-        });
+        // Flow: built-in (rule) parser → whole-file Claude → per-page Claude.
+        // parseOneFile(…, "ai") hits the server, which tries the rule parser
+        // FIRST (handles Sailwave / Manage2sail / Sailti instantly, all pages,
+        // exact names) and only falls back to a whole-file Claude pass for
+        // unknown formats. Most files finish right here with no AI at all.
+        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading with the built-in parser…"]}:l));
+        data=await parseOneFile(f,"ai");
+        // Only if the whole-file pass couldn't read it (unknown format too big
+        // for one Claude call, or it timed out) do we chunk it page-by-page.
+        if(!data.ok){
+          data=await parseOnePdfPaged(f,(p,t)=>{
+            setParseLog(prev=>prev.map((l,li)=>li===i
+              ?{...l,status:"parsing",notes:[t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"]}
+              :l));
+          });
+        }
       }else{
         data=await parseOneFile(f,mode);
       }
@@ -4766,7 +4780,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const perFile=new Array(files.length);
     let next=0;
     const worker=async()=>{ while(next<files.length){ const i=next++; perFile[i]=await handleOne(i); } };
-    await Promise.all(Array.from({length:Math.min(6,files.length)},worker));
+    await Promise.all(Array.from({length:Math.min(3,files.length)},worker));
     const results=perFile.flat();
     setPending(results);setActivePending(0);
     const firstOk=results.findIndex(r=>r.status==="ok");
