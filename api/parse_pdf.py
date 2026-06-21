@@ -29,8 +29,10 @@ from http.server import BaseHTTPRequestHandler
 import json, io, re, os, base64
 try:
     from urllib.request import urlopen, Request as UrlRequest
+    from urllib.error import HTTPError
 except ImportError:
     urlopen = UrlRequest = None
+    HTTPError = Exception
 
 try:
     import pdfplumber
@@ -750,7 +752,9 @@ def detect_fleets_in_text(text):
     return found
 
 # ── Gemini AI fallback ─────────────────────────────────────────────────────
-_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+_ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+# Haiku 4.5 reads PDFs natively (visual + text) and is fast enough for the Hobby 10s cap.
+_AI_MODEL = "claude-haiku-4-5"
 
 _GEMINI_PROMPT = """Parse this sailing regatta results file. Return ONLY a JSON object, no markdown/explanation.
 
@@ -804,9 +808,9 @@ def _downscale_image(file_bytes: bytes, mime_type: str, max_dim: int = 2200, qua
 
 
 def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_hint: str = "") -> dict:
-    key = os.environ.get("GEMINI_API_KEY", "")
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
-        raise ValueError("GEMINI_API_KEY not configured.")
+        raise ValueError("ANTHROPIC_API_KEY not configured.")
     if urlopen is None:
         raise ValueError("urllib not available.")
 
@@ -817,37 +821,54 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
     prompt = _GEMINI_PROMPT
     if header_hint:
         prompt = prompt + _GEMINI_PAGE_HINT.format(header=header_hint)
+
+    # Claude reads PDFs as a document block; images as an image block.
+    if mime_type == "application/pdf":
+        media_block = {"type": "document",
+                       "source": {"type": "base64", "media_type": "application/pdf",
+                                  "data": base64.b64encode(file_bytes).decode()}}
+    else:
+        media_block = {"type": "image",
+                       "source": {"type": "base64", "media_type": mime_type,
+                                  "data": base64.b64encode(file_bytes).decode()}}
+
     payload = json.dumps({
-        "contents": [{"parts": [
-            {"text": prompt},
-            {"inline_data": {"mime_type": mime_type,
-                             "data": base64.b64encode(file_bytes).decode()}}
-        ]}],
-        "generationConfig": {"temperature": 0, "maxOutputTokens": 65536}
+        "model": _AI_MODEL,
+        "max_tokens": 8192,
+        "temperature": 0,
+        "messages": [{"role": "user", "content": [media_block, {"type": "text", "text": prompt}]}],
     }).encode()
 
     req = UrlRequest(
-        f"{_GEMINI_URL}?key={key}",
+        _ANTHROPIC_URL,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json",
+                 "x-api-key": key,
+                 "anthropic-version": "2023-06-01"},
         method="POST"
     )
     # Hobby serverless functions hard-cap at ~10s, so keep the model call tight.
-    with urlopen(req, timeout=9) as resp:
-        result = json.loads(resp.read())
+    try:
+        with urlopen(req, timeout=9) as resp:
+            result = json.loads(resp.read())
+    except HTTPError as exc:
+        try:
+            detail = json.loads(exc.read())
+            msg = detail.get("error", {}).get("message", str(detail))
+        except Exception:
+            msg = getattr(exc, "reason", None) or str(exc)
+        raise ValueError(f"AI service error ({exc.code}): {msg}")
 
-    cand = (result.get("candidates") or [{}])[0]
-    finish = cand.get("finishReason", "")
-    parts = (cand.get("content") or {}).get("parts") or [{}]
-    raw = parts[0].get("text", "")
+    stop = result.get("stop_reason", "")
+    raw = "".join(b.get("text", "") for b in (result.get("content") or []) if b.get("type") == "text").strip()
     if not raw:
-        raise ValueError(f"AI parser returned no text (finishReason={finish or 'unknown'}).")
+        raise ValueError(f"AI parser returned no text (stop_reason={stop or 'unknown'}).")
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        if finish == "MAX_TOKENS":
-            raise ValueError("This results file is too large for the AI parser in one pass. Try splitting it by fleet, or use a Sailwave HTML export.")
+        if stop == "max_tokens":
+            raise ValueError("This page returned too much data for the AI parser. Try the built-in parser, or a Sailwave/Manage2sail export.")
         raise ValueError("AI parser returned malformed JSON.")
 
     entries = []
@@ -1292,7 +1313,7 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
             out.setdefault('notes', []).insert(0, f"Loaded {url}")
             return out
         except ValueError as html_err:
-            if mode == 'ai' and os.environ.get("GEMINI_API_KEY"):
+            if mode == 'ai' and os.environ.get("ANTHROPIC_API_KEY"):
                 # Some 'HTML' pages are really embedded PDFs / JS apps — let AI try the bytes.
                 try:
                     return _gemini_parse(data, "application/pdf")
@@ -1330,9 +1351,13 @@ def _pdf_header_hint(file_bytes: bytes) -> str:
     return ''
 
 
-def _extract_single_page_pdf(file_bytes: bytes, page_index: int) -> bytes:
-    """Return a standalone one-page PDF for the given 0-based page index."""
-    import pypdf
+def _extract_single_page_pdf(file_bytes: bytes, page_index: int):
+    """Return a standalone one-page PDF (bytes) for the given 0-based page index,
+    or None if pypdf isn't available (caller then falls back to the whole PDF)."""
+    try:
+        import pypdf
+    except ImportError:
+        return None
     reader = pypdf.PdfReader(io.BytesIO(file_bytes))
     writer = pypdf.PdfWriter()
     writer.add_page(reader.pages[page_index])
@@ -1351,11 +1376,19 @@ def parse_pdf_page(file_bytes: bytes, page_index: int) -> dict:
     if mime != "application/pdf":
         # Images / single files: no paging — parse whole thing.
         return _gemini_parse(file_bytes, mime)
-    key = os.environ.get("GEMINI_API_KEY", "")
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
-        raise ValueError("Page parsing requires AI, but GEMINI_API_KEY is not configured.")
+        raise ValueError("Page parsing requires AI, but ANTHROPIC_API_KEY is not configured.")
     header = _pdf_header_hint(file_bytes)
     page_pdf = _extract_single_page_pdf(file_bytes, page_index)
+    if page_pdf is None:
+        # pypdf missing → can't split. Parse the whole PDF (only return page 0's
+        # request to avoid N duplicate whole-file passes); client dedupes anyway.
+        if page_index != 0:
+            return {"ok": True, "multi": False, "name": "", "date": "", "discards": 1,
+                    "entries": [], "ai_parsed": True,
+                    "notes": ["pypdf not installed — page splitting unavailable; parsed whole file on page 0."]}
+        return _gemini_parse(file_bytes, "application/pdf")
     return _gemini_parse(page_pdf, "application/pdf", header_hint=header)
 
 
@@ -1383,10 +1416,10 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
                 "This is an image — the non-AI parser can't read it. "
                 "Use the AI parser for photos and screenshots."
             )
-        key = os.environ.get("GEMINI_API_KEY", "")
+        key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not key:
             raise ValueError(
-                "Image results require AI parsing, but GEMINI_API_KEY is not configured."
+                "Image results require AI parsing, but ANTHROPIC_API_KEY is not configured."
             )
         return _gemini_parse(file_bytes, mime)
 
@@ -1396,7 +1429,7 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     except ValueError as rule_err:
         if mode == 'rule':
             raise   # non-AI parser: surface the failure, no fallback
-        key = os.environ.get("GEMINI_API_KEY", "")
+        key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not key:
             raise  # No AI key — surface original error
         try:
