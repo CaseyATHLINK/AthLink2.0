@@ -82,6 +82,30 @@ function CountryTag({code,size=14,style={}}){
   const fl=iocFlag(code);
   return <span style={{display:"inline-flex",alignItems:"center",gap:5,...style}}>{fl&&<span style={{fontSize:size+2,lineHeight:1}}>{fl}</span>}{code}</span>;
 }
+/* ── ConfirmModal: in-app replacement for window.confirm (liquid-glass) ──────
+   Render when `state` is set; state = {title?, message, confirmLabel?, danger?, onConfirm}. */
+function ConfirmModal({state,onClose}){
+  if(!state) return null;
+  const {title="Are you sure?",message,confirmLabel="Confirm",danger=true,onConfirm}=state;
+  return(
+    <div className="ov" onClick={onClose} style={{zIndex:120}}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:400,overflow:"visible"}}>
+        <div className="mhead" style={{padding:"16px 22px"}}>
+          <AlertCircle size={18}/><h3 style={{flex:1}}>{title}</h3>
+        </div>
+        <div style={{padding:"18px 22px 22px"}}>
+          <p style={{margin:"0 0 18px",fontSize:14,lineHeight:1.5,color:"var(--ink)",whiteSpace:"pre-line"}}>{message}</p>
+          <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+            <button className="btn ghost" style={{fontSize:13}} onClick={onClose}>Cancel</button>
+            <button className="btn" style={{fontSize:13,background:danger?"#e74c3c":"var(--accent)",color:"#fff",
+              boxShadow:"inset 0 1px 0 rgba(255,255,255,.3),0 1px 3px rgba(0,0,0,.18)"}}
+              onClick={()=>{onClose();onConfirm&&onConfirm();}}>{danger?<Trash2 size={14}/>:<CheckCircle size={14}/>}{confirmLabel}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 function VerifyBadge({verified,size=14,title}){
   // verified -> blue, unverified -> grey. Badge icon only.
   const col=verified?"#0d8ecf":"#9fb2c8";
@@ -2983,18 +3007,21 @@ function DevApprovalsModal({auth,hosts,nameForHost,eventCountFor,memberCountFor,
 
   const nameFor=(id)=>id?(names[id]||`User ${id.slice(0,8)}`):"—";
 
+  const[confirm,setConfirm]=React.useState(null);
   const doApprove=async(m)=>{setBusyId(m.id);await onApprove(m);await load();setBusyId(null);};
-  const doDelete=async(m)=>{
-    if(!window.confirm(`Delete ${nameFor(m.user_id)}'s ${m.role} request for "${nameForHost(m.host_id)}"?`)) return;
-    setBusyId(m.id);await onDelete(m);await load();setBusyId(null);
-  };
+  const doDelete=(m)=>setConfirm({
+    title:"Delete request?",
+    message:`Delete ${nameFor(m.user_id)}'s ${m.role} request for "${nameForHost(m.host_id)}"?`,
+    confirmLabel:"Delete",
+    onConfirm:async()=>{setBusyId(m.id);await onDelete(m);await load();setBusyId(null);}});
   const doReassign=async(m,newHostId)=>{
     setBusyId(m.id);await onReassign(m,newHostId);setReassignFor(null);setReassignSearch("");await load();setBusyId(null);
   };
 
   const reassignOptions=(hosts||[]).filter(h=>!reassignSearch.trim()||h.name.toLowerCase().includes(reassignSearch.toLowerCase()));
 
-  return(
+  return(<>
+    <ConfirmModal state={confirm} onClose={()=>setConfirm(null)}/>
     <div className="ov" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:600}}>
         <div className="mhead" style={{padding:"18px 24px"}}>
@@ -3050,7 +3077,7 @@ function DevApprovalsModal({auth,hosts,nameForHost,eventCountFor,memberCountFor,
         </div>
       </div>
     </div>
-  );
+  </>);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -3081,10 +3108,12 @@ function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
   const membersFor=(uid)=>members.filter(m=>m.user_id===uid);
   const nameOf=(p)=>`${p.first_name||""} ${p.last_name||""}`.trim()||p.display_name||(p.username?"@"+p.username:null)||`User ${String(p.user_id).slice(0,8)}`;
 
-  const del=async(p)=>{
-    if(!window.confirm(`Delete profile "${nameOf(p)}" and all its memberships? This cannot be undone.`)) return;
-    setBusyId(p.user_id); await devDeleteProfile(p.user_id,tok); await load(); setBusyId(null);
-  };
+  const[confirm,setConfirm]=React.useState(null);
+  const del=(p)=>setConfirm({
+    title:"Delete profile?",
+    message:`Delete profile "${nameOf(p)}" and all its memberships?\n\nThis cannot be undone.`,
+    confirmLabel:"Delete",
+    onConfirm:async()=>{setBusyId(p.user_id);await devDeleteProfile(p.user_id,tok);await load();setBusyId(null);}});
   // ── Reassign helpers (persisted to host_members) ──
   const patchMember=async(m,patch)=>{
     setBusyId(m.user_id);
@@ -3112,7 +3141,8 @@ function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
     return hay.includes(q.toLowerCase());
   });
 
-  return(
+  return(<>
+    <ConfirmModal state={confirm} onClose={()=>setConfirm(null)}/>
     <div className="ov" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:680}}>
         <div className="mhead" style={{padding:"18px 24px"}}>
@@ -3199,7 +3229,7 @@ function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
         </div>
       </div>
     </div>
-  );
+  </>);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -3213,7 +3243,9 @@ function HostEditModal({host,onSave,onClose,canManage,membersProps}){
   const[country,setCountry]=React.useState(host?.country||"");
   const[busy,setBusy]=React.useState(false);
   const iso=IOC_ISO[(country||"").toUpperCase()]||"";
-  const barStyle={width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"12px 14px",font:"inherit",fontSize:15,outline:"none",background:"rgba(255,255,255,.85)"};
+  const barStyle={width:"100%",border:"0",borderRadius:980,padding:"13px 18px",font:"inherit",fontSize:15,outline:"none",
+    background:"rgba(255,255,255,.55)",backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",
+    boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",transition:"box-shadow .16s"};
   const save=async()=>{
     setBusy(true);
     await onSave({name:name.trim()||host.name,country:(country||"").toUpperCase()||null});
@@ -3227,7 +3259,7 @@ function HostEditModal({host,onSave,onClose,canManage,membersProps}){
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
         {canManage&&(
-          <div className="seg" style={{margin:"16px 28px 0",alignSelf:"flex-start"}}>
+          <div className="seg" style={{margin:"18px 28px 0"}}>
             <button className={tab==="details"?"on":""} onClick={()=>setTab("details")}>Details</button>
             <button className={tab==="members"?"on":""} onClick={()=>setTab("members")}>Members</button>
           </div>
@@ -3250,8 +3282,8 @@ function HostEditModal({host,onSave,onClose,canManage,membersProps}){
                 <div style={{marginTop:14}}>
                   <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Location <span style={{fontWeight:400}}>(IOC country code)</span></label>
                   <div style={{position:"relative"}}>
-                    <input value={country} onChange={e=>setCountry(e.target.value.toUpperCase().slice(0,3))} placeholder="HKG" maxLength={3} style={{...barStyle,paddingRight:42}}/>
-                    {iso&&<span style={{position:"absolute",right:14,top:"50%",transform:"translateY(-50%)",fontSize:17,pointerEvents:"none"}}>{iocFlag(country)}</span>}
+                    <input value={country} onChange={e=>setCountry(e.target.value.toUpperCase().slice(0,3))} placeholder="HKG" maxLength={3} style={{...barStyle,paddingRight:46}}/>
+                    {iso&&<span style={{position:"absolute",right:18,top:"50%",transform:"translateY(-50%)",fontSize:17,pointerEvents:"none"}}>{iocFlag(country)}</span>}
                   </div>
                 </div>
                 <div style={{display:"flex",gap:10,marginTop:"auto",paddingTop:18}}>
@@ -3657,6 +3689,7 @@ export default function AthLinkMVP(){
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
   const[footprintOpen,setFootprintOpen]=useState(false);
   const[hostFootprintOpen,setHostFootprintOpen]=useState(false);
+  const[confirmState,setConfirmState]=useState(null); // in-app confirm dialog (replaces window.confirm)
   const[editingAthName,setEditingAthName]=useState(null); // {orig} when renaming on the profile page
   const[athNameFirst,setAthNameFirst]=useState("");
   const[athNameLast,setAthNameLast]=useState("");
@@ -3730,14 +3763,19 @@ export default function AthLinkMVP(){
       else console.error("saveNewHost: Supabase save failed — host won't survive reload (run hosts_migration.sql).");
     }catch(err){console.error("saveNewHost: background save error",err);}
   };
-  const deleteHost=async(id,name,e)=>{
+  const deleteHost=(id,name,e)=>{
     if(e)e.stopPropagation();
     if(!devMode) return;
-    if(!window.confirm(`Delete host/portal "${name}"?\n\nThis removes the portal only — imported results stay intact and will simply no longer be grouped under this host.`)) return;
-    removeHostLocal(id);
-    setHostsVersion(v=>v+1);
-    if(portal===id){setPortal(null);setView({name:"portals"});}
-    try{await sbDel("hosts","id=eq."+encodeURIComponent(id));}catch(err){console.error("deleteHost: DB delete error",err);}
+    setConfirmState({
+      title:"Delete portal?",
+      message:`Delete host/portal "${name}"?\n\nThis removes the portal only — imported results stay intact and will simply no longer be grouped under this host.`,
+      confirmLabel:"Delete",
+      onConfirm:async()=>{
+        removeHostLocal(id);
+        setHostsVersion(v=>v+1);
+        if(portal===id){setPortal(null);setView({name:"portals"});}
+        try{await sbDel("hosts","id=eq."+encodeURIComponent(id));}catch(err){console.error("deleteHost: DB delete error",err);}
+      }});
   };
   const[calClsSet,setCalClsSet]=useState(new Set()); // empty = All
   const[calQ,setCalQ]=useState("");
@@ -3865,12 +3903,15 @@ export default function AthLinkMVP(){
   // countryCounts (ISO → # competitions) drives the globe; hostHistory feeds the
   // popup list in the same shape FootprintModal expects from an athlete.
   const hostCountryCounts=useMemo(()=>{
-    if(!portal||isClassPortal) return {};
+    if(!portal) return {};
     const m={};
     classEvents.forEach(ev=>{const iso=IOC_ISO[eventCountryCode(ev)||""]||"";if(iso)m[iso]=(m[iso]||0)+1;});
-    // Always include the host's home location so the globe has a marker.
-    const hc=hostLocation(portal,events); const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
-    if(hiso&&!m[hiso]) m[hiso]=0;
+    // For host portals, always include the host's home location so the globe has a marker.
+    // Class portals have no single home — the spread itself is the footprint.
+    if(!isClassPortal){
+      const hc=hostLocation(portal,events); const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+      if(hiso&&!m[hiso]) m[hiso]=0;
+    }
     return m;
   },[portal,isClassPortal,classEvents,events]);
   const hostHistory=useMemo(()=>classEvents.map(ev=>{
@@ -4986,9 +5027,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .srch{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:12px;padding:10px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35);transition:background .16s,box-shadow .16s;}
     .srch:hover,.srch:focus-within{background:rgba(255,255,255,0.66);box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 4px var(--halo);}
     .srch input{border:0;outline:0;font:inherit;font-size:14px;width:100%;background:none;color:var(--ink);}
-    .seg{display:flex;background:rgba(255,255,255,.4);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);border:0;border-radius:12px;padding:4px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.45);}
-    .seg button{font:inherit;font-size:13px;font-weight:600;border:0;background:none;color:var(--mut);padding:7px 14px;border-radius:9px;cursor:pointer;transition:.12s;}
-    .seg button.on{background:rgba(255,255,255,.85);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 1px 3px rgba(0,0,0,.1);}
+    .seg{display:inline-flex;background:rgba(255,255,255,.42);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;border-radius:980px;padding:5px;gap:2px;box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 4px 14px -8px rgba(0,0,0,.14);}
+    .seg button{font:inherit;font-family:'Barlow',sans-serif;font-size:13px;font-weight:700;border:0;background:none;color:var(--mut);padding:8px 18px;border-radius:980px;cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);white-space:nowrap;}
+    .seg button:hover{color:var(--navy);}
+    .seg button.on{background:rgba(255,255,255,.92);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .btn{font-weight:600;font-size:14px;border:0;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:10px 18px;transition:transform .18s cubic-bezier(.4,0,.2,1),filter .18s,background .18s,box-shadow .18s;letter-spacing:-.01em;}
     .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 3px rgba(10,132,255,.35);}.btn.cta:hover{background:var(--accent2);}
     .btn.ghost{background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.06);}.btn.ghost:hover{background:rgba(255,255,255,.85);}
@@ -5756,23 +5798,32 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
           <div style={{minWidth:0,display:"flex",gap:18,alignItems:"center"}}>
             {(()=>{
-              if(isClassPortal) return null;
-              const hc=hostLocation(portal,events);
-              const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+              // Item 7: globe for BOTH association/club/federation portals AND class portals.
+              let hiso=null;
+              if(isClassPortal){
+                const top=Object.entries(hostCountryCounts).sort((a,b)=>b[1]-a[1])[0];
+                hiso=top?top[0]:null;
+              } else {
+                const hc=hostLocation(portal,events);
+                hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+              }
               if(!hiso) return null;
-              return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where this host competes — click to expand" onClick={()=>setHostFootprintOpen(true)}>
-                <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={hiso}/>
+              return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where this portal competes — click to expand" onClick={()=>setHostFootprintOpen(true)}>
+                <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={isClassPortal?null:hiso}/>
               </div>);
             })()}
             <div style={{minWidth:0,alignSelf:"center"}}>
-            <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
-              <h1 className="page-title">{portalName}</h1>
-              {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
+            {/* Item 4: OWNER/role badge sits ABOVE the title, left-aligned. */}
+            {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
+              <div style={{marginBottom:8}}>
                 <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
                   color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
                   <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
                 </span>
-              )}
+              </div>
+            )}
+            <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+              <h1 className="page-title">{portalName}</h1>
             </div>
             <div className="pillbar" style={{marginTop:12}}>
               <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
@@ -5780,8 +5831,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             </div>
           </div>
-          {/* ── In-portal pill buttons (vertical stack) ── */}
-          <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none"}}>
+          {/* ── In-portal pill buttons — Item 6: vertically centered against the globe/title block ── */}
+          <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",alignSelf:"center"}}>
             <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
               <Users size={14} style={{flex:"none"}}/> Athletes
             </MagneticItem>
@@ -6081,10 +6132,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <div className="wrap sec" style={{paddingTop:16}}>
       <div className="page-head">
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
-        <div style={{display:"flex",alignItems:"baseline",gap:16,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",width:"100%"}}>
           <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
-          {portal&&<button className="btn sky" style={{fontSize:13,padding:"6px 12px"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
-            <Users size={14}/>All Athletes</button>}
+          {portal&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
+            <Users size={14} style={{flex:"none"}}/>All Athletes</button>}
         </div>
         <p className="page-sub">One profile per athlete, built automatically from results.</p>
       </div>
@@ -6939,7 +6990,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     );
   })()}
 
-  {hostFootprintOpen&&portal&&!isClassPortal&&(
+  {hostFootprintOpen&&portal&&(
     <ErrorBoundary resetKey={portal} fallback={<div className="ov" onClick={()=>setHostFootprintOpen(false)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",fontWeight:600}}>Couldn't open this host's map.</p><button className="btn cta" onClick={()=>setHostFootprintOpen(false)}>Close</button></div></div>}>
       <FootprintModal name={portalName} ag={{history:hostHistory}} countryCounts={hostCountryCounts} hostMode titleSuffix="Competitions" onClose={()=>setHostFootprintOpen(false)}/>
     </ErrorBoundary>
@@ -7053,6 +7104,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       </div>
     </div>
   )}
+  <ConfirmModal state={confirmState} onClose={()=>setConfirmState(null)}/>
   <div className="foot">Powered by AthLink</div>
   </div>
   );
