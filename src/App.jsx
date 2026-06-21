@@ -4593,7 +4593,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const data=await res.json();
       if(data.ok) return data;
-      if(!isHtml) return{ok:false,error:data.error||"Could not parse this file."};
+      if(!isHtml){
+        let err=data.error||"Could not parse this file.";
+        // B: when the built-in parser doesn't recognise a PDF, point to the AI parser.
+        if(mode==="rule"&&/not found|unsupported|unknown|couldn'?t|supported:/i.test(err))
+          err=err.replace(/\s*For other formats use Manual entry\.?/i,"")
+              +" — switch to the AI parser tab (it reads odd or non-standard layouts), or use Manual entry.";
+        return{ok:false,error:err};
+      }
       // server reachable but couldn't read the HTML → try the browser parser below
     }catch{
       if(!isHtml) return{ok:false,error:"Upload failed. Check api/parse_pdf.py is deployed."};
@@ -4608,6 +4615,75 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       }catch(err){return{ok:false,error:"HTML parse failed: "+err.message};}
     }
     return{ok:false,error:"Could not parse this file."};
+  };
+
+  // ── Paged AI parse (PDF only): split into per-page calls so each finishes
+  //    under the Hobby 10s function cap, then stitch the entries together.
+  //    onProgress(done,total) drives the per-page UI. Returns the same shape
+  //    as parseOneFile: {ok, name, date, entries, discards, ai_parsed, notes}. ──
+  const parseOnePdfPaged=async(file,onProgress)=>{
+    // 1) page count (instant, server-side via pypdf)
+    let pageCount=1;
+    try{
+      const cres=await fetch(`/api/parse_pdf?count=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const cdata=await cres.json();
+      if(cdata.ok&&cdata.page_count) pageCount=Math.max(1,cdata.page_count|0);
+    }catch{ /* fall back to a single whole-file AI call below */ }
+
+    // Single-page PDF: nothing to chunk — one normal AI call.
+    if(pageCount<=1){
+      onProgress&&onProgress(0,1);
+      const d=await parseOneFile(file,"ai");
+      onProgress&&onProgress(1,1);
+      return d;
+    }
+
+    // 2) parse each page on its own request (bounded concurrency)
+    onProgress&&onProgress(0,pageCount);
+    const pageResults=new Array(pageCount).fill(null);
+    const pageErrors=[];
+    let done=0,next=0;
+    const worker=async()=>{
+      while(next<pageCount){
+        const pi=next++;
+        try{
+          const r=await fetch(`/api/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+          const d=await r.json();
+          if(d.ok&&Array.isArray(d.entries)){
+            pageResults[pi]={entries:d.entries,name:d.name,date:d.date,discards:d.discards};
+          }else{
+            pageErrors.push({page:pi+1,error:(d&&d.error)||"page failed"});
+          }
+        }catch(e){ pageErrors.push({page:pi+1,error:"network/timeout"}); }
+        done++; onProgress&&onProgress(done,pageCount);
+      }
+    };
+    await Promise.all(Array.from({length:Math.min(3,pageCount)},worker));
+
+    // 3) stitch: concat entries in page order; dedupe by helm+crew+sail
+    const seen=new Set(); const entries=[];
+    let name="",date="",discards=1;
+    pageResults.forEach(pr=>{
+      if(!pr) return;
+      if(pr.name&&!name) name=pr.name;
+      if(pr.date&&!date) date=pr.date;
+      if(pr.discards) discards=Math.max(discards,pr.discards|0);
+      (pr.entries||[]).forEach(e=>{
+        const key=`${(e.helm||"").toLowerCase()}|${(e.crew||"").toLowerCase()}|${(e.sail||"").toLowerCase()}`;
+        if(seen.has(key)) return;
+        seen.add(key); entries.push(e);
+      });
+    });
+
+    if(!entries.length){
+      return{ok:false,error:pageErrors.length
+        ?`AI parser couldn't read this PDF (${pageErrors.length}/${pageCount} pages failed). Try the built-in parser, or a Sailwave/Manage2sail export.`
+        :"AI parser returned no entries."};
+    }
+    const notes=[`AI-parsed ${pageCount} pages → ${entries.length} competitors.`];
+    if(pageErrors.length) notes.push(`⚠ ${pageErrors.length} page(s) failed (${pageErrors.map(x=>x.page).join(", ")}) — review for gaps before publishing.`);
+    return{ok:true,multi:false,name:name||file.name.replace(/\.pdf$/i,""),date,discards,entries,ai_parsed:true,notes,
+      partial:pageErrors.length>0};
   };
 
   // Fetch + parse a live results link server-side (browser can't, due to CORS).
@@ -4656,7 +4732,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // Cap concurrency so a large batch doesn't fire dozens of simultaneous AI calls.
     let done=0;
     const handleOne=async(i)=>{
-      const data=await parseOneFile(files[i],mode);
+      const f=files[i];
+      const isPdf=f.name.toLowerCase().endsWith(".pdf")||f.type==="application/pdf";
+      let data;
+      if(mode==="ai"&&isPdf){
+        // Page-chunked AI parse (each page is its own sub-10s request).
+        data=await parseOnePdfPaged(f,(p,t)=>{
+          setParseLog(prev=>prev.map((l,li)=>li===i
+            ?{...l,status:"parsing",notes:[t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"]}
+            :l));
+        });
+      }else{
+        data=await parseOneFile(f,mode);
+      }
       let rows;
       if(!data.ok){
         rows=[{...seed[i],status:"error",error:data.error}];
