@@ -172,10 +172,19 @@ def hdr_key(cell):
 
 # ── name helpers ───────────────────────────────────────────────────────────
 def strip_birth_year(name):
-    return re.sub(r'\s*\(\d{4}\)\s*', '', str(name)).strip()
+    # Replace a (YYYY) birth year with a space so the surname doesn't glue to
+    # whatever follows (e.g. a trailing "(Club)"), then collapse whitespace.
+    n = re.sub(r'\(\s*(?:19[3-9]\d|20[0-2]\d)\s*\)', ' ', str(name))
+    return re.sub(r'\s+', ' ', n).strip()
 
 def strip_club_suffix(name):
-    return re.sub(r'\s*\([A-Z]{2,6}\)\s*$', '', str(name)).strip()
+    # Strip ALL trailing parenthetical groups (club names, codes, empty "()"),
+    # not just short ALL-CAPS abbreviations. Repeats to peel multiple groups.
+    n = str(name); prev = None
+    while prev != n:
+        prev = n
+        n = re.sub(r'\s*\([^()]*\)\s*$', '', n).strip()
+    return n
 
 def title_name(n):
     if not n:
@@ -183,16 +192,39 @@ def title_name(n):
     parts = str(n).strip().split()
     out = []
     for p in parts:
-        if len(p) > 1 and re.match(r'^[A-Z\-]+$', p):
+        mc = re.match(r"^(Ma?c)([A-ZÀ-ÖØ-Þ]{2,})$", p)  # McKAY → McKay, MacDONALD → MacDonald
+        if mc:
+            out.append(mc.group(1) + mc.group(2).title())
+        elif len(p) > 1 and re.match(r'^[A-ZÀ-ÖØ-Þ\-]+$', p):
             out.append(p.title())
         else:
             out.append(p)
     return ' '.join(out)
 
+def reorder_surname_first(n):
+    """manage2sail writes Asian names surname-first ("LAW Casey"). The ALL-CAPS
+    token is the surname in either order, so when a name STARTS with an all-caps
+    run followed by a Title-case forename, move the surname to the end.
+    Western names ("Erwan FISCHER") start Title-case and are left untouched."""
+    toks = n.split()
+    if len(toks) < 2:
+        return n
+    def is_caps(t):  return len(t) >= 2 and re.match(r"^[A-ZÀ-ÖØ-Þ\-]+$", t)
+    def is_title(t): return re.match(r"^[A-ZÀ-Þ][a-zà-ÿ]", t)
+    if is_caps(toks[0]) and any(is_title(t) for t in toks[1:]):
+        i = 0
+        while i < len(toks) and is_caps(toks[i]):
+            i += 1
+        surname, rest = toks[:i], toks[i:]
+        if rest:
+            return ' '.join(rest + surname)
+    return n
+
 def clean_name(raw):
     n = str(raw or '').strip()
     n = strip_birth_year(n)
     n = strip_club_suffix(n)
+    n = reorder_surname_first(n)
     return title_name(n)
 
 def join_wrapped(cell_value):
@@ -222,23 +254,34 @@ def split_combined_names(cell_value):
         crew = clean_name(rejoin(comma_parts[1]))
         return helm, crew
 
-    # Case 2: birth years → manage2sail combined cell
+    # Case 2: manage2sail combined cell (birth years and/or per-line clubs).
     if re.search(r'\(\d{4}\)', raw):
-        lines = raw.split('\n')
+        lines = [l.strip() for l in raw.split('\n') if l.strip()]
+        # A NAME line has BOTH a Title-case token (forename) and an ALL-CAPS
+        # token (surname). Club lines (all-caps abbreviations like "WPNSA",
+        # all-title-case like "Royal Sydney YC", or score rows) are skipped.
+        def is_name_line(l):
+            toks = l.split()
+            has_title = any(re.match(r"^[A-ZÀ-Þ][a-zà-ÿ]", t) for t in toks)
+            has_caps  = any(len(t.strip("().,'")) >= 2 and
+                            re.match(r"^[A-ZÀ-ÖØ-Þ\-]+$", t.strip("().,'")) for t in toks)
+            return has_title and has_caps
+        name_lines = [l for l in lines if is_name_line(l)]
+        # Two clean single-line names → use them directly (handles a helm with
+        # no birth year followed by a crew that has one).
+        if len(name_lines) >= 2:
+            return clean_name(name_lines[0]), clean_name(name_lines[1])
+        # Otherwise fall back to accumulating lines and breaking on birth years
+        # (covers names that wrap across two lines: "Iven Anton" / "FROMM (2004)").
         person_lines = []
         current = ''
         for line in lines:
-            line = line.strip()
-            if not line:
-                continue
             current = (current + ' ' + line).strip()
-            # When we hit a birth year, this person is complete
             if re.search(r'\(\d{4}\)', line):
-                person_lines.append(current)
-                current = ''
-        if current:
+                person_lines.append(current); current = ''
+        if current and (not person_lines or is_name_line(current)):
             person_lines.append(current)
-        helm = clean_name(person_lines[0]) if person_lines else ''
+        helm = clean_name(person_lines[0]) if person_lines else (clean_name(name_lines[0]) if name_lines else '')
         crew = clean_name(person_lines[1]) if len(person_lines) > 1 else ''
         return helm, crew
 
@@ -847,9 +890,10 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
                  "anthropic-version": "2023-06-01"},
         method="POST"
     )
-    # Hobby serverless functions hard-cap at ~10s, so keep the model call tight.
+    # Hobby + Fluid Compute allows long I/O waits; vercel.json caps the function at 60s,
+    # so give the model call generous room (PDF vision parsing routinely needs 10-30s).
     try:
-        with urlopen(req, timeout=9) as resp:
+        with urlopen(req, timeout=50) as resp:
             result = json.loads(resp.read())
     except HTTPError as exc:
         try:
