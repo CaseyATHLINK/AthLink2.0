@@ -760,14 +760,23 @@ Structure:
 RULES:
 - Use the OVERALL/FINAL table (skip preliminary per-fleet tables).
 - helm/crew: title case "First Last"; convert "SMITH, John" to "John Smith".
+- IGNORE club, team, and sponsor text entirely. The name cell often lists a sailor's name followed by " / Club / Sponsor / Sponsor". Keep ONLY the person's name; never put club/sponsor text in any field.
 - sail: country prefix + number if present ("NZL 7"), else number only.
 - nat: 3-letter IOC code, empty if unknown.
 - gender: "M"/"F"/"Mix" from any Gender/Sex/Boat Gender column. Two-person boat with separate helm+crew gender: both male->"M", both female->"F", mixed->"Mix". Empty if none.
 - category: age group only - "U17"/"U19"/"U23"/"Jr". Normalise "Under 17"/"U-17"->"U17", "Junior"->"Jr". Never put fleet colours (Gold/Silver/Bronze) or "Open" here.
 - birth_year/crew_birth_year: 4-digit YOB if shown; if only AGE shown compute (event year - age); else null.
-- races: all scores in order as numbers or string codes (DNF,DNC,DNS,UFD,BFD,DSQ,OCS,RET,NSC,SCP,STP,RDG). Discards as plain numbers (no parentheses).
+- races: ONLY per-race scores in order, as numbers or string codes (DNF,DNC,DNS,UFD,BFD,DSQ,OCS,RET,NSC,SCP,STP,RDG). Discards as plain numbers (no parentheses). Do NOT include carry-forward (CF), points-series (PS), TOTAL or NET columns in races.
 - race_codes: null for plain scores; the code string when a numeric score has a code annotation.
-- pdf_rank: finishing position integer (1=winner). pdf_net: net score after discards. discards: integer (usually 1).
+- pdf_rank: finishing position integer (1=winner). pdf_net: net score (the NET column, after discards) — usually the LAST numeric column; TOTAL is the second-to-last. discards: integer (usually 1).
+"""
+
+# Appended when parsing a single page of a multi-page table (the page may have no header row).
+_GEMINI_PAGE_HINT = """
+THIS IS ONE PAGE of a larger multi-page results table. It may have NO header row.
+The column order for every row on this page is:
+{header}
+Parse EVERY data row on this page. Return ONLY the rows visible on this page.
 """
 
 def _downscale_image(file_bytes: bytes, mime_type: str, max_dim: int = 2200, quality: int = 82):
@@ -794,7 +803,7 @@ def _downscale_image(file_bytes: bytes, mime_type: str, max_dim: int = 2200, qua
         return file_bytes, mime_type
 
 
-def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict:
+def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_hint: str = "") -> dict:
     key = os.environ.get("GEMINI_API_KEY", "")
     if not key:
         raise ValueError("GEMINI_API_KEY not configured.")
@@ -805,9 +814,12 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict
     if mime_type.startswith("image/"):
         file_bytes, mime_type = _downscale_image(file_bytes, mime_type)
 
+    prompt = _GEMINI_PROMPT
+    if header_hint:
+        prompt = prompt + _GEMINI_PAGE_HINT.format(header=header_hint)
     payload = json.dumps({
         "contents": [{"parts": [
-            {"text": _GEMINI_PROMPT},
+            {"text": prompt},
             {"inline_data": {"mime_type": mime_type,
                              "data": base64.b64encode(file_bytes).decode()}}
         ]}],
@@ -820,7 +832,8 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf") -> dict
         headers={"Content-Type": "application/json"},
         method="POST"
     )
-    with urlopen(req, timeout=90) as resp:
+    # Hobby serverless functions hard-cap at ~10s, so keep the model call tight.
+    with urlopen(req, timeout=9) as resp:
         result = json.loads(resp.read())
 
     cand = (result.get("candidates") or [{}])[0]
@@ -1290,6 +1303,62 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
     return parse_pdf_bytes(data, mode=mode)
 
 
+def _pdf_page_count(file_bytes: bytes) -> int:
+    """Fast page count via pypdf (falls back to pdfplumber)."""
+    try:
+        import pypdf
+        return len(pypdf.PdfReader(io.BytesIO(file_bytes)).pages)
+    except Exception:
+        try:
+            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                return len(pdf.pages)
+        except Exception:
+            return 1
+
+
+def _pdf_header_hint(file_bytes: bytes) -> str:
+    """Pull the column-header line from page 1 (Pos … NET) to guide page parsing."""
+    try:
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            txt = pdf.pages[0].extract_text() or ''
+        for line in txt.split('\n'):
+            up = line.upper()
+            if ('POS' in up or 'RANK' in up or 'PL' in up) and ('NET' in up or 'TOTAL' in up or 'POINTS' in up):
+                return ' '.join(line.split())[:300]
+    except Exception:
+        pass
+    return ''
+
+
+def _extract_single_page_pdf(file_bytes: bytes, page_index: int) -> bytes:
+    """Return a standalone one-page PDF for the given 0-based page index."""
+    import pypdf
+    reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+    writer = pypdf.PdfWriter()
+    writer.add_page(reader.pages[page_index])
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def parse_pdf_page(file_bytes: bytes, page_index: int) -> dict:
+    """
+    AI-parse a SINGLE page of a multi-page PDF (0-based index).
+    Used by the client to chunk large files into sub-10s serverless calls
+    (Hobby plan). Returns just that page's entries (no scoring, no dedupe).
+    """
+    mime = _detect_mime(file_bytes)
+    if mime != "application/pdf":
+        # Images / single files: no paging — parse whole thing.
+        return _gemini_parse(file_bytes, mime)
+    key = os.environ.get("GEMINI_API_KEY", "")
+    if not key:
+        raise ValueError("Page parsing requires AI, but GEMINI_API_KEY is not configured.")
+    header = _pdf_header_hint(file_bytes)
+    page_pdf = _extract_single_page_pdf(file_bytes, page_index)
+    return _gemini_parse(page_pdf, "application/pdf", header_hint=header)
+
+
 def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     """
     Entry point for uploaded bytes.
@@ -1346,13 +1415,17 @@ class handler(BaseHTTPRequestHandler):
         if pdfplumber is None:
             return self._respond(500, {'ok':False,'error':'pdfplumber not installed.'})
         # mode comes from ?mode=rule|ai (default ai)
-        mode = 'ai'
+        mode = 'ai'; want_count = False; page_idx = None
         try:
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             mode = (qs.get('mode', ['ai'])[0] or 'ai').lower()
             if mode not in ('rule', 'ai'):
                 mode = 'ai'
+            want_count = qs.get('count', ['0'])[0] in ('1', 'true')
+            if 'page' in qs:
+                try: page_idx = int(qs.get('page', ['0'])[0])
+                except (ValueError, TypeError): page_idx = None
         except Exception:
             mode = 'ai'
 
@@ -1363,6 +1436,12 @@ class handler(BaseHTTPRequestHandler):
         ctype = (self.headers.get('Content-Type') or '').lower()
 
         try:
+            # ?count=1 → just return the PDF page count (instant; no parsing)
+            if want_count and 'application/json' not in ctype:
+                return self._respond(200, {'ok':True, 'page_count': _pdf_page_count(body)})
+            # ?page=N → AI-parse a single page of a multi-page PDF (sub-10s on Hobby)
+            if page_idx is not None and 'application/json' not in ctype:
+                return self._respond(200, parse_pdf_page(body, page_idx))
             # JSON body with a results link → fetch + parse server-side
             if 'application/json' in ctype:
                 payload = json.loads(body.decode('utf-8', errors='replace') or '{}')
