@@ -547,6 +547,15 @@ def parse_row_with_cols(row, cols):
             category = norm_category(div_raw)
         div_raw = ''
 
+    # FINAL fleet routing: a "Division" column may name a BOAT CLASS / scoring
+    # FLEET ("Optimist Intermediate Fleet", "2.4 mR", "Laser Radial", "Waszp")
+    # rather than a demographic group. When there's no separate fleet column, use
+    # the RAW value as the fleet key (div) so the event splits per class. Runs
+    # last so the demotion above can't strip an unrecognised-but-valid class.
+    if not div_raw and cat_raw and _looks_like_fleet_label(cat_raw):
+        div_raw  = re.sub(r'\s+', ' ', cat_raw).strip()
+        category = ''
+
     if 'sailors' in cols and not helm_raw and 'crew' not in cols:
         # A single combined "Name" column with NO separate crew column → split
         # it into helm + crew (SailingResults.net, some 49er.org pages).
@@ -1055,6 +1064,20 @@ def _discards_from_brackets(ents, fallback):
     if not nonzero:
         return fallback
     return Counter(nonzero).most_common(1)[0][0]
+
+_FLEET_STRIP_RE = re.compile(
+    r'\b(men|man|male|women|woman|female|boys?|girls?|mixed|mix|junior|jr|'
+    r'youth|cadet|master|veteran|senior|open|overall|main|all|ladies|lady|'
+    r'gold|silver|bronze|emerald|sapphire|fleet|division|'
+    r'u\d{1,2}|under\s*\d{1,2})\b', re.IGNORECASE)
+
+def _looks_like_fleet_label(value):
+    low = str(value or '').strip().lower()
+    if not low:
+        return False
+    stripped = _FLEET_STRIP_RE.sub(' ', low)
+    stripped = re.sub(r'[\s,]+', ' ', stripped).strip()
+    return len(stripped) >= 2
 
 def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label="the built-in parser"):
     """
