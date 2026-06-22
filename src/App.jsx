@@ -298,6 +298,15 @@ const governingFeds=ev=>{
 };
 // All hosts that own/co-own an event, INCLUDING auto-collaborating federations.
 const eventAssocs=ev=>[...new Set([ev.owner,...(ev.collabs||[]),...governingFeds(ev).map(f=>f.id)].filter(Boolean))];
+
+// Dedup fingerprint: normalised name + date + class + sorted sail-number set.
+// Two imports of the same regatta (by different hosts) collide here so we can
+// link them instead of creating duplicates.
+const eventFingerprint=ev=>{
+  const norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+  const sails=[...new Set((ev.entries||[]).map(e=>norm(e.sail)).filter(Boolean))].sort();
+  return [norm(ev.name),norm(ev.date),norm(ev.cls||ev.class),sails.join(",")].join("|");
+};
 // A host's display location (IOC code): its explicitly-set country, else the
 // most common country across the events it owns/co-owns. evList is all events.
 const hostLocation=(hostId,evList)=>{
@@ -998,6 +1007,9 @@ function dbToApp(ev){
     venue:ev.venue||"—",country:ev.country||"",date:ev.date||"—",discards:ev.discards,
     scoring:ev.scoring||"",source:ev.source||"Imported",status:ev.status||"Final",
     owner:ev.owner||null,collabs:Array.isArray(ev.collabs)?ev.collabs:(ev.collabs?JSON.parse(ev.collabs):[]),
+    owner_confirmed:ev.owner_confirmed!==false,imported_by:ev.imported_by||null,
+    organizer_name:ev.organizer_name||null,fingerprint:ev.fingerprint||null,
+    sources:Array.isArray(ev.sources)?ev.sources:(ev.sources?JSON.parse(ev.sources):[]),
     subclass:ev.subclass||null,
     entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",nat:e.nat||"",div:e.division||"",
       gender:e.gender||"",category:e.category||"",
@@ -1012,6 +1024,9 @@ async function saveEventToDb(ev){
     discards:ev.discards||1, scoring:ev.scoring||null,
     source:ev.source||null, status:ev.status||"Final",
     owner:ev.owner||null, collabs:ev.collabs||[], subclass:ev.subclass||null,
+    owner_confirmed:ev.owner_confirmed!==false, imported_by:ev.imported_by||null,
+    organizer_name:ev.organizer_name||null, fingerprint:ev.fingerprint||null,
+    sources:ev.sources||[],
   };
   const ins=await sbPost("events",evPayload);
   if(!ins?.[0]?.id){
@@ -4877,10 +4892,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const importPreview=async(asDraft)=>{
     if(!previewEv) return;
     const status=asDraft?"Draft":"Final";
+    // Source ≠ organizer. Importing makes you the CONTRIBUTOR (imported_by);
+    // you only become the ORGANIZER (owner) when you assert you ran it.
+    const importerHost=(portal&&!isClassPortal)?portal:null;
+    const selfOrganized=(previewEv._orgMode||"self")!=="external" && !!importerHost;
+    const attributedHost=selfOrganized?importerHost:(previewEv._orgHost||null);
     const ev={...previewEv,status,
       cls:previewEv.cls||assoc?.cls||"29er",
       subclass:mf.subclass||previewEv.subclass||null,
-      owner:portal&&!isClassPortal?portal:(previewEv.owner||null),
+      owner:attributedHost||null,
+      owner_confirmed:selfOrganized,
+      imported_by:importerHost,
+      organizer_name:selfOrganized?null:(attributedHost?null:(previewEv._orgName||null)),
       collabs:mf.collabs||previewEv.collabs||[],
       venue:previewEv.venue||"",
       country:(previewEv.venue||"").toUpperCase()||previewEv.country||"",
@@ -4888,6 +4911,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       doublehanded:previewEv.entries.some(e=>e.crew&&e.crew.trim()),
     };
     ev.entries=ev.entries.map(e=>({...e,races:(e.races||[]).filter(r=>r!==null&&r!==undefined&&r!==""),}));
+    delete ev._orgMode; delete ev._orgHost; delete ev._orgName;
+    ev.fingerprint=eventFingerprint(ev);
+    ev.sources=[...new Set([...(previewEv.sources||[]),importerHost].filter(Boolean))];
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
@@ -6914,6 +6940,37 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Class type</label>
               <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
             </div>}
+            {!editResultsEv&&(()=>{
+              const importerHost=(portal&&!isClassPortal)?portal:null;
+              const orgMode=previewEv._orgMode||"self";
+              const external=!importerHost||orgMode==="external";
+              const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
+              return <div style={{marginBottom:10}}>
+                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Organizer</label>
+                {importerHost&&<div style={{display:"inline-flex",gap:6,marginBottom:external?8:0}}>
+                  {[["self",`We organized this — ${hostById(importerHost)?.name||"this host"}`],["external","Another organizer"]].map(([m,lbl])=>(
+                    <button key={m} type="button" onClick={()=>updPMeta("_orgMode",m)}
+                      style={{border:"1px solid "+(orgMode===m?"var(--navy)":"var(--line)"),background:orgMode===m?"var(--navy)":"transparent",
+                        color:orgMode===m?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",cursor:"pointer"}}>{lbl}</button>
+                  ))}
+                </div>}
+                {external&&<div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <select value={previewEv._orgHost||""} onChange={e=>{updPMeta("_orgHost",e.target.value||null);if(e.target.value)updPMeta("_orgName","");}}
+                    style={{flex:"1 1 180px",minWidth:180,padding:"7px 9px",borderRadius:8,border:"1px solid var(--line)",background:"var(--card)",color:"var(--ink)",fontSize:12.5}}>
+                    <option value="">— attribute to a host on AthLink —</option>
+                    {allHosts.map(h=><option key={h.id} value={h.id}>{h.name}</option>)}
+                  </select>
+                  <input placeholder="…or type the organizer's name" value={previewEv._orgName||""} disabled={!!previewEv._orgHost}
+                    onChange={e=>updPMeta("_orgName",e.target.value)}
+                    style={{flex:"1 1 180px",minWidth:160,padding:"7px 9px",borderRadius:8,border:"1px solid var(--line)",background:previewEv._orgHost?"var(--line)":"var(--card)",color:"var(--ink)",fontSize:12.5}}/>
+                </div>}
+                <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>
+                  {external
+                    ?"This event will be filed as externally contributed — it stays out of your portal and the organizer can claim it later."
+                    :"You'll be recorded as the organizer; the event appears in your portal."}
+                </p>
+              </div>;
+            })()}
             <div style={{marginBottom:10}}>
               <CollabPicker owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
             </div>
@@ -7001,7 +7058,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       :(hostById(sp)?.name||"Global");
     const scopeEvents=!sp?events
       :isClsScope?events.filter(ev=>ev.cls===sp.slice(6))
-      :events.filter(ev=>eventAssocs(ev).includes(sp)||ev.owner===sp);
+      :events.filter(ev=>{
+          // Your portal shows events you ORGANIZED (and that organizer status is
+          // confirmed) plus events you co-organize. Externally-contributed events
+          // (where you're only imported_by, or an unconfirmed attributed owner)
+          // stay out of the portal and live in global calendar/search until claimed.
+          if(ev.owner===sp) return ev.owner_confirmed!==false;
+          return (ev.collabs||[]).includes(sp)||governingFeds(ev).map(f=>f.id).includes(sp);
+        });
     const calEvs=scopeEvents.filter(ev=>calClsSet.size===0||calClsSet.has(ev.cls));
     const prevMonth=()=>{if(calMonth===0){setCalMonth(11);setCalYear(y=>y-1);}else setCalMonth(m=>m-1);};
     const nextMonth=()=>{if(calMonth===11){setCalMonth(0);setCalYear(y=>y+1);}else setCalMonth(m=>m+1);};
