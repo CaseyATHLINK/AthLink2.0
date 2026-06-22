@@ -988,6 +988,23 @@ async function decideClaim(claimId,approve,vouchUserId,hostId,tok){
     decided_at:new Date().toISOString()})},tok);
 }
 
+/* ── Event claims (event_claims) ──────────────────────────────────────────────
+   A host claims an externally-contributed event (one imported by another host
+   and attributed to them as organizer). Any verified admin of the attributed
+   host can approve; on approval the event's owner flips to that host and
+   owner_confirmed becomes true, so it surfaces in their portal. Mirrors the
+   athlete-claim flow. */
+const fetchAllEventClaims=(tok)=>hostRest("event_claims?select=*",{},tok);
+async function createEventClaim(eventId,hostId,userId,detail,tok){
+  return hostRest("event_claims",{method:"POST",headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
+    body:JSON.stringify({event_id:eventId,host_id:hostId||null,user_id:userId,status:"pending",detail:detail||null})},tok);
+}
+async function decideEventClaim(claimId,approve,vouchUserId,hostId,tok){
+  return hostRest(`event_claims?id=eq.${claimId}`,{method:"PATCH",body:JSON.stringify({
+    status:approve?"approved":"denied",vouched_by:approve?vouchUserId:null,host_id:approve?hostId:null,
+    decided_at:new Date().toISOString()})},tok);
+}
+
 // Fetch invite by dedicated short_code column (exact, case-insensitive)
 const fetchInviteByShortCode=(code,tok)=>hostRest(`host_invites?short_code=eq.${encodeURIComponent(code.toUpperCase())}&select=*`,{},tok);
 // Mark invite used (single-use enforcement)
@@ -2700,7 +2717,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
    - Create single-use, 7-day invite links
    - Audit trail
    ═══════════════════════════════════════════════════════════════════════ */
-function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],canVouch=false,onDecideClaim,onClose,onChanged,embedded=false,canManage=false}){
+function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pendingEventClaims=[],canVouch=false,onDecideClaim,onDecideEventClaim,onClose,onChanged,embedded=false,canManage=false}){
   const tok=auth?.token; const uid=auth?.user?.id;
   const[members,setMembers]=React.useState(null);
   const[invites,setInvites]=React.useState([]);
@@ -2845,6 +2862,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
             <div className="seg" style={{alignSelf:"flex-start"}}>
               <button className={tab==="members"?"on":""} onClick={()=>setTab("members")}>Members</button>
               <button className={tab==="claims"?"on":""} onClick={()=>setTab("claims")}>Profile claims{pendingClaims.length>0?` (${pendingClaims.length})`:""}</button>
+              <button className={tab==="eventclaims"?"on":""} onClick={()=>setTab("eventclaims")}>Event claims{pendingEventClaims.length>0?` (${pendingEventClaims.length})`:""}</button>
               <button className={tab==="audit"?"on":""} onClick={()=>setTab("audit")}>Audit log</button>
             </div>
 
@@ -2958,6 +2976,30 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],ca
                     </button>
                     <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
                       onClick={async()=>{setClaimBusy(c.id);await onDecideClaim(c,false);setClaimBusy(null);}}>Deny</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {tab==="eventclaims"&&(
+              <div>
+                <p style={{fontSize:12.5,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.5}}>
+                  Competitions contributed by another host and attributed to <b>{hostName}</b> as organizer. Approving confirms <b>{hostName}</b> ran the event — it then appears in this portal.
+                </p>
+                {!canVouch&&<div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:10,padding:"9px 13px",fontSize:12.5,color:"#a85c00",marginBottom:10}}>Your account must be verified before you can approve event claims.</div>}
+                {pendingEventClaims.length===0&&<p style={{fontSize:13,color:"var(--mut)"}}>No pending event claims for this host.</p>}
+                {pendingEventClaims.map(c=>(
+                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid var(--line)"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{c._eventName||"(event)"}</div>
+                      <div style={{fontSize:11.5,color:"var(--mut)"}}>claimed by user {c.user_id?.slice(0,8)}{c.ts?` · ${new Date(c.ts).toLocaleDateString()}`:""}{c.detail?` · ${c.detail}`:""}</div>
+                    </div>
+                    <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
+                      onClick={async()=>{setClaimBusy(c.id);await onDecideEventClaim(c,true);setClaimBusy(null);}}>
+                      {claimBusy===c.id?<Loader2 size={13} className="spin"/>:<CheckCircle size={13}/>}Approve
+                    </button>
+                    <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
+                      onClick={async()=>{setClaimBusy(c.id);await onDecideEventClaim(c,false);setClaimBusy(null);}}>Deny</button>
                   </div>
                 ))}
               </div>
@@ -3336,6 +3378,7 @@ export default function AthLinkMVP(){
   const[showMembers,setShowMembers]=useState(false);   // members-management panel open
   const[inviteRedeemed,setInviteRedeemed]=useState(null); // {hostId,status} after redeeming an invite link
   const[allClaims,setAllClaims]=useState([]);          // every athlete_claims row (for badges + admin review)
+  const[allEventClaims,setAllEventClaims]=useState([]);// every event_claims row (host claims on contributed events)
   const[claimNote,setClaimNote]=useState(null);        // toast after submitting a claim
   const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
   const[pendingInviteToken,setPendingInviteToken]=useState(null); // raw token from ?invite= URL param
@@ -3559,6 +3602,21 @@ export default function AthLinkMVP(){
     if(rows) setAllClaims(rows);
   },[auth]);
   useEffect(()=>{ reloadClaims(); },[reloadClaims]);
+
+  // ── Load all event claims (host claims on externally-contributed events) ──
+  const reloadEventClaims=React.useCallback(async()=>{
+    if(!auth?.token){setAllEventClaims([]);return;}
+    const rows=await fetchAllEventClaims(auth.token);
+    if(rows) setAllEventClaims(rows);
+  },[auth]);
+  useEffect(()=>{ reloadEventClaims(); },[reloadEventClaims]);
+
+  // ── Host admin claims an externally-contributed event for their host ──
+  const submitEventClaim=async(eventId,hostId)=>{
+    if(!auth?.user?.id||!auth?.token){setShowSignIn(true);return;}
+    const r=await createEventClaim(eventId,hostId,auth.user.id,null,auth.token);
+    if(r){setNote({name:"",matched:0,created:0,msg:"Event claim submitted — a verified admin can approve it in the host's Manage panel."});setTimeout(()=>setNote(null),7000);await reloadEventClaims();}
+  };
 
   // ── Athlete submits a claim on their auto-built profile ──
   const submitClaim=async(profileName)=>{
@@ -4931,6 +4989,40 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     delete ev._orgMode; delete ev._orgHost; delete ev._orgName;
     ev.fingerprint=eventFingerprint(ev);
     ev.sources=[...new Set([...(previewEv.sources||[]),importerHost].filter(Boolean))];
+    // Phase B — dedup on import. If this competition already exists (same
+    // fingerprint: name + date + class + sail-number set), don't create a
+    // duplicate. Link this contributor as an extra source, backfill any blank
+    // metadata, and — if they assert they organized it and the existing record
+    // has no confirmed organizer — transfer confirmed ownership to them. Only
+    // dedups when there's a real sail set (guards against blank/draft collisions).
+    const fpSails=(ev.fingerprint||"").split("|")[3];
+    const dup=fpSails?events.find(x=>x.id!==ev.id&&eventFingerprint(x)===ev.fingerprint):null;
+    if(dup){
+      const mergedSources=[...new Set([...(dup.sources||[]),...(ev.sources||[])])];
+      const patch={sources:mergedSources};
+      if(!dup.date&&ev.date) patch.date=ev.date;
+      if(!dup.venue&&ev.venue) patch.venue=ev.venue;
+      if(!dup.country&&ev.country) patch.country=ev.country;
+      if(selfOrganized&&dup.owner_confirmed===false){patch.owner=importerHost;patch.owner_confirmed=true;patch.imported_by=dup.imported_by||importerHost;}
+      setEvents(p=>p.map(x=>x.id===dup.id?{...x,...patch}:x));
+      const who=hostById(importerHost)?.name||"your contribution";
+      setNote({name:dup.name,matched:0,created:0,msg:`Already on AthLink — linked ${who} as an additional source (no duplicate created).`});
+      setTimeout(()=>setNote(null),7000);
+      if(pending.length){
+        const remaining=pending.filter((_,i)=>i!==activePending);
+        if(remaining.length){
+          setPending(remaining);
+          const nextIdx=Math.min(activePending,remaining.length-1);
+          const firstOk=remaining[nextIdx]?.status==="ok"?nextIdx:remaining.findIndex(r=>r.status==="ok");
+          setActivePending(firstOk<0?0:firstOk);
+          const t=remaining[firstOk<0?0:firstOk];
+          if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
+        } else { closeImport(); }
+      } else { closeImport(); }
+      const isSaved=!String(dup.id).startsWith("imp_")&&!String(dup.id).startsWith("fg_");
+      if(isSaved){try{await sbPatch("events",`id=eq.${dup.id}`,patch);}catch(err){console.error("importPreview dedup patch failed",err);}}
+      return;
+    }
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
@@ -4958,6 +5050,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     try{
       const saved=await saveEventToDb(ev);
       if(saved?.[0]?.id){
+        // If this contribution was attributed to ANOTHER real host as organizer
+        // (external, unconfirmed), file an event claim so it surfaces in that
+        // host's "Event claims" tab for a verified admin to confirm.
+        if(!selfOrganized&&attributedHost&&hostById(attributedHost)&&attributedHost!==importerHost&&auth?.user?.id){
+          try{await createEventClaim(saved[0].id,attributedHost,auth.user.id,`Attributed at import by ${hostById(importerHost)?.name||"a contributor"}`,auth.token);await reloadEventClaims();}
+          catch(e){console.error("importPreview: auto event-claim failed",e);}
+        }
         const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
         if(fresh?.[0]){
           const dbEv=dbToApp(fresh[0]);
@@ -5517,12 +5616,22 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const hostAthleteNames=new Set();
     hostEvents.forEach(ev=>ev.entries.forEach(en=>{if(en.helm)hostAthleteNames.add(en.helm);if(en.crew)hostAthleteNames.add(en.crew);}));
     const pendingClaimsHere=allClaims.filter(c=>c.status==="pending"&&[...hostAthleteNames].some(n=>n.toLowerCase()===c.profile_name?.toLowerCase()));
+    const pendingEventClaimsHere=allEventClaims.filter(c=>c.status==="pending"&&c.host_id===portal).map(c=>({...c,_eventName:(events.find(e=>e.id===c.event_id)||{}).name||"(event)"}));
     return(
     <HostMembersModal hostId={portal} hostName={host.name} auth={auth} myMembership={myPortalMembership}
-      pendingClaims={pendingClaimsHere} canVouch={!!myPortalMembership&&myPortalMembership.verified}
+      pendingClaims={pendingClaimsHere} pendingEventClaims={pendingEventClaimsHere} canVouch={!!myPortalMembership&&myPortalMembership.verified}
       onDecideClaim={async(claim,approve)=>{
         await decideClaim(claim.id,approve,auth.user.id,portal,auth.token);
         await reloadClaims();
+      }}
+      onDecideEventClaim={async(claim,approve)=>{
+        await decideEventClaim(claim.id,approve,auth.user.id,portal,auth.token);
+        if(approve){
+          const patch={owner:portal,owner_confirmed:true,organizer_name:null};
+          setEvents(p=>p.map(x=>x.id===claim.event_id?{...x,...patch}:x));
+          try{await sbPatch("events",`id=eq.${claim.event_id}`,patch);}catch(e){console.error("event claim approve patch",e);}
+        }
+        await reloadEventClaims();
       }}
       onClose={()=>setShowMembers(false)} onChanged={reloadMemberships}/>
     );
@@ -5561,12 +5670,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const hostAthleteNames=new Set();
     hostEvents.forEach(ev=>ev.entries.forEach(en=>{if(en.helm)hostAthleteNames.add(en.helm);if(en.crew)hostAthleteNames.add(en.crew);}));
     const pendingClaimsHere=allClaims.filter(c=>c.status==="pending"&&[...hostAthleteNames].some(n=>n.toLowerCase()===c.profile_name?.toLowerCase()));
+    const pendingEventClaimsHere=allEventClaims.filter(c=>c.status==="pending"&&c.host_id===portal).map(c=>({...c,_eventName:(events.find(e=>e.id===c.event_id)||{}).name||"(event)"}));
     return(
     <HostEditModal host={hostById(portal)} canManage={canManageMembers}
       onSave={(patch)=>saveHost(portal,patch)}
       membersProps={{hostId:portal,hostName:hostById(portal).name,auth,myMembership:myPortalMembership,
-        pendingClaims:pendingClaimsHere,canVouch:!!myPortalMembership&&myPortalMembership.verified,
+        pendingClaims:pendingClaimsHere,pendingEventClaims:pendingEventClaimsHere,canVouch:!!myPortalMembership&&myPortalMembership.verified,
         onDecideClaim:async(claim,approve)=>{await decideClaim(claim.id,approve,auth.user.id,portal,auth.token);await reloadClaims();},
+        onDecideEventClaim:async(claim,approve)=>{
+          await decideEventClaim(claim.id,approve,auth.user.id,portal,auth.token);
+          if(approve){const patch={owner:portal,owner_confirmed:true,organizer_name:null};setEvents(p=>p.map(x=>x.id===claim.event_id?{...x,...patch}:x));try{await sbPatch("events",`id=eq.${claim.event_id}`,patch);}catch(e){console.error("event claim approve patch",e);}}
+          await reloadEventClaims();
+        },
         onClose:()=>setShowHostEdit(false),onChanged:reloadMemberships}}
       onClose={()=>setShowHostEdit(false)}/>
     );
@@ -6193,6 +6308,32 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </React.Fragment>)}</span>
               </div>
             )}
+            {(ev.imported_by||ev.organizer_name||ev.owner_confirmed===false)&&(()=>{
+              const contributor=ev.imported_by&&hostById(ev.imported_by)?.name;
+              const isMineUnconfirmed=ev.owner===portal&&ev.owner_confirmed===false&&!isClassPortal;
+              const verifiedHere=!!myPortalMembership&&myPortalMembership.verified&&!isClassPortal&&hostById(portal);
+              const externalByName=!ev.owner&&!!ev.organizer_name;
+              const canClaimHere=verifiedHere&&ev.owner!==portal&&(externalByName||ev.owner_confirmed===false);
+              const alreadyClaimed=allEventClaims.some(c=>c.event_id===ev.id&&c.host_id===portal&&c.status==="pending");
+              return(
+              <div style={{marginTop:7,fontSize:11.5,color:"var(--mut)",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                <span>
+                  {contributor&&<>Contributed by <b style={{fontWeight:600}}>{contributor}</b></>}
+                  {ev.organizer_name&&<>{contributor?" · ":""}Organized by <b style={{fontWeight:600}}>{ev.organizer_name}</b> (external)</>}
+                  {ev.owner_confirmed===false&&ev.owner&&<>{(contributor||ev.organizer_name)?" · ":""}attributed to <b style={{fontWeight:600}}>{assocName(ev.owner)}</b>, awaiting confirmation</>}
+                </span>
+                {isMineUnconfirmed&&(
+                  <button className="btn green" style={{fontSize:11.5,padding:"4px 10px"}} onClick={async()=>{
+                    const patch={owner_confirmed:true};
+                    setEvents(p=>p.map(x=>x.id===ev.id?{...x,...patch}:x));
+                    try{await sbPatch("events",`id=eq.${ev.id}`,patch);}catch(e){console.error("confirm organizer patch",e);}
+                  }}><CheckCircle size={12}/>Confirm {hostById(portal).name} organized this</button>
+                )}
+                {!isMineUnconfirmed&&canClaimHere&&(alreadyClaimed
+                  ? <span style={{fontStyle:"italic"}}>Claim pending review for {hostById(portal).name}.</span>
+                  : <button className="btn ghost" style={{fontSize:11.5,padding:"4px 10px"}} onClick={()=>submitEventClaim(ev.id,portal)}><Anchor size={12}/>Claim this event for {hostById(portal).name}</button>)}
+              </div>);
+            })()}
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
@@ -6519,7 +6660,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       {g&&<span><span style={{background:GENDER_COLOR[g]||"var(--mut)",color:"#fff",borderRadius:980,fontSize:10.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"2px 9px"}} title={g==="Mix"?"Mixed":g==="F"?"Female":"Male"}>{g==="Mix"?"Mixed":g==="F"?"Female":"Male"}</span></span>}
                     </>);
                   })()}
-                  {age!=null&&<span style={{fontWeight:600}}>Age {age}</span>}
+                  {birthYear&&<span style={{fontWeight:600}}>Born {birthYear}{age!=null?` · age ${age}`:""}</span>}
                   {(()=>{
                     const recent=ag.history[0]?.row;
                     if(!recent?.sail||recent.sail==="—") return null;
