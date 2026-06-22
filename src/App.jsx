@@ -4774,6 +4774,23 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       }else{
         data=await parseOneFile(f,mode);
       }
+      // Flag-image nationalities: when the rule parser found a Nat column but it
+      // was empty (flags, not text), read them with one small AI call and merge
+      // by SAIL NUMBER (never by row order — so a flag can't land on the wrong
+      // boat). Best-effort: a failure leaves the result with blank nat.
+      if(data.ok&&data.nat_from_flags&&isPdf){
+        try{
+          setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading nationalities from flags…"]}:l));
+          const nr=await fetch(`/api/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
+          const nd=await nr.json();
+          if(nd.ok&&nd.nats&&Object.keys(nd.nats).length){
+            const norm=v=>String(v||"").replace(/\s+/g,"").toLowerCase();
+            const apply=ents=>(ents||[]).forEach(e=>{const code=nd.nats[norm(e.sail)];if(code&&!(e.nat||"").trim())e.nat=code;});
+            if(data.entries) apply(data.entries);
+            if(data.fleets) data.fleets.forEach(fl=>apply(fl.entries));
+          }
+        }catch(e){ /* best-effort — keep the parsed result without nationalities */ }
+      }
       let rows;
       if(!data.ok){
         rows=[{...seed[i],status:"error",error:data.error}];
