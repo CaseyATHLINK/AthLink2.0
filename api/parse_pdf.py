@@ -330,6 +330,16 @@ def norm_gender(raw):
         return 'Mix'
     return ''
 
+def gender_from_text(raw):
+    """Extract a boat gender from a free-text Division/category label such as
+    "Junior, Men" / "Women" / "Mixed". Checks women/mixed before men so the
+    substring in 'women' can't be misread (word boundaries guard this anyway)."""
+    low = str(raw or '').lower()
+    if re.search(r'\b(women|woman|female|girls?|ladies|lady)\b', low): return 'F'
+    if re.search(r'\b(mixed|mix|co\-?ed)\b', low):                     return 'Mix'
+    if re.search(r'\b(men|man|male|boys?|open\s+men)\b', low):         return 'M'
+    return ''
+
 def combine_boat_gender(helm_g, crew_g):
     """Derive a single boat gender from helm + crew gender."""
     h, c = norm_gender(helm_g), norm_gender(crew_g)
@@ -348,7 +358,17 @@ def norm_category(raw):
     if not s:
         return ''
     low = s.lower()
-    if low in ('open', 'overall', 'main', 'all', 'mixed', 'm', 'f', '-', '—'):
+    if low in ('open', 'overall', 'main', 'all', 'mixed', 'm', 'f', '-', '—',
+               'men', 'man', 'male', 'women', 'woman', 'female',
+               'boy', 'boys', 'girl', 'girls', 'lady', 'ladies'):
+        return ''
+    # Strip a leading/trailing gender word so "Junior, Men" → "Junior".
+    s_nogender = re.sub(r'\b(men|man|male|women|woman|female|boys?|girls?|ladies|lady|mixed)\b',
+                        ' ', s, flags=re.IGNORECASE)
+    s_nogender = re.sub(r'[,\s]+', ' ', s_nogender).strip()
+    if s_nogender:
+        s, low = s_nogender, s_nogender.lower()
+    else:
         return ''
     if re.search(r'\b(gold|silver|bronze|emerald|sapphire)\b', low):
         return ''
@@ -511,6 +531,10 @@ def parse_row_with_cols(row, cols):
     gender = norm_gender(get('gender'))
     if 'crewgender' in cols:
         gender = combine_boat_gender(get('gender'), get('crewgender'))
+    # Sailwave often packs gender into the Division column ("Junior, Men",
+    # "Women", "Mixed") with no separate gender column — recover it here.
+    if not gender and 'gender' not in cols:
+        gender = gender_from_text(cat_raw) or gender_from_text(div_raw)
     category = norm_category(cat_raw)
 
     # A "Fleet"/"Division" column sometimes holds an age group ("U23") or a
@@ -551,6 +575,7 @@ def parse_row_with_cols(row, cols):
     race_end   = cols.get('race_end')
     races = []
     race_codes = []  # parallel array: code annotation when a numeric score had a code label
+    _disc_count = 0  # number of bracketed (discarded) scores in this row
     if race_start is not None and race_end is not None:
         skip_cols = {cols.get('total'), cols.get('net')} | set(cols.get('_skip', set()))
         for i in range(race_start, race_end + 1):
@@ -560,6 +585,11 @@ def parse_row_with_cols(row, cols):
             if sc is not None:
                 races.append(sc)
                 race_codes.append(code_ann)  # None for plain scores, "STP" etc for annotated
+                # A score wrapped in parentheses is a discard, e.g. "(7)" or
+                # "(28) DNF". Count them so the event's discard total can be read
+                # from the results themselves, not a header rule label.
+                if re.match(r'^\s*\(', str(row[i] or '')):
+                    _disc_count += 1
 
     # Extract PDF rank (first column) and net score (last meaningful column)
     # Get rank from dedicated column, or fall back to first column
@@ -625,6 +655,7 @@ def parse_row_with_cols(row, cols):
         'category':   category,
         'races':      races,
         'race_codes': race_codes,
+        '_disc':      _disc_count,
         'pdf_rank':   pdf_rank,
         'pdf_net':    pdf_net,
         'birth_year':      birth_year,
@@ -1012,6 +1043,18 @@ def _resolve_birth_years(entries, ev_year):
             e['crew_birth_year'] = ev_year - e['_crew_age']
         e.pop('_age', None); e.pop('_crew_age', None)
 
+def _discards_from_brackets(ents, fallback):
+    """The number of discards in effect = the most common non-zero count of
+    bracketed scores across competitors (a fully-raced sailor shows exactly the
+    discard-rule number of brackets). Falls back to the header value when no
+    bracket data is present (e.g. AI-parsed rows)."""
+    from collections import Counter
+    counts = [e.get('_disc', 0) for e in ents if e.get('races')]
+    nonzero = [c for c in counts if c > 0]
+    if not nonzero:
+        return fallback
+    return Counter(nonzero).most_common(1)[0][0]
+
 def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label="the built-in parser"):
     """
     Group entries and decide single vs multi. Grouping key:
@@ -1067,8 +1110,10 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
     # Single fleet (or only the unlabelled bucket) → one result
     if len(real) <= 1:
         ents = groups[real[0]] if real else []
+        g_disc = _discards_from_brackets(ents, discards)
+        for e in ents: e.pop('_disc', None)
         return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
-                'discards':discards,'entries':ents,'notes':notes}
+                'discards':g_disc,'entries':ents,'notes':notes}
 
     non_main = [k for k in real if k != '__main__']
     # Every labelled group is a Gold/Silver/Bronze split → merge to one championship
@@ -1080,13 +1125,18 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
                 if sk not in mseen:
                     mseen.add(sk); merged.append(e)
         notes.append(f"Merged {len(non_main)} qualifying/final fleets into one result.")
+        g_disc = _discards_from_brackets(merged, discards)
+        for e in merged: e.pop('_disc', None)
         return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
-                'discards':discards,'entries':merged,'notes':notes}
+                'discards':g_disc,'entries':merged,'notes':notes}
 
     # Genuine separate fleets/classes → one competition each
-    fleets = [{'name': (k if k != '__main__' else ''),
-               'entries': groups[k], 'discards': discards, 'count': len(groups[k])}
-              for k in real]
+    fleets = []
+    for k in real:
+        g_disc = _discards_from_brackets(groups[k], discards)
+        for e in groups[k]: e.pop('_disc', None)
+        fleets.append({'name': (k if k != '__main__' else ''),
+                       'entries': groups[k], 'discards': g_disc, 'count': len(groups[k])})
     labels = [f['name'] or 'Main' for f in fleets]
     notes.append(f"Separated into {len(fleets)} fleets: {', '.join(labels)}.")
     return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,'fleets':fleets}
