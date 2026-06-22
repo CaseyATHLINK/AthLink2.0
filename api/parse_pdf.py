@@ -718,6 +718,7 @@ def parse_table(tbl, fleet_hint=''):
         if fleet_hint and not e['div']:
             e['div'] = fleet_hint
         e['_tbl_class'] = _class_of(fleet_hint)   # class from the section heading
+        e['_nat_col']   = ('nat' in cols)         # a Nat column existed for this row
         entries.append(e)
 
     return {'entries': entries} if entries else None
@@ -1099,6 +1100,12 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
         for e in groups[k]:
             e.pop('_tbl_class', None)   # internal-only, never reaches client/DB
 
+    # A Nat column that came back empty on every row → nationalities are flag
+    # images (no text). Flag this so the client can read them with a small AI pass.
+    nat_from_flags = (any(e.get('_nat_col') for e in all_entries)
+                      and not any((e.get('nat') or '').strip() for e in all_entries))
+    for e in all_entries:
+        e.pop('_nat_col', None)
     real = [k for k in groups if groups[k]]
     n_total = sum(len(groups[k]) for k in real)
     n_gender = sum(1 for k in real for e in groups[k] if e.get('gender'))
@@ -1113,7 +1120,7 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
         g_disc = _discards_from_brackets(ents, discards)
         for e in ents: e.pop('_disc', None)
         return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
-                'discards':g_disc,'entries':ents,'notes':notes}
+                'discards':g_disc,'entries':ents,'notes':notes,'nat_from_flags':nat_from_flags}
 
     non_main = [k for k in real if k != '__main__']
     # Every labelled group is a Gold/Silver/Bronze split → merge to one championship
@@ -1128,7 +1135,7 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
         g_disc = _discards_from_brackets(merged, discards)
         for e in merged: e.pop('_disc', None)
         return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
-                'discards':g_disc,'entries':merged,'notes':notes}
+                'discards':g_disc,'entries':merged,'notes':notes,'nat_from_flags':nat_from_flags}
 
     # Genuine separate fleets/classes → one competition each
     fleets = []
@@ -1139,7 +1146,7 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
                        'entries': groups[k], 'discards': g_disc, 'count': len(groups[k])})
     labels = [f['name'] or 'Main' for f in fleets]
     notes.append(f"Separated into {len(fleets)} fleets: {', '.join(labels)}.")
-    return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,'fleets':fleets}
+    return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,'fleets':fleets,'nat_from_flags':nat_from_flags}
 
 
 def _rule_based_parse(pdf_bytes: bytes) -> dict:
@@ -1460,6 +1467,54 @@ def _extract_single_page_pdf(file_bytes: bytes, page_index: int):
     return buf.getvalue()
 
 
+_NAT_PROMPT = """This sailing results PDF shows nationality as COUNTRY FLAG images (not text).
+For EVERY competitor row, read the flag and map that boat's SAIL NUMBER to its
+3-letter IOC country code (e.g. HKG, AUS, SGP, JPN, GBR, USA).
+Return ONLY a JSON object, no markdown or prose, e.g.:
+{"3354":"HKG","2681":"AUS"}
+Use the sail number exactly as printed. Omit any row whose flag you cannot read."""
+
+def _ai_read_nationalities(file_bytes: bytes) -> dict:
+    """Read flag-image nationalities with one small AI call. Returns
+    {normalised_sail: 'IOC'} so the caller can match by sail number (robust —
+    never assigns a nationality to the wrong boat via row miscount)."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        raise ValueError("ANTHROPIC_API_KEY not configured.")
+    if urlopen is None:
+        raise ValueError("urllib not available.")
+    payload = json.dumps({
+        "model": _AI_MODEL, "max_tokens": 4096, "temperature": 0,
+        "messages": [{"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64",
+             "media_type": "application/pdf", "data": base64.b64encode(file_bytes).decode()}},
+            {"type": "text", "text": _NAT_PROMPT}]}],
+    }).encode()
+    req = UrlRequest(_ANTHROPIC_URL, data=payload,
+                     headers={"Content-Type": "application/json", "x-api-key": key,
+                              "anthropic-version": "2023-06-01"}, method="POST")
+    try:
+        with urlopen(req, timeout=50) as resp:
+            result = json.loads(resp.read())
+    except HTTPError as exc:
+        try:
+            msg = json.loads(exc.read()).get("error", {}).get("message", str(exc))
+        except Exception:
+            msg = str(exc)
+        raise ValueError(f"AI service error ({exc.code}): {msg}")
+    raw = "".join(b.get("text", "") for b in (result.get("content") or [])
+                  if b.get("type") == "text").strip()
+    raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
+    data = json.loads(raw)
+    out = {}
+    for k, v in (data.items() if isinstance(data, dict) else []):
+        sk = re.sub(r'\s+', '', str(k)).lower()
+        code = re.sub(r'[^A-Za-z]', '', str(v)).upper()[:3]
+        if sk and len(code) == 3:
+            out[sk] = code
+    return out
+
+
 def parse_pdf_page(file_bytes: bytes, page_index: int) -> dict:
     """
     AI-parse a SINGLE page of a multi-page PDF (0-based index).
@@ -1550,6 +1605,7 @@ class handler(BaseHTTPRequestHandler):
             if mode not in ('rule', 'ai'):
                 mode = 'ai'
             want_count = qs.get('count', ['0'])[0] in ('1', 'true')
+            want_nat = qs.get('nat', ['0'])[0] in ('1', 'true')
             if 'page' in qs:
                 try: page_idx = int(qs.get('page', ['0'])[0])
                 except (ValueError, TypeError): page_idx = None
@@ -1566,6 +1622,12 @@ class handler(BaseHTTPRequestHandler):
             # ?count=1 → just return the PDF page count (instant; no parsing)
             if want_count and 'application/json' not in ctype:
                 return self._respond(200, {'ok':True, 'page_count': _pdf_page_count(body)})
+            # ?nat=1 → read flag-image nationalities with a small AI call → {sail: IOC}
+            if want_nat and 'application/json' not in ctype:
+                try:
+                    return self._respond(200, {'ok':True, 'nats': _ai_read_nationalities(body)})
+                except Exception as exc:
+                    return self._respond(200, {'ok':False, 'error':str(exc), 'nats':{}})
             # ?page=N → AI-parse a single page of a multi-page PDF (sub-10s on Hobby)
             if page_idx is not None and 'application/json' not in ctype:
                 return self._respond(200, parse_pdf_page(body, page_idx))
