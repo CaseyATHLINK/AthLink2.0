@@ -1721,6 +1721,157 @@ def _ai_read_nationalities(file_bytes: bytes) -> dict:
     return out
 
 
+# ── Agent tool wrappers ─────────────────────────────────────────────────────
+# Thin adapters around the existing parsers so the agent loop can call them and
+# get a JSON string back. They wrap (do NOT rewrite) the existing functions.
+def _tool_rule_parse(file_bytes: bytes) -> str:
+    try:
+        return json.dumps(_rule_based_parse(file_bytes))
+    except ValueError as e:
+        return json.dumps({"ok": False, "error": str(e)})
+
+
+def _tool_vision_parse(file_bytes: bytes) -> str:
+    try:
+        return json.dumps(_gemini_parse(file_bytes, "application/pdf"))
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)})
+
+
+def _tool_lookup_nationalities(file_bytes: bytes) -> str:
+    try:
+        return json.dumps({"ok": True, "nats": _ai_read_nationalities(file_bytes)})
+    except Exception as e:
+        return json.dumps({"ok": False, "nats": {}, "error": str(e)})
+
+
+# ── Agent loop ──────────────────────────────────────────────────────────────
+# Claude orchestrates the existing parsers via tool calls instead of fixed
+# if/else logic. Uses the Messages API directly (urlopen — no SDK in serverless),
+# matching _gemini_parse's request pattern. Capped at 8 turns for the Hobby 60s
+# ceiling. The agent merges flag-image nationalities internally, so the frontend
+# no longer needs its second ?nat=1 request.
+_AGENT_SYSTEM = (
+    "You are a sailing results parser agent. You have access to tools to parse a "
+    "PDF of sailing competition results. Rules:\n"
+    "- Always call rule_parse first.\n"
+    "- If rule_parse returns ok=false, call vision_parse instead.\n"
+    "- If rule_parse returns nat_from_flags=true, call lookup_nationalities, then "
+    "merge the returned nats into the entries by matching the sail field "
+    "(normalised: strip whitespace, lowercase). Never use row order for matching.\n"
+    "- Once you have a complete result with entries, call finalize with the full "
+    "result dict.\n"
+    "- Never re-rank, recalculate, or modify scores. The PDF is ground truth.\n"
+    "- Keep the notes array from whichever parser succeeded."
+)
+
+_AGENT_TOOLS = [
+    {"name": "rule_parse",
+     "description": ("Extract results using the built-in rule-based parser (pdfplumber). "
+                     "Fast and exact for Sailwave, Manage2sail, SailingResults.net formats. "
+                     "Always try this first. Returns a JSON object with ok, entries, name, "
+                     "date, discards, nat_from_flags."),
+     "input_schema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "vision_parse",
+     "description": ("Parse the PDF visually using Claude AI vision. Use when rule_parse "
+                     "returns ok=false, or when the format is non-standard. Slower but "
+                     "handles any layout."),
+     "input_schema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "lookup_nationalities",
+     "description": ("Read flag images in the PDF to determine nationalities. Call this "
+                     "when rule_parse returns nat_from_flags=true and the entries have "
+                     "empty nat fields. Returns {ok, nats} where nats is a dict of "
+                     "sail_number -> IOC code."),
+     "input_schema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "finalize",
+     "description": ("Submit the completed result. Call this when you have a valid entries "
+                     "list and all available nationalities have been merged. This ends the loop."),
+     "input_schema": {"type": "object",
+                      "properties": {"result": {"type": "object",
+                          "description": ("The full result dict to return, with ok, name, "
+                                          "date, discards, entries, notes, detected_class, "
+                                          "detected_host")}},
+                      "required": ["result"]}},
+]
+
+
+def _agent_parse(file_bytes: bytes) -> dict:
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        raise ValueError("ANTHROPIC_API_KEY not configured.")
+    if urlopen is None:
+        raise ValueError("urllib not available.")
+
+    dispatch = {
+        "rule_parse": _tool_rule_parse,
+        "vision_parse": _tool_vision_parse,
+        "lookup_nationalities": _tool_lookup_nationalities,
+    }
+    messages = [{"role": "user",
+                 "content": "Parse this sailing results PDF and return the structured results."}]
+    final_result = None
+    max_turns = 8
+
+    for _turn in range(max_turns):
+        payload = json.dumps({
+            "model": _AI_MODEL,
+            "max_tokens": 4096,
+            "temperature": 0,
+            "system": _AGENT_SYSTEM,
+            "tools": _AGENT_TOOLS,
+            "messages": messages,
+        }).encode()
+        req = UrlRequest(
+            _ANTHROPIC_URL,
+            data=payload,
+            headers={"Content-Type": "application/json",
+                     "x-api-key": key,
+                     "anthropic-version": "2023-06-01"},
+            method="POST"
+        )
+        try:
+            with urlopen(req, timeout=50) as resp:
+                result = json.loads(resp.read())
+        except HTTPError as exc:
+            try:
+                detail = json.loads(exc.read())
+                msg = detail.get("error", {}).get("message", str(detail))
+            except Exception:
+                msg = getattr(exc, "reason", None) or str(exc)
+            raise ValueError(f"AI service error ({exc.code}): {msg}")
+
+        content = result.get("content") or []
+        # Echo the assistant turn back so the next request has full context.
+        messages.append({"role": "assistant", "content": content})
+
+        if result.get("stop_reason", "") != "tool_use":
+            break
+
+        tool_results = []
+        for block in content:
+            if block.get("type") != "tool_use":
+                continue
+            name = block.get("name", "")
+            if name == "finalize":
+                final_result = (block.get("input") or {}).get("result")
+                out = json.dumps({"ok": True, "finalized": True})
+            elif name in dispatch:
+                out = dispatch[name](file_bytes)
+            else:
+                out = json.dumps({"ok": False, "error": f"unknown tool: {name}"})
+            tool_results.append({"type": "tool_result",
+                                 "tool_use_id": block.get("id"),
+                                 "content": out})
+
+        if final_result is not None:
+            break
+        messages.append({"role": "user", "content": tool_results})
+
+    if final_result is not None:
+        return final_result
+    raise ValueError("Agent did not finalize results.")
+
+
 def parse_pdf_page(file_bytes: bytes, page_index: int) -> dict:
     """
     AI-parse a SINGLE page of a multi-page PDF (0-based index).
@@ -1779,20 +1930,18 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
         return _gemini_parse(file_bytes, mime)
 
     # ── PDF → rule-based first ──
-    try:
+    if mode == 'rule':
         return _rule_based_parse(file_bytes)
-    except ValueError as rule_err:
-        if mode == 'rule':
-            raise   # non-AI parser: surface the failure, no fallback
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not key:
-            raise  # No AI key — surface original error
-        try:
-            return _gemini_parse(file_bytes, "application/pdf")
-        except Exception as ai_err:
-            raise ValueError(
-                f"{rule_err} (AI fallback also failed: {ai_err})"
-            )
+
+    # ── AI mode → agent loop orchestrates rule + vision + nationality ──
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        # No AI key — fall back to rule-based only, surface errors
+        return _rule_based_parse(file_bytes)
+    try:
+        return _agent_parse(file_bytes)
+    except Exception as agent_err:
+        raise ValueError(f"Agent parse failed: {agent_err}")
 
 
 # ── Vercel handler ─────────────────────────────────────────────────────────
