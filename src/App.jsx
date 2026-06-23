@@ -218,6 +218,36 @@ const CLASSES=[
   {id:"optimist",short:"OPTI",full:"Optimist"},
   {id:"49er",    short:"49er"},
 ];
+// ── Custom boat classes (runtime registry, mirrors the host pattern) ──
+// Beyond the four main CLASSES above. Each: {id, short, full, color, canonical}.
+// In-memory only for now — seeded empty; DB persistence comes later.
+let CUSTOM_CLASSES=[];
+const customClassById=id=>CUSTOM_CLASSES.find(c=>c.id===id)||null;
+// Normalise a class name → canonical key for dedup (lowercase, strip non-alphanumerics).
+const canonClass=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+// Muted navy-palette colours auto-assigned to custom classes (no aggressive highlights).
+const CUSTOM_CLASS_PALETTE=["#1f4e80","#0d8ecf","#5b6b80"];
+// Best-effort readable text from a custom-class canonical slug, used only when no
+// registry entry exists (e.g. after a refresh — custom classes are in-memory).
+// Adds spaces at letter/number boundaries and uppercases; never the bare slug.
+const prettifyClassSlug=(slug)=>{
+  const s=String(slug||"").trim();
+  if(!s) return "Custom class";
+  return s.replace(/([a-z])([0-9])/gi,"$1 $2").replace(/([0-9])([a-z])/gi,"$1 $2").toUpperCase();
+};
+// Single source of truth for displaying ANY class id:
+//   • main class  → its short/full from CLASSES
+//   • custom class in the live registry → its stored (readable) short
+//   • orphaned "custom:<slug>" id (no entry) → prefix stripped + prettified
+// Never returns the literal "custom:" prefix.
+const classLabel=(clsId)=>{
+  const main=CLASSES.find(c=>c.id===clsId);
+  if(main) return main.short||main.full||clsId;
+  const cc=customClassById(clsId);
+  if(cc) return cc.short||cc.full||clsId;
+  if(typeof clsId==="string"&&clsId.startsWith("custom:")) return prettifyClassSlug(clsId.slice(7));
+  return clsId;
+};
 
 // ── Associations: each portal is one association ──
 // ── Hosts (associations, clubs, federations) ────────────────────────────────
@@ -318,7 +348,8 @@ const hostLocation=(hostId,evList)=>{
     const cc=eventCountryCode(ev); if(cc) counts[cc]=(counts[cc]||0)+1;
   });
   const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-  return top?top[0]:null;
+  if(top) return top[0];
+  return SCOPE_COUNTRY[h?.scope]||null;
 };
 
 // ── Sub-classes (per-event) for ILCA and Optimist ──
@@ -341,8 +372,8 @@ const subById=(cls,id)=>(SUBCLASSES[cls]||[]).find(s=>s.id===id);
 const nuggetFor=(cls,subclass)=>{
   const s=subById(cls,subclass);
   if(s) return{label:s.short||s.label,full:s.label,color:s.color};
-  const c=CLASSES.find(c=>c.id===cls);
-  return{label:c?.short||cls,full:c?.full||c?.short||cls,color:classColor(cls)};
+  const c=CLASSES.find(c=>c.id===cls)||customClassById(cls);
+  return{label:classLabel(cls),full:c?.full||classLabel(cls),color:classColor(cls)};
 };
 
 // Global class colour coding (used by calendar circles)
@@ -352,7 +383,7 @@ const nuggetFor=(cls,subclass)=>{
 //   Optimist -> "Optimist black" (#3D3D3D)
 //   49er  -> "49er green"    (#5FAF4E)
 const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#2E78C8","optimist":"#3D3D3D"};
-const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||"#5b6b80";
+const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||customClassById(cls)?.color||"#5b6b80";
 // Class colour at a given alpha (for translucent buttons that go solid on hover).
 const classColorA=(cls,a)=>{
   const hex=classColor(cls).replace("#","");
@@ -373,6 +404,86 @@ function SubclassPicker({cls,value,onChange}){
           padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{s.label}</button>;
     })}
   </div>;
+}
+
+// Custom-class dropdown — sits beside the four main class buttons. Lists every
+// custom class (global, not host-scoped) plus an "Add new class" action that
+// prompts for a name, creates it (auto-assigned muted colour) and selects it.
+// value = current evCls; selected style applies when it's a custom class.
+function CustomClassPicker({classes,value,disabled,onSelect,onAdd}){
+  const[open,setOpen]=React.useState(false);
+  const[adding,setAdding]=React.useState(false);  // in-app "New class name" modal
+  const[name,setName]=React.useState("");
+  const ref=React.useRef();
+  React.useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+  const sel=classes.find(c=>c.id===value);
+  // A "custom:" value with no live registry entry (e.g. an event saved before
+  // refresh) still counts as a selected custom class — resolve it via classLabel.
+  const isCustomVal=typeof value==="string"&&value.startsWith("custom:");
+  const on=!!sel||isCustomVal;
+  const closeAdd=()=>{setAdding(false);setName("");};
+  // Same create-or-dedup logic as before — onAdd normalises + reuses/creates.
+  const submitAdd=()=>{
+    const id=onAdd(name);
+    if(id)onSelect(id);
+    closeAdd();
+  };
+  return(
+    <div style={{position:"relative"}} ref={ref}>
+      <button type="button" disabled={disabled} onClick={()=>{if(!disabled)setOpen(o=>!o);}}
+        style={{border:"1px solid "+(on?classColor(value):"var(--line)"),background:on?classColor(value):"transparent",
+          color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
+          cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1,display:"inline-flex",alignItems:"center",gap:6}}>
+        {sel?sel.short:(isCustomVal?classLabel(value):"+ Other class")}
+        <ChevronRight size={12} style={{transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
+      </button>
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:90,minWidth:180,background:"var(--card)",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.2)",maxHeight:260,overflow:"auto"}}>
+          {!classes.length&&<div style={{padding:"8px 12px",fontSize:12,color:"var(--mut)"}}>No custom classes yet</div>}
+          {classes.map(c=>(
+            <div key={c.id} onClick={()=>{onSelect(c.id);setOpen(false);}}
+              style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:600,color:"var(--ink)",display:"flex",alignItems:"center",gap:8,background:c.id===value?"var(--sky)":"transparent",transition:".1s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+              onMouseLeave={e=>e.currentTarget.style.background=c.id===value?"var(--sky)":"transparent"}>
+              <span style={{width:10,height:10,borderRadius:3,background:c.color,flex:"none"}}/>{c.short}
+            </div>
+          ))}
+          <div onClick={()=>{setAdding(true);setName("");setOpen(false);}}
+            style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:700,color:"var(--accent)",borderTop:"1px solid var(--line)",transition:".1s"}}
+            onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+            + Add new class
+          </div>
+        </div>
+      )}
+      {adding&&(
+        <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)closeAdd();}}
+          style={{position:"fixed",inset:0,background:"rgba(8,20,40,.55)",zIndex:120,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"80px 16px",overflow:"auto"}}>
+          <div style={{background:"#fff",borderRadius:14,maxWidth:380,width:"100%",boxShadow:"0 24px 60px -20px rgba(0,0,0,.4)"}}>
+            <div style={{background:"var(--navy)",color:"#fff",padding:"14px 18px",borderRadius:"14px 14px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <strong style={{fontSize:15}}>New class name</strong>
+              <button type="button" onClick={closeAdd} style={{border:0,background:"rgba(255,255,255,.15)",color:"#fff",borderRadius:8,padding:6,cursor:"pointer",display:"flex"}}><X size={15}/></button>
+            </div>
+            <div style={{padding:18,display:"flex",flexDirection:"column",gap:14}}>
+              <input autoFocus value={name} onChange={e=>setName(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter"&&name.trim())submitAdd();if(e.key==="Escape")closeAdd();}}
+                placeholder="e.g. 2.4 mR"
+                style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"9px 11px",font:"inherit",fontSize:13,outline:"none"}}/>
+              <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                <button type="button" onClick={closeAdd}
+                  style={{border:"1px solid var(--line)",background:"#fff",color:"var(--mut)",borderRadius:8,padding:"7px 14px",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+                <button type="button" disabled={!name.trim()} onClick={submitAdd}
+                  style={{border:0,background:name.trim()?"var(--accent)":"var(--line)",color:"#fff",borderRadius:8,padding:"7px 16px",fontSize:13,fontWeight:700,cursor:name.trim()?"pointer":"not-allowed"}}>Add</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Collaboration picker — tickbox reveals a type-to-search dropdown of other
@@ -2123,6 +2234,72 @@ function CountrySelect({value,onChange,placeholder="Select country..."}){
   );
 }
 
+/* ── Searchable host attribution combobox ──────────────────────────────
+   value = host id (attribute to a host on AthLink) or null (nothing /
+   Other host). The "Other host — not listed" row carries sentinel
+   HOST_OTHER; picking it sets _orgHost to null and reveals the free-text
+   organizer-name input (rendered here, only in that case).
+   onChange(id|null) writes _orgHost. orgName/onOrgName drive _orgName. */
+const HOST_OTHER="__other__";
+function HostPicker({hosts,value,onChange,orgName,onOrgName}){
+  const[open,setOpen]=React.useState(false);
+  const[q,setQ]=React.useState("");
+  const[other,setOther]=React.useState(false);
+  const sel=hosts.find(h=>h.id===value);
+  const filtered=q?hosts.filter(h=>(h.name||"").toLowerCase().includes(q.toLowerCase())):hosts;
+  const ref=React.useRef();
+  React.useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+  // keep cosmetic "other" flag in sync if a real host gets selected elsewhere
+  React.useEffect(()=>{if(value)setOther(false);},[value]);
+  // Selecting the Other-host sentinel: clear the real host id, mark "other",
+  // and drop any previously attributed host name. A real host clears _orgName.
+  const pick=id=>{
+    if(id===HOST_OTHER){setOther(true);onChange(null);}
+    else{setOther(false);onChange(id);onOrgName("");}
+    setOpen(false);setQ("");
+  };
+  return(<>
+    <div style={{position:"relative",flex:"1 1 180px",minWidth:180}} ref={ref}>
+      <div onClick={()=>setOpen(o=>!o)} style={{border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",fontSize:12.5,background:"var(--card)",color:"var(--ink)",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"}}>
+        {sel?<span>{sel.name}</span>:other?<span>Other host — not listed</span>:<span style={{color:"var(--mut)"}}>Select host</span>}
+        <ChevronRight size={12} style={{marginLeft:"auto",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s",flex:"none"}}/>
+      </div>
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:90,background:"var(--card)",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.2)",maxHeight:240,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+          <div style={{padding:"8px 10px",borderBottom:"1px solid var(--line)"}}>
+            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search hosts..." style={{width:"100%",border:0,outline:0,font:"inherit",fontSize:12.5,color:"var(--ink)",background:"transparent"}}/>
+          </div>
+          <div style={{overflowY:"auto",flex:1}}>
+            <div onClick={()=>pick(HOST_OTHER)}
+              style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:600,color:"var(--navy)",borderBottom:"1px solid var(--line)",background:other&&!value?"var(--sky)":"transparent",transition:".1s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+              onMouseLeave={e=>e.currentTarget.style.background=other&&!value?"var(--sky)":"transparent"}>
+              Other host — not listed
+            </div>
+            {filtered.map(h=>(
+              <div key={h.id} onClick={()=>pick(h.id)}
+                style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,color:"var(--ink)",background:h.id===value?"var(--sky)":"transparent",transition:".1s"}}
+                onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+                onMouseLeave={e=>e.currentTarget.style.background=h.id===value?"var(--sky)":"transparent"}>
+                {h.name}
+              </div>
+            ))}
+            {!filtered.length&&<div style={{padding:"8px 12px",fontSize:12,color:"var(--mut)"}}>No matching hosts</div>}
+          </div>
+        </div>
+      )}
+    </div>
+    {other&&!value&&(
+      <input placeholder="…or type the organizer's name" value={orgName||""}
+        onChange={e=>onOrgName(e.target.value)}
+        style={{flex:"1 1 180px",minWidth:160,padding:"7px 9px",borderRadius:8,border:"1px solid var(--line)",background:"var(--card)",color:"var(--ink)",fontSize:12.5}}/>
+    )}
+  </>);
+}
+
 
 /* ═══════════════════════════════════════════════════════════════════════
    Multi-step Sign-in / Sign-up modal
@@ -3371,6 +3548,23 @@ export default function AthLinkMVP(){
     if(rows) applyDbHosts(rows);
     setHostsVersion(v=>v+1);
   };
+  // ── Custom boat classes (global, in-memory) ──
+  // State mirrors the module-level CUSTOM_CLASSES registry so the UI re-renders.
+  const[customClasses,setCustomClasses]=useState(CUSTOM_CLASSES);
+  // Add (or reuse) a custom class by name. Dedups on canonical key; returns the
+  // class id so the caller can select it. No DB yet — in-memory only.
+  const addCustomClass=(name)=>{
+    const nm=String(name||"").trim();
+    if(!nm) return null;
+    const canonical=canonClass(nm);
+    const existing=CUSTOM_CLASSES.find(c=>c.canonical===canonical);
+    if(existing) return existing.id;
+    const color=CUSTOM_CLASS_PALETTE[CUSTOM_CLASSES.length%CUSTOM_CLASS_PALETTE.length];
+    const cc={id:`custom:${canonical}`,short:nm,full:nm,color,canonical};
+    CUSTOM_CLASSES=[...CUSTOM_CLASSES,cc];
+    setCustomClasses(CUSTOM_CLASSES);
+    return cc.id;
+  };
   const[auth,setAuth]=useState(null);
   const[showSignIn,setShowSignIn]=useState(false);
   const[accountOpen,setAccountOpen]=useState(false);
@@ -4062,8 +4256,8 @@ export default function AthLinkMVP(){
     return Math.max(...previewEv.entries.map(e=>(e.races||[]).length),1);
   },[previewEv]);
 
-  const cls=assoc?CLASSES.find(c=>c.id===assoc.cls):(isClassPortal?CLASSES.find(c=>c.id===portalCls):null);
-  const portalName=host?host.name:(isClassPortal?`All ${CLASSES.find(c=>c.id===portalCls)?.short||portalCls} Results`:"");
+  const cls=assoc?(CLASSES.find(c=>c.id===assoc.cls)||customClassById(assoc.cls)):(isClassPortal?(CLASSES.find(c=>c.id===portalCls)||customClassById(portalCls)):null);
+  const portalName=host?host.name:(isClassPortal?`All ${classLabel(portalCls)} Results`:"");
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
   const athleteTitle=isGlobal?"All Athletes":(cls?`${cls.short} Athletes`:`${portalName} Athletes`);
@@ -4141,7 +4335,7 @@ export default function AthLinkMVP(){
   const navLabelFor=(snap)=>{
     if(!snap) return "Back";
     const v=snap.view||{};
-    const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`All ${CLASSES.find(c=>c.id===id.slice(6))?.short||""} Results`;return null;};
+    const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`All ${classLabel(id.slice(6))} Results`;return null;};
     if(v.name==="portals") return "Sailing";
     if(v.name==="athletes") return snap.portal?`${pName(snap.portal)||""} Athletes`:"All Athletes";
     if(v.name==="events") return pName(snap.portal)||"Competitions";
@@ -4338,7 +4532,7 @@ Partial query: "${q}"`;
     // Athletes — nav into the owner association of one of their events
     allPeople.filter(p=>p.name.toLowerCase().includes(ql)).slice(0,5).forEach(p=>{
       const ev=events.find(e=>e.entries.some(en=>en.helm===p.name||en.crew===p.name));
-      results.push({type:"athlete",label:p.name,sub:CLASSES.find(cl=>cl.id===p.cls)?.short||"",nav:{type:"profile",assoc:ev?.owner||null,id:p.name}});
+      results.push({type:"athlete",label:p.name,sub:p.cls?classLabel(p.cls):"",nav:{type:"profile",assoc:ev?.owner||null,id:p.name}});
     });
     // Events — nav into the event's owner association portal
     events.filter(ev=>ev.name.toLowerCase().includes(ql)).slice(0,4).forEach(ev=>{
@@ -4920,6 +5114,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const selectFleet=fleet=>buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,fleet);
   const updPMeta=(k,v)=>setPreviewEv(ev=>({...ev,[k]:v}));
   const updPEntry=(idx,k,v)=>setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>i===idx?{...e,[k]:v}:e)}));
+  // Resolve the host driving the preview: the self-organizing importer, else
+  // the manually attributed AthLink host. Auto-fill Host Country from it, but
+  // only when venue is empty — never overwrite a country the user picked.
+  const _pvImporterHost=(portal&&!isClassPortal)?portal:null;
+  const _pvResolvedHost=previewEv
+    ?((((previewEv._orgMode||"self")!=="external")&&_pvImporterHost)?_pvImporterHost:(previewEv._orgHost||null))
+    :null;
+  useEffect(()=>{
+    if(!_pvResolvedHost||!previewEv||previewEv.venue) return;
+    const code=hostLocation(_pvResolvedHost,events);
+    if(code) updPMeta("venue",code);
+  },[_pvResolvedHost,previewEv?.venue]);
   // Build the DivisionToggle string from an entry's real gender + category.
   const divFromEntry=(e)=>{
     const g=normGender(e.gender)||parseDiv(e.div||"").gender||"";
@@ -5895,7 +6101,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     rows.sort((a,b)=>a.total-b.total||b.count-a.count||(a.name||a.helm||"").localeCompare(b.name||b.helm||""));
     rows.forEach((r,i)=>r.rankNum=i+1);
     const podium=n=>n===1?"#e3b341":n===2?"#9aa6b2":n===3?"#c08457":"var(--navy)";
-    const clsShort=CLASSES.find(c=>c.id===rankCls)?.short||rankCls;
+    const clsShort=classLabel(rankCls);
     // Cumulative tallies across the selected competitions (updates as comps change)
     const rankAthleteCount=(()=>{
       const set=new Set();
@@ -6128,7 +6334,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <div className="classes-grid">
               {feAssoc.map(a=>{
                 const ce=events.filter(e=>eventAssocs(e).includes(a.id));
-                const col=classColor(a.cls);const short=CLASSES.find(c=>c.id===a.cls)?.short||a.cls;
+                const col=classColor(a.cls);const short=classLabel(a.cls);
                 return <div className="class-card" key={a.id} style={{cursor:"pointer"}} onClick={()=>enterPortal(a.id)}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
                     <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px"}}>Association</span>
@@ -7092,6 +7298,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
                       cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1}}>{c.short}</button>;
                 })}
+                <CustomClassPicker classes={customClasses} value={evCls} disabled={classLocked}
+                  onSelect={id=>{updPMeta("cls",id);updMeta("subclass",null);}}
+                  onAdd={name=>addCustomClass(name)}/>
               </div>
             </div>
             {SUBCLASSES[evCls]&&<div style={{marginBottom:10}}>
@@ -7113,14 +7322,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   ))}
                 </div>}
                 {external&&<div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-                  <select value={previewEv._orgHost||""} onChange={e=>{updPMeta("_orgHost",e.target.value||null);if(e.target.value)updPMeta("_orgName","");}}
-                    style={{flex:"1 1 180px",minWidth:180,padding:"7px 9px",borderRadius:8,border:"1px solid var(--line)",background:"var(--card)",color:"var(--ink)",fontSize:12.5}}>
-                    <option value="">— attribute to a host on AthLink —</option>
-                    {allHosts.map(h=><option key={h.id} value={h.id}>{h.name}</option>)}
-                  </select>
-                  <input placeholder="…or type the organizer's name" value={previewEv._orgName||""} disabled={!!previewEv._orgHost}
-                    onChange={e=>updPMeta("_orgName",e.target.value)}
-                    style={{flex:"1 1 180px",minWidth:160,padding:"7px 9px",borderRadius:8,border:"1px solid var(--line)",background:previewEv._orgHost?"var(--line)":"var(--card)",color:"var(--ink)",fontSize:12.5}}/>
+                  <HostPicker hosts={allHosts} value={previewEv._orgHost||null}
+                    onChange={id=>{updPMeta("_orgHost",id||null);if(id)updPMeta("_orgName","");}}
+                    orgName={previewEv._orgName||""} onOrgName={v=>updPMeta("_orgName",v)}/>
                 </div>}
                 <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>
                   {external
@@ -7145,6 +7349,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:160}}>Gender / Div</th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
                     <th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>
+                    <th style={{background:"var(--navy)",width:32,padding:"9px 4px"}} aria-label=""></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -7189,6 +7394,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                         </td>);
                       })}
                       <td style={{textAlign:"center",padding:"8px 6px",fontFamily:"'Barlow',sans-serif",fontWeight:700,color:"var(--navy)",fontSize:13}}>{net!==undefined?net:"—"}</td>
+                      <td style={{textAlign:"center",padding:"4px 2px",width:32}}>
+                        <button type="button" title="Remove this athlete"
+                          onClick={()=>setPreviewEv(ev=>({...ev,entries:ev.entries.filter((_,i)=>i!==idx)}))}
+                          style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:24,height:24,padding:0,border:"1px solid transparent",borderRadius:6,background:"transparent",color:"var(--mut)",cursor:"pointer",transition:".12s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.color="#c0392b";e.currentTarget.style.background="rgba(192,57,43,.08)";e.currentTarget.style.borderColor="rgba(192,57,43,.25)";}}
+                          onMouseLeave={e=>{e.currentTarget.style.color="var(--mut)";e.currentTarget.style.background="transparent";e.currentTarget.style.borderColor="transparent";}}>
+                          <Trash2 size={13}/>
+                        </button>
+                      </td>
                     </tr>);
                   })}
                 </tbody>
@@ -7212,7 +7426,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const sp=calScopePortal;
     const isClsScope=typeof sp==="string"&&sp.startsWith("class:");
     const scopeName=!sp?"Global"
-      :isClsScope?`All ${CLASSES.find(c=>c.id===sp.slice(6))?.short||sp.slice(6)} Results`
+      :isClsScope?`All ${classLabel(sp.slice(6))} Results`
       :(hostById(sp)?.name||"Global");
     const scopeEvents=!sp?events
       :isClsScope?events.filter(ev=>ev.cls===sp.slice(6))

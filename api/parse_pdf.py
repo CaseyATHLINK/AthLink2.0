@@ -301,12 +301,35 @@ def split_combined_names(cell_value):
 
 # ── sail / nationality ─────────────────────────────────────────────────────
 def parse_sail_country(raw):
+    """Split a sail cell into (country_code, sail_number).
+
+    Handles, in order:
+      - pure / club-prefixed sails (315, 22597, "RHKYC 1") → ('', sail as-is);
+        never guess a country for these.
+      - a 3-letter IOC code OR 2-letter "HK", with or WITHOUT a space, any case,
+        directly followed by the number:  "HKG 929" / "HKG929" / "HkG306" /
+        "HK 12" / "HK12" → ('HKG'/'CHN'/…, '929'/…). "HK" normalises to "HKG".
+    Returns ('', sail) when no country prefix is recognised.
+    """
     if raw is None:
         return '', ''
     s = str(raw).strip()
-    m = re.match(r'^([A-Z]{3})\s+(\d+.*)$', s)
+    if not s:
+        return '', ''
+    # Pure number (optionally with internal spaces / hyphens) → no country.
+    if re.match(r'^\d[\d\s\-]*$', s):
+        return '', s
+    # 2–3 letter alpha prefix glued or spaced to the sail number.
+    m = re.match(r'^([A-Za-z]{2,3})\s*(\d+.*)$', s)
     if m:
-        return m.group(1), m.group(2).strip()
+        code = m.group(1).upper()
+        num  = m.group(2).strip()
+        if len(code) == 2:
+            if code == 'HK':
+                return 'HKG', num
+            return '', s          # unknown 2-letter prefix — don't guess
+        return code, num          # 3-letter code (HKG, CHN, …)
+    # Club-prefixed (e.g. "RHKYC 1") or anything else → leave sail untouched.
     return '', s
 
 def flag_from_ioc(code):
@@ -401,8 +424,15 @@ def extract_event_name(text):
     return 'Imported Regatta'
 
 def extract_discards(text):
+    """Read the discard count from a header/metadata line ("Discards: 1").
+
+    Returns 0 when there's no discard indicator — the bracket-count logic in
+    _discards_from_brackets() is the primary signal and will override this from
+    the actual results; this header number is only a fallback. We never default
+    to a non-zero discard count without evidence (genuinely no-discard regattas
+    must stay at 0)."""
     m = re.search(r'[Dd]iscard[^:]*[:\s]+(?:Global[:\s]+)?(\d+)', text)
-    return int(m.group(1)) if m else 1
+    return int(m.group(1)) if m else 0
 
 def extract_date(text):
     months = {
@@ -475,13 +505,21 @@ def detect_cols(header_rows):
         elif h in ('division','div','category','agegroup','agecategory','agecat',
                    'group','catgory'):
             cols.setdefault('category', i)
-        elif h in ('fleet','class','dinghyclassfleet','dinghyclass/fleet','fleetclass',
-                   'fleet/class','boatclass','dinghyclass'):
+        elif h in ('class','boat','type','boatclass','boattype'):
+            # A per-row "Class"/"Boat"/"Type" column: the class is read PER ROW
+            # (mixed-handicap / multi-class events). Tracked as its own column
+            # (row_class) and also as div so genuine multi-class tables still
+            # split; an Open/handicap division clears div but keeps row_class.
+            cols.setdefault('rowclass', i)
+            cols.setdefault('div', i)
+        elif h in ('fleet','dinghyclassfleet','dinghyclass/fleet','fleetclass',
+                   'fleet/class','dinghyclass'):
             cols.setdefault('div', i)
         elif h in ('gender','sex','boatgender','gender(skipper)','genderskipper',
-                   'gendersksipper','helmgender','skippergender'):
+                   'gendersksipper','helmgender','skippergender','helmsex',
+                   'skippersex','sexskipper'):
             cols.setdefault('gender', i)
-        elif h in ('crewgender','gender(crew)','gendercrew'):
+        elif h in ('crewgender','gender(crew)','gendercrew','crewsex','sexcrew'):
             cols['crewgender'] = i
         elif h in ('nat','nationality','country','sailnationalletter','nationalletter'):
             cols.setdefault('nat', i)
@@ -513,7 +551,7 @@ def detect_cols(header_rows):
     return cols
 
 # ── row parsing ────────────────────────────────────────────────────────────
-def parse_row_with_cols(row, cols):
+def parse_row_with_cols(row, cols, open_division=False):
     def get(key, default=''):
         idx = cols.get(key)
         if idx is None or idx >= len(row):
@@ -526,6 +564,9 @@ def parse_row_with_cols(row, cols):
     nat_raw  = get('nat')
     div_raw  = re.sub(r'\s+', ' ', get('div')).strip()
     cat_raw  = get('category')
+    # Per-row boat class from a "Class"/"Boat"/"Type" column (mixed-handicap
+    # divisions). Kept on every entry so the frontend can create custom classes.
+    row_class = re.sub(r'\s+', ' ', get('rowclass')).strip()
 
     # Gender: prefer a boat/skipper gender column; else combine helm + crew gender.
     gender = norm_gender(get('gender'))
@@ -555,6 +596,12 @@ def parse_row_with_cols(row, cols):
     if not div_raw and cat_raw and _looks_like_fleet_label(cat_raw):
         div_raw  = re.sub(r'\s+', ' ', cat_raw).strip()
         category = ''
+
+    # Mixed-handicap "Open Division": every boat is a different class but they all
+    # race as ONE fleet — never split by the per-row class. Clear div (the section
+    # label fills it uniformly later) while keeping row_class as a tag.
+    if open_division:
+        div_raw = ''
 
     if 'sailors' in cols and not helm_raw and 'crew' not in cols:
         # A single combined "Name" column with NO separate crew column → split
@@ -660,6 +707,7 @@ def parse_row_with_cols(row, cols):
         'sail':       clean_sail or '—',
         'nat':        flag_from_ioc(nat_raw),
         'div':        div_raw,
+        'row_class':  row_class,
         'gender':     gender,
         'category':   category,
         'races':      races,
@@ -712,6 +760,10 @@ def parse_table(tbl, fleet_hint=''):
     if not (has_name and has_races):
         return None
 
+    # An "Open Division" / handicap / PY section is ONE fleet of mixed classes —
+    # tell the row parser not to split it by its per-row class column.
+    open_division = _is_open_division(fleet_hint)
+
     entries = []
     for row in tbl[header_end:]:
         if not row or not any(str(c or '').strip() for c in row):
@@ -721,7 +773,7 @@ def parse_table(tbl, fleet_hint=''):
             continue
         if len([c for c in row if str(c or '').strip()]) < 3:
             continue
-        e = parse_row_with_cols(row, cols)
+        e = parse_row_with_cols(row, cols, open_division=open_division)
         if not e['helm'] or not e['races']:
             continue
         if fleet_hint and not e['div']:
@@ -834,6 +886,104 @@ def detect_fleets_in_text(text):
         if key not in seen:
             seen.add(key); found.append(name)
     return found
+
+# ── Boat-class auto-detection ───────────────────────────────────────────────
+def _canon_class(name):
+    """Map a class LABEL (e.g. from a per-row Class column) to a canonical id.
+    Known one-designs collapse to their id; anything unrecognised (RS Feva,
+    Laser 2000, 2.4 mR, Waszp, …) is returned VERBATIM so the frontend can
+    create a custom class. Note: only ILCA-family lasers map to 'ilca' — a bare
+    or numbered "Laser 2000" is a different boat and stays a custom class."""
+    s = re.sub(r'\s+', ' ', str(name or '')).strip()
+    low = s.lower()
+    if not low:
+        return ''
+    if re.search(r'\boptimist[s]?\b|\bopti\b', low):
+        return 'optimist'
+    if re.search(r'\b29er\b', low):
+        return '29er'
+    if re.search(r'\b49er\b', low):
+        return '49er'
+    if re.search(r'\bilca\b', low) or re.search(r'laser\s*(?:radial|standard|4\.7)', low):
+        return 'ilca'
+    return s   # unknown → raw name (custom class)
+
+def _class_in_text(text):
+    """Find a KNOWN canonical class mentioned anywhere in free text (title /
+    headings). Returns '' when none of the known classes are present (unknown
+    classes are only trusted from an explicit per-row Class column)."""
+    low = str(text or '').lower()
+    if not low:
+        return ''
+    if re.search(r'\boptimist[s]?\b|\bopti\b', low):
+        return 'optimist'
+    if re.search(r'\b29er\b', low):
+        return '29er'
+    if re.search(r'\b49er\b', low):
+        return '49er'
+    if re.search(r'\bilca\b', low) or re.search(r'laser\s*(?:radial|standard|4\.7)', low):
+        return 'ilca'
+    return ''
+
+def detect_class(entries, title='', headings=''):
+    """Infer the event's boat class, in priority order:
+        1. the per-row Class column (entry['row_class']) — most reliable,
+        2. the event title,
+        3. section / fleet headings.
+    Returns a canonical id ('optimist'/'29er'/'ilca'/'49er'), or the raw class
+    name for a single unknown class (custom), or '' when undeterminable / mixed.
+    Never defaults to 29er."""
+    rcs = [_canon_class(e.get('row_class')) for e in (entries or [])
+           if (e.get('row_class') or '').strip()]
+    rcs = [c for c in rcs if c]
+    if rcs:
+        uniq = list(dict.fromkeys(rcs))
+        if len(uniq) == 1:
+            return uniq[0]
+        # Several different per-row classes → mixed/handicap; defer to title.
+    c = _class_in_text(title)
+    if c:
+        return c
+    return _class_in_text(headings)
+
+def _is_open_division(label):
+    """True for a mixed-class 'Open Division' / handicap / PY / IRC section,
+    where every boat is a different class but they race as ONE fleet."""
+    low = str(label or '').lower()
+    return bool(re.search(
+        r'open\s+division|open\s+fleet|handicap|performance\s+handicap'
+        r'|\bpy\b|portsmouth|\birc\b', low))
+
+# ── Host club auto-detection ────────────────────────────────────────────────
+# Distinctive names + abbreviations. Matched case-insensitively, punctuation
+# ignored. Order matters only for overlapping aliases (none here).
+_HOST_ALIASES = [
+    (r'royal\s+hong\s+kong\s+yacht\s+club|\brhkyc\b', 'Royal Hong Kong Yacht Club'),
+    (r'aberdeen\s+boat\s+club|\babclub\b',            'Aberdeen Boat Club'),
+    (r'hebe\s+haven\s+yacht\s+club|\bhhyc\b',         'Hebe Haven Yacht Club'),
+    (r'royal\s+yacht\s+club\s+victoria|\brycv\b',     'Royal Yacht Club Victoria'),
+    (r'hong\s+kong\s+sailing\s+federation|\bhksf\b',  'Hong Kong Sailing Federation'),
+]
+
+def detect_host(text):
+    """Detect the organizing host (club/federation) from the document title,
+    header or footer. Returns the readable name string, or None if nothing is
+    found. Matching is loose (case-insensitive, punctuation ignored). Does NOT
+    map to an AthLink host id — the frontend handles that."""
+    raw = str(text or '')
+    if not raw.strip():
+        return None
+    norm = re.sub(r'[^a-z0-9\s]', ' ', raw.lower())
+    norm = re.sub(r'\s+', ' ', norm)
+    for pat, name in _HOST_ALIASES:
+        if re.search(pat, norm):
+            return name
+    # Generic "<Something> Yacht/Boat/Sailing Club" phrase as a fallback.
+    m = re.search(r'([A-Z][A-Za-z&\'.]*(?:\s+[A-Z][A-Za-z&\'.]*){0,4}\s+'
+                  r'(?:Yacht|Boat|Sailing)\s+Club)\b', raw)
+    if m:
+        return re.sub(r'\s+', ' ', m.group(1)).strip()
+    return None
 
 # ── Gemini AI fallback ─────────────────────────────────────────────────────
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -1028,14 +1178,18 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
     if n_cat:
         notes.append(f"Detected age category on {n_cat} of {len(entries)} rows.")
 
+    ev_name = str(data.get("name") or "Imported Competition")
     return {
         "ok": True, "multi": False,
-        "name": str(data.get("name") or "Imported Competition"),
+        "name": ev_name,
         "date": str(data.get("date") or ""),
-        "discards": int(data.get("discards") or 1),
+        # Never invent discards: default to 0 when the model didn't report one.
+        "discards": int(data.get("discards") or 0),
         "entries": entries,
         "ai_parsed": True,
         "notes": notes,
+        "detected_class": detect_class(entries, ev_name, ""),
+        "detected_host": detect_host(ev_name),
     }
 
 
@@ -1079,7 +1233,8 @@ def _looks_like_fleet_label(value):
     stripped = re.sub(r'[\s,]+', ' ', stripped).strip()
     return len(stripped) >= 2
 
-def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label="the built-in parser"):
+def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label="the built-in parser",
+              detected_class='', detected_host=None):
     """
     Group entries and decide single vs multi. Grouping key:
       1. the per-row fleet/class label (div) when those values name real classes
@@ -1143,7 +1298,8 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
         g_disc = _discards_from_brackets(ents, discards)
         for e in ents: e.pop('_disc', None)
         return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
-                'discards':g_disc,'entries':ents,'notes':notes,'nat_from_flags':nat_from_flags}
+                'discards':g_disc,'entries':ents,'notes':notes,'nat_from_flags':nat_from_flags,
+                'detected_class':detected_class,'detected_host':detected_host}
 
     non_main = [k for k in real if k != '__main__']
     # Every labelled group is a Gold/Silver/Bronze split → merge to one championship
@@ -1158,7 +1314,8 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
         g_disc = _discards_from_brackets(merged, discards)
         for e in merged: e.pop('_disc', None)
         return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
-                'discards':g_disc,'entries':merged,'notes':notes,'nat_from_flags':nat_from_flags}
+                'discards':g_disc,'entries':merged,'notes':notes,'nat_from_flags':nat_from_flags,
+                'detected_class':detected_class,'detected_host':detected_host}
 
     # Genuine separate fleets/classes → one competition each
     fleets = []
@@ -1169,7 +1326,8 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
                        'entries': groups[k], 'discards': g_disc, 'count': len(groups[k])})
     labels = [f['name'] or 'Main' for f in fleets]
     notes.append(f"Separated into {len(fleets)} fleets: {', '.join(labels)}.")
-    return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,'fleets':fleets,'nat_from_flags':nat_from_flags}
+    return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,'fleets':fleets,
+            'nat_from_flags':nat_from_flags,'detected_class':detected_class,'detected_host':detected_host}
 
 
 def _rule_based_parse(pdf_bytes: bytes) -> dict:
@@ -1208,6 +1366,14 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
             )
             if fleet_sec:
                 current_fleet = fleet_sec.group(1)
+            # An "Open Division" / handicap / PY section heading marks a mixed-class
+            # one-fleet boundary (kept together; rows tagged with row_class).
+            open_sec = re.search(
+                r'(Open\s+Division|Handicap\s+Division|Performance\s+Handicap'
+                r'|Open\s+Fleet|Handicap\s+Fleet|PY\s+Division)',
+                first_text, re.IGNORECASE)
+            if open_sec:
+                current_fleet = re.sub(r'\s+', ' ', open_sec.group(1)).strip()
 
             # fleet_hint fills e['div'] only when the row has no class/fleet column,
             # so a per-row "Dinghy Class / Fleet" column always wins.
@@ -1236,7 +1402,11 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         "Recognised a known results format — used the built-in parser.",
         f"Read {len(all_parsed)} competitor rows.",
     ]
-    return _finalize(all_parsed, ev_name, ev_date, discards, base_notes)
+    headings_text = ' '.join(detect_fleets_in_text(full_text)) + ' ' + full_text[:1500]
+    detected_class = detect_class(all_parsed, ev_name, headings_text)
+    detected_host  = detect_host(full_text)
+    return _finalize(all_parsed, ev_name, ev_date, discards, base_notes,
+                     detected_class=detected_class, detected_host=detected_host)
 
 
 def _detect_mime(data: bytes) -> str:
@@ -1375,9 +1545,18 @@ def _parse_html_string(html_text: str) -> dict:
         anchor = hv._table_anchor_text[ti] if ti < len(hv._table_anchor_text) else ''
         fsec = re.search(r'(\d+-(?:Gold|Silver|Bronze|Emerald)\s+Fleet|'
                          r'Gold Fleet|Silver Fleet|Bronze Fleet)', anchor, re.IGNORECASE)
+        # An "Open Division" / handicap heading keeps that table as one mixed-class
+        # fleet (rows tagged with row_class) instead of splitting it per class.
+        osec = re.search(r'(Open\s+Division|Handicap\s+Division|Performance\s+Handicap'
+                         r'|Open\s+Fleet|Handicap\s+Fleet|PY\s+Division)', anchor, re.IGNORECASE)
         # _class_of resolves 49erFX before 49er etc., so separate per-class tables
         # (e.g. a page stacking 49er / 49erFX / Nacra) are distinguished correctly.
-        fleet = fsec.group(1) if fsec else _class_of(anchor)
+        if fsec:
+            fleet = fsec.group(1)
+        elif osec:
+            fleet = re.sub(r'\s+', ' ', osec.group(1)).strip()
+        else:
+            fleet = _class_of(anchor)
         parsed = parse_table(tbl, fleet)
         if parsed and parsed['entries']:
             all_parsed.extend(parsed['entries'])
@@ -1393,7 +1572,11 @@ def _parse_html_string(html_text: str) -> dict:
         "Fetched the page and read its source HTML directly.",
         f"Read {len(all_parsed)} competitor rows.",
     ]
-    return _finalize(all_parsed, ev_name, ev_date, discards, base_notes)
+    headings_text = ' '.join(t for (_tag, t) in hv.headings) + ' ' + ' '.join(detected_fleets)
+    detected_class = detect_class(all_parsed, ev_name, headings_text)
+    detected_host  = detect_host(' '.join(t for (_tag, t) in hv.headings) + ' ' + plain[:2000])
+    return _finalize(all_parsed, ev_name, ev_date, discards, base_notes,
+                     detected_class=detected_class, detected_host=detected_host)
 
 
 _ALLOWED_FETCH_SCHEMES = ('http://', 'https://')
