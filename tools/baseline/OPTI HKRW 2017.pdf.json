@@ -1,0 +1,30 @@
+{
+  "event": "16/06/2026, 16:47 Sailwave results for Hong Kong Race Week 2017 at 2017",
+  "date": "19/02/2017",
+  "detected_class": "optimist",
+  "detected_host": "Royal Hong Kong Yacht Club",
+  "discards": 2,
+  "n_entries": 2,
+  "sample_rows": [
+    {
+      "pdf_rank": 38,
+      "sail": "388",
+      "helm": "Bincker Uiterwaal",
+      "crew": "",
+      "nat": "",
+      "div": "420",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 49,
+      "sail": "306",
+      "helm": "Nathan Turner",
+      "crew": "",
+      "nat": "",
+      "div": "420",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

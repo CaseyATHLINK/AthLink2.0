@@ -1,0 +1,96 @@
+{
+  "ok": true,
+  "multi": false,
+  "name": "16/06/2026, 16:47 Sailwave results for Hong Kong Race Week 2017 at 2017",
+  "date": "19/02/2017",
+  "discards": 2,
+  "entries": [
+    {
+      "helm": "Bincker Uiterwaal",
+      "crew": "",
+      "sail": "388",
+      "nat": "",
+      "div": "420",
+      "row_class": "",
+      "gender": "",
+      "category": "",
+      "races": [
+        18,
+        15,
+        21,
+        24,
+        27,
+        15,
+        22,
+        22,
+        34,
+        28,
+        32
+      ],
+      "race_codes": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "pdf_rank": 38,
+      "pdf_net": 192,
+      "birth_year": 2004,
+      "crew_birth_year": null
+    },
+    {
+      "helm": "Nathan Turner",
+      "crew": "",
+      "sail": "306",
+      "nat": "",
+      "div": "420",
+      "row_class": "",
+      "gender": "",
+      "category": "",
+      "races": [
+        53,
+        53,
+        53,
+        53,
+        53,
+        53,
+        53,
+        53,
+        53,
+        53,
+        53
+      ],
+      "race_codes": [
+        "DNC",
+        "DNC",
+        "DNC",
+        "DNC",
+        "DNC",
+        "DNC",
+        "DNC",
+        "DNC",
+        "DNC",
+        "DNC",
+        "DNC"
+      ],
+      "pdf_rank": 49,
+      "pdf_net": 477,
+      "birth_year": 2004,
+      "crew_birth_year": null
+    }
+  ],
+  "notes": [
+    "Recognised a known results format — used the built-in parser.",
+    "Read 2 competitor rows."
+  ],
+  "nat_from_flags": false,
+  "detected_class": "optimist",
+  "detected_host": "Royal Hong Kong Yacht Club"
+}
