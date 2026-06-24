@@ -5470,7 +5470,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .page-sub{color:var(--mut);font-size:14px;margin:6px 0 0;}
     /* ── Calendar liquid-glass header ── */
     .cal-head-glass{background:rgba(255,255,255,.55);backdrop-filter:blur(40px) saturate(200%);-webkit-backdrop-filter:blur(40px) saturate(200%);border-radius:22px;padding:16px 20px;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 10px 30px -14px rgba(0,0,0,.22);}
-    .cal-viewtoggle{display:inline-flex;align-items:center;gap:6px;font-family:'Barlow',sans-serif;font-weight:700;font-size:13px;color:var(--navy);background:rgba(255,255,255,.6);border:0;border-radius:980px;padding:7px 14px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.45);transition:.15s;}
+    .cal-viewtoggle{display:inline-flex;align-items:center;gap:6px;font-family:'Barlow',sans-serif;font-weight:700;font-size:13px;color:var(--navy);background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);border:0;border-radius:980px;padding:7px 14px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.7),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
     .cal-viewtoggle:hover{background:var(--navy);color:#fff;}
     .cal-cls-box{display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.5);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);border-radius:980px;padding:5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.45);}
     .cal-cls-mini{border:1px solid var(--line);background:rgba(255,255,255,.4);border-radius:980px;padding:5px 13px;font-size:12.5px;font-weight:700;font-family:'Barlow',sans-serif;color:var(--mut);cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);}
@@ -5497,8 +5497,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .evmeta span{display:flex;align-items:center;gap:5px;}
     .draftbadge{font-size:11px;font-weight:700;color:#7a4a0a;background:#fdecd6;padding:4px 9px;border-radius:20px;}
     .cls{font-family:'Barlow',sans-serif;font-weight:700;font-size:12px;color:#fff;background:var(--navy2);padding:4px 10px;border-radius:980px;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.12);}
-    .delbtn{background:none;border:0;color:#c0392b;cursor:pointer;padding:6px;border-radius:7px;display:grid;place-items:center;opacity:.45;transition:.15s;flex:none;}
-    .delbtn:hover{opacity:1;background:#fbe7e4;}
+    .delbtn{background:rgba(255,255,255,.5);backdrop-filter:blur(18px) saturate(185%);-webkit-backdrop-filter:blur(18px) saturate(185%);border:0;color:#c0392b;cursor:pointer;padding:7px;border-radius:980px;display:grid;place-items:center;opacity:.72;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.55),inset 0 1px 0 rgba(255,255,255,.65),0 1px 2px rgba(0,0,0,.06);transition:.15s;flex:none;}
+    .delbtn:hover{opacity:1;background:rgba(251,231,228,.88);box-shadow:inset 0 0 0 .5px rgba(192,57,43,.30),0 2px 8px -2px rgba(192,57,43,.25);}
     .panel{background:rgba(255,255,255,0.85);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:var(--radius);overflow:auto;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);}
     table{width:100%;border-collapse:collapse;font-size:13px;min-width:680px;}
     thead th{background:linear-gradient(180deg,rgba(31,78,128,.92),rgba(19,49,78,.94));backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);color:#fff;font-family:'Barlow',sans-serif;font-weight:600;text-align:center;padding:11px 5px;font-size:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.12);}
@@ -5582,11 +5582,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .seg button:hover{color:var(--navy);}
     .seg button.on{background:rgba(255,255,255,.92);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .btn{font-weight:600;font-size:14px;border:0;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:10px 18px;transition:transform .18s cubic-bezier(.4,0,.2,1),filter .18s,background .18s,box-shadow .18s;letter-spacing:-.01em;}
-    .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 3px rgba(10,132,255,.35);}.btn.cta:hover{background:var(--accent2);}
-    .btn.ghost{background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.06);filter:url(#glass-distortion);}.btn.ghost:hover{background:rgba(255,255,255,.85);}
-    .btn.sky{background:rgba(10,132,255,.20);backdrop-filter:blur(26px) saturate(195%);-webkit-backdrop-filter:blur(26px) saturate(195%);color:var(--navy);border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.45);filter:url(#glass-distortion);}.btn.sky:hover{background:rgba(10,132,255,.28);}
-    .btn.amber{background:rgba(255,149,0,.16);backdrop-filter:blur(14px);color:#a85c00;border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}.btn.amber:hover{background:rgba(255,149,0,.24);}
-    .btn.green{background:rgba(52,199,89,.18);backdrop-filter:blur(14px);color:#0a7a3f;border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}.btn.green:hover{background:rgba(52,199,89,.28);}
+    /* ── Crisp-edge buttons: original (un-blurred) tints + a hairline ring in
+       each variant's own hue and a faint separation shadow for definition.
+       No displacement distortion on the solid tints — keeps them sharp. ── */
+    .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.30),inset 0 1px 0 rgba(255,255,255,.45),0 1px 3px rgba(10,132,255,.35);}.btn.cta:hover{background:var(--accent2);}
+    .btn.ghost{background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;color:var(--ink);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.62),inset 0 1px 0 rgba(255,255,255,.72),0 1px 2px rgba(0,0,0,.10);}.btn.ghost:hover{background:rgba(255,255,255,.85);}
+    .btn.sky{background:rgba(10,132,255,.20);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);border:0;box-shadow:inset 0 0 0 .5px rgba(10,132,255,.45),inset 0 1px 0 rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.08);}.btn.sky:hover{background:rgba(10,132,255,.28);}
+    .btn.amber{background:rgba(255,149,0,.16);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);color:#a85c00;border:0;box-shadow:inset 0 0 0 .5px rgba(255,149,0,.42),inset 0 1px 0 rgba(255,255,255,.45),0 1px 2px rgba(0,0,0,.07);}.btn.amber:hover{background:rgba(255,149,0,.24);}
+    .btn.green{background:rgba(52,199,89,.18);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);color:#0a7a3f;border:0;box-shadow:inset 0 0 0 .5px rgba(52,199,89,.45),inset 0 1px 0 rgba(255,255,255,.45),0 1px 2px rgba(0,0,0,.07);}.btn.green:hover{background:rgba(52,199,89,.28);}
     .btn:hover{transform:translateY(-2px) scale(1.025);filter:brightness(1.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 12px 28px -10px rgba(0,0,0,.22);}
     .btn:active{transform:translateY(0) scale(.975);filter:brightness(.99);}
     .btn:disabled{opacity:.45;cursor:default;transform:none;filter:none;}
@@ -5642,7 +5645,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:border-radius .32s cubic-bezier(.2,.85,.2,1),background .32s;}
     .menupill.open{border-radius:24px;background:rgba(255,255,255,.70);}
     .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
-    .mp-burger{flex:none;width:38px;height:38px;border-radius:980px;border:0;background:transparent;color:var(--navy);display:grid;place-items:center;cursor:pointer;transition:.15s;}
+    .mp-burger{flex:none;width:38px;height:38px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
     .mp-burger:hover{background:rgba(255,255,255,.5);}
     .mp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.45);border-radius:980px;padding:8px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
     .mp-star{color:var(--accent);flex:none;}
@@ -5656,7 +5659,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .mp-dev{margin-top:8px;align-self:flex-start;display:inline-flex;align-items:center;gap:5px;background:rgba(124,58,237,.16);color:#7c3aed;border:0;border-radius:980px;font-weight:700;font-size:11px;padding:5px 11px;cursor:pointer;}
     .mp-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:340px;overflow:auto;z-index:5;}
     .tb-right{flex:none;}
-    .tb-profile{width:44px;height:44px;border-radius:980px;border:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);transition:.18s;}
+    .tb-profile{width:44px;height:44px;border-radius:980px;border:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.72),0 8px 24px -12px rgba(0,0,0,.28);transition:.18s;}
     .tb-profile:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
     .tb-acct{position:absolute;right:0;top:calc(100% + 8px);background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;min-width:200px;z-index:80;}
     @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}}
@@ -5691,17 +5694,20 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .notice{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:60;background:var(--mat-dark);backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;border-radius:980px;padding:14px 22px;display:flex;gap:13px;align-items:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 20px 50px -18px rgba(0,0,0,.6);animation:rise .4s both;max-width:92%;}
     .notice b{font-family:'Barlow',sans-serif;}
     .notice .ico{background:var(--accent);color:#fff;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:none;}
-    .back{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13.5px;color:var(--navy2);background:none;border:0;cursor:pointer;margin-bottom:10px;padding:0;}
+    .back{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13.5px;color:var(--navy2);background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);border:0;cursor:pointer;margin-bottom:10px;padding:7px 14px;border-radius:980px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.7),0 1px 2px rgba(0,0,0,.08);transition:.15s;}
+    .back:hover{background:rgba(255,255,255,.85);}
     .back:hover{color:var(--accent);}
-    .portal-pill{display:inline-flex;align-items:center;gap:7px;justify-content:flex-start;min-width:140px;background:rgba(255,255,255,.58);backdrop-filter:blur(32px) saturate(195%);-webkit-backdrop-filter:blur(32px) saturate(195%);border:0;border-radius:980px;padding:9px 18px;font-size:13.5px;font-weight:700;color:var(--navy);cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 4px 14px -6px rgba(0,0,0,.14);transition:.22s cubic-bezier(.2,.85,.2,1);}
-    .portal-pill:hover{background:rgba(255,255,255,.82);transform:translateY(-2px) scale(1.05);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 12px 28px -10px rgba(0,0,0,.22);}
+    /* portal-pill shares the exact .btn.ghost glass material (same blur, shine
+       and hairline edge) so nav pills and buttons read as one family. */
+    .portal-pill{display:inline-flex;align-items:center;gap:7px;justify-content:flex-start;min-width:140px;background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;border-radius:980px;padding:9px 18px;font-size:13.5px;font-weight:700;color:var(--navy);cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.62),inset 0 1px 0 rgba(255,255,255,.72),0 4px 14px -6px rgba(0,0,0,.14);transition:.22s cubic-bezier(.2,.85,.2,1);}
+    .portal-pill:hover{background:rgba(255,255,255,.85);transform:translateY(-2px) scale(1.05);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.7),inset 0 1.5px 0 rgba(255,255,255,.9),0 12px 28px -10px rgba(0,0,0,.22);}
     .foot{font-size:12px;color:var(--mut);text-align:center;padding:30px 0;}
     .ov{position:fixed;inset:0;background:rgba(0,0,0,.3);backdrop-filter:blur(4px) saturate(140%);-webkit-backdrop-filter:blur(4px) saturate(140%);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;animation:fade .2s both;}
     .modal{background:rgba(252,253,255,0.88);backdrop-filter:blur(56px) saturate(210%);-webkit-backdrop-filter:blur(56px) saturate(210%);width:100%;max-width:900px;border-radius:22px;overflow:hidden;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 40px 90px -28px rgba(0,0,0,.45),0 0 0 .5px rgba(60,60,67,.08);animation:rise .3s both;}
     .modal.wide{max-width:1140px;}
     .mhead{background:linear-gradient(135deg,rgba(31,78,128,.78),rgba(19,49,78,.84));backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);border-radius:22px 22px 0 0;}
     .mhead h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;margin:0;flex:1;}
-    .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:32px;height:32px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;flex:none;padding:0;}
+    .x{background:rgba(255,255,255,.16);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);border:0;color:#fff;width:32px;height:32px;border-radius:980px;cursor:pointer;display:grid;place-items:center;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.3),inset 0 1px 0 rgba(255,255,255,.25);transition:.15s;flex:none;padding:0;}
     .x:hover{background:rgba(255,255,255,.26);}
     .mhead .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:34px;height:34px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;}
     .mhead .x:hover{background:rgba(255,255,255,.26);transform:scale(1.05);}
@@ -5746,7 +5752,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .cal-head h3{font-family:'Barlow',sans-serif;font-weight:800;font-size:22px;margin:0;}
     .cal-head .x{background:rgba(255,255,255,.12);border:0;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;display:grid;place-items:center;opacity:.85;transition:.12s;flex:none;}
     .cal-head .x:hover{opacity:1;background:rgba(255,255,255,.22);}
-    .cal-back{display:inline-flex;align-items:center;gap:6px;background:none;border:0;color:#bcd2e8;font-weight:600;font-size:13px;cursor:pointer;padding:0;transition:color .12s;}
+    .cal-back{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.16);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);border:0;color:#dbe9f8;font-weight:600;font-size:13px;cursor:pointer;padding:7px 13px;border-radius:980px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.28),inset 0 1px 0 rgba(255,255,255,.22);transition:.15s;}
     .cal-back:hover{color:#fff;}
     .cal-body{padding:0;overflow-y:auto;flex:1;display:flex;flex-direction:column;}
     .cal-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.4);flex:none;flex-wrap:wrap;background:rgba(255,255,255,.28);}
