@@ -486,6 +486,37 @@ function CustomClassPicker({classes,value,disabled,onSelect,onAdd}){
   );
 }
 
+// Host-card class pills. Shows the classes (main OR custom) a host has events in,
+// resolved via classLabel/classColor. Caps the row at 4 pills; any extras collapse
+// into a "+N" pill that reveals them in a small popover (keeps the row one line).
+function HostClassPills({classIds}){
+  const[open,setOpen]=React.useState(false);
+  const ref=React.useRef();
+  React.useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+  const ids=classIds||[];
+  const MAX=3;
+  const shown=ids.slice(0,MAX);
+  const extra=ids.slice(MAX);
+  return(
+    <div ref={ref} style={{display:"flex",gap:4,alignItems:"center",flexWrap:"nowrap",position:"relative"}}>
+      {shown.map(id=><span key={id} className="cls" style={{background:classColor(id)}}>{classLabel(id)}</span>)}
+      {extra.length>0&&(<>
+        <span onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="cls"
+          title="Show more classes" style={{background:"var(--mut)",cursor:"pointer"}}>+{extra.length}</span>
+        {open&&(
+          <div onClick={e=>e.stopPropagation()}
+            style={{position:"absolute",top:"calc(100% + 6px)",right:0,zIndex:90,background:"var(--card)",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.25)",padding:8,display:"flex",flexWrap:"wrap",gap:4,maxWidth:220,justifyContent:"flex-end"}}>
+            {extra.map(id=><span key={id} className="cls" style={{background:classColor(id)}}>{classLabel(id)}</span>)}
+          </div>
+        )}
+      </>)}
+    </div>
+  );
+}
+
 // Collaboration picker — tickbox reveals a type-to-search dropdown of other
 // hosts. `kind` selects the pool: "association" → only associations,
 // "club" → only clubs. Both pickers share ONE `value` (collabs) array; each
@@ -2613,9 +2644,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               </div>
             </div>
 
-            <button className="btn cta" style={{width:"100%",justifyContent:"center"}}
+            <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}}
               disabled={busy||!email.trim()||!pw} onClick={doSignIn}>
-              {busy?<Loader2 size={15} className="spin"/>:null}Sign in
+              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:null}Sign in</div>
             </button>
 
             <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
@@ -2657,9 +2688,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               </div>
             </div>
 
-            <button className="btn cta" style={{width:"100%",justifyContent:"center"}}
+            <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}}
               disabled={busy||!step1Valid} onClick={()=>{setErr("");setStep(isInviteMode?3:2);}}>
-              Continue <ChevronRight size={16}/>
+              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
             </button>
 
             <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
@@ -2684,8 +2715,8 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(1)}>
                 <ArrowLeft size={15}/>Back
               </button>
-              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={()=>{setErr("");setStep(3);}}>
-                Continue <ChevronRight size={16}/>
+              <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={()=>{setErr("");setStep(3);}}>
+                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
               </button>
             </div>
           </>)}
@@ -2739,12 +2770,14 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               </button>
               {/* Athlete finishes here; host advances to step 4; invite mode finishes here */}
               {(role==="athlete"||isInviteMode)
-                ? <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
+                ? <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
+                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">
                     {busy?<Loader2 size={15} className="spin"/>:null}
                     {isInviteMode?"Accept invitation":isMinor?"Send guardian approval":"Create account"}
+                    </div>
                   </button>
-                : <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={()=>{setErr("");setStep(4);}}>
-                    Continue <ChevronRight size={16}/>
+                : <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={()=>{setErr("");setStep(4);}}>
+                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
                   </button>}
             </div>
           </>)}
@@ -2765,9 +2798,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
                     onChange={e=>{ setInviteCodeInput(e.target.value.toUpperCase().replace(/[^A-Za-z0-9]/g,"")); setInviteCodeErr(""); }}
                     onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
                     onKeyDown={async e=>{ if(e.key==="Enter"&&inviteCodeInput.length>=6) await applyInviteCode(); }}/>
-                  <button className="btn cta" style={{fontSize:13,padding:"9px 14px",whiteSpace:"nowrap"}}
+                  <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 14px",whiteSpace:"nowrap"}}
                     disabled={inviteCodeBusy||inviteCodeInput.length<6} onClick={applyInviteCode}>
-                    {inviteCodeBusy?<Loader2 size={13} className="spin"/>:null}Apply
+                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{inviteCodeBusy?<Loader2 size={13} className="spin"/>:null}Apply</div>
                   </button>
                 </div>
                 {inviteCodeErr&&<p style={{margin:"7px 0 0",fontSize:12,color:"#c0392b"}}>{inviteCodeErr}</p>}
@@ -2870,9 +2903,11 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>{addingNew?setAddingNew(false):setStep(3);}}>
                 <ArrowLeft size={15}/>Back
               </button>
-              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!(localInviteCtx||step4Valid)} onClick={doSignUp}>
+              <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!(localInviteCtx||step4Valid)} onClick={doSignUp}>
+                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">
                 {busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}
                 {localInviteCtx?"Accept invitation & create account":addingNew?`Create ${hostKind} & request ownership`:"Request ownership"}
+                </div>
               </button>
             </div>
           </>)}
@@ -3015,8 +3050,8 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pe
               <p style={{margin:"0 0 16px",fontSize:13,color:"var(--mut)",lineHeight:1.5}}>
                 Claim <b>{hostName}</b> to become its first Owner. Your access will be activated once the AthLink team verifies your account.
               </p>
-              <button className="btn cta" style={{justifyContent:"center"}} disabled={busy} onClick={claim}>
-                {busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}Claim as Owner
+              <button className="btn cta liquidGlass-wrapper" style={{justifyContent:"center"}} disabled={busy} onClick={claim}>
+                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}Claim as Owner</div>
               </button>
             </div>
           )}
@@ -3095,8 +3130,8 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pe
                     <button className={inviteRole==="editor"?"on":""} onClick={()=>setInviteRole("editor")}>Editor</button>
                     <button className={inviteRole==="owner"?"on":""} onClick={()=>setInviteRole("owner")}>Owner</button>
                   </div>
-                  <button className="btn cta" style={{fontSize:13,padding:"7px 13px"}} disabled={busy} onClick={createInvite}>
-                    <Link2 size={14}/>Create invite link
+                  <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"7px 13px"}} disabled={busy} onClick={createInvite}>
+                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Link2 size={14}/>Create invite link</div>
                   </button>
                 </div>
                 {newInvite&&(
@@ -3450,8 +3485,8 @@ function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
                           <button className={addRole==="owner"?"on":""} onClick={()=>setAddRole("owner")}>Owner</button>
                           <button className={addRole==="editor"?"on":""} onClick={()=>setAddRole("editor")}>Editor</button>
                         </div>
-                        <button className="btn cta" style={{fontSize:12,padding:"6px 11px"}} disabled={!addHost||busyId===p.user_id} onClick={()=>addMembership(p)}>
-                          <Plus size={13}/>Add
+                        <button className="btn cta liquidGlass-wrapper" style={{fontSize:12,padding:"6px 11px"}} disabled={!addHost||busyId===p.user_id} onClick={()=>addMembership(p)}>
+                          <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Plus size={13}/>Add</div>
                         </button>
                       </div>
                     </div>
@@ -3522,8 +3557,8 @@ function HostEditModal({host,onSave,onClose,canManage,membersProps}){
                 </div>
                 <div style={{display:"flex",gap:10,marginTop:"auto",paddingTop:18}}>
                   <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={onClose}>Cancel</button>
-                  <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
-                    {busy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes
+                  <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
+                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes</div>
                   </button>
                 </div>
               </div>
@@ -4563,7 +4598,7 @@ Partial query: "${q}"`;
   };
 
   const[editResultsEv,setEditResultsEv]=useState(null); // full edit mode for existing event
-  const[hoverRow,setHoverRow]=useState(null); // {evId,helm} currently hovered
+  const[hoverRow,setHoverRow]=useState(null); // {evId,helm,y} currently hovered
   const[hoverSummaries,setHoverSummaries]=useState({}); // key=helm → summary text
   const[profileSummaries,setProfileSummaries]=useState({}); // key=name → full profile blurb
   const[eventSummaries,setEventSummaries]=useState({}); // key=event.id → competition blurb
@@ -4968,11 +5003,44 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   };
 
   // Build a previewEv object from parsed fleet data (no state side-effects).
-  const previewFromData=(name,date,fleet,aiParsed=false)=>{
+  // Match a parser-detected host name to a runtime host (case-insensitive,
+  // punctuation ignored). Tries an exact normalised match, then containment
+  // either way (so "RHKYC" ↔ "Royal Hong Kong Yacht Club" still resolves).
+  const _normHostName=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"");
+  const matchDetectedHost=name=>{
+    const n=_normHostName(name); if(n.length<3) return null;
+    const all=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
+    let h=all.find(x=>_normHostName(x.name)===n);
+    if(h) return h.id;
+    h=all.find(x=>{const hn=_normHostName(x.name);return hn.length>=3&&(hn.includes(n)||n.includes(hn));});
+    return h?h.id:null;
+  };
+  // Build the organizer-attribution fields from a detected host name. Matched →
+  // attribute to that host (+ prefill its country); unmatched → "Another
+  // organizer" with the detected name as free text.
+  const orgFromDetectedHost=name=>{
+    const nm=String(name||"").trim();
+    if(!nm) return {};
+    const matchedId=matchDetectedHost(nm);
+    const importerHost=(portal&&!isClassPortal)?portal:null;
+    if(matchedId){
+      const code=hostLocation(matchedId,events);
+      if(matchedId===importerHost) return {_orgMode:"self",...(code?{venue:code}:{})};
+      return {_orgMode:"external",_orgHost:matchedId,...(code?{venue:code}:{})};
+    }
+    return {_orgMode:"external",_orgName:nm};
+  };
+
+  const previewFromData=(name,date,fleet,aiParsed=false,detectedClass="",detectedHost="")=>{
     const lockedCls=assoc?.cls;                          // association portals lock to their class
     const dhFromEntries=(fleet.entries||[]).some(e=>e.crew&&String(e.crew).trim());
     const inferred=classFromFleetName(fleet.name||name);
-    const cls=lockedCls||inferred||(dhFromEntries?"29er":"optimist");
+    // Resolve the parser's detected_class: a known main-class id is used as-is;
+    // an unrecognised name (e.g. "2.4 mR") becomes/reuses a custom class id.
+    let detCls="";
+    if(detectedClass)
+      detCls=CLASSES.some(c=>c.id===detectedClass)?detectedClass:(addCustomClass(detectedClass)||"");
+    const cls=lockedCls||inferred||detCls||(dhFromEntries?"29er":"optimist");
     const sh=cls==="ilca"||cls==="optimist";
     return{
       id:"imp_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
@@ -4987,6 +5055,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank??null,pdf_net:e.pdf_net??null,
         birth_year:e.birth_year??null,crew_birth_year:sh?null:(e.crew_birth_year??null),
       })),
+      // Organizer/country prefill from detected_host — applied last so it can
+      // override venue:"". Identical across sibling fleets → they start synced.
+      ...orgFromDetectedHost(detectedHost),
     };
   };
 
@@ -5051,11 +5122,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         const groupId="fg_"+Date.now()+"_"+i;
         const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
         rows=data.fleets.map((fl,fi)=>({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false),subclass:null,collabs:[],
+          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
           fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc}));
         setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]}:l));
       }else{
-        rows=[{...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false)}];
+        rows=[{...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"")}];
         setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:data.notes||["Done."]}:l));
       }
       done++; setParseProgress({done,total:files.length});
@@ -5093,12 +5164,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
       data.fleets.forEach((fl,fi)=>{
         results.push({id:groupId+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false),subclass:null,collabs:[],
+          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
           fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc});
       });
     }else{
       results.push({id:"link_"+Date.now(),name:data.name||u,status:"ok",error:null,
-        previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false),subclass:null,collabs:[]});
+        previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[]});
     }
     setPending(results);
     const firstOk=results.findIndex(r=>r.status==="ok");
@@ -5114,6 +5185,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const selectFleet=fleet=>buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,fleet);
   const updPMeta=(k,v)=>setPreviewEv(ev=>({...ev,[k]:v}));
   const updPEntry=(idx,k,v)=>setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>i===idx?{...e,[k]:v}:e)}));
+  // Update a SHARED field (Host Country, Date, Organizer) on the active preview
+  // AND every sibling tab from the same source file (fleetGroupId) — edit once,
+  // applied to all fleets of that file. Other fields stay per-tab via updPMeta.
+  const updSharedMeta=(k,v)=>{
+    setPreviewEv(ev=>ev?{...ev,[k]:v}:ev);            // active (live editor)
+    const gid=pending[activePending]?.fleetGroupId;
+    if(!gid) return;                                  // single-file → nothing to sync
+    setPending(prev=>prev.map((p,i)=>
+      (i!==activePending&&p.fleetGroupId===gid&&p.previewEv)
+        ? {...p,previewEv:{...p.previewEv,[k]:v}}
+        : p));
+  };
   // Resolve the host driving the preview: the self-organizing importer, else
   // the manually attributed AthLink host. Auto-fill Host Country from it, but
   // only when venue is empty — never overwrite a country the user picked.
@@ -5124,7 +5207,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   useEffect(()=>{
     if(!_pvResolvedHost||!previewEv||previewEv.venue) return;
     const code=hostLocation(_pvResolvedHost,events);
-    if(code) updPMeta("venue",code);
+    if(code) updSharedMeta("venue",code);   // keep auto-filled country synced across sibling fleets
   },[_pvResolvedHost,previewEv?.venue]);
   // Build the DivisionToggle string from an entry's real gender + category.
   const divFromEntry=(e)=>{
@@ -5339,6 +5422,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   /* ═════════════════════════════════════════════════════════════ */
   return(
   <div className="al-root">
+  <svg xmlns="http://www.w3.org/2000/svg" style={{display:'none'}} aria-hidden="true">
+    <filter id="glass-distortion" x="-20%" y="-20%" width="140%" height="140%" filterUnits="objectBoundingBox">
+      <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch" result="turbulence"/>
+      <feDisplacementMap in="SourceGraphic" in2="turbulence" scale="8" xChannelSelector="R" yChannelSelector="G" result="displacement"/>
+      <feGaussianBlur in="displacement" stdDeviation="0.5" result="blur"/>
+      <feBlend in="SourceGraphic" in2="blur" mode="normal"/>
+    </filter>
+  </svg>
   <LiquidBackground/>
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&display=swap');
@@ -5425,6 +5516,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       background:rgba(10,132,255,.08);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;
       border-radius:14px;font-size:13px;line-height:1.5;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 3px 0 0 var(--accent);
       transform-origin:top center;animation:summaryPop .42s cubic-bezier(.34,1.5,.5,1) both;}
+    .row-ai-tooltip{position:fixed;left:50%;transform:translateX(-50%);z-index:90;
+      width:min(540px,88vw);pointer-events:none;
+      background:rgba(12,30,55,0.82);backdrop-filter:blur(32px) saturate(200%);-webkit-backdrop-filter:blur(32px) saturate(200%);
+      border-radius:16px;padding:13px 16px;
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 3px 0 0 var(--accent),0 24px 48px -16px rgba(0,0,0,.55);
+      display:flex;gap:10px;align-items:flex-start;
+      font-size:13px;line-height:1.55;color:#dce8f8;
+      animation:rise .18s both;}
+    .row-ai-tooltip.loading{color:#7fa8cc;font-style:italic;}
     .team-summary.loading{color:var(--mut);font-style:italic;}
     @keyframes summaryPop{0%{opacity:0;transform:translateY(-9px) scaleY(.5);}55%{opacity:1;transform:translateY(2px) scaleY(1.05);}100%{opacity:1;transform:translateY(0) scaleY(1);}}
     /* Calendar — year/month views */
@@ -5483,8 +5583,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .seg button.on{background:rgba(255,255,255,.92);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .btn{font-weight:600;font-size:14px;border:0;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:10px 18px;transition:transform .18s cubic-bezier(.4,0,.2,1),filter .18s,background .18s,box-shadow .18s;letter-spacing:-.01em;}
     .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 3px rgba(10,132,255,.35);}.btn.cta:hover{background:var(--accent2);}
-    .btn.ghost{background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.06);}.btn.ghost:hover{background:rgba(255,255,255,.85);}
-    .btn.sky{background:rgba(10,132,255,.20);backdrop-filter:blur(26px) saturate(195%);-webkit-backdrop-filter:blur(26px) saturate(195%);color:var(--navy);border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.45);}.btn.sky:hover{background:rgba(10,132,255,.2);}
+    .btn.ghost{background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border:0;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.06);filter:url(#glass-distortion);}.btn.ghost:hover{background:rgba(255,255,255,.85);}
+    .btn.sky{background:rgba(10,132,255,.20);backdrop-filter:blur(26px) saturate(195%);-webkit-backdrop-filter:blur(26px) saturate(195%);color:var(--navy);border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.45);filter:url(#glass-distortion);}.btn.sky:hover{background:rgba(10,132,255,.28);}
     .btn.amber{background:rgba(255,149,0,.16);backdrop-filter:blur(14px);color:#a85c00;border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}.btn.amber:hover{background:rgba(255,149,0,.24);}
     .btn.green{background:rgba(52,199,89,.18);backdrop-filter:blur(14px);color:#0a7a3f;border:0;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}.btn.green:hover{background:rgba(52,199,89,.28);}
     .btn:hover{transform:translateY(-2px) scale(1.025);filter:brightness(1.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 12px 28px -10px rgba(0,0,0,.22);}
@@ -5716,6 +5816,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .filter-chip{display:inline-flex;align-items:center;gap:6px;background:#eef4fb;border:1px solid #b9cee4;border-radius:20px;padding:4px 10px 4px 12px;font-size:12px;font-weight:600;color:var(--navy);margin-bottom:12px;}
     .filter-chip button{border:0;background:none;cursor:pointer;color:var(--mut);padding:0;display:flex;align-items:center;line-height:1;}
     .filter-chip button:hover{color:#c0392b;}
+    /* ── Apple WWDC25 liquid-glass effect (lucasromerodb/liquid-glass-effect-macos), adapted for dark navy ── */
+    .liquidGlass-wrapper{position:relative;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;border:none;box-shadow:0 6px 6px rgba(0,0,0,0.25),0 0 20px rgba(0,0,0,0.12);transition:transform .18s cubic-bezier(.4,0,.2,1),box-shadow .18s,filter .18s;}
+    .liquidGlass-effect{position:absolute;z-index:0;inset:0;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);filter:url(#glass-distortion);overflow:hidden;isolation:isolate;border-radius:inherit;}
+    .liquidGlass-tint{z-index:1;position:absolute;inset:0;background:rgba(255,255,255,0.10);border-radius:inherit;}
+    .liquidGlass-shine{position:absolute;inset:0;z-index:2;overflow:hidden;border-radius:inherit;box-shadow:inset 2px 2px 1px 0 rgba(255,255,255,0.45),inset -1px -1px 1px 1px rgba(255,255,255,0.3);}
+    .liquidGlass-text{position:relative;z-index:3;color:inherit;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
+    .liquidGlass-wrapper:hover{transform:scale(1.02) translateY(-1px);}
+    .liquidGlass-wrapper:active{transform:scale(0.98);}
+    .liquidGlass-wrapper:disabled{opacity:0.45;cursor:not-allowed;transform:none;}
   `}</style>
 
   {/* ── FLOATING TOP BAR (no frame; glass pills that hide on scroll-down) ── */}
@@ -5919,8 +6028,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               placeholder="your_handle" maxLength={24}
               style={{flex:1,border:0,background:"none",outline:"none",font:"inherit",fontSize:14,padding:"11px 13px 11px 2px"}}/>
           </div>
-          <button className="btn cta" style={{width:"100%",justifyContent:"center"}} disabled={usernameBusy||usernameInput.trim().length<3} onClick={saveUsername}>
-            {usernameBusy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save username
+          <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}} disabled={usernameBusy||usernameInput.trim().length<3} onClick={saveUsername}>
+            <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{usernameBusy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save username</div>
           </button>
         </div>
       </div>
@@ -5966,9 +6075,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
       const isClub=!a.cls;  // clubs and federations have no single class
       const typeLabel=a.type==="federation"?"Federation":a.type==="club"?"Club":"Association";
-      // Class nuggets shown top-right: a club/federation shows every class it has
-      // events in; an association shows its single class.
-      const nuggets=isClub?CLASSES.filter(c=>ce.some(e=>e.cls===c.id)):CLASSES.filter(c=>c.id===a.cls);
+      // Class nuggets shown top-right: a club/federation shows every class (main
+      // OR custom) it has events in; an association shows its single class. Main
+      // classes lead in canonical order, then any custom classes.
+      const hostClsIds=isClub
+        ? Array.from(new Set(ce.map(e=>e.cls).filter(Boolean)))
+        : (a.cls?[a.cls]:[]);
+      const mainIds=CLASSES.filter(c=>hostClsIds.includes(c.id)).map(c=>c.id);
+      const classIds=[...mainIds,...hostClsIds.filter(id=>!mainIds.includes(id))];
       // Purple host-role pill when the signed-in user is a verified member here.
       const myHere=myMemberships.find(m=>m.host_id===a.id&&m.verified);
       return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
@@ -5981,8 +6095,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </span>
             : <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
                 color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>}
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center"}}>
-            {nuggets.map(c=><span key={c.id} className="cls" style={{background:classColor(c.id)}}>{c.short}</span>)}
+          <div style={{display:"flex",gap:4,flexWrap:"nowrap",justifyContent:"flex-end",alignItems:"center"}}>
+            <HostClassPills classIds={classIds}/>
             {devMode&&<button onClick={e=>deleteHost(a.id,a.name,e)} title="Delete host/portal (dev)" style={{border:0,background:"rgba(232,72,85,.15)",color:"#c0392b",borderRadius:980,width:26,height:26,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Trash2 size={14}/></button>}
           </div>
         </div>
@@ -6392,7 +6506,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </>)}
           </div>
-          {canEdit&&<button className="btn cta" style={{whiteSpace:"nowrap",flex:"none"}} onClick={()=>setOpen(true)}><Upload size={16}/>Import a competition</button>}
+          {canEdit&&<button className="btn cta liquidGlass-wrapper" style={{whiteSpace:"nowrap",flex:"none"}} onClick={()=>setOpen(true)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>Import a competition</div></button>}
         </div>
         {(()=>{
           const allFiltered=(evFilterChips.length
@@ -6575,8 +6689,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         <tbody>{s.rows.map(r=>(
           <React.Fragment key={r.sail+r.helm}>
           <tr className={hoverRow?.evId===ev.id&&hoverRow?.helm===r.helm?"row-hover":""}
-            onMouseEnter={()=>{
-              setHoverRow({evId:ev.id,helm:r.helm});
+            onMouseEnter={e=>{
+              const rect=e.currentTarget.getBoundingClientRect();
+              setHoverRow({evId:ev.id,helm:r.helm,crew:r.crew||null,y:rect.top+rect.height/2});
               const ag=aggregate(r.helm,events);
               fetchHoverSummary(r.helm,ag,r.crew||null);
             }}
@@ -6604,18 +6719,22 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             })}
             <td className="net">{r.net}</td>
           </tr>
-          {hoverRow?.evId===ev.id&&hoverRow?.helm===r.helm&&(()=>{
-            const k=r.crew?`${r.helm}+${r.crew}`:r.helm;const v=hoverSummaries[k];
-            return(<tr className="summary-row"><td colSpan={s.races+5} style={{padding:0,border:0,background:"none"}}>
-              <div className={`team-summary${v===null?" loading":""}`}>
-                <Sparkles size={14} style={{flex:"none",marginTop:1,color:"var(--accent)"}}/>
-                <span>{v===null?"Generating team summary…":(v===undefined||v==="")?"AI summary unavailable.":v}</span>
-              </div></td></tr>);
-          })()}
           </React.Fragment>
         ))}</tbody>
       </table></div>
       <p style={{fontSize:12,color:"var(--mut)",marginTop:12,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}><span>( ) = discard · red = penalty code</span></p>
+      {hoverRow?.evId===ev.id&&(()=>{
+        const k=hoverRow.crew?`${hoverRow.helm}+${hoverRow.crew}`:hoverRow.helm;
+        const v=hoverSummaries[hoverRow.helm]??hoverSummaries[k];
+        const topPx=Math.min(Math.max((hoverRow.y||0)+14,80),window.innerHeight-120);
+        return(
+          <div className={`row-ai-tooltip${v===null?" loading":""}`}
+            style={{top:topPx}}>
+            <Sparkles size={14} style={{flex:"none",marginTop:2,color:"var(--accent)"}}/>
+            <span>{v===null?"Generating scout summary…":(v===undefined||v==="")?"AI summary unavailable.":v}</span>
+          </div>
+        );
+      })()}
     </div></ErrorBoundary>);
   })()}
 
@@ -6657,12 +6776,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           ));
         })()}</div>
         {canEdit&&filter==="duplicates"&&visibleDupGroups.length>0&&(
-          <button className="btn cta" style={{fontSize:13,padding:"7px 13px",whiteSpace:"nowrap"}} onClick={()=>{
+          <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"7px 13px",whiteSpace:"nowrap"}} onClick={()=>{
             const keys=visibleDupGroups.map(g=>g.key);
             visibleDupGroups.forEach(g=>mergeGroup(g.names));
             setDismissedDups2(prev=>{const s=new Set(prev);keys.forEach(k=>s.add(k));return s;});
           }}>
-            <Users size={14}/>Merge all
+            <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Users size={14}/>Merge all</div>
           </button>
         )}
       </div>
@@ -6720,9 +6839,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
                     <button className="btn ghost" style={{fontSize:13,padding:"6px 14px"}}
                       onClick={()=>setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;})}>Don't merge</button>
-                    <button className="btn cta" style={{fontSize:13,padding:"6px 14px"}}
+                    <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"6px 14px"}}
                       onClick={()=>{mergeGroup(g.names);setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});}}>
-                      <Users size={14}/>Merge
+                      <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Users size={14}/>Merge</div>
                     </button>
                   </div>
                 </div>
@@ -6843,7 +6962,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                         <input value={athNameLast} onChange={e=>setAthNameLast(e.target.value)} placeholder="Last name"
                           onKeyDown={async e=>{if(e.key==="Enter"){const nn=`${athNameFirst} ${athNameLast}`.trim();if(nn){setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}if(e.key==="Escape")setEditingAthName(null);}}
                           style={{font:"inherit",fontSize:"inherit",fontWeight:"inherit",fontFamily:"inherit",color:"var(--navy)",border:"2px solid var(--accent)",borderRadius:10,padding:"2px 10px",outline:"none",width:200}}/>
-                        <button className="btn cta" style={{fontSize:12,padding:"6px 11px"}} onClick={async()=>{const nn=`${athNameFirst} ${athNameLast}`.trim();if(!nn)return;setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}><CheckCircle size={13}/>Save</button>
+                        <button className="btn cta liquidGlass-wrapper" style={{fontSize:12,padding:"6px 11px"}} onClick={async()=>{const nn=`${athNameFirst} ${athNameLast}`.trim();if(!nn)return;setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><CheckCircle size={13}/>Save</div></button>
                         <button className="btn ghost" style={{fontSize:12,padding:"6px 11px"}} onClick={()=>setEditingAthName(null)}>Cancel</button>
                       </span>
                     : <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
@@ -7061,8 +7180,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     placeholder="https://… Manage2sail / Clubspot / Sailwave results page"
                     style={{flex:1,border:0,outline:"none",font:"inherit",fontSize:13,padding:"10px 0",background:"transparent"}}/>
                 </div>
-                <button className="btn cta" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={pdfLoading||!liveUrl.trim()} onClick={()=>handleLink(liveUrl,"ai")}>
-                  {pdfLoading?<Loader2 size={15} className="spin"/>:<>Fetch &amp; parse</>}
+                <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={pdfLoading||!liveUrl.trim()} onClick={()=>handleLink(liveUrl,"ai")}>
+                  <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{pdfLoading?<Loader2 size={15} className="spin"/>:<>Fetch &amp; parse</>}</div>
                 </button>
               </div>
               <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0",lineHeight:1.5}}>Parsing the page's source is usually more accurate than a PDF. The link is fetched on our server (your browser can't, due to cross-origin rules).</p>
@@ -7171,7 +7290,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               <div className="mfoot">
                 <button className="btn ghost" onClick={closeImport}>Cancel</button>
-                <button className="btn cta" disabled={!manualReady} onClick={doImportManual}><Upload size={16}/>Import competition</button>
+                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady} onClick={doImportManual}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>Import competition</div></button>
               </div>
             </>)}
           </div>
@@ -7281,8 +7400,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <span style={{fontSize:11,color:"#6278b5"}}>— This result was parsed by Claude AI. Review all cells before publishing.</span>
               </div>}
               <div><label>Event name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Event name"/></div>
-              <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updPMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
-              <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updPMeta("venue",v)}/></div>
+              <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updSharedMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
+              <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
             {/* ── Per-result class type selector (reshapes the table) ── */}
@@ -7316,15 +7435,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Organizer</label>
                 {importerHost&&<div style={{display:"inline-flex",gap:6,marginBottom:external?8:0}}>
                   {[["self",`We organized this — ${hostById(importerHost)?.name||"this host"}`],["external","Another organizer"]].map(([m,lbl])=>(
-                    <button key={m} type="button" onClick={()=>updPMeta("_orgMode",m)}
+                    <button key={m} type="button" onClick={()=>updSharedMeta("_orgMode",m)}
                       style={{border:"1px solid "+(orgMode===m?"var(--navy)":"var(--line)"),background:orgMode===m?"var(--navy)":"transparent",
                         color:orgMode===m?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",cursor:"pointer"}}>{lbl}</button>
                   ))}
                 </div>}
                 {external&&<div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
                   <HostPicker hosts={allHosts} value={previewEv._orgHost||null}
-                    onChange={id=>{updPMeta("_orgHost",id||null);if(id)updPMeta("_orgName","");}}
-                    orgName={previewEv._orgName||""} onOrgName={v=>updPMeta("_orgName",v)}/>
+                    onChange={id=>{updSharedMeta("_orgHost",id||null);if(id)updSharedMeta("_orgName","");}}
+                    orgName={previewEv._orgName||""} onOrgName={v=>updSharedMeta("_orgName",v)}/>
                 </div>}
                 <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>
                   {external
@@ -7411,7 +7530,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
             <div className="mfoot" style={{marginTop:14}}>
               <button className="btn amber" onClick={()=>editResultsEv?saveEditedResults(true):importPreview(true)}><Clock size={16}/>Save as Draft</button>
-              <button className="btn cta" onClick={()=>editResultsEv?saveEditedResults(false):importPreview(false)}><CheckCircle size={16}/>{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</button>
+              <button className="btn cta liquidGlass-wrapper" onClick={()=>editResultsEv?saveEditedResults(false):importPreview(false)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><CheckCircle size={16}/>{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</div></button>
             </div>
             </>)}
           </div>);
@@ -7529,13 +7648,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   })()}
 
   {hostFootprintOpen&&portal&&(
-    <ErrorBoundary resetKey={portal} fallback={<div className="ov" onClick={()=>setHostFootprintOpen(false)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",fontWeight:600}}>Couldn't open this host's map.</p><button className="btn cta" onClick={()=>setHostFootprintOpen(false)}>Close</button></div></div>}>
+    <ErrorBoundary resetKey={portal} fallback={<div className="ov" onClick={()=>setHostFootprintOpen(false)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",fontWeight:600}}>Couldn't open this host's map.</p><button className="btn cta liquidGlass-wrapper" onClick={()=>setHostFootprintOpen(false)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Close</div></button></div></div>}>
       <FootprintModal name={portalName} ag={{history:hostHistory}} countryCounts={hostCountryCounts} hostMode titleSuffix="Competitions" onClose={()=>setHostFootprintOpen(false)}/>
     </ErrorBoundary>
   )}
   {regattaFootprint&&(
     <ErrorBoundary resetKey={regattaFootprint.id}
-      fallback={<div className="ov" onClick={()=>setRegattaFootprint(null)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",color:"var(--ink)",fontWeight:600}}>Couldn't open this regatta's map.</p><button className="btn cta" onClick={()=>setRegattaFootprint(null)}>Close</button></div></div>}>
+      fallback={<div className="ov" onClick={()=>setRegattaFootprint(null)}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:440,padding:24,textAlign:"center"}}><p style={{margin:"0 0 14px",color:"var(--ink)",fontWeight:600}}>Couldn't open this regatta's map.</p><button className="btn cta liquidGlass-wrapper" onClick={()=>setRegattaFootprint(null)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Close</div></button></div></div>}>
       <RegattaFootprintModal event={regattaFootprint} homeCountry={homeCountry} onClose={()=>setRegattaFootprint(null)}
         onPickAthlete={(nm)=>{const evId=regattaFootprint.id;setRegattaFootprint(null);setPortal(regattaFootprint.cls);go({name:"profile",id:nm,fromRegatta:evId});}}/>
     </ErrorBoundary>
@@ -7572,7 +7691,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
           <div className="mfoot" style={{marginTop:16}}>
             <button className="btn ghost" onClick={()=>setEditEvMeta(null)}>Cancel</button>
-            <button className="btn cta" onClick={saveEvMeta}><CheckCircle size={15}/>Save changes</button>
+            <button className="btn cta liquidGlass-wrapper" onClick={saveEvMeta}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><CheckCircle size={15}/>Save changes</div></button>
           </div>
         </div>
       </div>
@@ -7618,11 +7737,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             {newHost.type==="association"&&<div style={{flex:1}}>
               <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:5}}>Boat class</label>
-              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
                 {CLASSES.map(c=>(
                   <button key={c.id} type="button" onClick={()=>setNewHost(h=>({...h,cls:c.id}))}
                     style={{border:"1px solid "+(newHost.cls===c.id?classColor(c.id):"var(--line)"),background:newHost.cls===c.id?classColor(c.id):"#fff",color:newHost.cls===c.id?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,padding:"5px 9px",cursor:"pointer"}}>{c.short}</button>
                 ))}
+                <CustomClassPicker classes={customClasses}
+                  value={CLASSES.some(c=>c.id===newHost.cls)?null:newHost.cls}
+                  onSelect={id=>setNewHost(h=>({...h,cls:id}))}
+                  onAdd={name=>addCustomClass(name)}/>
               </div>
             </div>}
             {newHost.type==="federation"&&<div style={{flex:1}}>
@@ -7634,8 +7757,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           {newHost.type==="federation"&&<p style={{fontSize:11.5,color:"var(--mut)",margin:0}}>Federations auto-collaborate on every competition hosted in their country.</p>}
           <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:4}}>
             <button className="btn ghost" style={{fontSize:13,padding:"8px 14px"}} onClick={()=>setShowAddHost(false)}>Cancel</button>
-            <button className="btn cta" style={{fontSize:13,padding:"8px 16px"}} disabled={!newHost.name.trim()||addingHost} onClick={saveNewHost}>
-              {addingHost?<><Loader2 size={15} className="spin"/>Saving…</>:<>Add host</>}
+            <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"8px 16px"}} disabled={!newHost.name.trim()||addingHost} onClick={saveNewHost}>
+              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{addingHost?<><Loader2 size={15} className="spin"/>Saving…</>:<>Add host</>}</div>
             </button>
           </div>
         </div>
