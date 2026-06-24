@@ -39,6 +39,17 @@ try:
 except ImportError:
     pdfplumber = None
 
+# Confidence gate (standalone module in api/). Robust import so it works both
+# in the Vercel serverless runtime and the local test harness.
+import sys
+_API_DIR = os.path.dirname(os.path.abspath(__file__))
+if _API_DIR not in sys.path:
+    sys.path.insert(0, _API_DIR)
+try:
+    from validate import score_parse
+except Exception:
+    score_parse = None
+
 # ── penalty codes ──────────────────────────────────────────────────────────
 CODES = {
     'DNF','DNC','DNS','OCS','DSQ','BFD','UFD','RET','RDG','DGM','DNE',
@@ -1405,8 +1416,13 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
     headings_text = ' '.join(detect_fleets_in_text(full_text)) + ' ' + full_text[:1500]
     detected_class = detect_class(all_parsed, ev_name, headings_text)
     detected_host  = detect_host(full_text)
-    return _finalize(all_parsed, ev_name, ev_date, discards, base_notes,
-                     detected_class=detected_class, detected_host=detected_host)
+    res = _finalize(all_parsed, ev_name, ev_date, discards, base_notes,
+                    detected_class=detected_class, detected_host=detected_host)
+    # Stash document size so the confidence gate can spot silent row-dropping
+    # (a big PDF that produced almost no entries).
+    if isinstance(res, dict):
+        res["_text_lines"] = len(full_text.splitlines())
+    return res
 
 
 def _detect_mime(data: bytes) -> str:
@@ -1726,9 +1742,23 @@ def _ai_read_nationalities(file_bytes: bytes) -> dict:
 # get a JSON string back. They wrap (do NOT rewrite) the existing functions.
 def _tool_rule_parse(file_bytes: bytes) -> str:
     try:
-        return json.dumps(_rule_based_parse(file_bytes))
+        result = _rule_based_parse(file_bytes)
     except ValueError as e:
         return json.dumps({"ok": False, "error": str(e)})
+    # Confidence gate: the rule parser can "succeed" yet return garbage (rows
+    # silently dropped, polluted event name). Score it so the agent knows when
+    # to fall back to vision even though parsing didn't raise.
+    if score_parse is not None and isinstance(result, dict):
+        verdict = score_parse(result)
+        result["confidence"] = verdict["confidence"]
+        result["low_confidence"] = not verdict["ok"]
+        result["confidence_reasons"] = verdict["reasons"]
+        result.setdefault("notes", []).append(
+            f"Rule-parse confidence {verdict['confidence']:.2f} "
+            f"({'low — recommend AI' if not verdict['ok'] else 'ok'}): "
+            + "; ".join(verdict["reasons"])
+        )
+    return json.dumps(result)
 
 
 def _tool_vision_parse(file_bytes: bytes) -> str:
@@ -1756,6 +1786,9 @@ _AGENT_SYSTEM = (
     "PDF of sailing competition results. Rules:\n"
     "- Always call rule_parse first.\n"
     "- If rule_parse returns ok=false, call vision_parse instead.\n"
+    "- If rule_parse returns low_confidence=true (it succeeded but the result "
+    "looks untrustworthy — see confidence_reasons), also call vision_parse and "
+    "prefer whichever result is more complete and sane.\n"
     "- If rule_parse returns nat_from_flags=true, call lookup_nationalities, then "
     "merge the returned nats into the entries by matching the sail field "
     "(normalised: strip whitespace, lowercase). Never use row order for matching.\n"

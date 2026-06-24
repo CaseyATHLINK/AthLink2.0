@@ -1,0 +1,60 @@
+{
+  "event": "2024 29er Asian Championship",
+  "date": "08/02/2024",
+  "detected_class": "29er",
+  "detected_host": null,
+  "discards": 2,
+  "n_entries": 18,
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "3084",
+      "helm": "Emily Polson",
+      "crew": "Tiffany Mak",
+      "nat": "",
+      "div": "29er",
+      "gender": "F",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "3054",
+      "helm": "Cameron Law",
+      "crew": "Christopher Lam",
+      "nat": "",
+      "div": "29er",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "3140",
+      "helm": "Yuto Tsutsumi",
+      "crew": "Taishi Goto",
+      "nat": "",
+      "div": "29er",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "2750",
+      "helm": "Jamie Tsang",
+      "crew": "Cheuk Wing Mak",
+      "nat": "",
+      "div": "29er",
+      "gender": "F",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "2846",
+      "helm": "Raphael Mak",
+      "crew": "Louis Polson",
+      "nat": "",
+      "div": "29er",
+      "gender": "M",
+      "category": "Jr"
+    }
+  ]
+}

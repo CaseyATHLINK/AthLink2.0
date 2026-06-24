@@ -1,0 +1,60 @@
+{
+  "event": "2025 European Championship",
+  "date": "09/06/2025",
+  "detected_class": "49er",
+  "detected_host": null,
+  "discards": 1,
+  "n_entries": 54,
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "250",
+      "helm": "Seb Menzies",
+      "crew": "George Lee Rush",
+      "nat": "NZL",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "31",
+      "helm": "Nevin Snow",
+      "crew": "Ian Macdiarmid",
+      "nat": "USA",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "14",
+      "helm": "Hernan Umpierre",
+      "crew": "Fernando Diz",
+      "nat": "URU",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "775",
+      "helm": "Martin Wizner",
+      "crew": "Jaime Wizner",
+      "nat": "ESP",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "999",
+      "helm": "William Pank",
+      "crew": "Thommie Grit",
+      "nat": "GBR",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}
