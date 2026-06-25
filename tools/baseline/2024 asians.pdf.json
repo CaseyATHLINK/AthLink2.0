@@ -5,6 +5,11 @@
   "detected_host": null,
   "discards": 2,
   "n_entries": 18,
+  "confidence": 1.0,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "looks clean"
+  ],
   "sample_rows": [
     {
       "pdf_rank": 1,

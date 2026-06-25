@@ -2358,5 +2358,6 @@
   ],
   "nat_from_flags": false,
   "detected_class": "49er",
-  "detected_host": null
+  "detected_host": null,
+  "_text_lines": 154
 }

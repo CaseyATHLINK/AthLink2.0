@@ -1,0 +1,65 @@
+{
+  "event": "Bay Hotel Motel 9er Nationals Championship 2023",
+  "date": "09/06/2026",
+  "detected_class": "",
+  "detected_host": null,
+  "discards": 2,
+  "n_entries": 9,
+  "confidence": 1.0,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "looks clean"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "88",
+      "helm": "Casey Law",
+      "crew": "Jack Dingemans",
+      "nat": "",
+      "div": "49erFX",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "108",
+      "helm": "Chloe Fisher",
+      "crew": "Laura Thomson",
+      "nat": "",
+      "div": "49erFX",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "777",
+      "helm": "Mina Ferguson",
+      "crew": "Madeleine Mcleay",
+      "nat": "",
+      "div": "49erFX",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "11",
+      "helm": "Daniel Links",
+      "crew": "Keizo Tomishima",
+      "nat": "",
+      "div": "49erFX",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "31",
+      "helm": "Seisia Mair",
+      "crew": "Stella Hurley",
+      "nat": "",
+      "div": "49erFX",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

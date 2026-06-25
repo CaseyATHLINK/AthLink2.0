@@ -426,6 +426,11 @@ def extract_event_name(text):
     skip = r'(?i)^(sailed|discard|entries|result|rank|pos|overall|start|finish|http|www|point|powered|report)'
     for line in text.split('\n'):
         line = line.strip()
+        # Drop a browser print-header prefix ("09/06/2026, 12:00 …") and the
+        # Sailwave "Sailwave results for … at YYYY" title wrapper.
+        line = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}\s+', '', line)
+        line = re.sub(r'(?i)^sailwave results for\s+', '', line)
+        line = re.sub(r'(?i)\s+at\s+\d{4}\s*$', '', line)
         if len(line) > 8 and re.search(kw, line) and not re.match(skip, line):
             return line[:120]
     for line in text.split('\n')[:12]:
@@ -843,6 +848,169 @@ def try_clubspot(full_text):
             entries.append({'helm':helm,'crew':crew,'sail':sail,'nat':nat,'div':'','gender':'','category':'','races':score_vals,'race_codes':[None]*len(score_vals),'pdf_rank':i2+1,'pdf_net':None})
 
     return entries if entries else None
+
+# ── Text-line parsers (raw extract_text, not pdfplumber tables) ──────────────
+# Some formats defeat pdfplumber's table grid (SailingResults.net spreads one
+# boat over several visual lines; multi-page flighted Sailwave shatters into
+# dozens of 1-row fragments). For these the *raw text lines* are clean, so we
+# reconstruct rows from them. These run only as signature-gated fallbacks (see
+# _rule_based_parse) so the table path for clean Sailwave/manage2sail is untouched.
+
+_SCORE_RE = re.compile(r'^\(?-?\d+(?:\.\d+)?\)?$')
+_SCORE_CODES = {'UFD','DNF','DNS','DNC','OCS','BFD','RET','DSQ','DNE','RDG',
+                'ZFP','NSC','SCP','STP','DPI','DGM'}
+
+def _trailing_score_run(toks):
+    n = 0
+    for t in reversed(toks):
+        if _SCORE_RE.match(t):
+            n += 1
+        else:
+            break
+    return n
+
+def _leading_name_pair(toks):
+    """A forename (Titlecase, ≥1 token) followed by an ALL-CAPS surname.
+    Returns 'Forename SURNAME' or '' if the run doesn't form a name."""
+    fore = []
+    for t in toks:
+        if re.match(r"^[A-Z][a-z][A-Za-z'’-]*$", t):
+            fore.append(t)
+        elif re.match(r"^[A-Z][A-Z'’-]+$", t) and len(t) >= 2 and fore:
+            return ' '.join(fore + [t])
+        else:
+            if fore:
+                break
+    return ''
+
+def _text_line_entry(rank, helm, crew, sail, nat, div, race_tokens, net_token=None):
+    races, race_codes, disc = [], [], 0
+    for tok in race_tokens:
+        sc, code = clean_score_with_code(tok)
+        if sc is not None:
+            races.append(sc); race_codes.append(code)
+            if str(tok).strip().startswith('('):
+                disc += 1
+    ex_nat, clean_sail = parse_sail_country(str(sail or ''))
+    if not nat and ex_nat:
+        nat = ex_nat
+    pdf_net = None
+    if net_token is not None:
+        try:
+            v = float(str(net_token).strip('()'))
+            pdf_net = int(v) if v == int(v) else v
+        except (ValueError, TypeError):
+            pass
+    return {
+        'helm': clean_name(helm), 'crew': clean_name(crew),
+        'sail': clean_sail or '—', 'nat': flag_from_ioc(nat),
+        'div': div, 'row_class': '', 'gender': '', 'category': '',
+        'races': races, 'race_codes': race_codes, '_disc': disc,
+        'pdf_rank': rank, 'pdf_net': pdf_net,
+        'birth_year': None, 'crew_birth_year': None, '_age': None, '_crew_age': None,
+    }
+
+def try_sailingresults(full_text):
+    """SailingResults.net: rank + (Forename SURNAME) + boat + sail + club + races
+    + Total + Net on one line, with the crew (and sometimes the helm) on the
+    following continuation line(s). Two sailors per boat (49er/49erFX etc.)."""
+    if 'sailingresults.net' not in full_text.lower():
+        return None
+    raw = full_text.split('\n')
+    cm = re.search(r'(?:Overall\s+)?Results?\s*[-–—]\s*([0-9A-Za-z][0-9A-Za-z ]*)', full_text)
+    div = re.sub(r'\s+', ' ', cm.group(1)).strip() if cm else ''
+
+    helm_idx = []
+    for i, l in enumerate(raw):
+        toks = l.split()
+        if toks and toks[0].isdigit() and _trailing_score_run(toks) >= 5:
+            helm_idx.append(i)
+
+    entries = []
+    for j, i in enumerate(helm_idx):
+        toks = raw[i].split()
+        tr = _trailing_score_run(toks)
+        scores = toks[len(toks) - tr:]
+        if len(scores) < 3:
+            continue
+        races, total, net = scores[:-2], scores[-2], scores[-1]
+        middle = toks[1:len(toks) - tr]
+        sail, sidx = '', None
+        for k, t in enumerate(middle):
+            if re.match(r'^\d{1,6}$', t):
+                sail, sidx = t, k; break
+        left = middle[:sidx] if sidx is not None else middle
+        names = []
+        nm = _leading_name_pair(left)
+        if nm:
+            names.append(nm)
+        end = helm_idx[j + 1] if j + 1 < len(helm_idx) else len(raw)
+        for k in range(i + 1, end):
+            low = raw[k].lower()
+            if not raw[k].strip() or 'sailingresults' in low or 'http' in low or low.startswith('created'):
+                continue
+            nm = _leading_name_pair(raw[k].split())
+            if nm:
+                names.append(nm)
+        if not names:
+            continue
+        helm = names[0]
+        crew = names[1] if len(names) > 1 else ''
+        entries.append(_text_line_entry(int(toks[0]), helm, crew, sail, '', div, races, net))
+    return entries or None
+
+def try_sailwave_text(full_text):
+    """Multi-page / flighted Sailwave where the table grid shatters. Each entry
+    line starts with an ordinal rank ("1st"); wrapped surnames and score codes
+    spill onto the next line. Single-handed layout (Optimist etc.)."""
+    low = full_text.lower()
+    if 'sailwave results for' not in low and not re.search(r'sailed:\s*\d+.*entries:\s*\d+', low):
+        return None
+    raw = full_text.split('\n')
+    ORD = re.compile(r'^(\d+)(?:st|nd|rd|th)$', re.IGNORECASE)
+    NAT = re.compile(r'^[A-Z]{3}$')
+    _HDR = {'rank','bow','sail','helmname','helm','prefix','age','opti','total',
+            'nett','no','no.','#','flight','fleet','sailed','discards','entries',
+            'scoring','provisional','results','sailwave','of','at'}
+
+    helm_idx = [i for i, l in enumerate(raw)
+                if l.split() and ORD.match(l.split()[0]) and _trailing_score_run(l.split()) >= 3]
+
+    entries = []
+    for j, i in enumerate(helm_idx):
+        toks = raw[i].split()
+        rank = int(ORD.match(toks[0]).group(1))
+        net, total = toks[-1], toks[-2]
+        sail = toks[2] if len(toks) > 2 else ''
+        nidx = None
+        for k in range(3, len(toks) - 2):
+            if NAT.match(toks[k]):
+                nidx = k; break
+        if nidx is not None:
+            name_toks = toks[3:nidx]
+            races = toks[nidx + 2:-2]          # skip the age column after nat
+            nat = toks[nidx]
+        else:
+            sidx = next((k for k in range(3, len(toks)) if _SCORE_RE.match(toks[k])), len(toks) - 2)
+            name_toks, races, nat = toks[3:sidx], toks[sidx:-2], ''
+        # Continuation lines: append genuine wrapped name fragments only.
+        end = helm_idx[j + 1] if j + 1 < len(helm_idx) else len(raw)
+        extra = []
+        for k in range(i + 1, end):
+            line = raw[k]
+            if not line.strip() or re.search(r'[\d:]', line):
+                continue
+            lt = line.split()
+            if any(t.strip('.').lower() in _HDR for t in lt):
+                continue
+            for t in lt:
+                if re.match(r"^[A-Za-z][A-Za-z'’-]+$", t) and t.upper() not in _SCORE_CODES:
+                    extra.append(t)
+        helm = ' '.join(name_toks + extra).strip()
+        if not helm:
+            continue
+        entries.append(_text_line_entry(rank, helm, '', sail, nat, '', races, net))
+    return entries or None
 
 # ── Fleet detection ────────────────────────────────────────────────────────
 FLEET_PATTERNS = re.compile(
@@ -1397,6 +1565,22 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         cs = try_clubspot(full_text)
         if cs:
             all_parsed.extend(cs)
+
+    # ── Text-line fallbacks (formats pdfplumber can't cleanly tabulate) ──
+    # Signature-gated and only when the table path is empty or clearly deficient,
+    # so clean Sailwave/manage2sail tables are never disturbed.
+    sig = full_text.lower()
+    if 'sailingresults.net' in sig and len(all_parsed) < 3:
+        sr = try_sailingresults(full_text)
+        if sr and len(sr) > len(all_parsed):
+            all_parsed = sr
+    if 'sailwave results for' in sig or re.search(r'sailed:\s*\d+.*entries:\s*\d+', sig):
+        declared = max([int(x) for x in re.findall(r'[Ee]ntries:\s*(\d+)', full_text)] or [0])
+        deficient = (not all_parsed) or len(all_parsed) < 5 or (declared and len(all_parsed) < 0.5 * declared)
+        if deficient:
+            sw = try_sailwave_text(full_text)
+            if sw and len(sw) > len(all_parsed):
+                all_parsed = sw
 
     if not all_parsed:
         raise ValueError(

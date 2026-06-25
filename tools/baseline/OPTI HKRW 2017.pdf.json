@@ -1,28 +1,63 @@
 {
-  "event": "16/06/2026, 16:47 Sailwave results for Hong Kong Race Week 2017 at 2017",
+  "event": "Hong Kong Race Week 2017",
   "date": "19/02/2017",
   "detected_class": "optimist",
   "detected_host": "Royal Hong Kong Yacht Club",
   "discards": 2,
-  "n_entries": 2,
+  "n_entries": 104,
+  "confidence": 0.8,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "52 ranks missing from 1..104"
+  ],
   "sample_rows": [
     {
-      "pdf_rank": 38,
-      "sail": "388",
-      "helm": "Bincker Uiterwaal",
+      "pdf_rank": 1,
+      "sail": "205",
+      "helm": "Duncan Gregor",
       "crew": "",
-      "nat": "",
-      "div": "420",
+      "nat": "HKG",
+      "div": "",
       "gender": "",
       "category": ""
     },
     {
-      "pdf_rank": 49,
-      "sail": "306",
-      "helm": "Nathan Turner",
+      "pdf_rank": 1,
+      "sail": "319",
+      "helm": "Patrick Feng",
       "crew": "",
-      "nat": "",
-      "div": "420",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "1750",
+      "helm": "Blake Wilson",
+      "crew": "",
+      "nat": "AUS",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "6677",
+      "helm": "Hsiang Hui Chiang",
+      "crew": "",
+      "nat": "TPE",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "1715",
+      "helm": "Jack Ferguson",
+      "crew": "",
+      "nat": "AUS",
+      "div": "",
       "gender": "",
       "category": ""
     }
