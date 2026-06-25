@@ -70,11 +70,12 @@ Provenance columns on events: owner, owner_confirmed, imported_by,
 organizer_name, fingerprint, sources
 
 ## Pending migrations — verify in Supabase before assuming columns exist
+SQL migration files live in `migrations/`.
 - profiles_username_migration.sql
 - host_invites_shortcode_migration.sql
 - dev_admin_select_migration.sql (replace admin UUID placeholder first)
 - event_provenance_migration.sql (run before deploying provenance features)
-- custom_classes table — NOT YET RUN (custom classes are in-memory only until this runs)
+- migrations/custom_classes_migration.sql — NOT YET RUN (custom classes are in-memory only until this runs)
 - country column on hosts table — NOT YET RUN
 
 ## Auth architecture
