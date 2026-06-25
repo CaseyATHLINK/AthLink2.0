@@ -76,8 +76,20 @@ def score_parse(result: dict) -> dict:
         reasons.append(f"only {n} entries parsed")
 
     # 2. Required-field coverage.
-    have_sail = sum(1 for e in entries if str(e.get("sail") or "").strip())
-    if have_sail / n < 0.6:
+    # A placeholder dash ("—", "-") is NOT a real sail number — the parser emits
+    # it when the sail column was never found. Counting it as present let whole
+    # results through with every sail silently dropped (web-print PDFs whose real
+    # table pdfplumber couldn't reach), so treat placeholders as missing.
+    _SAIL_PLACEHOLDER = {"", "—", "-", "–", "n/a", "n/a.", "na"}
+    have_sail = sum(1 for e in entries
+                    if str(e.get("sail") or "").strip().lower() not in _SAIL_PLACEHOLDER)
+    sail_cov = have_sail / n
+    if sail_cov < 0.3:
+        # Near-total loss → almost certainly a column-detection failure, not a
+        # format that genuinely omits sails. Dock hard so it falls back to AI.
+        conf -= 0.5
+        reasons.append(f"only {have_sail}/{n} rows have a real sail number (column likely missed)")
+    elif sail_cov < 0.6:
         conf -= 0.3
         reasons.append(f"{have_sail}/{n} rows have a sail number")
 
