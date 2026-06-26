@@ -848,7 +848,10 @@ function aggregate(name,evList){
     if(row.rank<best) best=row.rank;
     history.push({ev,row:{...row,nat:e.nat||""},role,partner,fleet:s.fleet,countries:s.countries});
   }
-  history.sort((a,b)=>new Date(b.ev.date)-new Date(a.ev.date));
+  // Sort newest-first via a robust YYYYMMDD key (dates are DD/MM/YYYY; new Date()
+  // misreads that, which previously left history[0] = wrong "most recent").
+  const _dk=ev=>(ev.date||"").split("/").reverse().join("");
+  history.sort((a,b)=>_dk(b.ev).localeCompare(_dk(a.ev)));
   return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
 }
 
@@ -1146,13 +1149,14 @@ async function upsertAthleteProfile(name,patch,userId,tok){
 // Upload an athlete headshot to the public `athlete-photos` bucket; returns its
 // public URL or null. Path: <name slug>/<timestamp>.<ext>.
 async function uploadAthletePhoto(file,name,tok){
-  if(!SB_URL||!file) return null;
-  const ext=((file.name||"").split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,"")||"jpg";
+  if(!SB_URL||!file||!tok) return null;   // storage write needs a signed-in token
+  const type=file.type||"image/jpeg";
+  const ext=type.includes("png")?"png":type.includes("webp")?"webp":type.includes("gif")?"gif":"jpg";
   const slug=profileNameKey(name).replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"athlete";
   const path=`${slug}/${Date.now()}.${ext}`;
   try{
     const r=await fetch(`${SB_URL}/storage/v1/object/athlete-photos/${path}`,{method:"POST",
-      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":file.type||"application/octet-stream","x-upsert":"true"},
+      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":type,"x-upsert":"true"},
       body:file});
     if(!r.ok){console.error("uploadAthletePhoto",r.status,await r.text().catch(()=>""));return null;}
     return `${SB_URL}/storage/v1/object/public/athlete-photos/${path}`;
@@ -3630,6 +3634,69 @@ function ClaimProfileModal({myName="",people=[],events=[],alreadyClaimed=null,on
    name, nationality, bio, and an Instagram link. Results stay PDF-sourced.
    Photo uploads go to the public `athlete-photos` storage bucket.
    ═══════════════════════════════════════════════════════════════════════ */
+// Google-style circular photo cropper: drag to reposition + zoom slider, then
+// renders the visible circle to a square canvas and returns a JPEG blob.
+function PhotoCropper({file,onCancel,onConfirm}){
+  const V=288, OUT=512;
+  const[img,setImg]=React.useState(null);
+  const[base,setBase]=React.useState(1);
+  const[scale,setScale]=React.useState(1);
+  const[off,setOff]=React.useState({x:0,y:0});
+  const[busy,setBusy]=React.useState(false);
+  const drag=React.useRef(null);
+  React.useEffect(()=>{
+    const url=URL.createObjectURL(file);
+    const im=new Image();
+    im.onload=()=>{
+      const b=Math.max(V/im.naturalWidth,V/im.naturalHeight);
+      setImg(im);setBase(b);setScale(1);
+      setOff({x:(V-im.naturalWidth*b)/2,y:(V-im.naturalHeight*b)/2});
+    };
+    im.src=url;
+    return()=>URL.revokeObjectURL(url);
+  },[file]);
+  const eff=base*scale;
+  const dispW=img?img.naturalWidth*eff:0;
+  const dispH=img?img.naturalHeight*eff:0;
+  const clamp=(o)=>({x:Math.min(0,Math.max(V-dispW,o.x)),y:Math.min(0,Math.max(V-dispH,o.y))});
+  React.useEffect(()=>{ if(img) setOff(o=>clamp(o)); /* re-clamp on zoom */ },[scale,img]);// eslint-disable-line
+  const pt=e=>e.touches?e.touches[0]:e;
+  const onDown=e=>{const p=pt(e);drag.current={sx:p.clientX,sy:p.clientY,ox:off.x,oy:off.y};};
+  const onMove=e=>{if(!drag.current)return;const p=pt(e);setOff(clamp({x:drag.current.ox+(p.clientX-drag.current.sx),y:drag.current.oy+(p.clientY-drag.current.sy)}));};
+  const onUp=()=>{drag.current=null;};
+  const confirm=()=>{
+    if(!img)return; setBusy(true);
+    const c=document.createElement("canvas");c.width=OUT;c.height=OUT;
+    const ctx=c.getContext("2d");
+    const sSize=V/eff, sx=(-off.x)/eff, sy=(-off.y)/eff;
+    ctx.drawImage(img,sx,sy,sSize,sSize,0,0,OUT,OUT);
+    c.toBlob(b=>onConfirm(b),"image/jpeg",0.9);
+  };
+  return(
+    <div className="ov" style={{zIndex:120}} onClick={onCancel}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:360}}>
+        <div className="mhead" style={{padding:"16px 22px"}}><Upload size={16}/><h3 style={{flex:1}}>Position photo</h3><button className="x" onClick={onCancel}><X size={16}/></button></div>
+        <div style={{padding:"18px 22px 22px",display:"flex",flexDirection:"column",alignItems:"center"}}>
+          <div onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
+            onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
+            style={{position:"relative",width:V,height:V,borderRadius:"50%",overflow:"hidden",cursor:"grab",background:"#0b1f38",boxShadow:"inset 0 0 0 2px rgba(255,255,255,.45)",touchAction:"none",userSelect:"none"}}>
+            {img&&<img src={img.src} alt="" draggable={false} style={{position:"absolute",left:off.x,top:off.y,width:dispW,height:dispH,maxWidth:"none",pointerEvents:"none"}}/>}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10,width:"100%",margin:"16px 0 4px"}}>
+            <span style={{fontSize:11,fontWeight:700,color:"var(--mut)"}}>ZOOM</span>
+            <input type="range" min="1" max="4" step="0.01" value={scale} onChange={e=>setScale(parseFloat(e.target.value))} style={{flex:1}}/>
+          </div>
+          <p style={{fontSize:11.5,color:"var(--mut)",margin:"4px 0 0"}}>Drag to reposition · slide to zoom</p>
+          <div style={{display:"flex",gap:10,width:"100%",marginTop:14}}>
+            <button className="btn cta liquidGlass-wrapper" disabled={busy||!img} onClick={confirm} style={{flex:1}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={14} className="spin"/>:<CheckCircle size={14}/>}Use photo</div></button>
+            <button className="btn ghost" onClick={onCancel} style={{padding:"0 16px"}}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClose}){
   const parts=(name||"").trim().split(/\s+/);
   const[first,setFirst]=React.useState(parts.length>1?parts.slice(0,-1).join(" "):(parts[0]||""));
@@ -3638,6 +3705,7 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
   const[insta,setInsta]=React.useState(profile?.instagram_url||"");
   const[nat,setNat]=React.useState(profile?.nat_override||"");
   const[photo,setPhoto]=React.useState(profile?.photo_url||"");
+  const[cropFile,setCropFile]=React.useState(null);
   const[uploading,setUploading]=React.useState(false);
   const[busy,setBusy]=React.useState(false);
   const[err,setErr]=React.useState("");
@@ -3645,13 +3713,18 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
   const field={width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"9px 11px",font:"inherit",fontSize:13.5,outline:"none",background:"rgba(255,255,255,.9)"};
   const lbl={fontSize:11.5,fontWeight:700,color:"var(--mut)",textTransform:"uppercase",letterSpacing:".03em",margin:"0 0 5px"};
 
-  const pickPhoto=async(e)=>{
-    const f=e.target.files?.[0]; if(!f) return;
-    if(f.size>5*1024*1024){setErr("Photo must be under 5 MB.");return;}
-    setErr(""); setUploading(true);
-    const url=await uploadPhoto(f);
+  const pickFile=(e)=>{
+    const f=e.target.files?.[0]; e.target.value="";
+    if(!f) return;
+    if(f.size>10*1024*1024){setErr("Image too large (max 10 MB).");return;}
+    setErr(""); setCropFile(f);
+  };
+  const onCropped=async(blob)=>{
+    setCropFile(null); if(!blob) return;
+    setUploading(true);
+    const url=await uploadPhoto(blob);
     setUploading(false);
-    if(url) setPhoto(url); else setErr("Photo upload failed — the athlete-photos bucket may not exist yet.");
+    if(url) setPhoto(url); else setErr("Photo upload failed — make sure you're signed in.");
   };
   const normIg=(v)=>{
     let ig=(v||"").trim(); if(!ig) return null;
@@ -3663,45 +3736,46 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
   const save=async()=>{
     setBusy(true); setErr("");
     const newName=`${first} ${last}`.trim()||name;
-    const patch={bio:bio.trim()||null,instagram_url:normIg(insta),nat_override:nat.trim().toUpperCase()||null,photo_url:photo||null};
+    const patch={bio:bio.trim()||null,instagram_url:normIg(insta),nat_override:(nat||"").trim().toUpperCase()||null,photo_url:photo||null};
     try{
       if(newName!==name) await onRename(name,newName);   // rename follows ownership + migrates extras key
       await onSaveExtras(newName,patch);
       onClose(newName);
     }catch(e){console.error("athlete edit save",e);setErr("Couldn't save changes. Try again.");setBusy(false);}
   };
-  return(
+  return(<>
+    {cropFile&&<PhotoCropper file={cropFile} onCancel={()=>setCropFile(null)} onConfirm={onCropped}/>}
     <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:480}}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:460}}>
         <div className="mhead" style={{padding:"18px 24px"}}>
           <Pencil size={17}/>
           <h3 style={{flex:1}}>Edit profile</h3>
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
-        <div style={{padding:"16px 24px 24px"}}>
-          {/* Photo */}
-          <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:16}}>
-            {photo
-              ? <img src={photo} alt="" style={{width:64,height:64,borderRadius:"50%",objectFit:"cover",flex:"none",boxShadow:"inset 0 0 0 .5px rgba(0,0,0,.1)"}}/>
-              : <div className="av" style={{background:avatarColor(name),width:64,height:64,fontSize:22,flex:"none"}}>{initials(name)}</div>}
-            <div style={{flex:1}}>
-              <input ref={fileRef} type="file" accept="image/*" onChange={pickPhoto} style={{display:"none"}}/>
-              <button className="btn ghost" disabled={uploading} onClick={()=>fileRef.current&&fileRef.current.click()} style={{fontSize:12.5,padding:"7px 11px"}}>
-                {uploading?<><Loader2 size={13} className="spin"/>Uploading…</>:<><Upload size={13}/>{photo?"Replace photo":"Upload photo"}</>}
-              </button>
-              {photo&&<button className="btn ghost" onClick={()=>setPhoto("")} style={{fontSize:12.5,padding:"7px 11px",marginLeft:7,color:"#c0392b"}}><Trash2 size={13}/>Remove</button>}
+        <div style={{padding:"18px 24px 24px"}}>
+          {/* Photo (click to change) + name fields to the right */}
+          <div style={{display:"flex",gap:16,marginBottom:16,alignItems:"flex-start"}}>
+            <div onClick={()=>!uploading&&fileRef.current&&fileRef.current.click()} title="Click to change photo"
+              style={{position:"relative",width:96,height:96,borderRadius:"50%",overflow:"hidden",cursor:uploading?"default":"pointer",flex:"none"}}>
+              {uploading
+                ? <div className="av" style={{width:96,height:96,background:"var(--navy)"}}><Loader2 size={22} className="spin"/></div>
+                : photo
+                  ? <img src={photo} alt="" style={{width:96,height:96,objectFit:"cover",display:"block"}}/>
+                  : <div className="av" style={{width:96,height:96,fontSize:30,background:avatarColor(name)}}>{initials(name)}</div>}
+              <div style={{position:"absolute",left:0,right:0,bottom:0,background:"rgba(13,142,207,.92)",color:"#fff",fontSize:9,fontWeight:800,textAlign:"center",padding:"3px 0",letterSpacing:".04em"}}>CLICK TO EDIT</div>
+              <input ref={fileRef} type="file" accept="image/*" onChange={pickFile} style={{display:"none"}}/>
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <p style={lbl}>First name</p>
+              <input value={first} onChange={e=>setFirst(e.target.value)} style={{...field,marginBottom:11}}/>
+              <p style={lbl}>Last name</p>
+              <input value={last} onChange={e=>setLast(e.target.value)} style={field}/>
             </div>
           </div>
-          {/* Name */}
-          <div style={{display:"flex",gap:10,marginBottom:14}}>
-            <div style={{flex:1}}><p style={lbl}>First name</p><input value={first} onChange={e=>setFirst(e.target.value)} style={field}/></div>
-            <div style={{flex:1}}><p style={lbl}>Last name</p><input value={last} onChange={e=>setLast(e.target.value)} style={field}/></div>
-          </div>
-          {/* Nationality */}
+          {/* Nationality — dropdown, on the row below the photo */}
           <div style={{marginBottom:14}}>
-            <p style={lbl}>Nationality (IOC code)</p>
-            <input value={nat} onChange={e=>setNat(e.target.value.toUpperCase().slice(0,3))} placeholder="e.g. HKG" maxLength={3} style={{...field,width:120,textTransform:"uppercase"}}/>
-            <span style={{fontSize:11.5,color:"var(--mut)",marginLeft:9}}>Overrides the sail-number guess.</span>
+            <p style={lbl}>Nationality</p>
+            <CountrySelect value={nat} onChange={setNat} placeholder="Select country (overrides sail-number guess)"/>
           </div>
           {/* Instagram */}
           <div style={{marginBottom:14}}>
@@ -3724,7 +3798,7 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
         </div>
       </div>
     </div>
-  );
+  </>);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -4705,7 +4779,7 @@ Query: "${query}"`;
       const res=await fetch("/api/ai_filter",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt:buildFilterPrompt(q,`Portal: ${host?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
+        body:JSON.stringify({task:"filter",prompt:buildFilterPrompt(q,`Portal: ${host?.name||"unknown"}, Events: ${classEvents.length}`),max_tokens:300})
       });
       const data=await res.json();
       if(!data.ok) throw new Error(data.error||"API error");
@@ -4736,6 +4810,7 @@ Query: "${query}"`;
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
+          task:"filter",
           prompt:`You convert a natural-language sailing-results filter into one or more conditions.
 A query may contain SEVERAL conditions (e.g. "finished top 15 in the world championships" = a placing condition AND an event-type condition). Split them.
 Return ONLY a JSON array (no markdown). Each element: {"label": short human label (max 6 words), "code": a JS arrow-function BODY string operating on item "h"}.
@@ -4767,6 +4842,7 @@ Query: "${q}"`,
     try{
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
+          task:"filter",
           prompt:`You convert a natural-language athlete search into a JS predicate.
 Return ONLY a JSON object (no markdown): {"label": short label (max 7 words), "code": arrow-function BODY operating on athlete "a"}.
 "a" has: a.name (string), a.iso (ISO-2 country like "GB","HK"), a.country (full country name), a.events (number of regattas), a.best (best finish rank number or null), a.podiums, a.wins, and a.results = array of {name (event name), rank, fleet, year}.
@@ -4810,7 +4886,7 @@ Return ONLY a JSON array of 4 strings (no markdown). Each string is a complete n
 Context: portal=${host?.name||"unknown"}, recent events: ${eventCtx}
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt,max_tokens:200})});
+        body:JSON.stringify({task:"filter",prompt,max_tokens:200})});
       const data=await res.json();
       if(data.ok){
         const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
@@ -4829,7 +4905,7 @@ Partial query: "${q}"`;
 Return ONLY a JSON array of 4 strings. Each is a complete filter query.
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt,max_tokens:150})});
+        body:JSON.stringify({task:"filter",prompt,max_tokens:150})});
       const data=await res.json();
       if(data.ok){
         const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
@@ -4897,7 +4973,7 @@ Partial query: "${q}"`;
 In 2-4 sentences, summarize this sailing competition for a sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical fleet strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club regatta) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
 Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev.country||"unknown"}. Fleet size: ${sc.fleet} boats. Races sailed: ${sc.races}.`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt,max_tokens:220})});
+        body:JSON.stringify({task:"overview",prompt,max_tokens:220})});
       const data=await res.json();
       if(data.ok) setEventSummaries(m=>({...m,[ev.id]:cleanAISummary(data.text)}));
       else setEventSummaries(m=>({...m,[ev.id]:""}));
@@ -4966,7 +5042,7 @@ Together: ${togLine}`;
 Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins} race wins. Placings: ${peerNote||"unknown"}.`;
       }
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt,max_tokens:90})});
+        body:JSON.stringify({task:"hover",prompt,max_tokens:90})});
       const data=await res.json();
       if(data.ok) setHoverSummaries(h=>({...h,[key]:cleanAISummary(data.text)}));
       else setHoverSummaries(h=>({...h,[key]:""}));
@@ -5002,7 +5078,7 @@ Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins}
       const prompt=`Write a SHORT athlete bio: 2 sentences, MAX 45 words total, third person. Focus on the athlete's JOURNEY — when they started competing, any class change, the class they've excelled in, and where they place now. Do NOT list every stat. No heading, no markdown, no "#", do not begin with the name.
 Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${journey||'unknown'}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. ${recentLine}`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt,max_tokens:110})});
+        body:JSON.stringify({task:"overview",prompt,max_tokens:110})});
       const data=await res.json();
       if(data.ok){
         const text=cleanAISummary(data.text);
@@ -7303,33 +7379,24 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         return(<>
           <div className="phead">
             <div style={{display:"flex",gap:20,alignItems:"flex-start",flex:1,minWidth:260}}>
-              {extras?.photo_url
-                ? <img className="av" src={extras.photo_url} alt={name} style={{objectFit:"cover"}}/>
-                : <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>}
+              {/* Left column: photo (50% bigger), then a compact Calendar and Instagram beneath it */}
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:9,flex:"none"}}>
+                {extras?.photo_url
+                  ? <img className="av" src={extras.photo_url} alt={name} style={{width:111,height:111,objectFit:"cover"}}/>
+                  : <div className="av" style={{background:avatarColor(name),width:111,height:111,fontSize:38}}>{initials(name)}</div>}
+                <button className="portal-pill" style={{minWidth:0,width:111,padding:"6px 0",fontSize:12,justifyContent:"center"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
+                  <Calendar size={13} style={{flex:"none"}}/>Calendar
+                </button>
+                {extras?.instagram_url&&<a href={extras.instagram_url} target="_blank" rel="noopener noreferrer" className="portal-pill" style={{minWidth:0,width:111,padding:"6px 0",fontSize:12,justifyContent:"center",textDecoration:"none"}}>
+                  <Instagram size={13} style={{flex:"none"}}/>Instagram
+                </a>}
+              </div>
               <div style={{flex:1,minWidth:0}}>
                 <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                  {editingAthName?.orig===name
-                    ? <span style={{display:"inline-flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                        <input autoFocus value={athNameFirst} onChange={e=>setAthNameFirst(e.target.value)} placeholder="First name"
-                          onKeyDown={async e=>{if(e.key==="Enter"){const nn=`${athNameFirst} ${athNameLast}`.trim();if(nn){setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}if(e.key==="Escape")setEditingAthName(null);}}
-                          style={{font:"inherit",fontSize:"inherit",fontWeight:"inherit",fontFamily:"inherit",color:"var(--navy)",border:"2px solid var(--accent)",borderRadius:10,padding:"2px 10px",outline:"none",width:200}}/>
-                        <input value={athNameLast} onChange={e=>setAthNameLast(e.target.value)} placeholder="Last name"
-                          onKeyDown={async e=>{if(e.key==="Enter"){const nn=`${athNameFirst} ${athNameLast}`.trim();if(nn){setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}if(e.key==="Escape")setEditingAthName(null);}}
-                          style={{font:"inherit",fontSize:"inherit",fontWeight:"inherit",fontFamily:"inherit",color:"var(--navy)",border:"2px solid var(--accent)",borderRadius:10,padding:"2px 10px",outline:"none",width:200}}/>
-                        <button className="btn cta liquidGlass-wrapper" style={{fontSize:12,padding:"6px 11px"}} onClick={async()=>{const nn=`${athNameFirst} ${athNameLast}`.trim();if(!nn)return;setEditingAthName(null);await renameAthlete(name,nn);go({name:"profile",id:nn});}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><CheckCircle size={13}/>Save</div></button>
-                        <button className="btn ghost" style={{fontSize:12,padding:"6px 11px"}} onClick={()=>setEditingAthName(null)}>Cancel</button>
-                      </span>
-                    : <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
-                        {profileVerified(name)&&<VerifyBadge verified size={20} title="Verified athlete — claimed & vouched"/>}
-                        {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
-                        {devMode&&<button title="Rename athlete (dev)" onClick={()=>{const parts=name.trim().split(/\s+/);setEditingAthName({orig:name});setAthNameFirst(parts.slice(0,-1).join(" ")||parts[0]||"");setAthNameLast(parts.length>1?parts[parts.length-1]:"");}} style={{border:0,background:"var(--grouped)",color:"var(--accent)",borderRadius:980,width:30,height:30,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Pencil size={14}/></button>}
-                      </span>}
-                  {extras?.instagram_url&&editingAthName?.orig!==name&&<a href={extras.instagram_url} target="_blank" rel="noopener noreferrer" className="portal-pill" style={{marginLeft:"auto",textDecoration:"none"}}>
-                    <Instagram size={14} style={{flex:"none"}}/>Instagram
-                  </a>}
-                  {editingAthName?.orig!==name&&<button className="portal-pill" style={{marginLeft:extras?.instagram_url?8:"auto"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
-                    <Calendar size={14} style={{flex:"none"}}/>Calendar
-                  </button>}
+                  <span style={{display:"inline-flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                    {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
+                    {profileVerified(name)&&<VerifyBadge verified size={20} title="Verified athlete — claimed & vouched"/>}
+                  </span>
                 </h1>
                 <div className="pmeta">
                   {(()=>{
@@ -7377,7 +7444,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             {/* Competition footprint — frameless globe on the right, click to expand */}
             {ag.events>0&&hasFootprint&&(
               <div style={{flex:"0 0 260px",maxWidth:"100%",cursor:"pointer"}} onClick={()=>setFootprintOpen(true)} title="Click to expand">
-                <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 4px",fontSize:11}}><Globe size={12}/>Competition footprint</p>
+                <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 4px",fontSize:11,justifyContent:"flex-end",textAlign:"right"}}><Globe size={12}/>Competition footprint</p>
                 <div style={{position:"relative"}}>
                   <SailingGlobe countryData={countryCounts} height={220} dark bare/>
                   <div style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
