@@ -101,6 +101,14 @@ def call_openai_compat(base_url, key, model, messages, max_tokens, tools=None,
     payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
     if tools:
         payload["tools"] = tools
+    # Kimi/Moonshot turns "thinking" ON by default. For our short-output tasks
+    # (filter JSON, hover/overview blurbs, parse JSON) the reasoning eats the
+    # whole max_tokens budget and the model returns EMPTY content with a valid
+    # 200 — which the UI then shows as "AI summary unavailable". Disable it so we
+    # get the answer directly. Harmless for non-Kimi OpenAI-compat providers
+    # since it's only sent to moonshot.
+    if "moonshot" in base_url:
+        payload["thinking"] = {"type": "disabled"}
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json",
                "Authorization": f"Bearer {key}"}
