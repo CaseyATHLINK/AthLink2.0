@@ -1000,6 +1000,16 @@ const sbPatch=async(t,f,b)=>{
   }catch(e){console.error("Supabase PATCH network error",e);return null;}
 };
 const sbDel=async(t,f)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"DELETE",headers:{...sbH,"Prefer":""}});};
+// Reviewed duplicate pairs (see migrations/0006). Read to seed the hidden set;
+// save so a "merge"/"don't merge" decision sticks across reloads and devices.
+const fetchDupDismissals=()=>sbGet("dup_dismissals?select=key");
+async function saveDupDismissals(keys){
+  if(!sbH||!keys||!keys.length) return;
+  try{await fetch(`${SB_URL}/rest/v1/dup_dismissals`,{method:"POST",
+    headers:{...sbH,"Prefer":"resolution=ignore-duplicates"},
+    body:JSON.stringify(keys.map(k=>({key:k})))});}
+  catch(e){console.error("saveDupDismissals",e);}
+}
 
 /* ── Auth (Supabase GoTrue) — minimal, no extra deps ─────────────────────── */
 const AUTH_BASE=SB_URL?`${SB_URL}/auth/v1`:null;
@@ -4671,6 +4681,11 @@ export default function AthLinkMVP(){
     try{const s=localStorage.getItem("athlink_dismissed_dups");return s?new Set(JSON.parse(s)):new Set();}catch{return new Set();}
   });
   useEffect(()=>{try{localStorage.setItem("athlink_dismissed_dups",JSON.stringify([...dismissedDups2]));}catch{}},[dismissedDups2]);
+  // Seed from the server too, so decisions persist across reloads AND devices.
+  useEffect(()=>{(async()=>{
+    const rows=await fetchDupDismissals();
+    if(Array.isArray(rows)&&rows.length) setDismissedDups2(prev=>{const s=new Set(prev);rows.forEach(r=>r.key&&s.add(r.key));return s;});
+  })();},[]);
   // True if a name competes in the given class (canonical match).
   const nameInClass=(nm,clsId)=>{const t=canonName(nm);return events.some(e=>e.cls===clsId&&e.entries.some(en=>canonName(en.helm)===t||canonName(en.crew)===t));};
   const visibleDupGroups=useMemo(()=>{
@@ -6102,7 +6117,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .mp-clear{flex:none;border:0;background:none;cursor:pointer;color:var(--mut);display:flex;padding:0;}
     .mp-panel{max-height:0;overflow:hidden;opacity:0;display:flex;flex-direction:column;gap:1px;padding:0 12px;transition:max-height .36s cubic-bezier(.2,.85,.2,1),opacity .26s,padding .3s;}
     .menupill.open .mp-panel{max-height:340px;opacity:1;padding:2px 12px 13px;}
-    .mp-link{text-align:left;border:0;background:none;cursor:pointer;font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;color:var(--ink);padding:8px 6px;border-radius:12px;transition:color .15s;}
+    .mp-link{align-self:flex-start;text-align:left;border:0;background:none;cursor:pointer;font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;color:var(--ink);padding:8px 6px;border-radius:12px;transition:color .15s;}
     .mp-link:hover,.mp-link.on{color:var(--accent);}
     .mp-dev{margin-top:8px;align-self:flex-start;display:inline-flex;align-items:center;gap:5px;background:rgba(124,58,237,.16);color:#7c3aed;border:0;border-radius:980px;font-weight:700;font-size:11px;padding:5px 11px;cursor:pointer;}
     .mp-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:340px;overflow:auto;z-index:5;}
@@ -7283,6 +7298,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             const keys=visibleDupGroups.map(g=>g.key);
             visibleDupGroups.forEach(g=>mergeGroup(g.names));
             setDismissedDups2(prev=>{const s=new Set(prev);keys.forEach(k=>s.add(k));return s;});
+            saveDupDismissals(keys);
           }}>
             <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Users size={14}/>Merge all</div>
           </button>
@@ -7305,14 +7321,20 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             const MiniCard=({name,dim})=>{
               const ag=aggregate(name,events);
               const nat=athleteNat(name,events);
+              const attrs=ATHLETE_ATTRS.get(canonName(name));
+              const nug=attrs?.recentCls?nuggetFor(attrs.recentCls,attrs.recentSub):null;
+              const recent=ag.history[0]?.ev;            // most recent competition (history is newest-first)
+              const recentYr=recent?.date?.split('/')?.[2]||"";
               return(
                 <div className="acard" style={{flex:1,minWidth:0,opacity:dim?.75:1,cursor:"pointer"}} onClick={()=>go({name:"profile",id:name})}>
                   <div className="achead">
                     <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
-                    <div style={{minWidth:0}}>
+                    <div style={{minWidth:0,flex:1}}>
                       <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {name}</div>
+                      {nug&&<span className="cls" style={{background:nug.color,fontSize:9.5,padding:"1px 7px",marginTop:3,display:"inline-block"}}>{nug.label}</span>}
                     </div>
                   </div>
+                  {recent&&<div style={{fontSize:11,color:"var(--mut)",margin:"0 0 8px",display:"flex",alignItems:"center",gap:5,minWidth:0}}><Trophy size={11} style={{flex:"none"}}/><span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{recent.name}{recentYr?` · ${recentYr}`:""}</span></div>}
                   <div className="acstat">
                     <div><b>{ag.events}</b>competitions</div><div><b>{ag.best?"#"+ag.best:"—"}</b>best</div>
                   </div>
@@ -7341,9 +7363,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   </div>
                   <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
                     <button className="btn ghost" style={{fontSize:13,padding:"6px 14px"}}
-                      onClick={()=>setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;})}>Don't merge</button>
+                      onClick={()=>{setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);}}>Don't merge</button>
                     <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"6px 14px"}}
-                      onClick={()=>{mergeGroup(g.names);setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});}}>
+                      onClick={()=>{mergeGroup(g.names);setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);}}>
                       <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Users size={14}/>Merge</div>
                     </button>
                   </div>

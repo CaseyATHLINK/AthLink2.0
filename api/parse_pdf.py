@@ -2317,15 +2317,40 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
         rule_result = None
     if rule_result is not None and score_parse is not None:
         verdict = score_parse(rule_result)
-        if verdict.get("ok") and not rule_result.get("nat_from_flags"):
-            rule_result["confidence"] = verdict["confidence"]
-            rule_result["ai_parsed"] = False
-            rule_result.setdefault("notes", []).append(
-                f"Parsed by the built-in parser (confidence {verdict['confidence']:.2f}) — AI not needed."
-            )
-            return rule_result
+        if verdict.get("ok"):
+            if not rule_result.get("nat_from_flags"):
+                # Fully clean → return immediately, no AI at all.
+                rule_result["confidence"] = verdict["confidence"]
+                rule_result["ai_parsed"] = False
+                rule_result.setdefault("notes", []).append(
+                    f"Parsed by the built-in parser (confidence {verdict['confidence']:.2f}) — AI not needed."
+                )
+                return rule_result
+            # Confident table whose ONLY gap is flag-image nationalities. Do ONE
+            # small nat read (sail → IOC) and merge it, instead of the full agent
+            # loop (multiple model calls + a whole-table echo that can truncate).
+            # This is what made e.g. the 2024 Asians PDF take 10s+.
+            try:
+                nats = _ai_read_nationalities(file_bytes)
+                if nats:
+                    def _apply_nats(entries):
+                        for e in entries:
+                            s = str(e.get("sail", "")).strip()
+                            if s and not (e.get("nat") or "").strip() and nats.get(s):
+                                e["nat"] = nats[s]
+                    _apply_nats(rule_result.get("entries", []) or [])
+                    for f in (rule_result.get("fleets", []) or []):
+                        _apply_nats(f.get("entries", []) or [])
+                rule_result["confidence"] = verdict["confidence"]
+                rule_result["ai_parsed"] = True
+                rule_result.setdefault("notes", []).append(
+                    "Built-in parser + a single AI flag-nationality read (fast path)."
+                )
+                return rule_result
+            except Exception as nat_err:
+                print("nat-only fast path failed; falling back to agent:", nat_err)
 
-    # Rules failed, scored low-confidence, or the nationalities are flag images →
+    # Rules failed, scored low-confidence, or the nat fast path errored →
     # hand off to the agent loop (rule + vision + nationality merge).
     try:
         res = _agent_parse(file_bytes)
