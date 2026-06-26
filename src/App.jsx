@@ -721,7 +721,7 @@ function MagneticItem({children,onClick,className,strength=0.35}){
 function ResultNuggets({entry,size="md",doublehanded=false}){
   const {category}=genderCatOf(entry);
   const gender=resolvedEntryGender(entry,doublehanded);
-  if(!gender&&!category) return <span style={{color:"#c8d4e0",fontSize:12}}>—</span>;
+  if(!gender&&!category) return null;   // no tag → show nothing (no dash)
   const fs=size==="sm"?9.5:10.5;
   const pad=size==="sm"?"1px 5px":"2px 6px";
   return <span style={{display:"inline-flex",gap:3,alignItems:"center",flexWrap:"wrap"}}>
@@ -5629,6 +5629,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         ? {...p,previewEv:{...p.previewEv,[k]:v}}
         : p));
   };
+  // Collab (association/club) is stored per-fleet in `mf`/pending, not previewEv.
+  // Sync it across every sibling fleet of the same source file — set once, applied
+  // to all fleets of that event (same behaviour as Host Country / Date above).
+  const updSharedCollabs=(v)=>{
+    updMeta("collabs",v);                              // active editor (mf)
+    const gid=pending[activePending]?.fleetGroupId;
+    if(!gid) return;                                   // single-file → nothing to sync
+    setPending(prev=>prev.map(p=>p.fleetGroupId===gid?{...p,collabs:v}:p));
+  };
   // Resolve the host driving the preview: the self-organizing importer, else
   // the manually attributed AthLink host. Auto-fill Host Country from it, but
   // only when venue is empty — never overwrite a country the user picked.
@@ -7160,7 +7169,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       </div>
       <div className="panel"><table>
         <thead><tr>
-          <th>Pos</th><th className="l">Boat</th><th>Gender / Div</th><th className="l">Sail #</th>
+          <th>Pos</th><th className="l">Boat</th><th aria-label="Gender / Division"></th><th className="l">Sail #</th>
           {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
           <th>Net</th>
         </tr></thead>
@@ -7874,12 +7883,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 {fleetGroupIds.map(gid=>{
                   const gItems=pending.filter(p=>p.fleetGroupId===gid);
                   if(gItems.length<2) return null;
+                  // Event title = longest common prefix of the fleet names, trimmed
+                  // of any trailing separator (e.g. "29er World Championship — 1-Gold"
+                  // + "… — 2-Silver" → "29er World Championship").
+                  const names=gItems.map(p=>p.previewEv?.name||p.name||"");
+                  let base=names[0]||"";
+                  for(const n of names){let k=0;while(k<base.length&&k<n.length&&base[k]===n[k])k++;base=base.slice(0,k);}
+                  base=base.replace(/[\s–—\-—–:,#]+$/,"").trim()||"this event";
                   return(
                     <button key={gid} onClick={()=>combineFleetGroup(gid)}
-                      title={`Merge all ${gItems.length} fleets into one combined result`}
+                      title={`Merge all ${gItems.length} fleets of ${base} into one combined result`}
                       style={{display:"inline-flex",alignItems:"center",gap:5,border:"1px dashed var(--accent)",background:"#f0f8ff",color:"var(--accent)",
                         borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>
-                      <Trophy size={12} style={{flex:"none"}}/>Combine {gItems.length} fleets → one result
+                      <Trophy size={12} style={{flex:"none"}}/>Combine all “{base}” fleets
                     </button>
                   );
                 })}
@@ -7962,7 +7978,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>;
             })()}
             <div style={{marginBottom:10}}>
-              <CollabPicker owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
+              <CollabPicker owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updSharedCollabs(v)}/>
             </div>
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}</>)}
             {!isError&&previewEv&&(<>
