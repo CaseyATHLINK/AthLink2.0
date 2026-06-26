@@ -1163,6 +1163,16 @@ async function uploadAthletePhoto(file,name,tok){
   }catch(e){console.error("uploadAthletePhoto network",e);return null;}
 }
 
+/* ── Custom boat classes (custom_classes) ─────────────────────────────────────
+   Persisted mirror of the in-memory CUSTOM_CLASSES registry. Read is public;
+   insert is gated to verified hosts or admins (see migrations/0002). */
+const fetchCustomClasses=(tok)=>hostRest("custom_classes?select=*",{},tok);
+async function insertCustomClass(cc,userId,tok){
+  return hostRest("custom_classes",{method:"POST",
+    headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
+    body:JSON.stringify({id:cc.id,canonical:cc.canonical,short:cc.short,full:cc.full,color:cc.color,created_by:userId})},tok);
+}
+
 /* ── Event claims (event_claims) ──────────────────────────────────────────────
    A host claims an externally-contributed event (one imported by another host
    and attributed to them as organizer). Any verified admin of the attributed
@@ -3459,9 +3469,6 @@ function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
               <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search profiles…"
                 style={{width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"8px 11px 8px 32px",font:"inherit",fontSize:13,outline:"none",background:"rgba(255,255,255,.85)"}}/>
             </div>
-            <button className={`btn ghost`} style={{fontSize:12.5,padding:"8px 12px",...(onlyEmpty?{background:"var(--accent)",color:"#fff"}:{})}} onClick={()=>setOnlyEmpty(v=>!v)}>
-              {onlyEmpty?<CheckCircle size={13}/>:<Minus size={13}/>}No memberships
-            </button>
             <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{rows.length} shown</span>
           </div>
           {profiles===null&&<div style={{display:"flex",alignItems:"center",gap:8,color:"var(--mut)",fontSize:13}}><Loader2 size={15} className="spin"/>Loading profiles…</div>}
@@ -3477,9 +3484,7 @@ function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
                       <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{nameOf(p)}{p.username&&<span style={{marginLeft:6,fontSize:11.5,color:"var(--mut)",fontWeight:600}}>@{p.username}</span>}</div>
                       <div style={{fontSize:11.5,color:"var(--mut)",marginTop:2}}>
                         <span style={{textTransform:"capitalize"}}>{p.role||"guest"}</span>
-                        {mem.length>0
-                          ? <> · {mem.map(m=>`${nameForHost(m.host_id)} (${m.role}${m.verified?"":", unverified"})`).join(", ")}</>
-                          : <span style={{color:"#c8860a"}}> · no memberships</span>}
+                        {mem.length>0&&<> · {mem.map(m=>`${nameForHost(m.host_id)} (${m.role}${m.verified?"":", unverified"})`).join(", ")}</>}
                         {p.created_at?<> · {new Date(p.created_at).toLocaleDateString()}</>:null}
                       </div>
                     </div>
@@ -3636,41 +3641,52 @@ function ClaimProfileModal({myName="",people=[],events=[],alreadyClaimed=null,on
    ═══════════════════════════════════════════════════════════════════════ */
 // Google-style circular photo cropper: drag to reposition + zoom slider, then
 // renders the visible circle to a square canvas and returns a JPEG blob.
-function PhotoCropper({file,onCancel,onConfirm}){
+// initialSrc may be a File or an existing image URL; a "Change image" button
+// lets the user swap in a different file without leaving the cropper.
+function PhotoCropper({initialSrc=null,onCancel,onConfirm}){
   const V=288, OUT=512;
+  const[src,setSrc]=React.useState(initialSrc); // File | url string | null
   const[img,setImg]=React.useState(null);
   const[base,setBase]=React.useState(1);
   const[scale,setScale]=React.useState(1);
   const[off,setOff]=React.useState({x:0,y:0});
   const[busy,setBusy]=React.useState(false);
   const drag=React.useRef(null);
+  const fileRef=React.useRef(null);
   React.useEffect(()=>{
-    const url=URL.createObjectURL(file);
+    if(!src){setImg(null);return;}
+    const isFile=typeof src!=="string";
+    const url=isFile?URL.createObjectURL(src):src;
     const im=new Image();
+    if(!isFile) im.crossOrigin="anonymous";   // allow canvas export of stored photos
     im.onload=()=>{
       const b=Math.max(V/im.naturalWidth,V/im.naturalHeight);
       setImg(im);setBase(b);setScale(1);
       setOff({x:(V-im.naturalWidth*b)/2,y:(V-im.naturalHeight*b)/2});
     };
+    im.onerror=()=>setImg(null);
     im.src=url;
-    return()=>URL.revokeObjectURL(url);
-  },[file]);
+    return()=>{ if(isFile) URL.revokeObjectURL(url); };
+  },[src]);
   const eff=base*scale;
   const dispW=img?img.naturalWidth*eff:0;
   const dispH=img?img.naturalHeight*eff:0;
   const clamp=(o)=>({x:Math.min(0,Math.max(V-dispW,o.x)),y:Math.min(0,Math.max(V-dispH,o.y))});
   React.useEffect(()=>{ if(img) setOff(o=>clamp(o)); /* re-clamp on zoom */ },[scale,img]);// eslint-disable-line
   const pt=e=>e.touches?e.touches[0]:e;
-  const onDown=e=>{const p=pt(e);drag.current={sx:p.clientX,sy:p.clientY,ox:off.x,oy:off.y};};
+  const onDown=e=>{if(!img)return;const p=pt(e);drag.current={sx:p.clientX,sy:p.clientY,ox:off.x,oy:off.y};};
   const onMove=e=>{if(!drag.current)return;const p=pt(e);setOff(clamp({x:drag.current.ox+(p.clientX-drag.current.sx),y:drag.current.oy+(p.clientY-drag.current.sy)}));};
   const onUp=()=>{drag.current=null;};
+  const pickFile=e=>{const f=e.target.files?.[0];e.target.value="";if(f)setSrc(f);};
   const confirm=()=>{
     if(!img)return; setBusy(true);
-    const c=document.createElement("canvas");c.width=OUT;c.height=OUT;
-    const ctx=c.getContext("2d");
-    const sSize=V/eff, sx=(-off.x)/eff, sy=(-off.y)/eff;
-    ctx.drawImage(img,sx,sy,sSize,sSize,0,0,OUT,OUT);
-    c.toBlob(b=>onConfirm(b),"image/jpeg",0.9);
+    try{
+      const c=document.createElement("canvas");c.width=OUT;c.height=OUT;
+      const ctx=c.getContext("2d");
+      const sSize=V/eff, sx=(-off.x)/eff, sy=(-off.y)/eff;
+      ctx.drawImage(img,sx,sy,sSize,sSize,0,0,OUT,OUT);
+      c.toBlob(b=>onConfirm(b),"image/jpeg",0.9);
+    }catch(e){console.error("crop export",e);setBusy(false);onConfirm(null);}
   };
   return(
     <div className="ov" style={{zIndex:120}} onClick={onCancel}>
@@ -3679,15 +3695,19 @@ function PhotoCropper({file,onCancel,onConfirm}){
         <div style={{padding:"18px 22px 22px",display:"flex",flexDirection:"column",alignItems:"center"}}>
           <div onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
             onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
-            style={{position:"relative",width:V,height:V,borderRadius:"50%",overflow:"hidden",cursor:"grab",background:"#0b1f38",boxShadow:"inset 0 0 0 2px rgba(255,255,255,.45)",touchAction:"none",userSelect:"none"}}>
-            {img&&<img src={img.src} alt="" draggable={false} style={{position:"absolute",left:off.x,top:off.y,width:dispW,height:dispH,maxWidth:"none",pointerEvents:"none"}}/>}
+            style={{position:"relative",width:V,height:V,borderRadius:"50%",overflow:"hidden",cursor:img?"grab":"default",background:"#0b1f38",boxShadow:"inset 0 0 0 2px rgba(255,255,255,.45)",touchAction:"none",userSelect:"none",display:"grid",placeItems:"center"}}>
+            {img
+              ? <img src={img.src} alt="" draggable={false} style={{position:"absolute",left:off.x,top:off.y,width:dispW,height:dispH,maxWidth:"none",pointerEvents:"none"}}/>
+              : <span style={{color:"#9fbdd9",fontSize:12.5,padding:"0 30px",textAlign:"center"}}>Choose an image below</span>}
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:10,width:"100%",margin:"16px 0 4px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,width:"100%",margin:"16px 0 4px",opacity:img?1:.4}}>
             <span style={{fontSize:11,fontWeight:700,color:"var(--mut)"}}>ZOOM</span>
-            <input type="range" min="1" max="4" step="0.01" value={scale} onChange={e=>setScale(parseFloat(e.target.value))} style={{flex:1}}/>
+            <input type="range" min="1" max="4" step="0.01" disabled={!img} value={scale} onChange={e=>setScale(parseFloat(e.target.value))} style={{flex:1}}/>
           </div>
           <p style={{fontSize:11.5,color:"var(--mut)",margin:"4px 0 0"}}>Drag to reposition · slide to zoom</p>
-          <div style={{display:"flex",gap:10,width:"100%",marginTop:14}}>
+          <input ref={fileRef} type="file" accept="image/*" onChange={pickFile} style={{display:"none"}}/>
+          <button className="btn ghost" onClick={()=>fileRef.current&&fileRef.current.click()} style={{marginTop:12,fontSize:12.5,padding:"7px 13px"}}><Upload size={13}/>Change image</button>
+          <div style={{display:"flex",gap:10,width:"100%",marginTop:12}}>
             <button className="btn cta liquidGlass-wrapper" disabled={busy||!img} onClick={confirm} style={{flex:1}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={14} className="spin"/>:<CheckCircle size={14}/>}Use photo</div></button>
             <button className="btn ghost" onClick={onCancel} style={{padding:"0 16px"}}>Cancel</button>
           </div>
@@ -3705,22 +3725,15 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
   const[insta,setInsta]=React.useState(profile?.instagram_url||"");
   const[nat,setNat]=React.useState(profile?.nat_override||"");
   const[photo,setPhoto]=React.useState(profile?.photo_url||"");
-  const[cropFile,setCropFile]=React.useState(null);
+  const[cropOpen,setCropOpen]=React.useState(false);
   const[uploading,setUploading]=React.useState(false);
   const[busy,setBusy]=React.useState(false);
   const[err,setErr]=React.useState("");
-  const fileRef=React.useRef(null);
   const field={width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"9px 11px",font:"inherit",fontSize:13.5,outline:"none",background:"rgba(255,255,255,.9)"};
   const lbl={fontSize:11.5,fontWeight:700,color:"var(--mut)",textTransform:"uppercase",letterSpacing:".03em",margin:"0 0 5px"};
 
-  const pickFile=(e)=>{
-    const f=e.target.files?.[0]; e.target.value="";
-    if(!f) return;
-    if(f.size>10*1024*1024){setErr("Image too large (max 10 MB).");return;}
-    setErr(""); setCropFile(f);
-  };
   const onCropped=async(blob)=>{
-    setCropFile(null); if(!blob) return;
+    setCropOpen(false); if(!blob){setErr("Couldn't process that image — try another.");return;}
     setUploading(true);
     const url=await uploadPhoto(blob);
     setUploading(false);
@@ -3744,7 +3757,7 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
     }catch(e){console.error("athlete edit save",e);setErr("Couldn't save changes. Try again.");setBusy(false);}
   };
   return(<>
-    {cropFile&&<PhotoCropper file={cropFile} onCancel={()=>setCropFile(null)} onConfirm={onCropped}/>}
+    {cropOpen&&<PhotoCropper initialSrc={photo||null} onCancel={()=>setCropOpen(false)} onConfirm={onCropped}/>}
     <div className="ov" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:460}}>
         <div className="mhead" style={{padding:"18px 24px"}}>
@@ -3753,17 +3766,18 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
         <div style={{padding:"18px 24px 24px"}}>
-          {/* Photo (click to change) + name fields to the right */}
+          {/* Photo (click to edit/crop) with small label, name fields to the right */}
           <div style={{display:"flex",gap:16,marginBottom:16,alignItems:"flex-start"}}>
-            <div onClick={()=>!uploading&&fileRef.current&&fileRef.current.click()} title="Click to change photo"
-              style={{position:"relative",width:96,height:96,borderRadius:"50%",overflow:"hidden",cursor:uploading?"default":"pointer",flex:"none"}}>
-              {uploading
-                ? <div className="av" style={{width:96,height:96,background:"var(--navy)"}}><Loader2 size={22} className="spin"/></div>
-                : photo
-                  ? <img src={photo} alt="" style={{width:96,height:96,objectFit:"cover",display:"block"}}/>
-                  : <div className="av" style={{width:96,height:96,fontSize:30,background:avatarColor(name)}}>{initials(name)}</div>}
-              <div style={{position:"absolute",left:0,right:0,bottom:0,background:"rgba(13,142,207,.92)",color:"#fff",fontSize:9,fontWeight:800,textAlign:"center",padding:"3px 0",letterSpacing:".04em"}}>CLICK TO EDIT</div>
-              <input ref={fileRef} type="file" accept="image/*" onChange={pickFile} style={{display:"none"}}/>
+            <div style={{flex:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
+              <div onClick={()=>!uploading&&setCropOpen(true)} title="Click to edit photo"
+                style={{width:96,height:96,borderRadius:"50%",overflow:"hidden",cursor:uploading?"default":"pointer"}}>
+                {uploading
+                  ? <div className="av" style={{width:96,height:96,background:"var(--navy)"}}><Loader2 size={22} className="spin"/></div>
+                  : photo
+                    ? <img src={photo} alt="" style={{width:96,height:96,objectFit:"cover",display:"block"}}/>
+                    : <div className="av" style={{width:96,height:96,fontSize:30,background:avatarColor(name)}}>{initials(name)}</div>}
+              </div>
+              <button type="button" onClick={()=>!uploading&&setCropOpen(true)} style={{border:0,background:"none",cursor:"pointer",fontSize:10.5,fontWeight:700,color:"var(--accent)",padding:0,letterSpacing:".02em"}}>click to edit</button>
             </div>
             <div style={{flex:1,minWidth:0}}>
               <p style={lbl}>First name</p>
@@ -3887,17 +3901,20 @@ export default function AthLinkMVP(){
   // State mirrors the module-level CUSTOM_CLASSES registry so the UI re-renders.
   const[customClasses,setCustomClasses]=useState(CUSTOM_CLASSES);
   // Add (or reuse) a custom class by name. Dedups on canonical key; returns the
-  // class id so the caller can select it. No DB yet — in-memory only.
+  // class id so the caller can select it. Persists to custom_classes when the
+  // creator is signed in, so it survives reloads and appears for everyone.
   const addCustomClass=(name)=>{
     const nm=String(name||"").trim();
     if(!nm) return null;
     const canonical=canonClass(nm);
+    if(!canonical) return null;
     const existing=CUSTOM_CLASSES.find(c=>c.canonical===canonical);
     if(existing) return existing.id;
     const color=CUSTOM_CLASS_PALETTE[CUSTOM_CLASSES.length%CUSTOM_CLASS_PALETTE.length];
     const cc={id:`custom:${canonical}`,short:nm,full:nm,color,canonical};
     CUSTOM_CLASSES=[...CUSTOM_CLASSES,cc];
     setCustomClasses(CUSTOM_CLASSES);
+    if(auth?.user?.id&&auth?.token) insertCustomClass(cc,auth.user.id,auth.token).catch(e=>console.error("persist custom class",e));
     return cc.id;
   };
   const[auth,setAuth]=useState(null);
@@ -3912,6 +3929,7 @@ export default function AthLinkMVP(){
   const[showClaimModal,setShowClaimModal]=useState(false); // guided claim modal open
   const[athleteProfiles,setAthleteProfiles]=useState({});  // name_key -> athlete_profiles row (owner extras)
   const[showAthEdit,setShowAthEdit]=useState(null);        // profile name being edited by its owner
+  const[savingResults,setSavingResults]=useState(null);    // "draft" | "publish" while the preview save runs
   const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
   const[pendingInviteToken,setPendingInviteToken]=useState(null); // raw token from ?invite= URL param
   const[showDevApprovals,setShowDevApprovals]=useState(false);  // dev-only pending-approvals panel
@@ -3926,22 +3944,35 @@ export default function AthLinkMVP(){
   // Lets Casey edit the platform pre-launch without signing in. Forces full
   // (association) access. Enable with ?dev=1 in the URL or Ctrl/Cmd+Shift+D;
   // persists in localStorage. REMOVE / set DEV_VIEW_ENABLED=false at publish.
+  // Open to everyone until public launch. After launch, flip DEV_VIEW_ENABLED to
+  // false and dev view stays available ONLY to the admin login below (persists).
   const DEV_VIEW_ENABLED=true;
+  const ADMIN_EMAIL="casey@athlink.win";
+  const isAdminUser=(auth?.user?.email||"").toLowerCase()===ADMIN_EMAIL;
+  const devEligible=DEV_VIEW_ENABLED||isAdminUser;
   const[devMode,setDevMode]=useState(()=>{
     try{
-      if(!DEV_VIEW_ENABLED) return false;
+      if(!DEV_VIEW_ENABLED) return false; // post-launch: admin re-enabled by the effect below
       if(typeof window!=="undefined"&&new URLSearchParams(window.location.search).get("dev")==="1"){localStorage.setItem("athlink_dev","1");return true;}
       return localStorage.getItem("athlink_dev")==="1";
     }catch{return false;}
   });
+  // Post-launch: restore the admin's persisted dev view once they're signed in.
   useEffect(()=>{
-    if(!DEV_VIEW_ENABLED) return;
+    if(DEV_VIEW_ENABLED||!isAdminUser) return;
+    try{
+      const want=new URLSearchParams(window.location.search).get("dev")==="1"||localStorage.getItem("athlink_dev")==="1";
+      if(want) setDevMode(true);
+    }catch{}
+  },[isAdminUser]);
+  useEffect(()=>{
+    if(!devEligible){ setDevMode(false); return; }
     const onKey=(e)=>{ if((e.ctrlKey||e.metaKey)&&e.shiftKey&&(e.key==="D"||e.key==="d")){
       e.preventDefault();
       setDevMode(d=>{const nv=!d;try{localStorage.setItem("athlink_dev",nv?"1":"0");}catch{};return nv;});
     }};
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
-  },[]);
+  },[devEligible]);
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
   const role=effectiveRole;
   const canEditRole=effectiveRole==="association";
@@ -4141,6 +4172,17 @@ export default function AthLinkMVP(){
     if(rows){const m={};rows.forEach(r=>{m[r.name_key]=r;});setAthleteProfiles(m);}
   },[auth]);
   useEffect(()=>{ reloadAthleteProfiles(); },[reloadAthleteProfiles]);
+
+  // ── Load persisted custom boat classes (public read; merge into the registry) ──
+  useEffect(()=>{
+    (async()=>{
+      const rows=await fetchCustomClasses(auth?.token);
+      if(!Array.isArray(rows)||!rows.length) return;
+      const have=new Set(CUSTOM_CLASSES.map(c=>c.canonical));
+      const add=rows.filter(r=>r.canonical&&!have.has(r.canonical)).map(r=>({id:r.id,short:r.short,full:r.full||r.short,color:r.color,canonical:r.canonical}));
+      if(add.length){ CUSTOM_CLASSES=[...CUSTOM_CLASSES,...add]; setCustomClasses(CUSTOM_CLASSES); }
+    })();
+  },[auth]);
   // Extras row for a profile name (or null).
   const athleteProfileOf=(nm)=>athleteProfiles[profileNameKey(nm)]||null;
   // Can the signed-in user edit this profile's extras? Verified owner, or dev.
@@ -5031,14 +5073,14 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
         const together=ag.history.filter(h=>h.partner&&canonName(h.partner)===canonName(crew));
         const firstTog=together.slice().sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return da.localeCompare(db);})[0];
         const togLine=together.length?`Sailed together in ${together.length} regatta(s) since ${firstTog?.ev.date?.split('/')?.[2]||"?"}; best together #${Math.min(...together.map(h=>h.row.rank))}.`:"First/few events as a pair.";
-        prompt=`Write a SHORT scouting blurb for a sailing PAIR (helm+crew): 2 sentences, MAX 38 words. Cover (a) when they started sailing together and how they've performed as a pair, (b) any standout milestone by either sailor, and (c) how they stack up against similar-calibre competition. Factual, no markdown, no heading.
+        prompt=`Write a SHORT scouting blurb for a sailing PAIR (helm+crew): 2 sentences, MAX 38 words. Cover (a) when they started sailing together and how they've performed as a pair, (b) any standout milestone by either sailor, and (c) how they stack up against similar-calibre competition. Factual, no markdown, no heading. Always refer to each sailor by their FULL name exactly as "${name}" and "${crew}" (first and last together) — never just a first name or just a last name.
 Helm: ${name} (${evs} regattas since ${firstYr||"?"}, best ${best}, ${pods} podiums, ${wins} race wins).
 Crew: ${crew} (${agCrew.events} regattas, best ${agCrew.best?"#"+agCrew.best:"unknown"}).
 Together: ${togLine}`;
       } else {
         // Comparison context: peers who finished near them in their events.
         const peerNote=ag.history.slice(0,5).map(h=>`${h.ev.name}: #${h.row.rank}/${h.fleet}`).join('; ');
-        prompt=`Write a SHORT scouting blurb for a SINGLE-HANDED sailor: 2 sentences, MAX 32 words. Focus mainly on how they performed RELATIVE TO COMPETITORS OF SIMILAR CALIBRE — i.e. where they placed within the fleet at their events, and against peers who finished near them. Factual, no markdown, no heading.
+        prompt=`Write a SHORT scouting blurb for a SINGLE-HANDED sailor: 2 sentences, MAX 32 words. Focus mainly on how they performed RELATIVE TO COMPETITORS OF SIMILAR CALIBRE — i.e. where they placed within the fleet at their events, and against peers who finished near them. Factual, no markdown, no heading. Always refer to the athlete by their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name.
 Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins} race wins. Placings: ${peerNote||"unknown"}.`;
       }
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -5060,7 +5102,7 @@ Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins}
     const sig=profileSig(name,ag);
     // Reuse a persisted overview if the athlete's results haven't changed.
     try{
-      const raw=localStorage.getItem("athlink_bio_"+name);
+      const raw=localStorage.getItem("athlink_bio_v2_"+name);  // v2: full-name prompt
       if(raw){
         const cached=JSON.parse(raw);
         if(cached.sig===sig){ setProfileSummaries(h=>({...h,[name]:cached.text})); return; }
@@ -5075,7 +5117,7 @@ Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins}
       const journey=Object.keys(clsByYear).sort().map(y=>`${y}: ${[...clsByYear[y]].join('/')}`).join('; ');
       const recent=ag.history[0];
       const recentLine=recent?`Most recent: ${recent.ev.name} (${recent.ev.date?.split('/')?.[2]||''}), finished #${recent.row.rank} of ${recent.fleet}.`:"";
-      const prompt=`Write a SHORT athlete bio: 2 sentences, MAX 45 words total, third person. Focus on the athlete's JOURNEY — when they started competing, any class change, the class they've excelled in, and where they place now. Do NOT list every stat. No heading, no markdown, no "#", do not begin with the name.
+      const prompt=`Write a SHORT athlete bio: 2 sentences, MAX 45 words total, third person. Focus on the athlete's JOURNEY — when they started competing, any class change, the class they've excelled in, and where they place now. Do NOT list every stat. No heading, no markdown, no "#", do not begin with the name. Whenever you refer to the athlete, use their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name on its own.
 Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${journey||'unknown'}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. ${recentLine}`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({task:"overview",prompt,max_tokens:110})});
@@ -5083,7 +5125,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       if(data.ok){
         const text=cleanAISummary(data.text);
         setProfileSummaries(h=>({...h,[name]:text}));
-        try{localStorage.setItem("athlink_bio_"+name,JSON.stringify({sig,text}));}catch{}
+        try{localStorage.setItem("athlink_bio_v2_"+name,JSON.stringify({sig,text}));}catch{}
       }
       else setProfileSummaries(h=>({...h,[name]:""}));
     }catch{setProfileSummaries(h=>({...h,[name]:""}));}
@@ -5124,6 +5166,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       ...ev,
       venue:ev.country||"",
       entries:ev.entries.map(e=>({...e})),
+      // Seed the organizer/host picker from the existing event so it reflects
+      // (and can change) the current host, and the change actually persists.
+      _orgMode: ev.owner?"external":"self",
+      _orgHost: ev.owner||null,
+      _orgName: ev.organizer_name||null,
     };
     setPreviewEv(prev);
     setMf(f=>({...f,cls:ev.cls,subclass:ev.subclass||null,collabs:ev.collabs||[]}));
@@ -5135,12 +5182,22 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const saveEditedResults=async(asDraft)=>{
     if(!previewEv||!editResultsEv) return;
     const status=asDraft?"Draft":"Final";
+    // Resolve the (possibly changed) organizer host from the picker, mirroring
+    // the import flow, so host re-assignment on an existing event persists.
+    const importerHost=(portal&&!isClassPortal)?portal:null;
+    const selfOrganized=(previewEv._orgMode||"self")!=="external" && !!importerHost;
+    const attributedHost=selfOrganized?importerHost:(previewEv._orgHost||null);
+    const doublehanded=previewEv.entries.some(e=>e.crew&&e.crew.trim());
     const ev={...previewEv,status,country:(previewEv.venue||"").toUpperCase()||previewEv.country||"",
-      subclass:mf.subclass||null,collabs:mf.collabs||[]};
+      subclass:mf.subclass||null,collabs:mf.collabs||[],cls:mf.cls||previewEv.cls,
+      owner:attributedHost||null,
+      organizer_name:attributedHost?null:(previewEv._orgName||previewEv.organizer_name||null),
+      doublehanded};
     // Update event metadata
     await sbPatch("events",`id=eq.${editResultsEv}`,{
       name:ev.name,date:ev.date,country:ev.country||null,
       discards:ev.discards,status,subclass:ev.subclass,collabs:ev.collabs,
+      cls:ev.cls,owner:ev.owner,organizer_name:ev.organizer_name,doublehanded:ev.doublehanded,
     });
     // Update entries (delete old, insert new)
     if(sbH){
@@ -5152,6 +5209,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
       })));
     }
+    delete ev._orgMode; delete ev._orgHost; delete ev._orgName;
     setEvents(p=>p.map(existing=>existing.id===editResultsEv?{...ev,id:editResultsEv}:existing));
     setEditResultsEv(null);
     closeImport();
@@ -5969,6 +6027,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .btn:disabled{opacity:.45;cursor:default;transform:none;filter:none;}
     .phead{background:linear-gradient(135deg,rgba(31,78,128,.95),rgba(19,49,78,.96));backdrop-filter:blur(38px) saturate(185%);-webkit-backdrop-filter:blur(38px) saturate(185%);border-radius:22px;padding:26px;color:#fff;display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 10px 30px -16px rgba(0,0,0,.4);}
     .phead .av{width:74px;height:74px;font-size:26px;border:3px solid rgba(255,255,255,.22);}
+    .globe-wrap .expand-tip{opacity:0;transition:opacity .15s;}
+    .globe-wrap:hover .expand-tip{opacity:1;}
     .pname{font-family:'Barlow',sans-serif;font-weight:800;font-size:28px;margin:0;line-height:1;}
     .pflag{font-size:28px;line-height:1;margin-right:4px;}
     .pmeta{color:#bcd2e8;font-size:14px;margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;}
@@ -6234,9 +6294,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           <MagneticItem className={`mp-link${view.name==="athletes"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"athletes"});}}>Athletes</MagneticItem>
           <MagneticItem className={`mp-link`} onClick={()=>{setMenuOpen(false);openCalendar(portal||null);}}>Calendar</MagneticItem>
           <MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>
-          {DEV_VIEW_ENABLED&&devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevApprovals(true);}}>Pending approvals</MagneticItem>}
-          {DEV_VIEW_ENABLED&&devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevProfiles(true);}}>All profiles</MagneticItem>}
-          {DEV_VIEW_ENABLED&&devMode&&<button className="mp-dev" onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}><Pencil size={11}/>Dev view ON — turn off</button>}
+          {devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevApprovals(true);}}>Pending approvals</MagneticItem>}
+          {devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevProfiles(true);}}>All profiles</MagneticItem>}
+          {devMode&&<button className="mp-dev" onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}><Pencil size={11}/>Dev view ON — turn off</button>}
         </div>
         {gSearchOpen&&gSearchResults.length>0&&(
           <div className="mp-drop">
@@ -6266,8 +6326,20 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 const fullName=`${auth.profile?.first_name||""} ${auth.profile?.last_name||""}`.trim()||auth.profile?.display_name||null;
                 // Host portals this user belongs to (verified) — shown as their identity instead of a generic role.
                 const myHostNames=myMemberships.filter(m=>m.verified).map(m=>hostById(m.host_id)?.name).filter(Boolean);
+                const myHostId=myMemberships.filter(m=>m.verified).map(m=>m.host_id)[0]||null;
+                const myAthleteName=auth.profile?.athlete_name||fullName;
+                // Clicking the name jumps to the athlete's own profile, or their host portal.
+                const goToMe=()=>{
+                  setAccountOpen(false);
+                  if(role==="athlete"&&myAthleteName){go({name:"profile",id:myAthleteName});}
+                  else if(myHostId){enterPortal(myHostId);}
+                  else if(myAthleteName){go({name:"profile",id:myAthleteName});}
+                };
+                const canGoToMe=(role==="athlete"&&!!myAthleteName)||!!myHostId;
                 return(<>
-                  {fullName&&<div style={{padding:"6px 10px 1px",fontSize:13.5,fontWeight:700,color:"var(--navy)"}}>{fullName}</div>}
+                  {fullName&&(canGoToMe
+                    ? <button onClick={goToMe} title="Go to my profile" style={{display:"block",width:"100%",textAlign:"left",border:0,background:"none",cursor:"pointer",padding:"6px 10px 1px",fontSize:13.5,fontWeight:700,color:"var(--accent)"}}>{fullName}</button>
+                    : <div style={{padding:"6px 10px 1px",fontSize:13.5,fontWeight:700,color:"var(--navy)"}}>{fullName}</div>)}
                   <div style={{padding:fullName?"0 10px 6px":"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>
                   {devMode
                     ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Role: <b style={{color:"var(--navy)"}}>Developer</b></div>
@@ -7104,7 +7176,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             onMouseLeave={()=>setHoverRow(null)}>
             <td className={`rk ${r.rank<=3?"p"+r.rank:""}`}>{r.rank}</td>
             <td className="l"><div className="boat">
-              <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>
+              {ev.doublehanded&&r.crew
+                ? <div style={{position:"relative",width:48,height:30,flex:"none"}}>
+                    {(()=>{const cp=athleteProfileOf(r.crew)?.photo_url;return cp
+                      ? <img className="av" src={cp} alt="" style={{position:"absolute",left:18,top:0,objectFit:"cover",boxShadow:"0 0 0 2px #fff"}}/>
+                      : <div className="av" style={{position:"absolute",left:18,top:0,background:avatarColor(r.crew),boxShadow:"0 0 0 2px #fff"}}>{initials(r.crew)}</div>;})()}
+                    {(()=>{const hp=athleteProfileOf(r.helm)?.photo_url;return hp
+                      ? <img className="av" src={hp} alt="" style={{position:"absolute",left:0,top:0,zIndex:2,objectFit:"cover",boxShadow:"0 0 0 2px #fff"}}/>
+                      : <div className="av" style={{position:"absolute",left:0,top:0,zIndex:2,background:avatarColor(r.helm),boxShadow:"0 0 0 2px #fff"}}>{initials(r.helm)}</div>;})()}
+                  </div>
+                : (()=>{const hp=athleteProfileOf(r.helm)?.photo_url;return hp
+                    ? <img className="av" src={hp} alt="" style={{objectFit:"cover"}}/>
+                    : <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>;})()}
               <div>
                 <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
                 {r.crew&&<div className="cn">with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></div>}
@@ -7443,11 +7526,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
             {/* Competition footprint — frameless globe on the right, click to expand */}
             {ag.events>0&&hasFootprint&&(
-              <div style={{flex:"0 0 260px",maxWidth:"100%",cursor:"pointer"}} onClick={()=>setFootprintOpen(true)} title="Click to expand">
-                <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 4px",fontSize:11,justifyContent:"flex-end",textAlign:"right"}}><Globe size={12}/>Competition footprint</p>
+              <div className="globe-wrap" style={{flex:"0 0 260px",maxWidth:"100%",cursor:"pointer"}} onClick={()=>setFootprintOpen(true)} title="Click to expand">
+                <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 4px",fontSize:11,justifyContent:"center",textAlign:"center"}}><Globe size={12}/>Competition footprint</p>
                 <div style={{position:"relative"}}>
                   <SailingGlobe countryData={countryCounts} height={220} dark bare/>
-                  <div style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
+                  <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                 </div>
               </div>
             )}
@@ -7898,9 +7981,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   </tr>
                 </thead>
                 <tbody>
-                  {previewEv.entries.map((entry,idx)=>{
-                    const scoredRow=scored?.rows.find(r=>r.helm===entry.helm&&r.sail===entry.sail);
-                    const rank=scoredRow?.rank;const net=scoredRow?.net;
+                  {previewEv.entries
+                    .map((entry,idx)=>{const scoredRow=scored?.rows.find(r=>r.helm===entry.helm&&r.sail===entry.sail);return{entry,idx,scoredRow,rank:scoredRow?.rank,net:scoredRow?.net};})
+                    .sort((a,b)=>{if(a.rank==null&&b.rank==null)return a.idx-b.idx;if(a.rank==null)return 1;if(b.rank==null)return -1;return a.rank-b.rank;})
+                    .map(({entry,idx,scoredRow,rank,net})=>{
                     return(<tr key={idx} style={{borderBottom:"1px solid var(--line)"}}>
                       <td style={{textAlign:"center",padding:"8px 5px",fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:14,color:rank===1?"var(--gold)":rank===2?"#7d8a98":rank===3?"#a86a32":"var(--ink)"}}>{rank||"—"}</td>
                       <td style={{padding:"4px 6px",minWidth:110}}>
@@ -7955,8 +8039,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
             <div className="mfoot" style={{marginTop:14}}>
-              <button className="btn amber" onClick={()=>editResultsEv?saveEditedResults(true):importPreview(true)}><Clock size={16}/>Save as Draft</button>
-              <button className="btn cta liquidGlass-wrapper" onClick={()=>editResultsEv?saveEditedResults(false):importPreview(false)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><CheckCircle size={16}/>{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</div></button>
+              <button className="btn amber" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>
+              <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</div></button>
             </div>
             </>)}
           </div>);
