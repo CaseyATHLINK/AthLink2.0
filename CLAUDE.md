@@ -45,6 +45,27 @@ Both must pass before committing. TDZ is the primary white-screen crash
 vector — esbuild won't catch const/let used before declaration. Manual
 review required after every JSX edit, especially new useEffect hooks.
 
+## Pre-push test gate — run before EVERY push to Vercel
+Push = production (athlink.win), so test on localhost first. Use the
+`athlink-tester` subagent (`.claude/agents/athlink-tester.md`) before any push;
+it auto-detects frontend vs backend changes and runs:
+- Frontend (`src/App.jsx`): esbuild check + TDZ review + localhost:5173 render.
+- Backend (`api/parse_pdf.py`, `api/validate.py`): `python3 -c "import ast..."`
+  syntax check + `python3 tools/test_parser.py --diff` vs `tools/baseline/`.
+Reports a single PASS/FAIL. Note: the dev proxy sends `/api` to the LIVE Vercel
+parser, so parser changes are NOT visible on localhost until pushed — the
+harness is the authoritative local backend test.
+
+### Automatic gate (any session)
+A **Stop hook** in `.claude/settings.json` runs `tools/pre_push_test.sh`
+automatically whenever a session finishes with `src/` or `api/*.py` changes in
+the working tree. It detects what changed, runs the relevant checks, and makes
+the assistant report the PASS/FAIL verdict before you push — no need to ask. The
+script is the single source of truth (the `athlink-tester` agent calls it too);
+it's a silent no-op when nothing testable changed, and self-guards against
+re-running in a loop. First run in a new session, Claude Code will ask you to
+approve the hook. Manual run any time: `bash tools/pre_push_test.sh`.
+
 ## Design tokens — never change
 --navy:  #163a63   --navy2: #1f4e80   --accent: #0d8ecf
 
@@ -69,14 +90,16 @@ event_claims, athlete_claims
 Provenance columns on events: owner, owner_confirmed, imported_by,
 organizer_name, fingerprint, sources
 
-## Pending migrations — verify in Supabase before assuming columns exist
-SQL migration files live in `migrations/`.
-- profiles_username_migration.sql
-- host_invites_shortcode_migration.sql
-- dev_admin_select_migration.sql (replace admin UUID placeholder first)
-- event_provenance_migration.sql (run before deploying provenance features)
-- migrations/custom_classes_migration.sql — NOT YET RUN (custom classes are in-memory only until this runs)
-- country column on hosts table — NOT YET RUN
+## Migrations — see migrations/ (canonical, numbered, idempotent)
+Audited against live DB 2026-06-25 — see migrations/README.md for full notes.
+- migrations/0001_baseline_schema.sql — full live schema (ALREADY APPLIED, no-op to re-run)
+- migrations/0002_custom_classes.sql — custom_classes table — NOT YET RUN (custom classes in-memory until this runs)
+- migrations/0099_cleanup_duplicate_policies.sql — OPTIONAL dedupe of redundant RLS policies
+Already applied (CLAUDE.md previously mislabelled these "pending"):
+profiles.username, host_invites.short_code, event provenance columns,
+country column on hosts AND events — all live.
+ACTION: is_athlink_admin() is still a placeholder that grants admin to ANY
+logged-in user — replace with real admin UUID(s). See README "Action items".
 
 ## Auth architecture
 Multi-step SignInModal: credentials → role pick → details.
