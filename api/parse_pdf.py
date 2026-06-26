@@ -2148,16 +2148,59 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
 
     # ── PDF → rule-based first ──
     if mode == 'rule':
-        return _rule_based_parse(file_bytes)
+        result = _rule_based_parse(file_bytes)
+        # Attach the confidence verdict so callers (e.g. the frontend's "try the
+        # built-in parser first" probe) can tell a trustworthy rule parse from a
+        # low-confidence one without invoking any AI.
+        if score_parse is not None and isinstance(result, dict):
+            verdict = score_parse(result)
+            result["confidence"] = verdict["confidence"]
+            result["low_confidence"] = not verdict["ok"]
+            result["confidence_reasons"] = verdict["reasons"]
+            result["ai_parsed"] = False
+        return result
 
-    # ── AI mode → agent loop orchestrates rule + vision + nationality ──
+    # ── AI mode ──
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         # No AI key — fall back to rule-based only, surface errors
         return _rule_based_parse(file_bytes)
+
+    # Fast path: try the deterministic rule parser DIRECTLY first. When it parses
+    # a known format with high confidence (and doesn't need an AI flag-image
+    # nationality read), return immediately — no LLM round-trips at all. This is
+    # what keeps clean Sailwave / Manage2sail / SailingResults parses sub-second
+    # and COMPLETE. Routing such a result through the agent loop is both slow
+    # (multiple model calls) and lossy: the agent has to echo the whole result
+    # back via finalize, and a large table (e.g. 56 boats × 14 races) gets
+    # truncated at max_tokens, silently dropping the last race columns.
+    rule_result = None
     try:
-        return _agent_parse(file_bytes)
+        rule_result = _rule_based_parse(file_bytes)
+    except ValueError:
+        rule_result = None
+    if rule_result is not None and score_parse is not None:
+        verdict = score_parse(rule_result)
+        if verdict.get("ok") and not rule_result.get("nat_from_flags"):
+            rule_result["confidence"] = verdict["confidence"]
+            rule_result["ai_parsed"] = False
+            rule_result.setdefault("notes", []).append(
+                f"Parsed by the built-in parser (confidence {verdict['confidence']:.2f}) — AI not needed."
+            )
+            return rule_result
+
+    # Rules failed, scored low-confidence, or the nationalities are flag images →
+    # hand off to the agent loop (rule + vision + nationality merge).
+    try:
+        res = _agent_parse(file_bytes)
+        if isinstance(res, dict):
+            res.setdefault("ai_parsed", True)
+        return res
     except Exception as agent_err:
+        # If the agent fails but the rule parser produced something usable,
+        # return that rather than erroring the whole upload.
+        if rule_result is not None:
+            return rule_result
         raise ValueError(f"Agent parse failed: {agent_err}")
 
 

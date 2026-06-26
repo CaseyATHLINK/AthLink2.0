@@ -4924,6 +4924,23 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   //    onProgress(done,total) drives the per-page UI. Returns the same shape
   //    as parseOneFile: {ok, name, date, entries, discards, ai_parsed, notes}. ──
   const parseOnePdfPaged=async(file,onProgress)=>{
+    // 0) Built-in parser FIRST (no AI). It reads every page in one fast pass and,
+    //    when it confidently recognises the format, returns complete results
+    //    sub-second — so multi-page Sailwave/Manage2sail/SailingResults never hit
+    //    the slow per-page AI path (which is also lossy: large tables get
+    //    truncated when echoed back through the model). Only fall through to AI
+    //    when the built-in parser can't read it or scores low confidence.
+    try{
+      onProgress&&onProgress(0,1);
+      const ruled=await parseOneFile(file,"rule");
+      const hasFlat=ruled&&Array.isArray(ruled.entries)&&ruled.entries.length>0;
+      const hasFleets=ruled&&ruled.multi&&Array.isArray(ruled.fleets)&&ruled.fleets.length>0;
+      if(ruled&&ruled.ok&&(hasFlat||hasFleets)&&!ruled.low_confidence){
+        onProgress&&onProgress(1,1);
+        return {...ruled,ai_parsed:false};
+      }
+    }catch{ /* fall through to per-page AI below */ }
+
     // 1) page count (instant, server-side via pypdf)
     let pageCount=1;
     try{
