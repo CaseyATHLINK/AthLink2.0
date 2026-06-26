@@ -49,6 +49,16 @@ try:
     from validate import score_parse
 except Exception:
     score_parse = None
+try:
+    from llm import (call_gemini, gemini_text, call_openai_compat, openai_text,
+                     LLMError, ROUTES as _LLM_ROUTES)
+except Exception:
+    call_gemini = None
+    gemini_text = None
+    call_openai_compat = None
+    openai_text = None
+    LLMError = Exception
+    _LLM_ROUTES = {}
 
 # ── penalty codes ──────────────────────────────────────────────────────────
 CODES = {
@@ -1164,10 +1174,20 @@ def detect_host(text):
         return re.sub(r'\s+', ' ', m.group(1)).strip()
     return None
 
-# ── Gemini AI fallback ─────────────────────────────────────────────────────
+# ── Vision parse providers ──────────────────────────────────────────────────
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-# Haiku 4.5 reads PDFs natively (visual + text) and is fast enough for the Hobby 10s cap.
+# Haiku 4.5 reads PDFs natively (visual + text). It is now the universal FALLBACK
+# for the vision parse: PDFs route to Gemini 3, image uploads to Kimi, and any
+# provider error / rate-limit (429) / empty response degrades gracefully here.
 _AI_MODEL = "claude-haiku-4-5"
+# Gemini 3 Flash ingests PDFs natively (no rasterisation) and is the recommended
+# high-volume free model. Override via env without a code change if Google bumps
+# the id (e.g. "gemini-flash-latest") or you move to a paid tier.
+_PARSE_GEMINI_MODEL = os.environ.get("PARSE_GEMINI_MODEL", "gemini-3-flash-preview")
+# Kimi handles IMAGES natively (png/jpeg/webp/gif) — but NOT PDFs — so it only
+# serves image uploads. k2.5 is vision-capable.
+_VISION_KIMI_MODEL = os.environ.get("VISION_KIMI_MODEL", "kimi-k2.5")
+_KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 
 _GEMINI_PROMPT = """Parse this sailing regatta results file. Return ONLY a JSON object, no markdown/explanation.
 
@@ -1220,10 +1240,106 @@ def _downscale_image(file_bytes: bytes, mime_type: str, max_dim: int = 2200, qua
         return file_bytes, mime_type
 
 
-def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_hint: str = "") -> dict:
+# ── vision-parse provider backends ──────────────────────────────────────────
+# Each returns (raw_text, stop_reason) where stop_reason is normalised so that a
+# truncated response reads "max_tokens" regardless of provider. They RAISE on any
+# error (incl. an empty/blocked response) so _vision_raw can fall back.
+def _anthropic_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeout: int = 50):
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         raise ValueError("ANTHROPIC_API_KEY not configured.")
+    if mime_type == "application/pdf":
+        media_block = {"type": "document",
+                       "source": {"type": "base64", "media_type": "application/pdf",
+                                  "data": base64.b64encode(file_bytes).decode()}}
+    else:
+        media_block = {"type": "image",
+                       "source": {"type": "base64", "media_type": mime_type,
+                                  "data": base64.b64encode(file_bytes).decode()}}
+    payload = json.dumps({
+        "model": _AI_MODEL, "max_tokens": 8192, "temperature": 0,
+        "messages": [{"role": "user", "content": [media_block, {"type": "text", "text": prompt}]}],
+    }).encode()
+    req = UrlRequest(_ANTHROPIC_URL, data=payload,
+                     headers={"Content-Type": "application/json", "x-api-key": key,
+                              "anthropic-version": "2023-06-01"}, method="POST")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            result = json.loads(resp.read())
+    except HTTPError as exc:
+        try:
+            detail = json.loads(exc.read())
+            msg = detail.get("error", {}).get("message", str(detail))
+        except Exception:
+            msg = getattr(exc, "reason", None) or str(exc)
+        raise ValueError(f"AI service error ({exc.code}): {msg}")
+    stop = result.get("stop_reason", "")
+    raw = "".join(b.get("text", "") for b in (result.get("content") or [])
+                  if b.get("type") == "text").strip()
+    if not raw:
+        raise ValueError(f"Anthropic returned no text (stop_reason={stop or 'unknown'}).")
+    return raw, stop
+
+
+def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 30):
+    """PDF parse via Gemini 3 (native PDF ingest, no rasterisation)."""
+    parts = [{"inline_data": {"mime_type": "application/pdf",
+                              "data": base64.b64encode(file_bytes).decode()}},
+             {"text": prompt}]
+    resp = call_gemini(key, _PARSE_GEMINI_MODEL, parts, max_tokens=8192, timeout=timeout)
+    raw = (gemini_text(resp) or "").strip()
+    try:
+        fr = resp["candidates"][0].get("finishReason", "")
+    except (KeyError, IndexError, TypeError):
+        fr = ""
+    if not raw:
+        raise ValueError(f"Gemini returned no text (finishReason={fr or 'unknown'}).")
+    return raw, ("max_tokens" if fr == "MAX_TOKENS" else fr)
+
+
+def _kimi_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, key: str, timeout: int = 30):
+    """Image parse via Kimi vision (base64 image_url; Kimi can't take PDFs)."""
+    data_url = f"data:{mime_type};base64,{base64.b64encode(file_bytes).decode()}"
+    messages = [{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": data_url}},
+        {"type": "text", "text": prompt}]}]
+    resp = call_openai_compat(_KIMI_BASE_URL, key, _VISION_KIMI_MODEL,
+                              messages, max_tokens=8192, timeout=timeout)
+    raw = (openai_text(resp) or "").strip()
+    try:
+        fr = resp["choices"][0].get("finish_reason", "")
+    except (KeyError, IndexError, TypeError):
+        fr = ""
+    if not raw:
+        raise ValueError(f"Kimi returned no text (finish_reason={fr or 'unknown'}).")
+    return raw, ("max_tokens" if fr == "length" else fr)
+
+
+def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str):
+    """Route the vision parse to its provider, falling back to Anthropic on ANY
+    error (rate-limit/429, timeout, blocked, malformed). The fallback is what
+    lets parsing absorb Gemini's free-tier volume limits without ever failing.
+    Timeouts are bounded so a primary-then-fallback retry still fits the 60s
+    Vercel ceiling; the Anthropic-only path (no primary key) keeps the full 50s."""
+    if mime_type.startswith("image/"):
+        kkey = os.environ.get("KIMI_API_KEY", "")
+        if kkey and call_openai_compat is not None:
+            try:
+                return _kimi_vision_raw(file_bytes, mime_type, prompt, kkey, timeout=30)
+            except Exception:
+                return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=25)
+        return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
+    # application/pdf (and any non-image) → Gemini 3, else Anthropic.
+    gkey = os.environ.get("GEMINI_API_KEY", "")
+    if gkey and call_gemini is not None:
+        try:
+            return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=30)
+        except Exception:
+            return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=25)
+    return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
+
+
+def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_hint: str = "") -> dict:
     if urlopen is None:
         raise ValueError("urllib not available.")
 
@@ -1235,48 +1351,8 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
     if header_hint:
         prompt = prompt + _GEMINI_PAGE_HINT.format(header=header_hint)
 
-    # Claude reads PDFs as a document block; images as an image block.
-    if mime_type == "application/pdf":
-        media_block = {"type": "document",
-                       "source": {"type": "base64", "media_type": "application/pdf",
-                                  "data": base64.b64encode(file_bytes).decode()}}
-    else:
-        media_block = {"type": "image",
-                       "source": {"type": "base64", "media_type": mime_type,
-                                  "data": base64.b64encode(file_bytes).decode()}}
-
-    payload = json.dumps({
-        "model": _AI_MODEL,
-        "max_tokens": 8192,
-        "temperature": 0,
-        "messages": [{"role": "user", "content": [media_block, {"type": "text", "text": prompt}]}],
-    }).encode()
-
-    req = UrlRequest(
-        _ANTHROPIC_URL,
-        data=payload,
-        headers={"Content-Type": "application/json",
-                 "x-api-key": key,
-                 "anthropic-version": "2023-06-01"},
-        method="POST"
-    )
-    # Hobby + Fluid Compute allows long I/O waits; vercel.json caps the function at 60s,
-    # so give the model call generous room (PDF vision parsing routinely needs 10-30s).
-    try:
-        with urlopen(req, timeout=50) as resp:
-            result = json.loads(resp.read())
-    except HTTPError as exc:
-        try:
-            detail = json.loads(exc.read())
-            msg = detail.get("error", {}).get("message", str(detail))
-        except Exception:
-            msg = getattr(exc, "reason", None) or str(exc)
-        raise ValueError(f"AI service error ({exc.code}): {msg}")
-
-    stop = result.get("stop_reason", "")
-    raw = "".join(b.get("text", "") for b in (result.get("content") or []) if b.get("type") == "text").strip()
-    if not raw:
-        raise ValueError(f"AI parser returned no text (stop_reason={stop or 'unknown'}).")
+    # PDF → Gemini 3, image → Kimi, with automatic Anthropic fallback.
+    raw, stop = _vision_raw(file_bytes, mime_type, prompt)
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
         data = json.loads(raw)
@@ -1880,10 +1956,39 @@ Return ONLY a JSON object, no markdown or prose, e.g.:
 {"3354":"HKG","2681":"AUS"}
 Use the sail number exactly as printed. Omit any row whose flag you cannot read."""
 
-def _ai_read_nationalities(file_bytes: bytes) -> dict:
-    """Read flag-image nationalities with one small AI call. Returns
-    {normalised_sail: 'IOC'} so the caller can match by sail number (robust —
-    never assigns a nationality to the wrong boat via row miscount)."""
+def _normalise_nat_map(data: dict) -> dict:
+    """{sail: code} → {normalised_sail: 'IOC'}, dropping anything malformed."""
+    out = {}
+    for k, v in (data.items() if isinstance(data, dict) else []):
+        sk = re.sub(r'\s+', '', str(k)).lower()
+        code = re.sub(r'[^A-Za-z]', '', str(v)).upper()[:3]
+        if sk and len(code) == 3:
+            out[sk] = code
+    return out
+
+
+def _strip_json_fence(raw: str) -> str:
+    return re.sub(r'^```(?:json)?\s*|\s*```$', '', (raw or "").strip())
+
+
+def _gemini_read_nationalities(file_bytes: bytes, key: str, timeout: int = 25) -> dict:
+    """Flag-image nationality read via Gemini (ingests the PDF natively as
+    inline_data). Returns {normalised_sail: 'IOC'}. Raises on any error so the
+    caller can fall back to Anthropic."""
+    model = (_LLM_ROUTES.get("nat") or {}).get("model", "gemini-2.5-flash")
+    parts = [
+        {"inline_data": {"mime_type": "application/pdf",
+                         "data": base64.b64encode(file_bytes).decode()}},
+        {"text": _NAT_PROMPT},
+    ]
+    resp = call_gemini(key, model, parts, max_tokens=4096, timeout=timeout)
+    data = json.loads(_strip_json_fence(gemini_text(resp)))
+    return _normalise_nat_map(data)
+
+
+def _anthropic_read_nationalities(file_bytes: bytes, timeout: int = 50) -> dict:
+    """Flag-image nationality read via Anthropic (native document block).
+    The universal fallback path. Returns {normalised_sail: 'IOC'}."""
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         raise ValueError("ANTHROPIC_API_KEY not configured.")
@@ -1900,7 +2005,7 @@ def _ai_read_nationalities(file_bytes: bytes) -> dict:
                      headers={"Content-Type": "application/json", "x-api-key": key,
                               "anthropic-version": "2023-06-01"}, method="POST")
     try:
-        with urlopen(req, timeout=50) as resp:
+        with urlopen(req, timeout=timeout) as resp:
             result = json.loads(resp.read())
     except HTTPError as exc:
         try:
@@ -1910,15 +2015,27 @@ def _ai_read_nationalities(file_bytes: bytes) -> dict:
         raise ValueError(f"AI service error ({exc.code}): {msg}")
     raw = "".join(b.get("text", "") for b in (result.get("content") or [])
                   if b.get("type") == "text").strip()
-    raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
-    data = json.loads(raw)
-    out = {}
-    for k, v in (data.items() if isinstance(data, dict) else []):
-        sk = re.sub(r'\s+', '', str(k)).lower()
-        code = re.sub(r'[^A-Za-z]', '', str(v)).upper()[:3]
-        if sk and len(code) == 3:
-            out[sk] = code
-    return out
+    data = json.loads(_strip_json_fence(raw))
+    return _normalise_nat_map(data)
+
+
+def _ai_read_nationalities(file_bytes: bytes) -> dict:
+    """Read flag-image nationalities with one small AI call. Returns
+    {normalised_sail: 'IOC'} so the caller can match by sail number (robust —
+    never assigns a nationality to the wrong boat via row miscount).
+
+    Routes to Gemini (Phase 2) when GEMINI_API_KEY is set, falling back to
+    Anthropic on any Gemini error so a miss degrades gracefully. Timeouts are
+    bounded so a Gemini-then-Anthropic retry still fits the 60s Vercel ceiling."""
+    gkey = os.environ.get("GEMINI_API_KEY", "")
+    if gkey and call_gemini is not None:
+        try:
+            return _gemini_read_nationalities(file_bytes, gkey, timeout=25)
+        except Exception:
+            # Gemini missed (error/timeout/bad JSON) → Anthropic with reduced
+            # budget so the combined wall time stays under the function ceiling.
+            return _anthropic_read_nationalities(file_bytes, timeout=30)
+    return _anthropic_read_nationalities(file_bytes, timeout=50)
 
 
 # ── Agent tool wrappers ─────────────────────────────────────────────────────
@@ -1990,9 +2107,9 @@ _AGENT_TOOLS = [
                      "date, discards, nat_from_flags."),
      "input_schema": {"type": "object", "properties": {}, "required": []}},
     {"name": "vision_parse",
-     "description": ("Parse the PDF visually using Claude AI vision. Use when rule_parse "
-                     "returns ok=false, or when the format is non-standard. Slower but "
-                     "handles any layout."),
+     "description": ("Parse the PDF visually using AI vision (Gemini 3, with automatic "
+                     "Anthropic fallback). Use when rule_parse returns ok=false, or when "
+                     "the format is non-standard. Slower but handles any layout."),
      "input_schema": {"type": "object", "properties": {}, "required": []}},
     {"name": "lookup_nationalities",
      "description": ("Read flag images in the PDF to determine nationalities. Call this "
