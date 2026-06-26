@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 .claudeignore
 .claude/
+.agents/
+skills-lock.json

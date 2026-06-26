@@ -12,7 +12,7 @@ create table if not exists public.custom_classes (
   id            text primary key,
   canonical     text not null unique,
   short         text not null,
-  full          text not null,
+  "full"        text not null,   -- quoted: FULL is a reserved word
   color         text not null,
   -- Provenance: which signed-in user created it (verified-host gating is enforced
   -- by the insert policy below). Nullable so seeds/back-fills don't require an author.
@@ -47,12 +47,15 @@ create policy custom_classes_insert_verified_host
   to authenticated
   with check (
     created_by = auth.uid()
-    and exists (
-      select 1
-      from public.host_members hm
-      where hm.user_id = auth.uid()
-        and hm.verified = true
-        and hm.status = 'active'
+    and (
+      is_athlink_admin()
+      or exists (
+        select 1
+        from public.host_members hm
+        where hm.user_id = auth.uid()
+          and hm.verified = true
+          and hm.status = 'active'
+      )
     )
   );
 
