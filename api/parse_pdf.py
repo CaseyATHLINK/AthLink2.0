@@ -1880,6 +1880,32 @@ def fetch_url_bytes(url: str):
     return data, ctype
 
 
+def _decode_html_bytes(data: bytes) -> str:
+    """Decode HTML bytes to text using the right charset.
+
+    Many sailing-results exports (Sailwave etc.) are ISO-8859-1 / Windows-1252,
+    not UTF-8. Decoding those as UTF-8 with errors='replace' turns accented
+    names (Hernández, Peña, Szölgyömi, Sámuel) into U+FFFD ("�"). So:
+      1. honour a declared <meta charset=...> when present,
+      2. otherwise try STRICT utf-8 and, only if that raises, fall back to
+         cp1252 (a superset of Latin-1 that browsers use for iso-8859-1).
+    """
+    head = data[:4096].lower()
+    m = re.search(rb'charset=["\']?\s*([a-z0-9_\-]+)', head)
+    enc = m.group(1).decode('ascii', 'ignore').strip() if m else None
+    if enc in ('iso-8859-1', 'iso8859-1', 'latin-1', 'latin1', 'windows-1252', 'cp1252'):
+        return data.decode('cp1252', errors='replace')
+    if enc and enc not in ('utf-8', 'utf8'):
+        try:
+            return data.decode(enc, errors='replace')
+        except LookupError:
+            pass
+    try:
+        return data.decode('utf-8')              # strict: raises on Latin-1 bytes
+    except UnicodeDecodeError:
+        return data.decode('cp1252', errors='replace')
+
+
 def parse_url(url: str, mode: str = 'ai') -> dict:
     """Fetch a results link and parse it. HTML pages are parsed from source
     (most accurate); PDFs go through the normal byte pipeline."""
@@ -1887,10 +1913,7 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
     mime = _detect_mime(data)
     is_html = ('html' in ctype) or (mime == 'text/html')
     if is_html and 'pdf' not in ctype:
-        try:
-            text = data.decode('utf-8', errors='replace')
-        except Exception:
-            text = data.decode('iso-8859-1', errors='replace')
+        text = _decode_html_bytes(data)
         try:
             out = _parse_html_string(text)
             out.setdefault('notes', []).insert(0, f"Loaded {url}")
@@ -2243,11 +2266,7 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
 
     # ── HTML upload (rare; usually parsed client-side, but supported here too) ──
     if mime == "text/html":
-        try:
-            text = file_bytes.decode('utf-8', errors='replace')
-        except Exception:
-            text = file_bytes.decode('iso-8859-1', errors='replace')
-        return _parse_html_string(text)
+        return _parse_html_string(_decode_html_bytes(file_bytes))
 
     # ── Image upload → Gemini only (no rule-based parser exists for images) ──
     if mime.startswith("image/"):

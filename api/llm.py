@@ -38,10 +38,12 @@ ANTHROPIC_MODEL = "claude-haiku-4-5"
 ROUTES = {
     "filter":   {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
                  "key_env": "KIMI_API_KEY",     "model": "kimi-k2.5"},
-    "overview": {"provider": "openai", "base_url": "https://api.deepseek.com",
-                 "key_env": "DEEPSEEK_API_KEY", "model": "deepseek-chat"},
+    # overview was DeepSeek, but DeepSeek has no free tier (402 w/o prepaid
+    # balance), so it's routed to Kimi — already live and free.
+    "overview": {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
+                 "key_env": "KIMI_API_KEY", "model": "kimi-k2.5"},
     "hover":    {"provider": "openai", "base_url": "https://api.cerebras.ai/v1",
-                 "key_env": "CEREBRAS_API_KEY", "model": "llama-3.3-70b"},
+                 "key_env": "CEREBRAS_API_KEY", "model": "gpt-oss-120b"},
     "nat":      {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
                  "key_env": "GEMINI_API_KEY",   "model": "gemini-2.5-flash"},
 }
