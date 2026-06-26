@@ -4126,6 +4126,10 @@ export default function AthLinkMVP(){
   const isPortalOwner=myPortalMembership?.role==="owner";
   // Does the signed-in user have ANY unverified host membership? (account badge)
   const hasPendingHostMembership=myMemberships.some(m=>!m.verified);
+  // Athlete who hasn't claimed their auto-built profile yet → show a nudge to
+  // claim it (and an avatar dot). Skip for hosts and dev mode.
+  const myAthleteClaim=auth?.user?.id?allClaims.find(c=>c.user_id===auth.user.id):null;
+  const showClaimNudge=!!auth&&role==="athlete"&&!devMode&&!myAthleteClaim&&!myMemberships.some(m=>m.verified);
   // A pending (unverified) host owner of THIS portal — sees guest UX everywhere
   // except a "pending approval" banner on their own portal page.
   const isPendingHostHere=!isClassPortal&&!!myPortalMembership&&!myPortalMembership.verified;
@@ -5902,6 +5906,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <button className="tb-profile" onClick={()=>setAccountOpen(o=>!o)} title={role} style={{position:"relative"}}>
               <span style={{fontSize:14,fontWeight:800}}>{(auth.profile?.display_name||auth.user?.email||"?").slice(0,1).toUpperCase()}</span>
               {hasPendingHostMembership&&<span style={{position:"absolute",top:-2,right:-2,width:12,height:12,borderRadius:"50%",background:"#f5a623",border:"2px solid #fff"}} title="Host approval pending"/>}
+              {showClaimNudge&&!hasPendingHostMembership&&<span style={{position:"absolute",top:-2,right:-2,width:12,height:12,borderRadius:"50%",background:"var(--accent)",border:"2px solid #fff"}} title="Claim your athlete profile"/>}
             </button>
             {accountOpen&&(<div className="tb-acct">
               {(()=>{
@@ -5931,6 +5936,16 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </div>
               )}
               {auth.profile?.username&&<div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Username: <b style={{color:"var(--navy)"}}>@{auth.profile.username}</b></div>}
+              {/* Claim-your-profile nudge — athletes who haven't claimed yet */}
+              {showClaimNudge&&(
+                <div style={{margin:"2px 8px 6px",padding:"9px 11px",background:"rgba(10,132,255,.07)",border:"1px solid rgba(10,132,255,.18)",borderRadius:9,fontSize:11.5,color:"var(--navy)",lineHeight:1.45}}>
+                  <div style={{display:"flex",gap:7,alignItems:"flex-start"}}>
+                    <BadgeCheck size={13} style={{flex:"none",marginTop:1,color:"var(--accent)"}}/>
+                    <span>Claim your athlete profile to verify your results and get a verified badge.</span>
+                  </div>
+                  <button onClick={()=>{setAccountOpen(false);go({name:"athletes"});}} style={{marginTop:7,width:"100%",border:0,background:"var(--accent)",color:"#fff",borderRadius:7,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Claim your profile</button>
+                </div>
+              )}
               {hasPendingHostMembership&&(
                 <div style={{margin:"2px 8px 8px",padding:"8px 10px",background:"rgba(255,149,0,.1)",border:"1px solid rgba(255,149,0,.3)",borderRadius:8,fontSize:11.5,color:"#a85c00",lineHeight:1.45,display:"flex",gap:7,alignItems:"flex-start"}}>
                   <Clock size={13} style={{flex:"none",marginTop:1}}/>
@@ -6955,12 +6970,32 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         <div style={{padding:"40px 0",color:"var(--mut)"}}>Couldn't render this profile. <button className="btn ghost" style={{marginLeft:8,fontSize:13,padding:"5px 12px"}} onClick={()=>go({name:"athletes"})}>Go back</button></div>
       </div>}>
       <div className="wrap sec" style={{paddingTop:22}}>
-      {view.fromRegatta
-        ? <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
-        : view.fromEvent
-        ? <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
-        : <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
-      }
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
+        <button className="back" onClick={navBack} style={{marginBottom:0}}><ArrowLeft size={16}/>Back</button>
+        {!devMode&&(()=>{
+          // Claim-my-profile control. Rules: one claim per user, one claim per
+          // profile (denied claims don't count). Any host the athlete competed
+          // under can later verify it.
+          const lower=(name||"").toLowerCase();
+          const uid=auth?.user?.id;
+          // Multiple people may have PENDING claims on a profile; only one can be approved.
+          const approvedOwner=allClaims.find(c=>c.profile_name?.toLowerCase()===lower&&c.status==="approved");
+          const myClaimHere=uid?allClaims.find(c=>c.profile_name?.toLowerCase()===lower&&c.user_id===uid&&c.status!=="denied"):null;
+          const myClaimAnywhere=uid?allClaims.find(c=>c.user_id===uid&&c.status!=="denied"):null;
+          const pill={marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,fontSize:12.5,fontWeight:700,padding:"7px 13px",borderRadius:980};
+          // Guests (signed out) see no claim control at all — keep guest view clean.
+          if(!auth) return null;
+          // Verified owner of THIS profile → no button (the badge by the name says it).
+          if(myClaimHere&&myClaimHere.status==="approved") return null;
+          // My own pending claim here.
+          if(myClaimHere) return <span style={{...pill,background:"rgba(255,149,0,.14)",color:"#a85c00",boxShadow:"inset 0 0 0 .5px rgba(255,149,0,.4)"}}><Clock size={14}/>Claim pending verification</span>;
+          // Someone else is already the verified owner → can't claim.
+          if(approvedOwner) return <span style={{...pill,background:"var(--grouped)",color:"var(--mut)"}} title="This profile already has a verified owner."><BadgeCheck size={14}/>Claimed</span>;
+          // I already hold a claim on a different profile → one profile per user.
+          if(myClaimAnywhere) return <span style={{...pill,background:"var(--grouped)",color:"var(--mut)"}} title="You can only claim one profile.">You've already claimed {myClaimAnywhere.profile_name}</span>;
+          return <button className="btn cta liquidGlass-wrapper" style={{marginLeft:"auto"}} onClick={()=>submitClaim(name)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><BadgeCheck size={15}/>Claim my profile</div></button>;
+        })()}
+      </div>
       {(()=>{
         // compute footprint + overview once, used by both the globe (right) and the strip (below)
         const countryCounts={};
@@ -6989,8 +7024,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                         <button className="btn ghost" style={{fontSize:12,padding:"6px 11px"}} onClick={()=>setEditingAthName(null)}>Cancel</button>
                       </span>
                     : <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
-                        {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
                         {profileVerified(name)&&<VerifyBadge verified size={20} title="Verified athlete — claimed & vouched"/>}
+                        {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
                         {devMode&&<button title="Rename athlete (dev)" onClick={()=>{const parts=name.trim().split(/\s+/);setEditingAthName({orig:name});setAthNameFirst(parts.slice(0,-1).join(" ")||parts[0]||"");setAthNameLast(parts.length>1?parts[parts.length-1]:"");}} style={{border:0,background:"var(--grouped)",color:"var(--accent)",borderRadius:980,width:30,height:30,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Pencil size={14}/></button>}
                       </span>}
                   {editingAthName?.orig!==name&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
@@ -7008,7 +7043,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       {g&&<span><span style={{background:GENDER_COLOR[g]||"var(--mut)",color:"#fff",borderRadius:980,fontSize:10.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"2px 9px"}} title={g==="Mix"?"Mixed":g==="F"?"Female":"Male"}>{g==="Mix"?"Mixed":g==="F"?"Female":"Male"}</span></span>}
                     </>);
                   })()}
-                  {birthYear&&<span style={{fontWeight:600}}>Born {birthYear}{age!=null?` · age ${age}`:""}</span>}
+                  {age!=null&&<span style={{fontWeight:600}}>Age {age}</span>}
                   {(()=>{
                     const recent=ag.history[0]?.row;
                     if(!recent?.sail||recent.sail==="—") return null;
