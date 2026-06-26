@@ -5,18 +5,18 @@ so the Anthropic API key is never exposed to the browser.
 """
 
 from http.server import BaseHTTPRequestHandler
-import json, os
+import json, os, sys
 
-try:
-    import urllib.request as urlreq
-    import urllib.error as urlerr
-except ImportError:
-    urlreq = None
-    urlerr = None
+# Sibling import (same pattern parse_pdf.py uses for validate.py).
+_API_DIR = os.path.dirname(os.path.abspath(__file__))
+if _API_DIR not in sys.path:
+    sys.path.insert(0, _API_DIR)
+from llm import complete_text, LLMError
 
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-# Haiku 4.5: fast + cheap, ideal for short summaries fired on every hover.
-# For richer full-profile prose you could swap to "claude-sonnet-4-6".
+# Haiku 4.5 is the universal fallback. Per-task routing (filter→Kimi,
+# overview→DeepSeek, hover→Cerebras) lives in llm.py; a request with no `task`
+# label routes to Anthropic, keeping older clients backward-compatible.
 CLAUDE_MODEL = "claude-haiku-4-5"
 
 
@@ -42,46 +42,19 @@ class handler(BaseHTTPRequestHandler):
 
         prompt   = body.get("prompt", "")
         max_tok  = body.get("max_tokens", 400)
+        task     = body.get("task")  # "filter"|"overview"|"hover" — absent → Anthropic
 
         if not prompt:
             return self._respond(400, {"ok": False, "error": "No prompt provided."})
 
-        payload = json.dumps({
-            "model": CLAUDE_MODEL,
-            "max_tokens": max_tok,
-            "messages": [{"role": "user", "content": prompt}],
-        }).encode()
-
-        req = urlreq.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "Content-Type":      "application/json",
-                "x-api-key":         ANTHROPIC_KEY,
-                "anthropic-version": "2023-06-01",
-            },
-            method="POST",
-        )
-
+        # complete_text routes to the per-task provider and transparently falls
+        # back to Anthropic Haiku on any provider error, so we never hard-fail.
         try:
-            with urlreq.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read())
-        except urlerr.HTTPError as exc:
-            # Surface Anthropic's actual error message, not just the status line.
-            try:
-                detail = json.loads(exc.read())
-                msg = detail.get("error", {}).get("message", str(detail))
-            except Exception:
-                msg = exc.reason or str(exc)
-            return self._respond(502, {"ok": False, "error": f"Anthropic {exc.code}: {msg}", "model": CLAUDE_MODEL})
-        except Exception as exc:
-            return self._respond(502, {"ok": False, "error": str(exc), "model": CLAUDE_MODEL})
+            text, model = complete_text(task, prompt, max_tok)
+        except LLMError as exc:
+            return self._respond(502, {"ok": False, "error": str(exc), "task": task})
 
-        text = "".join(
-            b.get("text", "") for b in data.get("content", [])
-            if b.get("type") == "text"
-        )
-        self._respond(200, {"ok": True, "text": text})
+        self._respond(200, {"ok": True, "text": text, "model": model})
 
     # ── helpers ──────────────────────────────────────────────────────────
     def _cors(self):
