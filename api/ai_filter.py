@@ -43,6 +43,7 @@ class handler(BaseHTTPRequestHandler):
         prompt   = body.get("prompt", "")
         max_tok  = body.get("max_tokens", 400)
         task     = body.get("task")  # "filter"|"overview"|"hover" — absent → Anthropic
+        debug    = body.get("debug")  # when truthy, surface the fallback reason
 
         if not prompt:
             return self._respond(400, {"ok": False, "error": "No prompt provided."})
@@ -50,11 +51,14 @@ class handler(BaseHTTPRequestHandler):
         # complete_text routes to the per-task provider and transparently falls
         # back to Anthropic Haiku on any provider error, so we never hard-fail.
         try:
-            text, model = complete_text(task, prompt, max_tok)
+            text, model, fallback_error = complete_text(task, prompt, max_tok)
         except LLMError as exc:
             return self._respond(502, {"ok": False, "error": str(exc), "task": task})
 
-        self._respond(200, {"ok": True, "text": text, "model": model})
+        out = {"ok": True, "text": text, "model": model}
+        if debug and fallback_error:
+            out["fallback_error"] = fallback_error  # why the primary provider was skipped
+        self._respond(200, out)
 
     # ── helpers ──────────────────────────────────────────────────────────
     def _cors(self):

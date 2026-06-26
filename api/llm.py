@@ -42,8 +42,10 @@ ROUTES = {
     # balance), so it's routed to Kimi — already live and free.
     "overview": {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
                  "key_env": "KIMI_API_KEY", "model": "kimi-k2.5"},
-    "hover":    {"provider": "openai", "base_url": "https://api.cerebras.ai/v1",
-                 "key_env": "CEREBRAS_API_KEY", "model": "gpt-oss-120b"},
+    # hover was Cerebras, but its public endpoint kept erroring (model churn /
+    # key), so it's routed to Kimi — already live and free.
+    "hover":    {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
+                 "key_env": "KIMI_API_KEY", "model": "kimi-k2.5"},
     "nat":      {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
                  "key_env": "GEMINI_API_KEY",   "model": "gemini-2.5-flash"},
 }
@@ -156,7 +158,9 @@ def complete_text(task, prompt, max_tokens, timeout=20):
     """Run a single-prompt text task through its routed provider.
 
     On ANY provider error, transparently retries on Anthropic Haiku so nothing
-    ever degrades to "no AI". Returns (text, model_used).
+    ever degrades to "no AI". Returns (text, model_used, fallback_error) where
+    fallback_error is None on the happy path, or the primary provider's error
+    string when the call fell back to Anthropic (for diagnostics — not secret).
     """
     cfg = route(task)
     key = os.environ.get(cfg["key_env"], "")
@@ -166,18 +170,19 @@ def complete_text(task, prompt, max_tokens, timeout=20):
         if cfg["provider"] == "anthropic":
             resp = call_anthropic(key, cfg["model"], messages, max_tokens,
                                   timeout=timeout)
-            return anthropic_text(resp), cfg["model"]
+            return anthropic_text(resp), cfg["model"], None
         if cfg["provider"] == "openai":
             resp = call_openai_compat(cfg["base_url"], key, cfg["model"],
                                       messages, max_tokens, timeout=timeout)
-            return openai_text(resp), cfg["model"]
+            return openai_text(resp), cfg["model"], None
         # gemini text-only path (rare for ai_filter; supported for completeness)
         if cfg["provider"] == "gemini":
             resp = call_gemini(key, cfg["model"], [{"text": prompt}],
                                max_tokens=max_tokens, timeout=timeout)
-            return gemini_text(resp), cfg["model"]
-    except LLMError:
-        pass  # fall through to Anthropic fallback below
+            return gemini_text(resp), cfg["model"], None
+        fallback_error = f"unknown provider '{cfg['provider']}'"
+    except LLMError as exc:
+        fallback_error = f"{cfg['provider']}/{cfg['model']}: {exc}"
 
     # ── Anthropic fallback ──
     akey = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -185,4 +190,4 @@ def complete_text(task, prompt, max_tokens, timeout=20):
         raise LLMError("primary provider failed and ANTHROPIC_API_KEY not set")
     resp = call_anthropic(akey, ANTHROPIC_MODEL, messages, max_tokens,
                           timeout=timeout)
-    return anthropic_text(resp), ANTHROPIC_MODEL
+    return anthropic_text(resp), ANTHROPIC_MODEL, fallback_error
