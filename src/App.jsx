@@ -5750,7 +5750,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         } else { closeImport(); }
       } else { closeImport(); }
       const isSaved=!String(dup.id).startsWith("imp_")&&!String(dup.id).startsWith("fg_");
-      if(isSaved){try{await sbPatch("events",`id=eq.${dup.id}`,patch);}catch(err){console.error("importPreview dedup patch failed",err);}}
+      if(isSaved){(async()=>{try{await sbPatch("events",`id=eq.${dup.id}`,patch);}catch(err){console.error("importPreview dedup patch failed",err);}})();}
       return;
     }
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
@@ -5776,29 +5776,34 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     } else {
       closeImport();
     }
-    // Persist in the background; swap in the DB copy (with real ids) once saved
-    try{
-      const saved=await saveEventToDb(ev);
-      if(saved?.[0]?.id){
-        // If this contribution was attributed to ANOTHER real host as organizer
-        // (external, unconfirmed), file an event claim so it surfaces in that
-        // host's "Event claims" tab for a verified admin to confirm.
-        if(!selfOrganized&&attributedHost&&hostById(attributedHost)&&attributedHost!==importerHost&&auth?.user?.id){
-          try{await createEventClaim(saved[0].id,attributedHost,auth.user.id,`Attributed at import by ${hostById(importerHost)?.name||"a contributor"}`,auth.token);await reloadEventClaims();}
-          catch(e){console.error("importPreview: auto event-claim failed",e);}
+    // Persist in the background; swap in the DB copy (with real ids) once saved.
+    // DETACHED (not awaited) so importPreview resolves as soon as the optimistic
+    // UI above is done — the Publish/Draft button's loading state then clears
+    // immediately instead of hanging on the DB round-trip.
+    (async()=>{
+      try{
+        const saved=await saveEventToDb(ev);
+        if(saved?.[0]?.id){
+          // If this contribution was attributed to ANOTHER real host as organizer
+          // (external, unconfirmed), file an event claim so it surfaces in that
+          // host's "Event claims" tab for a verified admin to confirm.
+          if(!selfOrganized&&attributedHost&&hostById(attributedHost)&&attributedHost!==importerHost&&auth?.user?.id){
+            try{await createEventClaim(saved[0].id,attributedHost,auth.user.id,`Attributed at import by ${hostById(importerHost)?.name||"a contributor"}`,auth.token);await reloadEventClaims();}
+            catch(e){console.error("importPreview: auto event-claim failed",e);}
+          }
+          const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
+          if(fresh?.[0]){
+            const dbEv=dbToApp(fresh[0]);
+            setEvents(p=>p.map(x=>x.id===ev.id?dbEv:x));
+            // If the user is currently viewing this just-imported event, keep the
+            // view pointed at the new DB id so the page doesn't go blank.
+            setView(v=>(v.name==="event"&&v.id===ev.id)?{...v,id:dbEv.id}:v);
+          }
+        } else {
+          console.error("importPreview: Supabase save failed — kept in memory only (will not persist on reload)");
         }
-        const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
-        if(fresh?.[0]){
-          const dbEv=dbToApp(fresh[0]);
-          setEvents(p=>p.map(x=>x.id===ev.id?dbEv:x));
-          // If the user is currently viewing this just-imported event, keep the
-          // view pointed at the new DB id so the page doesn't go blank.
-          setView(v=>(v.name==="event"&&v.id===ev.id)?{...v,id:dbEv.id}:v);
-        }
-      } else {
-        console.error("importPreview: Supabase save failed — kept in memory only (will not persist on reload)");
-      }
-    }catch(err){console.error("importPreview: background save error",err);}
+      }catch(err){console.error("importPreview: background save error",err);}
+    })();
   };
 
   /* ── inline score editing ─────────────────────────────────── */
