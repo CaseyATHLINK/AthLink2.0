@@ -3,7 +3,7 @@ import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
-  CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings
+  CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram
 } from "lucide-react";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
@@ -1128,6 +1128,35 @@ async function decideClaim(claimId,approve,vouchUserId,hostId,tok){
   return hostRest(`athlete_claims?id=eq.${claimId}`,{method:"PATCH",body:JSON.stringify({
     status:approve?"approved":"denied",vouched_by:approve?vouchUserId:null,host_id:approve?hostId:null,
     decided_at:new Date().toISOString()})},tok);
+}
+
+/* ── Athlete profile extras (athlete_profiles) ────────────────────────────────
+   Owner-editable presentation fields (bio, instagram, nationality override,
+   photo) layered over the auto-built profile. Keyed by normalised name
+   (lower+trim). Read is public; write is gated to the verified owner by RLS
+   (see migrations/0004_athlete_profiles.sql). */
+const profileNameKey=(name)=>String(name||"").trim().toLowerCase();
+const fetchAllAthleteProfiles=(tok)=>hostRest("athlete_profiles?select=*",{},tok);
+async function upsertAthleteProfile(name,patch,userId,tok){
+  const row={name_key:profileNameKey(name),display_name:name,...patch,updated_by:userId,updated_at:new Date().toISOString()};
+  return hostRest("athlete_profiles",{method:"POST",
+    headers:{"Prefer":"resolution=merge-duplicates,return=representation"},
+    body:JSON.stringify(row)},tok);
+}
+// Upload an athlete headshot to the public `athlete-photos` bucket; returns its
+// public URL or null. Path: <name slug>/<timestamp>.<ext>.
+async function uploadAthletePhoto(file,name,tok){
+  if(!SB_URL||!file) return null;
+  const ext=((file.name||"").split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,"")||"jpg";
+  const slug=profileNameKey(name).replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"athlete";
+  const path=`${slug}/${Date.now()}.${ext}`;
+  try{
+    const r=await fetch(`${SB_URL}/storage/v1/object/athlete-photos/${path}`,{method:"POST",
+      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":file.type||"application/octet-stream","x-upsert":"true"},
+      body:file});
+    if(!r.ok){console.error("uploadAthletePhoto",r.status,await r.text().catch(()=>""));return null;}
+    return `${SB_URL}/storage/v1/object/public/athlete-photos/${path}`;
+  }catch(e){console.error("uploadAthletePhoto network",e);return null;}
 }
 
 /* ── Event claims (event_claims) ──────────────────────────────────────────────
@@ -3502,6 +3531,203 @@ function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   Guided athlete-claim modal — surfaces auto-built profiles whose name is
+   similar to the signed-in athlete, each expandable to a mini result
+   preview, with a one-tap "This is me — claim". A fallback button opens the
+   full all-athletes page for manual search. Uses existing data only
+   (people list + aggregate) — no new storage.
+   ═══════════════════════════════════════════════════════════════════════ */
+function ClaimProfileModal({myName="",people=[],events=[],alreadyClaimed=null,onClaim,onSearchAll,onClose}){
+  const[q,setQ]=React.useState(myName||"");
+  const[openName,setOpenName]=React.useState(null);
+  const[busy,setBusy]=React.useState(null);
+  const norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9\s]/g," ").replace(/\s+/g," ").trim();
+  const myTokens=norm(myName).split(" ").filter(Boolean);
+  const qn=norm(q);
+  const scored=React.useMemo(()=>{
+    const qTokens=qn.split(" ").filter(Boolean);
+    return people.map(p=>{
+      const pn=norm(p.name);
+      const pTokens=pn.split(" ").filter(Boolean);
+      let score=0;
+      for(const t of qTokens){ if(pTokens.includes(t))score+=2; else if(t.length>=3&&pn.includes(t))score+=1; }
+      for(const t of myTokens){ if(pTokens.includes(t))score+=0.5; }
+      return{name:p.name,score};
+    })
+    .filter(x=>x.score>0)
+    .sort((a,b)=>b.score-a.score||a.name.localeCompare(b.name))
+    .slice(0,40);
+  },[qn,people]);
+  const claim=async(name)=>{ setBusy(name); try{await onClaim(name);}finally{setBusy(null);} };
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:560}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <BadgeCheck size={18}/>
+          <h3 style={{flex:1}}>Claim your profile</h3>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div style={{padding:"14px 24px 24px"}}>
+          {alreadyClaimed
+            ? <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 4px",lineHeight:1.45}}>You've already claimed <b style={{color:"var(--navy)"}}>{alreadyClaimed}</b>. You can only claim one profile.</p>
+            : <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.45}}>Find the auto-built profile that's you, preview the results, and claim it. A verified host admin from a competition you sailed will confirm it.</p>}
+          {!alreadyClaimed&&<>
+          <div style={{position:"relative",marginBottom:14}}>
+            <Search size={14} color="#9fb2c8" style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)"}}/>
+            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Type your name…"
+              style={{width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"9px 11px 9px 32px",font:"inherit",fontSize:13.5,outline:"none",background:"rgba(255,255,255,.85)"}}/>
+          </div>
+          <div style={{maxHeight:"52vh",overflowY:"auto",margin:"0 -4px"}}>
+            {qn&&scored.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:"6px 4px"}}>No profiles match "{q}". Try a different spelling, or search the full list below.</p>}
+            {!qn&&scored.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:"6px 4px"}}>Type your name to find your profile.</p>}
+            {scored.map(({name})=>{
+              const open=openName===name;
+              const ag=open?aggregate(name,events):null;
+              const recent=ag?.history?.[0];
+              const attrs=ATHLETE_ATTRS.get(canonName(name));
+              const nug=attrs?.recentCls?nuggetFor(attrs.recentCls,attrs.recentSub):null;
+              return(
+                <div key={name} style={{padding:"0 4px",borderBottom:"1px solid var(--line)"}}>
+                  <div onClick={()=>setOpenName(open?null:name)} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 6px",cursor:"pointer"}}>
+                    <div className="av" style={{background:avatarColor(name),width:34,height:34,fontSize:13,flex:"none"}}>{initials(name)}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:14,fontWeight:700,color:"var(--ink)",display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>{name}{nug&&<span className="cls" style={{background:nug.color,fontSize:10,padding:"1px 8px"}}>{nug.label}</span>}</div>
+                    </div>
+                    <ChevronRight size={15} color="#9fb2c8" style={{flex:"none",transform:open?"rotate(90deg)":"none",transition:".15s"}}/>
+                  </div>
+                  {open&&(
+                    <div style={{padding:"2px 8px 12px 50px"}}>
+                      {ag.events>0?(<>
+                        <div style={{display:"flex",gap:16,marginBottom:8}}>
+                          <span style={{fontSize:12.5,color:"var(--mut)"}}><b style={{color:"var(--navy)",fontSize:14}}>{ag.events}</b> comps</span>
+                          <span style={{fontSize:12.5,color:"var(--mut)"}}><b style={{color:"var(--navy)",fontSize:14}}>{ag.best?"#"+ag.best:"—"}</b> best</span>
+                          <span style={{fontSize:12.5,color:"var(--mut)"}}><b style={{color:"var(--navy)",fontSize:14}}>{ag.podiums}</b> podiums</span>
+                        </div>
+                        {recent&&<div style={{fontSize:12,color:"var(--mut)",marginBottom:10,display:"flex",alignItems:"center",gap:6}}><Trophy size={12} style={{flex:"none"}}/>Latest: {recent.ev.name} · {recent.ev.date} · #{recent.row.rank}</div>}
+                      </>):<div style={{fontSize:12.5,color:"var(--mut)",marginBottom:10}}>No competition results on this profile yet.</div>}
+                      <button className="btn cta liquidGlass-wrapper" disabled={busy===name} onClick={()=>claim(name)} style={{fontSize:13}}>
+                        <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy===name?<Loader2 size={14} className="spin"/>:<BadgeCheck size={14}/>}This is me — claim</div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          </>}
+          <button className="btn ghost" onClick={onSearchAll} style={{marginTop:16,width:"100%",fontSize:13,padding:"9px 12px"}}>
+            <Search size={13}/>{alreadyClaimed?"Browse all athletes":"Search the full athlete list instead"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Verified-owner profile edit modal — lets the approved owner (or dev) set
+   the presentation extras that aren't derived from PDFs: photo, display
+   name, nationality, bio, and an Instagram link. Results stay PDF-sourced.
+   Photo uploads go to the public `athlete-photos` storage bucket.
+   ═══════════════════════════════════════════════════════════════════════ */
+function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClose}){
+  const parts=(name||"").trim().split(/\s+/);
+  const[first,setFirst]=React.useState(parts.length>1?parts.slice(0,-1).join(" "):(parts[0]||""));
+  const[last,setLast]=React.useState(parts.length>1?parts[parts.length-1]:"");
+  const[bio,setBio]=React.useState(profile?.bio||"");
+  const[insta,setInsta]=React.useState(profile?.instagram_url||"");
+  const[nat,setNat]=React.useState(profile?.nat_override||"");
+  const[photo,setPhoto]=React.useState(profile?.photo_url||"");
+  const[uploading,setUploading]=React.useState(false);
+  const[busy,setBusy]=React.useState(false);
+  const[err,setErr]=React.useState("");
+  const fileRef=React.useRef(null);
+  const field={width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"9px 11px",font:"inherit",fontSize:13.5,outline:"none",background:"rgba(255,255,255,.9)"};
+  const lbl={fontSize:11.5,fontWeight:700,color:"var(--mut)",textTransform:"uppercase",letterSpacing:".03em",margin:"0 0 5px"};
+
+  const pickPhoto=async(e)=>{
+    const f=e.target.files?.[0]; if(!f) return;
+    if(f.size>5*1024*1024){setErr("Photo must be under 5 MB.");return;}
+    setErr(""); setUploading(true);
+    const url=await uploadPhoto(f);
+    setUploading(false);
+    if(url) setPhoto(url); else setErr("Photo upload failed — the athlete-photos bucket may not exist yet.");
+  };
+  const normIg=(v)=>{
+    let ig=(v||"").trim(); if(!ig) return null;
+    if(ig.startsWith("@")) return `https://instagram.com/${ig.slice(1)}`;
+    if(/^https?:\/\//i.test(ig)) return ig;
+    if(/instagram\.com/i.test(ig)) return `https://${ig}`;
+    return `https://instagram.com/${ig.replace(/^\/+/,"")}`;
+  };
+  const save=async()=>{
+    setBusy(true); setErr("");
+    const newName=`${first} ${last}`.trim()||name;
+    const patch={bio:bio.trim()||null,instagram_url:normIg(insta),nat_override:nat.trim().toUpperCase()||null,photo_url:photo||null};
+    try{
+      if(newName!==name) await onRename(name,newName);   // rename follows ownership + migrates extras key
+      await onSaveExtras(newName,patch);
+      onClose(newName);
+    }catch(e){console.error("athlete edit save",e);setErr("Couldn't save changes. Try again.");setBusy(false);}
+  };
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:480}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <Pencil size={17}/>
+          <h3 style={{flex:1}}>Edit profile</h3>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div style={{padding:"16px 24px 24px"}}>
+          {/* Photo */}
+          <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:16}}>
+            {photo
+              ? <img src={photo} alt="" style={{width:64,height:64,borderRadius:"50%",objectFit:"cover",flex:"none",boxShadow:"inset 0 0 0 .5px rgba(0,0,0,.1)"}}/>
+              : <div className="av" style={{background:avatarColor(name),width:64,height:64,fontSize:22,flex:"none"}}>{initials(name)}</div>}
+            <div style={{flex:1}}>
+              <input ref={fileRef} type="file" accept="image/*" onChange={pickPhoto} style={{display:"none"}}/>
+              <button className="btn ghost" disabled={uploading} onClick={()=>fileRef.current&&fileRef.current.click()} style={{fontSize:12.5,padding:"7px 11px"}}>
+                {uploading?<><Loader2 size={13} className="spin"/>Uploading…</>:<><Upload size={13}/>{photo?"Replace photo":"Upload photo"}</>}
+              </button>
+              {photo&&<button className="btn ghost" onClick={()=>setPhoto("")} style={{fontSize:12.5,padding:"7px 11px",marginLeft:7,color:"#c0392b"}}><Trash2 size={13}/>Remove</button>}
+            </div>
+          </div>
+          {/* Name */}
+          <div style={{display:"flex",gap:10,marginBottom:14}}>
+            <div style={{flex:1}}><p style={lbl}>First name</p><input value={first} onChange={e=>setFirst(e.target.value)} style={field}/></div>
+            <div style={{flex:1}}><p style={lbl}>Last name</p><input value={last} onChange={e=>setLast(e.target.value)} style={field}/></div>
+          </div>
+          {/* Nationality */}
+          <div style={{marginBottom:14}}>
+            <p style={lbl}>Nationality (IOC code)</p>
+            <input value={nat} onChange={e=>setNat(e.target.value.toUpperCase().slice(0,3))} placeholder="e.g. HKG" maxLength={3} style={{...field,width:120,textTransform:"uppercase"}}/>
+            <span style={{fontSize:11.5,color:"var(--mut)",marginLeft:9}}>Overrides the sail-number guess.</span>
+          </div>
+          {/* Instagram */}
+          <div style={{marginBottom:14}}>
+            <p style={lbl}>Instagram</p>
+            <input value={insta} onChange={e=>setInsta(e.target.value)} placeholder="@handle or full link" style={field}/>
+          </div>
+          {/* Bio */}
+          <div style={{marginBottom:8}}>
+            <p style={lbl}>Bio</p>
+            <textarea value={bio} onChange={e=>setBio(e.target.value.slice(0,600))} rows={4} placeholder="A short bio (optional)" style={{...field,resize:"vertical",lineHeight:1.5}}/>
+            <div style={{fontSize:11,color:"var(--mut)",textAlign:"right",marginTop:2}}>{bio.length}/600</div>
+          </div>
+          {err&&<div style={{fontSize:12.5,color:"#c0392b",margin:"4px 0 10px"}}>{err}</div>}
+          <div style={{display:"flex",gap:10,marginTop:10}}>
+            <button className="btn cta liquidGlass-wrapper" disabled={busy||uploading} onClick={save} style={{flex:1}}>
+              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={14} className="spin"/>:<CheckCircle size={14}/>}Save changes</div>
+            </button>
+            <button className="btn ghost" onClick={onClose} style={{padding:"0 18px"}}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    Host portal edit modal — tabbed: Details (name + location + globe) and
    Members (embedded member management). Owners/editors/dev use this to rename
    the host, set its location (→ globe by the title), and manage co-admins.
@@ -3609,6 +3835,9 @@ export default function AthLinkMVP(){
   const[allClaims,setAllClaims]=useState([]);          // every athlete_claims row (for badges + admin review)
   const[allEventClaims,setAllEventClaims]=useState([]);// every event_claims row (host claims on contributed events)
   const[claimNote,setClaimNote]=useState(null);        // toast after submitting a claim
+  const[showClaimModal,setShowClaimModal]=useState(false); // guided claim modal open
+  const[athleteProfiles,setAthleteProfiles]=useState({});  // name_key -> athlete_profiles row (owner extras)
+  const[showAthEdit,setShowAthEdit]=useState(null);        // profile name being edited by its owner
   const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
   const[pendingInviteToken,setPendingInviteToken]=useState(null); // raw token from ?invite= URL param
   const[showDevApprovals,setShowDevApprovals]=useState(false);  // dev-only pending-approvals panel
@@ -3832,6 +4061,39 @@ export default function AthLinkMVP(){
   },[auth]);
   useEffect(()=>{ reloadClaims(); },[reloadClaims]);
 
+  // ── Load owner-set athlete profile extras (public read; anon ok) ──
+  const reloadAthleteProfiles=React.useCallback(async()=>{
+    const rows=await fetchAllAthleteProfiles(auth?.token);
+    if(rows){const m={};rows.forEach(r=>{m[r.name_key]=r;});setAthleteProfiles(m);}
+  },[auth]);
+  useEffect(()=>{ reloadAthleteProfiles(); },[reloadAthleteProfiles]);
+  // Extras row for a profile name (or null).
+  const athleteProfileOf=(nm)=>athleteProfiles[profileNameKey(nm)]||null;
+  // Can the signed-in user edit this profile's extras? Verified owner, or dev.
+  const isProfileOwner=(nm)=>devMode||(myClaimFor(nm)?.status==="approved");
+  // Persist extras for a profile name, then refresh.
+  const saveAthleteExtras=async(nm,patch)=>{
+    if(!auth?.user?.id||!auth?.token) return;
+    await upsertAthleteProfile(nm,patch,auth.user.id,auth.token);
+    await reloadAthleteProfiles();
+  };
+  // Owner/dev rename: rename entries everywhere, keep the approved claim pointing
+  // at the new name (so the owner keeps edit rights), and migrate the extras row.
+  const renameOwnedAthlete=async(oldName,newName)=>{
+    const nn=(newName||"").trim(); if(!nn||nn===oldName) return;
+    const mine=myClaimFor(oldName);
+    const extras=athleteProfileOf(oldName);
+    await renameAthlete(oldName,nn);
+    if(mine&&mine.status==="approved"){
+      try{await hostRest(`athlete_claims?id=eq.${mine.id}`,{method:"PATCH",body:JSON.stringify({profile_name:nn})},auth.token);}catch(e){console.error("rename: claim follow",e);}
+      await reloadClaims();
+    }
+    if(extras&&auth?.user?.id){
+      await upsertAthleteProfile(nn,{bio:extras.bio,instagram_url:extras.instagram_url,nat_override:extras.nat_override,photo_url:extras.photo_url},auth.user.id,auth.token);
+      await reloadAthleteProfiles();
+    }
+  };
+
   // ── Load all event claims (host claims on externally-contributed events) ──
   const reloadEventClaims=React.useCallback(async()=>{
     if(!auth?.token){setAllEventClaims([]);return;}
@@ -3852,6 +4114,21 @@ export default function AthLinkMVP(){
     if(!auth?.user?.id||!auth?.token){setShowSignIn(true);return;}
     const r=await createClaim(profileName,auth.user.id,auth.token);
     if(r){setClaimNote({name:profileName,status:"pending"});setTimeout(()=>setClaimNote(null),6000);await reloadClaims();}
+  };
+
+  // ── Host admin approves/denies an athlete claim ──
+  // On APPROVE, auto-deny every OTHER pending claim on the same profile name:
+  // only one person can own a profile, so siblings can't stay open.
+  const resolveClaim=async(claim,approve,hostId)=>{
+    await decideClaim(claim.id,approve,auth.user.id,hostId,auth.token);
+    if(approve){
+      const lower=String(claim.profile_name||"").toLowerCase();
+      const siblings=allClaims.filter(c=>c.id!==claim.id&&c.status==="pending"&&c.profile_name?.toLowerCase()===lower);
+      for(const s of siblings){
+        try{await decideClaim(s.id,false,auth.user.id,hostId,auth.token);}catch(e){console.error("sibling claim auto-deny",e);}
+      }
+    }
+    await reloadClaims();
   };
 
   // ── Detect invite link on mount ──
@@ -5943,7 +6220,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     <BadgeCheck size={13} style={{flex:"none",marginTop:1,color:"var(--accent)"}}/>
                     <span>Claim your athlete profile to verify your results and get a verified badge.</span>
                   </div>
-                  <button onClick={()=>{setAccountOpen(false);go({name:"athletes"});}} style={{marginTop:7,width:"100%",border:0,background:"var(--accent)",color:"#fff",borderRadius:7,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Claim your profile</button>
+                  <button onClick={()=>{setAccountOpen(false);setShowClaimModal(true);}} style={{marginTop:7,width:"100%",border:0,background:"var(--accent)",color:"#fff",borderRadius:7,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Claim your profile</button>
                 </div>
               )}
               {hasPendingHostMembership&&(
@@ -5973,10 +6250,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
     <HostMembersModal hostId={portal} hostName={host.name} auth={auth} myMembership={myPortalMembership}
       pendingClaims={pendingClaimsHere} pendingEventClaims={pendingEventClaimsHere} canVouch={!!myPortalMembership&&myPortalMembership.verified}
-      onDecideClaim={async(claim,approve)=>{
-        await decideClaim(claim.id,approve,auth.user.id,portal,auth.token);
-        await reloadClaims();
-      }}
+      onDecideClaim={(claim,approve)=>resolveClaim(claim,approve,portal)}
       onDecideEventClaim={async(claim,approve)=>{
         await decideEventClaim(claim.id,approve,auth.user.id,portal,auth.token);
         if(approve){
@@ -6008,6 +6282,24 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <button className="x" style={{marginLeft:8}} onClick={()=>setClaimNote(null)}><X size={15}/></button>
     </div>
   )}
+  {showClaimModal&&(()=>{
+    const myName=auth?.profile?.athlete_name||`${auth?.profile?.first_name||""} ${auth?.profile?.last_name||""}`.trim()||auth?.profile?.display_name||"";
+    const mine=auth?.user?.id?allClaims.find(c=>c.user_id===auth.user.id&&c.status!=="denied"):null;
+    return <ClaimProfileModal
+      myName={myName} people={allPeople} events={events}
+      alreadyClaimed={mine?mine.profile_name:null}
+      onClaim={async(name)=>{await submitClaim(name);setShowClaimModal(false);}}
+      onSearchAll={()=>{setShowClaimModal(false);go({name:"athletes"});}}
+      onClose={()=>setShowClaimModal(false)}/>;
+  })()}
+  {showAthEdit&&(()=>{
+    const nm=showAthEdit;
+    return <AthleteEditModal
+      name={nm} profile={athleteProfileOf(nm)}
+      onSaveExtras={saveAthleteExtras} onRename={renameOwnedAthlete}
+      uploadPhoto={(file)=>uploadAthletePhoto(file,nm,auth?.token)}
+      onClose={(finalName)=>{setShowAthEdit(null); if(typeof finalName==="string"&&finalName&&finalName!==nm) go({name:"profile",id:finalName});}}/>;
+  })()}
   {showDevApprovals&&devMode&&(
     <DevApprovalsModal auth={auth} hosts={[...ASSOCIATIONS,...CLUBS,...FEDERATIONS]}
       nameForHost={(id)=>hostById(id)?.name||id}
@@ -6029,7 +6321,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       onSave={(patch)=>saveHost(portal,patch)}
       membersProps={{hostId:portal,hostName:hostById(portal).name,auth,myMembership:myPortalMembership,
         pendingClaims:pendingClaimsHere,pendingEventClaims:pendingEventClaimsHere,canVouch:!!myPortalMembership&&myPortalMembership.verified,
-        onDecideClaim:async(claim,approve)=>{await decideClaim(claim.id,approve,auth.user.id,portal,auth.token);await reloadClaims();},
+        onDecideClaim:(claim,approve)=>resolveClaim(claim,approve,portal),
         onDecideEventClaim:async(claim,approve)=>{
           await decideEventClaim(claim.id,approve,auth.user.id,portal,auth.token);
           if(approve){const patch={owner:portal,owner_confirmed:true,organizer_name:null};setEvents(p=>p.map(x=>x.id===claim.event_id?{...x,...patch}:x));try{await sbPatch("events",`id=eq.${claim.event_id}`,patch);}catch(e){console.error("event claim approve patch",e);}}
@@ -6961,7 +7253,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const name=view.id;
     const p=currentPeople.find(x=>x.name===name)||{name};
     const ag=aggregate(name,events);
-    const nat=athleteNat(name,events);
+    const extras=athleteProfileOf(name);                 // owner-set photo/bio/instagram/nat
+    const nat=extras?.nat_override||athleteNat(name,events);
     const birthYear=athleteBirthYear(name,events);
     const age=birthYear?(new Date().getFullYear()-birthYear):null;
     return(<ErrorBoundary resetKey={name} fallback={
@@ -6995,6 +7288,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           if(myClaimAnywhere) return <span style={{...pill,background:"var(--grouped)",color:"var(--mut)"}} title="You can only claim one profile.">You've already claimed {myClaimAnywhere.profile_name}</span>;
           return <button className="btn cta liquidGlass-wrapper" style={{marginLeft:"auto"}} onClick={()=>submitClaim(name)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><BadgeCheck size={15}/>Claim my profile</div></button>;
         })()}
+        {isProfileOwner(name)&&<button className="btn ghost" style={{marginLeft:"auto",fontSize:12.5,padding:"7px 13px"}} onClick={()=>setShowAthEdit(name)}><Pencil size={13}/>Edit profile</button>}
       </div>
       {(()=>{
         // compute footprint + overview once, used by both the globe (right) and the strip (below)
@@ -7009,7 +7303,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         return(<>
           <div className="phead">
             <div style={{display:"flex",gap:20,alignItems:"flex-start",flex:1,minWidth:260}}>
-              <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>
+              {extras?.photo_url
+                ? <img className="av" src={extras.photo_url} alt={name} style={{objectFit:"cover"}}/>
+                : <div className="av" style={{background:avatarColor(name)}}>{initials(name)}</div>}
               <div style={{flex:1,minWidth:0}}>
                 <h1 className="pname disp" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                   {editingAthName?.orig===name
@@ -7028,7 +7324,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                         {nat&&<span className="pflag">{iocFlag(nat)}</span>}{name}
                         {devMode&&<button title="Rename athlete (dev)" onClick={()=>{const parts=name.trim().split(/\s+/);setEditingAthName({orig:name});setAthNameFirst(parts.slice(0,-1).join(" ")||parts[0]||"");setAthNameLast(parts.length>1?parts[parts.length-1]:"");}} style={{border:0,background:"var(--grouped)",color:"var(--accent)",borderRadius:980,width:30,height:30,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Pencil size={14}/></button>}
                       </span>}
-                  {editingAthName?.orig!==name&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
+                  {extras?.instagram_url&&editingAthName?.orig!==name&&<a href={extras.instagram_url} target="_blank" rel="noopener noreferrer" className="portal-pill" style={{marginLeft:"auto",textDecoration:"none"}}>
+                    <Instagram size={14} style={{flex:"none"}}/>Instagram
+                  </a>}
+                  {editingAthName?.orig!==name&&<button className="portal-pill" style={{marginLeft:extras?.instagram_url?8:"auto"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
                     <Calendar size={14} style={{flex:"none"}}/>Calendar
                   </button>}
                 </h1>
@@ -7057,6 +7356,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
                   <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
                 </div>
+                {/* Owner-written bio (verified athlete's own words) */}
+                {extras?.bio&&<p style={{color:"#dce8f8",fontSize:13.5,lineHeight:1.55,margin:"16px 0 0",whiteSpace:"pre-wrap"}}>{extras.bio}</p>}
                 {/* Athlete overview — directly under the stats, left of the globe */}
                 {ag.events>0&&(
                   <div style={{marginTop:16}}>
