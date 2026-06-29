@@ -1,6 +1,9 @@
 .vercel
 .env*
 node_modules/
+dist/
+.turbo/
+pnpm-lock.yaml.bak
 __pycache__/
 *.pyc
 .claudeignore

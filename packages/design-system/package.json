@@ -1,0 +1,14 @@
+{
+  "name": "@athlink/design-system",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.jsx",
+  "exports": {
+    ".": "./src/index.jsx",
+    "./tokens.css": "./src/tokens.css"
+  },
+  "peerDependencies": {
+    "react": "^18",
+    "lucide-react": "^0.400.0"
+  }
+}

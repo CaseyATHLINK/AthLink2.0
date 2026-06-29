@@ -1,0 +1,14 @@
+# AthLink code ownership. GitHub auto-requests review from the owner of any
+# changed path. Keeps each dev in their lane; protects the shared foundation.
+
+# Default — platform owner
+*                     @CaseyATHLINK
+
+# Shared foundation — platform owner must review every change
+/packages/**          @CaseyATHLINK
+/apps/web/**          @CaseyATHLINK
+/api/**               @CaseyATHLINK
+
+# Sports — owned by their developer
+/sports/sailing/**    @CaseyATHLINK
+/sports/golf/**       @bennyben10wong
