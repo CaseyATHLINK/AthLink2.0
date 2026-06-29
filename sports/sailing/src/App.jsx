@@ -6100,10 +6100,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .topbar2{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 20px;pointer-events:none;transition:transform .42s cubic-bezier(.2,.85,.2,1),opacity .42s;}
     .topbar2.hidden{transform:translateY(-135%);opacity:0;}
     .topbar2>*{pointer-events:auto;}
-    .tb-brand{display:inline-flex;align-items:center;gap:9px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:7px 16px 7px 7px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);transition:.18s;flex:none;}
-    .tb-brand:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
-    .tb-logo{width:32px;height:32px;border-radius:980px;background:var(--accent);color:#fff;display:grid;place-items:center;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}
-    .tb-sport{font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.01em;}
+    .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 8px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;}
+    .tb-logo{width:32px;height:32px;border-radius:980px;background:var(--accent);color:#fff;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}
+    .tb-logo:hover{filter:brightness(1.08);transform:scale(1.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 4px 12px -3px rgba(10,132,255,.5);}
+    .tb-divider{width:1px;height:18px;background:rgba(0,0,0,.12);flex:none;margin:0 4px 0 10px;}
+    .tb-sport{font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.01em;cursor:pointer;padding:5px 11px 5px 6px;border-radius:980px;transition:.15s;}
+    .tb-sport:hover{background:rgba(19,49,78,.10);}
     .tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
     .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:border-radius .32s cubic-bezier(.2,.85,.2,1),background .32s;}
     .menupill.open{border-radius:24px;background:rgba(255,255,255,.70);}
@@ -6298,10 +6300,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   {/* ── FLOATING TOP BAR (no frame; glass pills that hide on scroll-down) ── */}
   <div className={`topbar2${barHidden?" hidden":""}`}>
-    {/* left: logo + sport → home */}
-    <div className="tb-brand" onClick={goHome} title="Home">
-      <span className="tb-logo"><Link2 size={15}/></span>
-      <span className="tb-sport">Sailing</span>
+    {/* left: two targets on one pill — logo → AthLink landing (shell); "Sailing" → sailing home. */}
+    <div className="tb-brand">
+      <span className="tb-logo" title="Back to AthLink — all sports"
+        onClick={()=>{window.location.hash="#/";}}><Link2 size={15}/></span>
+      <span className="tb-divider"/>
+      <span className="tb-sport" title="Sailing home" onClick={goHome}>Sailing</span>
     </div>
     {/* center: floating menu pill */}
     <div className="tb-center">

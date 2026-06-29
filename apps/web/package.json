@@ -1,0 +1,24 @@
+{
+  "name": "@athlink/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@athlink/core": "workspace:*",
+    "@athlink/design-system": "workspace:*",
+    "@athlink/sport-kit": "workspace:*",
+    "@athlink/sport-sailing": "workspace:*",
+    "lucide-react": "^0.400.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.0"
+  }
+}

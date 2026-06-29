@@ -1,0 +1,31 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile=false
+      # Production build of the shell — surfaces JSX/import errors (incl. most TDZ).
+      - run: pnpm --filter @athlink/web build
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Python syntax check
+        run: |
+          for f in api/*.py; do python3 -c "import ast,sys; ast.parse(open('$f').read())"; done
+      - name: Parser regression vs baseline
+        run: |
+          pip install -r requirements.txt || true
+          python3 tools/test_parser.py --diff
