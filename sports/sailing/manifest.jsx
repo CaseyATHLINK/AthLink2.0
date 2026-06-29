@@ -13,5 +13,8 @@ export default defineSport({
   tagline: "Class associations, competitions & athlete profiles",
   icon: Waves,
   accentToken: "--accent",
+  // Sailing has its own top bar; its AthLink logo returns to the landing,
+  // so the shell's floating "All sports" link is hidden for this sport.
+  providesOwnNav: true,
   Portal: App,
 });

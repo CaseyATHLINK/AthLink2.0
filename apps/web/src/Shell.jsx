@@ -86,7 +86,7 @@ export default function Shell() {
   const Portal = sport.Portal;
   return (
     <ThemeRoot>
-      <HomeLink />
+      {!sport.providesOwnNav && <HomeLink />}
       <Suspense fallback={<Spinner />}>
         <Portal />
       </Suspense>
