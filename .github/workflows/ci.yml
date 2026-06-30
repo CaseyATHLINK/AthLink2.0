@@ -8,11 +8,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # pnpm version comes from package.json "packageManager" — do not also set it here.
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: pnpm }
-      - run: pnpm install --frozen-lockfile=false
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --no-frozen-lockfile
       # Production build of the shell — surfaces JSX/import errors (incl. most TDZ).
       - run: pnpm --filter @athlink/web build
 
