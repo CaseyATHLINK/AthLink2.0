@@ -13,7 +13,7 @@ and re-run safely.
 | Order | File | Status | Purpose |
 |-------|------|--------|---------|
 | 0001 | `0001_baseline_schema.sql` | ✅ Already live | Full reconstruction of the current public schema — tables, indexes, triggers, RLS policies, helper functions. Re-running it is a no-op. |
-| 0002 | `0002_custom_classes.sql` | ⏳ **Not yet run** | Adds the `custom_classes` table to persist the in-memory `CUSTOM_CLASSES` registry. Run this to drop the "in-memory only" caveat. |
+| 0002 | `0002_custom_classes.sql` | ✅ **Applied 2026-07-01** | Adds the `custom_classes` table to persist the `CUSTOM_CLASSES` registry. Fixes the grey unrecognized-class nuggets. |
 
 Every statement is idempotent (`if not exists` / `create or replace` /
 `drop policy if exists … create`). After any DDL, run
@@ -30,7 +30,7 @@ migrations" list was **stale** — most of it is already applied:
   `organizer_name`, `fingerprint`, `sources`, `collabs`, `subclass`) — **applied**
 - ✅ `country` column on `hosts` (and on `events`) — **applied** (CLAUDE.md
   marked this "NOT YET RUN" — that note was wrong)
-- ⏳ `custom_classes` table — **genuinely still pending** (see 0002)
+- ✅ `custom_classes` table — applied 2026-07-01 (see 0002)
 
 Live tables (11): `events`, `athletes`, `entries`, `verifications`, `profiles`,
 `hosts`, `host_members`, `host_invites`, `host_audit`, `athlete_claims`,

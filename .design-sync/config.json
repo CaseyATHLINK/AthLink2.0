@@ -1,0 +1,34 @@
+{
+  "projectId": "981ab24f-c87c-4d01-8315-df7a651a7d82",
+  "shape": "package",
+  "pkg": "@athlink/design-system",
+  "globalName": "AthLinkDS",
+  "cssEntry": "src/tokens.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "provider": { "component": "ThemeRoot" },
+  "overrides": {
+    "ResultsTable": { "cardMode": "column" }
+  },
+  "componentSrcMap": {
+    "ThemeRoot": "src/index.jsx",
+    "Button": "src/index.jsx",
+    "Card": "src/index.jsx",
+    "Panel": "src/index.jsx",
+    "Seg": "src/index.jsx",
+    "Chip": "src/index.jsx",
+    "ClassBadge": "src/index.jsx",
+    "PageHeader": "src/index.jsx",
+    "ResultsTable": "src/index.jsx"
+  },
+  "dtsPropsFor": {
+    "ThemeRoot": "/** Extra classes appended after `al-ds`. */\n  className?: string;\n  children?: React.ReactNode;\n  /** All other props spread onto the root <div>. */\n  [key: string]: unknown;",
+    "Button": "/** Visual style. Defaults to \"ghost\". */\n  variant?: \"ghost\" | \"cta\" | \"sky\" | \"amber\" | \"green\";\n  className?: string;\n  children?: React.ReactNode;\n  disabled?: boolean;\n  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;\n  /** All other props spread onto the <button>. */\n  [key: string]: unknown;",
+    "Card": "/** Adds a lift-on-hover affordance. */\n  hoverable?: boolean;\n  className?: string;\n  children?: React.ReactNode;\n  /** All other props spread onto the <div>. */\n  [key: string]: unknown;",
+    "Panel": "/** Frosted-glass container, e.g. for tables and grouped content. */\n  className?: string;\n  children?: React.ReactNode;\n  /** All other props spread onto the <div>. */\n  [key: string]: unknown;",
+    "Seg": "/** Options rendered as pills inside the segmented control. */\n  options?: { value: string; label: string }[];\n  /** Currently selected option value. */\n  value?: string;\n  onChange?: (value: string) => void;",
+    "Chip": "/** Sky-tinted pill, e.g. for tags/metadata. Label goes in children. */\n  className?: string;\n  children?: React.ReactNode;\n  /** All other props spread onto the <span>. */\n  [key: string]: unknown;",
+    "ClassBadge": "/** Navy boat-class badge. Label (e.g. \"29er\", \"ILCA\") goes in children. */\n  className?: string;\n  children?: React.ReactNode;\n  /** All other props spread onto the <span>. */\n  [key: string]: unknown;",
+    "PageHeader": "/** Large page title. */\n  title?: React.ReactNode;\n  /** Optional muted sub-heading under the title. */\n  sub?: React.ReactNode;",
+    "ResultsTable": "/** Column definitions. `align: \"left\"` left-aligns; `render` customizes a cell. */\n  columns?: { key: string; label: string; align?: \"left\"; render?: (row: Record<string, any>) => React.ReactNode }[];\n  /** Row objects; each must have a unique `id`. */\n  rows?: { id: string | number; [key: string]: any }[];"
+  }
+}

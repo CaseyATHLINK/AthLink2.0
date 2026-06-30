@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
+import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY } from "d3-force";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
@@ -1835,6 +1836,161 @@ class ErrorBoundary extends React.Component{
       <div style={{padding:16,color:"#9fbdd9",fontSize:13,textAlign:"center"}}>Couldn't render this view.</div>);
     return this.props.children;
   }
+}
+
+/* === AthleteWeb: force-directed "web" of co-competitors ======================
+   Each node is an athlete the focal athlete has raced against. Node size scales
+   with how many competitions they have SHARED with the focal athlete (sqrt
+   scale, the way Obsidian sizes nodes by reference count). Edges connect any two
+   athletes who appeared in the same event (weight = times together). Limited to
+   the top 100 co-competitors. Drag nodes; hover to spotlight a node and its
+   connections; click to pin; double-click to open that athlete's profile.
+   Self-contained 2D canvas (matches SailingGlobe) + d3-force physics. */
+function AthleteWeb({name,events,height=220,dark=true,onPick}){
+  const canvasRef=React.useRef(null);
+  const wrapRef=React.useRef(null);
+  const simRef=React.useRef(null);
+  const stateRef=React.useRef({w:260,h:height,dpr:1,nodes:[],links:[],hover:null,sel:null,drag:null,maxShared:1,down:null});
+
+  // Build {nodes, links} from all events, centred on the focal athlete.
+  const graph=React.useMemo(()=>{
+    const focal=canonName(name);
+    const disp=new Map();                 // canon -> display name
+    const shared=new Map();               // canon -> # events shared with focal
+    const focalEvents=[];                 // [Set(canon)] events the focal sailed
+    const remember=raw=>{const k=canonName(raw);if(!k)return null;if(!disp.has(k))disp.set(k,raw);return k;};
+    (events||[]).forEach(ev=>{
+      if(ev.status==="Draft")return;
+      const present=new Set();
+      (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k)present.add(k);});});
+      if(!present.has(focal))return;
+      focalEvents.push(present);
+      present.forEach(k=>{if(k!==focal)shared.set(k,(shared.get(k)||0)+1);});
+    });
+    const clsFor=k=>ATHLETE_ATTRS.get(k)?.recentCls||null;
+    const top=[...shared.entries()].sort((a,b)=>b[1]-a[1]).slice(0,50);
+    const keep=new Set(top.map(([k])=>k)); keep.add(focal);
+    const maxShared=top.length?top[0][1]:1;
+    const nodes=[{id:focal,name:disp.get(focal)||name,cls:clsFor(focal),shared:maxShared,focal:true}];
+    top.forEach(([k,c])=>nodes.push({id:k,name:disp.get(k)||k,cls:clsFor(k),shared:c,focal:false}));
+    const ew=new Map();
+    focalEvents.forEach(present=>{
+      const arr=[...present].filter(k=>keep.has(k));
+      for(let i=0;i<arr.length;i++)for(let j=i+1;j<arr.length;j++){
+        const a=arr[i],b=arr[j];const key=a<b?a+"|"+b:b+"|"+a;
+        ew.set(key,(ew.get(key)||0)+1);
+      }
+    });
+    const links=[...ew.entries()].map(([key,w])=>{const p=key.split("|");return{source:p[0],target:p[1],w};});
+    return{nodes,links,maxShared,focal,count:top.length};
+  },[name,events]);
+
+  React.useEffect(()=>{
+    const cv=canvasRef.current,wrap=wrapRef.current;
+    if(!cv||!wrap||graph.nodes.length<=1)return;
+    const st=stateRef.current;
+    const ctx=cv.getContext("2d");
+    const sizeCanvas=()=>{
+      const w=wrap.clientWidth||260,h=height,dpr=window.devicePixelRatio||1;
+      cv.width=w*dpr;cv.height=h*dpr;cv.style.width=w+"px";cv.style.height=h+"px";
+      st.w=w;st.h=h;st.dpr=dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
+    };
+    sizeCanvas();
+    const nodes=graph.nodes.map(n=>({...n}));
+    const byId=new Map(nodes.map(n=>[n.id,n]));
+    const links=graph.links.map(l=>({...l}));
+    st.nodes=nodes;st.links=links;st.byId=byId;st.maxShared=graph.maxShared;st.hover=null;st.sel=null;
+    const focalNode=byId.get(graph.focal);
+    if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}
+    const rad=d=>d.focal?6:2.4+3.4*Math.sqrt((d.shared||1)/(st.maxShared||1));
+    st.rad=rad;
+    const shade=cnt=>{const mx=st.maxShared||1,t=mx<=1?1:Math.min(1,(cnt-1)/(mx-1));
+      const a=[240,167,158],b=[122,13,4],h=i=>Math.round(a[i]+(b[i]-a[i])*t).toString(16).padStart(2,"0");
+      return "#"+h(0)+h(1)+h(2);};
+    const lerpText=(n,strong)=>{
+      ctx.font=(strong?"700 ":"600 ")+(strong?12:10.5)+"px 'DM Sans',system-ui,sans-serif";
+      const t=n.name,tw=ctx.measureText(t).width,r=rad(n),x=n.x,y=n.y-r-6;
+      ctx.fillStyle="rgba(8,24,45,.82)";
+      const px=6,h=15,bx=x-tw/2-px,by=y-h+3,bw=tw+px*2;
+      ctx.beginPath();
+      if(ctx.roundRect)ctx.roundRect(bx,by,bw,h,5);else ctx.rect(bx,by,bw,h);
+      ctx.fill();
+      ctx.fillStyle=strong?"#ffffff":"#dcecf8";ctx.textAlign="center";ctx.textBaseline="alphabetic";
+      ctx.fillText(t,x,y);
+    };
+    const draw=()=>{
+      ctx.clearRect(0,0,st.w,st.h);
+      const active=st.sel||st.hover;
+      const nbr=new Set();
+      if(active)links.forEach(l=>{const s=l.source.id,t=l.target.id;if(s===active.id)nbr.add(t);else if(t===active.id)nbr.add(s);});
+      links.forEach(l=>{
+        const a=l.source,b=l.target;if(a.x==null||b.x==null)return;
+        const on=active&&(a.id===active.id||b.id===active.id);
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+        ctx.lineWidth=Math.min(2.4,.4+l.w*.35);
+        ctx.strokeStyle=on?"rgba(13,142,207,.85)":active?"rgba(150,175,205,.05)":"rgba(150,175,205,.16)";
+        ctx.stroke();
+      });
+      nodes.forEach(n=>{
+        if(n.x==null)return;
+        const c=rad(n),halo=c*2.6,dim=active&&n.id!==active.id&&!nbr.has(n.id);
+        const col=n.focal?"#ffcf2e":shade(n.shared);
+        ctx.globalAlpha=dim?.15:1;
+        const g=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,halo);
+        g.addColorStop(0,col);g.addColorStop(.34,col);g.addColorStop(.66,col+"66");g.addColorStop(1,col+"00");
+        ctx.fillStyle=g;ctx.beginPath();ctx.arc(n.x,n.y,halo,0,7);ctx.fill();
+        ctx.fillStyle=col;ctx.beginPath();ctx.arc(n.x,n.y,c,0,7);ctx.fill();
+        ctx.lineWidth=(n.focal||(active&&n.id===active.id))?1.6:1.1;ctx.strokeStyle="#fff";ctx.stroke();
+        ctx.globalAlpha=1;
+      });
+      // labels: focal always, plus active node + its neighbours when one is active
+      if(focalNode&&focalNode.x!=null)lerpText(focalNode,true);
+      if(active&&!active.focal&&active.x!=null)lerpText(active,true);
+    };
+    const sim=forceSimulation(nodes)
+      .force("link",forceLink(links).id(d=>d.id).distance(l=>12+(1-Math.min(l.w,8)/8)*20).strength(l=>Math.min(.9,.16+l.w*.12)))
+      .force("charge",forceManyBody().strength(-16))
+      .force("collide",forceCollide(d=>rad(d)+1.5))
+      .force("x",forceX(()=>st.w/2).strength(.09))
+      .force("y",forceY(()=>st.h/2).strength(.09))
+      .on("tick",draw);
+    simRef.current=sim;
+
+    const pos=ev=>{const r=cv.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};};
+    const hit=p=>{let best=null,bd=1e9;nodes.forEach(n=>{if(n.x==null)return;const dx=n.x-p.x,dy=n.y-p.y,d=dx*dx+dy*dy,r=rad(n)+6;if(d<=r*r&&d<bd){bd=d;best=n;}});return best;};
+    const onDown=e=>{const p=pos(e);const n=hit(p);st.down={p,n,moved:false,t:Date.now()};if(n){st.drag=n;n.fx=n.x;n.fy=n.y;sim.alphaTarget(.3).restart();}};
+    const onMove=e=>{
+      const p=pos(e);
+      if(st.drag){st.down&&(st.down.moved=true);st.drag.fx=p.x;st.drag.fy=p.y;return;}
+      const n=hit(p);
+      if(n!==st.hover){st.hover=n;cv.style.cursor=n?"pointer":"default";draw();}
+    };
+    const endDrag=()=>{if(st.drag){if(!st.drag.focal){st.drag.fx=null;st.drag.fy=null;}st.drag=null;sim.alphaTarget(0);}};
+    const onUp=e=>{
+      const d=st.down;endDrag();
+      if(d&&d.n&&!d.moved){st.sel=st.sel&&st.sel.id===d.n.id?null:d.n;draw();}
+      st.down=null;
+    };
+    const onDbl=e=>{const n=hit(pos(e));if(n&&!n.focal&&onPick)onPick(n.name);};
+    const onLeave=()=>{if(!st.drag){st.hover=null;draw();}};
+    cv.addEventListener("pointerdown",onDown);
+    window.addEventListener("pointermove",onMove);
+    window.addEventListener("pointerup",onUp);
+    cv.addEventListener("dblclick",onDbl);
+    cv.addEventListener("pointerleave",onLeave);
+    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(.06)).force("y",forceY(()=>st.h/2).strength(.06));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
+    window.addEventListener("resize",onResize);
+    return()=>{sim.stop();cv.removeEventListener("pointerdown",onDown);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerup",onUp);cv.removeEventListener("dblclick",onDbl);cv.removeEventListener("pointerleave",onLeave);window.removeEventListener("resize",onResize);};
+  },[graph,height,onPick]);
+
+  if(graph.nodes.length<=1)
+    return(<div ref={wrapRef} style={{height,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#9fbdd9",fontSize:12,padding:"0 16px",lineHeight:1.5}}>Not enough shared competitions yet to build a web.</div>);
+  return(
+    <div ref={wrapRef} style={{position:"relative",width:"100%",height}}>
+      <canvas ref={canvasRef} style={{display:"block",width:"100%",height,touchAction:"none"}}/>
+      <div style={{position:"absolute",bottom:4,left:0,right:0,textAlign:"center",fontSize:10,color:"#7fa0c0",pointerEvents:"none"}}>Top {graph.count} rivals · drag · click · double-click to open</div>
+    </div>
+  );
 }
 
 function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="regatta",hostIso=null,rankShade=false,markersHostOnly=false}){
@@ -4393,6 +4549,7 @@ export default function AthLinkMVP(){
   const[profileFilterChips,setProfileFilterChips]=useState([]); // cumulative AND-ed filters
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
   const[footprintOpen,setFootprintOpen]=useState(false);
+  const[profileTab,setProfileTab]=useState("footprint");
   const[hostFootprintOpen,setHostFootprintOpen]=useState(false);
   const[confirmState,setConfirmState]=useState(null); // in-app confirm dialog (replaces window.confirm)
   const[editingAthName,setEditingAthName]=useState(null); // {orig} when renaming on the profile page
@@ -4981,7 +5138,9 @@ Partial query: "${q}"`;
     // Athletes — nav into the owner association of one of their events
     allPeople.filter(p=>p.name.toLowerCase().includes(ql)).slice(0,5).forEach(p=>{
       const ev=events.find(e=>e.entries.some(en=>en.helm===p.name||en.crew===p.name));
-      results.push({type:"athlete",label:p.name,sub:p.cls?classLabel(p.cls):"",nav:{type:"profile",assoc:ev?.owner||null,id:p.name}});
+      const _attrs=ATHLETE_ATTRS.get(canonName(p.name));
+      const _showCls=_attrs?.recentCls||p.cls;
+      results.push({type:"athlete",label:p.name,sub:_showCls?classLabel(_showCls):"",nav:{type:"profile",assoc:ev?.owner||null,id:p.name}});
     });
     // Events — nav into the event's owner association portal
     events.filter(ev=>ev.name.toLowerCase().includes(ql)).slice(0,4).forEach(ev=>{
@@ -6598,7 +6757,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const myHere=myMemberships.find(m=>m.host_id===a.id&&m.verified);
       return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
         {/* Header: host-type (or owner/editor) pill left, class nugget(s) right — all centered on one row */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
+        <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
           {myHere
             ? <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
                 color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 10px",whiteSpace:"nowrap"}}>
@@ -6606,7 +6765,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </span>
             : <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
                 color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>}
-          <div style={{display:"flex",gap:4,flexWrap:"nowrap",justifyContent:"flex-end",alignItems:"center"}}>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",marginLeft:"auto"}}>
             <HostClassPills classIds={classIds}/>
             {devMode&&<button onClick={e=>deleteHost(a.id,a.name,e)} title="Delete host/portal (dev)" style={{border:0,background:"rgba(232,72,85,.15)",color:"#c0392b",borderRadius:980,width:26,height:26,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Trash2 size={14}/></button>}
           </div>
@@ -7564,13 +7723,32 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
 
-            {/* Competition footprint — frameless globe on the right, click to expand */}
+            {/* Footprint globe / Athlete web — toggled, with a shrink/reveal swap */}
             {ag.events>0&&hasFootprint&&(
-              <div className="globe-wrap" style={{flex:"0 0 260px",maxWidth:"100%",cursor:"pointer"}} onClick={()=>setFootprintOpen(true)} title="Click to expand">
-                <p className="seclabel" style={{color:"#9fbdd9",margin:"0 0 4px",fontSize:11,justifyContent:"center",textAlign:"center"}}><Globe size={12}/>Competition footprint</p>
-                <div style={{position:"relative"}}>
-                  <SailingGlobe countryData={countryCounts} height={220} dark bare/>
-                  <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
+              <div className="globe-wrap" style={{flex:"0 0 260px",maxWidth:"100%"}}>
+                <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6}}>
+                  {[["footprint","Footprint",Globe],["web","Web",Users]].map(([k,lab,Ico])=>(
+                    <button key={k} onClick={()=>setProfileTab(k)}
+                      style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,letterSpacing:".02em",
+                        border:"1px solid rgba(120,160,210,.28)",borderRadius:980,padding:"4px 12px",cursor:"pointer",transition:"all .2s ease",
+                        background:profileTab===k?"rgba(13,142,207,.92)":"rgba(120,160,210,.12)",color:profileTab===k?"#fff":"#9fbdd9"}}>
+                      <Ico size={12}/>{lab}
+                    </button>
+                  ))}
+                </div>
+                <div style={{position:"relative",height:220,overflow:"hidden"}}>
+                  <div onClick={()=>setFootprintOpen(true)} title="Click to expand"
+                    style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
+                      opacity:profileTab==="footprint"?1:0,transform:profileTab==="footprint"?"scale(1)":"scale(.82)",
+                      pointerEvents:profileTab==="footprint"?"auto":"none"}}>
+                    <SailingGlobe countryData={countryCounts} height={220} dark bare/>
+                    <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
+                  </div>
+                  <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
+                      opacity:profileTab==="web"?1:0,transform:profileTab==="web"?"scale(1)":"scale(.82)",
+                      pointerEvents:profileTab==="web"?"auto":"none"}}>
+                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onPick={nm=>go({name:"profile",id:nm})}/>}
+                  </div>
                 </div>
               </div>
             )}
