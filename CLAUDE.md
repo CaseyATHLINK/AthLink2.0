@@ -93,7 +93,7 @@ organizer_name, fingerprint, sources
 ## Migrations — see migrations/ (canonical, numbered, idempotent)
 Audited against live DB 2026-06-25 — see migrations/README.md for full notes.
 - migrations/0001_baseline_schema.sql — full live schema (ALREADY APPLIED, no-op to re-run)
-- migrations/0002_custom_classes.sql — custom_classes table — NOT YET RUN (custom classes in-memory until this runs)
+- migrations/0002_custom_classes.sql — custom_classes table — APPLIED 2026-07-01 (custom classes now persist to DB; grey-nugget bug fixed)
 - migrations/0099_cleanup_duplicate_policies.sql — OPTIONAL dedupe of redundant RLS policies
 Already applied (CLAUDE.md previously mislabelled these "pending"):
 profiles.username, host_invites.short_code, event provenance columns,
@@ -120,7 +120,7 @@ in the import preview and in Add-a-host.
 Dedup via canonical key (normalised lowercase, strip punctuation).
 classLabel(clsId) helper resolves display name for any id — strips "custom:"
 prefix from legacy-stored ids, never displays the raw id.
-DB persistence: pending custom_classes migration.
+DB persistence: custom_classes table — migration 0002 applied 2026-07-01.
 
 ## Event provenance
 Source (contributor) ≠ organizer. External imports stay out of importer's

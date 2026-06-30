@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "main": "manifest.jsx",
-  "exports": { ".": "./manifest.jsx" },
+  "exports": {
+    ".": "./manifest.jsx"
+  },
   "dependencies": {
     "@athlink/core": "workspace:*",
     "@athlink/design-system": "workspace:*",
-    "@athlink/sport-kit": "workspace:*"
+    "@athlink/sport-kit": "workspace:*",
+    "d3-force": "^3.0.0"
   },
   "peerDependencies": {
     "react": "^18",
