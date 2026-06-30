@@ -501,12 +501,23 @@ function HostClassPills({classIds}){
   const MAX=3;
   const shown=ids.slice(0,MAX);
   const extra=ids.slice(MAX);
+  // When there are extras, fan the pills into an overlapping stack so they stay on
+  // one row in line with the host pill: most-popular (first) sits at the back/bottom,
+  // each later pill overlaps the one before it, and the "+N" pill rides on top at the
+  // right. DOM order = paint order, so the +N lands in front and the back pill's left
+  // edge still peeks out. A paper-coloured ring separates the overlapping pills.
+  const stacked=extra.length>0;
+  const OVER=-12; // overlap in px between adjacent pills when stacked
+  // Separator ring uses the card's own background token (--mat-reg), so it reads as
+  // the thumbnail surface showing between pills and shifts with the background colour.
+  const ring={boxShadow:"0 0 0 2px var(--mat-reg),inset 0 1px 0 rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.18)"};
   return(
-    <div ref={ref} style={{display:"flex",gap:4,alignItems:"center",flexWrap:"nowrap",position:"relative"}}>
-      {shown.map(id=><span key={id} className="cls" style={{background:classColor(id)}}>{classLabel(id)}</span>)}
+    <div ref={ref} style={{display:"flex",gap:stacked?0:4,alignItems:"center",flexWrap:"nowrap",justifyContent:"flex-end",position:"relative"}}>
+      {shown.map((id,i)=><span key={id} className="cls"
+        style={{background:classColor(id),...(stacked?{marginLeft:i===0?0:OVER,...ring}:{})}}>{classLabel(id)}</span>)}
       {extra.length>0&&(<>
         <span onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="cls"
-          title="Show more classes" style={{background:"var(--mut)",cursor:"pointer"}}>+{extra.length}</span>
+          title="Show more classes" style={{background:"#2c3444",cursor:"pointer",marginLeft:OVER,...ring}}>+{extra.length}</span>
         {open&&(
           <div onClick={e=>e.stopPropagation()}
             style={{position:"absolute",top:"calc(100% + 6px)",right:0,zIndex:90,background:"var(--card)",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.25)",padding:8,display:"flex",flexWrap:"wrap",gap:4,maxWidth:220,justifyContent:"flex-end"}}>
@@ -1838,6 +1849,16 @@ class ErrorBoundary extends React.Component{
   }
 }
 
+/* Spider-web icon (lucide has none) — radial spokes + two octagon rings. */
+function WebIcon({size=12}){
+  return(<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{flex:"none"}}>
+    <path d="M12 3.5 L12 20.5 M3.5 12 L20.5 12 M6 6 L18 18 M18 6 L6 18"/>
+    <path d="M20 12 L17.66 17.66 L12 20 L6.34 17.66 L4 12 L6.34 6.34 L12 4 L17.66 6.34 Z"/>
+    <path d="M16.5 12 L15.18 15.18 L12 16.5 L8.82 15.18 L7.5 12 L8.82 8.82 L12 7.5 L15.18 8.82 Z"/>
+  </svg>);
+}
+
 /* === AthleteWeb: force-directed "web" of co-competitors ======================
    Each node is an athlete the focal athlete has raced against. Node size scales
    with how many competitions they have SHARED with the focal athlete (sqrt
@@ -1846,11 +1867,16 @@ class ErrorBoundary extends React.Component{
    the top 100 co-competitors. Drag nodes; hover to spotlight a node and its
    connections; click to pin; double-click to open that athlete's profile.
    Self-contained 2D canvas (matches SailingGlobe) + d3-force physics. */
-function AthleteWeb({name,events,height=220,dark=true,onPick}){
+function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,onSelectionChange,deselectKey=0,enlarged=false}){
   const canvasRef=React.useRef(null);
   const wrapRef=React.useRef(null);
   const simRef=React.useRef(null);
-  const stateRef=React.useRef({w:260,h:height,dpr:1,nodes:[],links:[],hover:null,sel:null,drag:null,maxShared:1,down:null});
+  const onPickRef=React.useRef(onPick);
+  const onOpenRef=React.useRef(onOpen);
+  const onOpenEventRef=React.useRef(onOpenEvent);
+  const onSelChangeRef=React.useRef(onSelectionChange);
+  React.useEffect(()=>{onPickRef.current=onPick;onOpenRef.current=onOpen;onOpenEventRef.current=onOpenEvent;onSelChangeRef.current=onSelectionChange;},[onPick,onOpen,onOpenEvent,onSelectionChange]);
+  const stateRef=React.useRef({w:260,h:height,dpr:1,nodes:[],links:[],hover:null,sel:null,drag:null,maxShared:1,down:null,scale:1,ox:0,oy:0,pan:null});
 
   // Build {nodes, links} from all events, centred on the focal athlete.
   const graph=React.useMemo(()=>{
@@ -1858,21 +1884,25 @@ function AthleteWeb({name,events,height=220,dark=true,onPick}){
     const disp=new Map();                 // canon -> display name
     const shared=new Map();               // canon -> # events shared with focal
     const focalEvents=[];                 // [Set(canon)] events the focal sailed
+    const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
+    const natCount=new Map();             // canon -> Map(nat -> count)
+    const bump=(map,k,v)=>{if(!v)return;let m=map.get(k);if(!m){m=new Map();map.set(k,m);}m.set(v,(m.get(v)||0)+1);};
+    const modeOf=m=>{if(!m)return null;let best=null,bc=-1;m.forEach((c,k)=>{if(c>bc){bc=c;best=k;}});return best;};
     const remember=raw=>{const k=canonName(raw);if(!k)return null;if(!disp.has(k))disp.set(k,raw);return k;};
     (events||[]).forEach(ev=>{
       if(ev.status==="Draft")return;
       const present=new Set();
-      (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k)present.add(k);});});
+      (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
       if(!present.has(focal))return;
       focalEvents.push(present);
-      present.forEach(k=>{if(k!==focal)shared.set(k,(shared.get(k)||0)+1);});
+      present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
     });
-    const clsFor=k=>ATHLETE_ATTRS.get(k)?.recentCls||null;
-    const top=[...shared.entries()].sort((a,b)=>b[1]-a[1]).slice(0,50);
+    const top=[...shared.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15);
     const keep=new Set(top.map(([k])=>k)); keep.add(focal);
     const maxShared=top.length?top[0][1]:1;
-    const nodes=[{id:focal,name:disp.get(focal)||name,cls:clsFor(focal),shared:maxShared,focal:true}];
-    top.forEach(([k,c])=>nodes.push({id:k,name:disp.get(k)||k,cls:clsFor(k),shared:c,focal:false}));
+    // node class = the boat class they shared MOST competitions with the focal in (drives node colour)
+    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOf(natCount.get(focal)),shared:maxShared,focal:true}];
+    top.forEach(([k,c])=>nodes.push({id:k,name:disp.get(k)||k,cls:modeOf(clsCount.get(k)),nat:modeOf(natCount.get(k)),shared:c,focal:false}));
     const ew=new Map();
     focalEvents.forEach(present=>{
       const arr=[...present].filter(k=>keep.has(k));
@@ -1884,6 +1914,24 @@ function AthleteWeb({name,events,height=220,dark=true,onPick}){
     const links=[...ew.entries()].map(([key,w])=>{const p=key.split("|");return{source:p[0],target:p[1],w};});
     return{nodes,links,maxShared,focal,count:top.length};
   },[name,events]);
+
+  // selected node (lifted to React state so the enlarged sidebar can render it)
+  const [selNode,setSelNode]=React.useState(null);
+  React.useEffect(()=>{onSelChangeRef.current&&onSelChangeRef.current(selNode);},[selNode]);
+  // external "Deselect" (from the popup header) clears the current selection
+  React.useEffect(()=>{const st=stateRef.current;st.sel=null;setSelNode(null);st.draw&&st.draw();},[deselectKey]);
+  // the competitions the focal + selected athlete both sailed
+  const sharedComps=React.useMemo(()=>{
+    if(!selNode)return [];
+    const focal=graph.focal,target=selNode.id,out=[];
+    (events||[]).forEach(ev=>{
+      if(ev.status==="Draft")return;
+      const present=new Set();
+      (ev.entries||[]).forEach(e=>[e.helm,e.crew].forEach(raw=>{const k=canonName(raw);if(k)present.add(k);}));
+      if(present.has(focal)&&present.has(target))out.push(ev);
+    });
+    return out.sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+  },[selNode,events,graph.focal]);
 
   React.useEffect(()=>{
     const cv=canvasRef.current,wrap=wrapRef.current;
@@ -1899,17 +1947,26 @@ function AthleteWeb({name,events,height=220,dark=true,onPick}){
     const nodes=graph.nodes.map(n=>({...n}));
     const byId=new Map(nodes.map(n=>[n.id,n]));
     const links=graph.links.map(l=>({...l}));
-    st.nodes=nodes;st.links=links;st.byId=byId;st.maxShared=graph.maxShared;st.hover=null;st.sel=null;
+    st.nodes=nodes;st.links=links;st.byId=byId;st.maxShared=graph.maxShared;st.hover=null;st.sel=null;st.scale=1;st.ox=0;st.oy=0;st.pan=null;
+    setSelNode(null);
     const focalNode=byId.get(graph.focal);
     if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}
-    const rad=d=>d.focal?6:2.4+3.4*Math.sqrt((d.shared||1)/(st.maxShared||1));
+    // scatter rivals radially: bigger (more-shared) start nearer the focal,
+    // smaller start further out, with random jitter so the layout looks organic.
+    nodes.forEach(n=>{if(n.focal)return;const ratio=(n.shared||1)/(graph.maxShared||1);
+      const ang=Math.random()*Math.PI*2,dist=(enlarged?144:55)+(1-ratio)*(enlarged?414:104)+(Math.random()-.5)*(enlarged?90:26);
+      n.x=st.w/2+Math.cos(ang)*dist;n.y=st.h/2+Math.sin(ang)*dist;});
+    // Sizing is relative to the focal node: the rival with the most shared
+    // competitions is 60% of the focal's size, and everyone else scales linearly
+    // by their shared count vs. that top rival. No rival is ever bigger than focal.
+    const F=enlarged?12.6:7.65;               // focal radius (50% smaller, +20%, then +50%)
+    const rad=d=>{if(d.focal)return F;
+      const ratio=(d.shared||1)/(st.maxShared||1);
+      return Math.max(enlarged?3.3:1.95,F*0.8*ratio);};   // top rival = 80% of focal
     st.rad=rad;
-    const shade=cnt=>{const mx=st.maxShared||1,t=mx<=1?1:Math.min(1,(cnt-1)/(mx-1));
-      const a=[240,167,158],b=[122,13,4],h=i=>Math.round(a[i]+(b[i]-a[i])*t).toString(16).padStart(2,"0");
-      return "#"+h(0)+h(1)+h(2);};
-    const lerpText=(n,strong)=>{
+    const lerpText=(n,strong,sx,sy)=>{
       ctx.font=(strong?"700 ":"600 ")+(strong?12:10.5)+"px 'DM Sans',system-ui,sans-serif";
-      const t=n.name,tw=ctx.measureText(t).width,r=rad(n),x=n.x,y=n.y-r-6;
+      const t=n.name,tw=ctx.measureText(t).width,x=sx,y=sy-rad(n)*st.scale-6;
       ctx.fillStyle="rgba(8,24,45,.82)";
       const px=6,h=15,bx=x-tw/2-px,by=y-h+3,bw=tw+px*2;
       ctx.beginPath();
@@ -1918,77 +1975,163 @@ function AthleteWeb({name,events,height=220,dark=true,onPick}){
       ctx.fillStyle=strong?"#ffffff":"#dcecf8";ctx.textAlign="center";ctx.textBaseline="alphabetic";
       ctx.fillText(t,x,y);
     };
+    // a node shows its label when it's the focal/active node, or — in the
+    // enlarged view — once zoom makes it big enough (larger nodes reveal first).
+    // enlarged: label every node. mini: only label the node under the cursor.
+    const labelFor=(n,active)=>enlarged||(active&&n.id===active.id);
     const draw=()=>{
+      const s=st.scale,active=st.sel||st.hover;
+      ctx.save();
+      ctx.setTransform(st.dpr,0,0,st.dpr,0,0);
       ctx.clearRect(0,0,st.w,st.h);
-      const active=st.sel||st.hover;
       const nbr=new Set();
-      if(active)links.forEach(l=>{const s=l.source.id,t=l.target.id;if(s===active.id)nbr.add(t);else if(t===active.id)nbr.add(s);});
+      if(active)links.forEach(l=>{const a=l.source.id,t=l.target.id;if(a===active.id)nbr.add(t);else if(t===active.id)nbr.add(a);});
+      // world-space layer — nodes + links pan & zoom together
+      ctx.save();
+      ctx.translate(st.ox,st.oy);ctx.scale(s,s);
       links.forEach(l=>{
         const a=l.source,b=l.target;if(a.x==null||b.x==null)return;
         const on=active&&(a.id===active.id||b.id===active.id);
         ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
-        ctx.lineWidth=Math.min(2.4,.4+l.w*.35);
+        ctx.lineWidth=Math.min(2.4,.4+l.w*.35)/s;
         ctx.strokeStyle=on?"rgba(13,142,207,.85)":active?"rgba(150,175,205,.05)":"rgba(150,175,205,.16)";
         ctx.stroke();
       });
       nodes.forEach(n=>{
         if(n.x==null)return;
-        const c=rad(n),halo=c*2.6,dim=active&&n.id!==active.id&&!nbr.has(n.id);
-        const col=n.focal?"#ffcf2e":shade(n.shared);
+        const c=rad(n),dim=active&&n.id!==active.id&&!nbr.has(n.id);
+        const col=n.focal?"#ffcf2e":classColor(n.cls);
         ctx.globalAlpha=dim?.15:1;
-        const g=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,halo);
-        g.addColorStop(0,col);g.addColorStop(.34,col);g.addColorStop(.66,col+"66");g.addColorStop(1,col+"00");
-        ctx.fillStyle=g;ctx.beginPath();ctx.arc(n.x,n.y,halo,0,7);ctx.fill();
         ctx.fillStyle=col;ctx.beginPath();ctx.arc(n.x,n.y,c,0,7);ctx.fill();
-        ctx.lineWidth=(n.focal||(active&&n.id===active.id))?1.6:1.1;ctx.strokeStyle="#fff";ctx.stroke();
+        ctx.lineWidth=((n.focal||(active&&n.id===active.id))?1.6:1.1)/s;ctx.strokeStyle="#fff";ctx.stroke();
         ctx.globalAlpha=1;
       });
-      // labels: focal always, plus active node + its neighbours when one is active
-      if(focalNode&&focalNode.x!=null)lerpText(focalNode,true);
-      if(active&&!active.focal&&active.x!=null)lerpText(active,true);
+      ctx.restore();
+      // screen-space labels — constant size, never scale with zoom
+      nodes.forEach(n=>{
+        if(n.x==null||!labelFor(n,active))return;
+        const dim=active&&n.id!==active.id&&!nbr.has(n.id);
+        ctx.globalAlpha=dim?.2:1;
+        lerpText(n,n.focal||(active&&n.id===active.id),n.x*s+st.ox,n.y*s+st.oy);
+        ctx.globalAlpha=1;
+      });
+      ctx.restore();
     };
+    st.draw=draw;
     const sim=forceSimulation(nodes)
-      .force("link",forceLink(links).id(d=>d.id).distance(l=>12+(1-Math.min(l.w,8)/8)*20).strength(l=>Math.min(.9,.16+l.w*.12)))
-      .force("charge",forceManyBody().strength(-16))
-      .force("collide",forceCollide(d=>rad(d)+1.5))
-      .force("x",forceX(()=>st.w/2).strength(.09))
-      .force("y",forceY(()=>st.h/2).strength(.09))
+      .velocityDecay(enlarged?.62:.58)        // higher damping = relaxed, fluid motion (less bounce)
+      // link distance is driven by node size: bigger (more-shared) nodes sit
+      // closer to the focal, smaller ones further out. Focal links hold the
+      // radial structure; rival-rival links stay weak so they don't clump.
+      .force("link",forceLink(links).id(d=>d.id)
+        .distance(l=>{const a=l.source,b=l.target,other=a.focal?b:(b.focal?a:null);
+          if(other){const ratio=(other.shared||1)/(st.maxShared||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
+          return enlarged?270:91;})
+        .strength(l=>(l.source.focal||l.target.focal)?(enlarged?.5:.45):.04))
+      .force("charge",forceManyBody().strength(enlarged?-270:-60).distanceMax(enlarged?1100:390))
+      .force("collide",forceCollide(d=>rad(d)+(enlarged?10:7)).strength(.6))
+      .force("x",forceX(()=>st.w/2).strength(enlarged?.04:.05))
+      .force("y",forceY(()=>st.h/2).strength(enlarged?.04:.05))
+      // soft walls — any node dragged/pushed outside the frame eases back in
+      .force("bounds",a=>{const m=enlarged?22:12;nodes.forEach(n=>{if(n.fx!=null||n.x==null)return;
+        if(n.x<m)n.vx+=(m-n.x)*a*0.6;else if(n.x>st.w-m)n.vx+=(st.w-m-n.x)*a*0.6;
+        if(n.y<m)n.vy+=(m-n.y)*a*0.6;else if(n.y>st.h-m)n.vy+=(st.h-m-n.y)*a*0.6;});})
       .on("tick",draw);
     simRef.current=sim;
 
     const pos=ev=>{const r=cv.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};};
-    const hit=p=>{let best=null,bd=1e9;nodes.forEach(n=>{if(n.x==null)return;const dx=n.x-p.x,dy=n.y-p.y,d=dx*dx+dy*dy,r=rad(n)+6;if(d<=r*r&&d<bd){bd=d;best=n;}});return best;};
-    const onDown=e=>{const p=pos(e);const n=hit(p);st.down={p,n,moved:false,t:Date.now()};if(n){st.drag=n;n.fx=n.x;n.fy=n.y;sim.alphaTarget(.3).restart();}};
+    const toWorld=p=>({x:(p.x-st.ox)/st.scale,y:(p.y-st.oy)/st.scale});
+    const hit=p=>{const w=toWorld(p);let best=null,bd=1e9;nodes.forEach(n=>{if(n.x==null)return;const dx=n.x-w.x,dy=n.y-w.y,d=dx*dx+dy*dy,r=rad(n)+6/st.scale;if(d<=r*r&&d<bd){bd=d;best=n;}});return best;};
+    const onDown=e=>{const p=pos(e);const n=hit(p);st.down={p,n,moved:false,t:Date.now()};
+      if(n){const w=toWorld(p);st.drag=n;n.fx=w.x;n.fy=w.y;sim.alphaTarget(.3).restart();}
+      else if(enlarged){st.pan={x:p.x,y:p.y,ox:st.ox,oy:st.oy};cv.style.cursor="grabbing";}};
     const onMove=e=>{
       const p=pos(e);
-      if(st.drag){st.down&&(st.down.moved=true);st.drag.fx=p.x;st.drag.fy=p.y;return;}
+      if(st.drag){st.down&&(st.down.moved=true);const w=toWorld(p);st.drag.fx=w.x;st.drag.fy=w.y;return;}
+      if(st.pan){st.down&&(st.down.moved=true);st.ox=st.pan.ox+(p.x-st.pan.x);st.oy=st.pan.oy+(p.y-st.pan.y);draw();return;}
       const n=hit(p);
-      if(n!==st.hover){st.hover=n;cv.style.cursor=n?"pointer":"default";draw();}
+      if(n!==st.hover){st.hover=n;cv.style.cursor=n?"pointer":(enlarged?"grab":"default");draw();}
     };
-    const endDrag=()=>{if(st.drag){if(!st.drag.focal){st.drag.fx=null;st.drag.fy=null;}st.drag=null;sim.alphaTarget(0);}};
-    const onUp=e=>{
+    const endDrag=()=>{if(st.drag){if(!st.drag.focal){st.drag.fx=null;st.drag.fy=null;}st.drag=null;sim.alphaTarget(0);sim.alpha(.55).restart();}st.pan=null;};
+    const onUp=()=>{
       const d=st.down;endDrag();
-      if(d&&d.n&&!d.moved){st.sel=st.sel&&st.sel.id===d.n.id?null:d.n;draw();}
-      st.down=null;
+      if(d&&d.n&&!d.moved){
+        if(enlarged){const ns=st.sel&&st.sel.id===d.n.id?null:d.n;st.sel=ns;setSelNode(ns?{id:ns.id,name:ns.name,shared:ns.shared,cls:ns.cls,nat:ns.nat}:null);draw();}
+        else if(onOpenRef.current){onOpenRef.current();}
+      }
+      else if(d&&!d.n&&!d.moved&&enlarged){st.sel=null;setSelNode(null);draw();} // click empty space → clear selection
+      st.down=null;cv.style.cursor=enlarged?"grab":"default";
     };
-    const onDbl=e=>{const n=hit(pos(e));if(n&&!n.focal&&onPick)onPick(n.name);};
-    const onLeave=()=>{if(!st.drag){st.hover=null;draw();}};
+    const onDbl=e=>{const n=hit(pos(e));if(n&&!n.focal&&onPickRef.current)onPickRef.current(n.name);};
+    const onLeave=()=>{if(!st.drag&&!st.pan){st.hover=null;draw();}};
+    const onWheel=e=>{if(!enlarged)return;e.preventDefault();const p=pos(e);
+      const f=Math.exp(-e.deltaY*0.0016),ns=Math.min(6,Math.max(.6,st.scale*f));
+      const wx=(p.x-st.ox)/st.scale,wy=(p.y-st.oy)/st.scale;
+      st.scale=ns;st.ox=p.x-wx*ns;st.oy=p.y-wy*ns;draw();};
     cv.addEventListener("pointerdown",onDown);
     window.addEventListener("pointermove",onMove);
     window.addEventListener("pointerup",onUp);
     cv.addEventListener("dblclick",onDbl);
     cv.addEventListener("pointerleave",onLeave);
-    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(.06)).force("y",forceY(()=>st.h/2).strength(.06));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
+    if(enlarged)cv.addEventListener("wheel",onWheel,{passive:false});
+    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(enlarged?.05:.055)).force("y",forceY(()=>st.h/2).strength(enlarged?.05:.055));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
     window.addEventListener("resize",onResize);
-    return()=>{sim.stop();cv.removeEventListener("pointerdown",onDown);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerup",onUp);cv.removeEventListener("dblclick",onDbl);cv.removeEventListener("pointerleave",onLeave);window.removeEventListener("resize",onResize);};
-  },[graph,height,onPick]);
+    return()=>{sim.stop();cv.removeEventListener("pointerdown",onDown);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerup",onUp);cv.removeEventListener("dblclick",onDbl);cv.removeEventListener("pointerleave",onLeave);cv.removeEventListener("wheel",onWheel);window.removeEventListener("resize",onResize);};
+  },[graph,height,enlarged]);
 
   if(graph.nodes.length<=1)
     return(<div ref={wrapRef} style={{height,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#9fbdd9",fontSize:12,padding:"0 16px",lineHeight:1.5}}>Not enough shared competitions yet to build a web.</div>);
-  return(
+  const canvasPane=(
     <div ref={wrapRef} style={{position:"relative",width:"100%",height}}>
       <canvas ref={canvasRef} style={{display:"block",width:"100%",height,touchAction:"none"}}/>
-      <div style={{position:"absolute",bottom:4,left:0,right:0,textAlign:"center",fontSize:10,color:"#7fa0c0",pointerEvents:"none"}}>Top {graph.count} rivals · drag · click · double-click to open</div>
+      <div style={{position:"absolute",bottom:4,left:0,right:0,textAlign:"center",fontSize:10,color:"#7fa0c0",pointerEvents:"none"}}>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 Rivals`}</div>
+    </div>
+  );
+  if(!enlarged)return canvasPane;
+  // shared competitions grouped by host country (mirrors the globe's footprint list)
+  const sharedGroups=(()=>{const m={};sharedComps.forEach(ev=>{const ioc=ev.country||"";const iso=IOC_ISO[ioc]||"";const cname=GLOBE_NAMES[iso]||ioc||"Unknown";const key=iso||ioc||"ZZ";if(!m[key])m[key]={iso,cname,items:[]};m[key].items.push(ev);});return Object.values(m).sort((a,b)=>a.cname.localeCompare(b.cname));})();
+  const sidebar=!selNode
+    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a node to see the competitions you shared with that athlete — grouped by country. Click a competition to open its results.</div>
+    : (<div style={{padding:"4px 0"}}>
+        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
+          <h3 onClick={()=>onPickRef.current&&onPickRef.current(selNode.name)} title="Open profile"
+            style={{margin:0,fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:19,color:"#eaf3fc",cursor:"pointer",
+              display:"inline-flex",alignItems:"center",gap:9,lineHeight:1.15}}>
+            {selNode.name}{selNode.nat&&<span style={{fontSize:19,lineHeight:1}}>{iocFlag(selNode.nat)}</span>}
+          </h3>
+          <div style={{marginTop:8,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            {selNode.cls&&(()=>{const ng=nuggetFor(selNode.cls);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
+            <span style={{color:"#9fc4ec",fontWeight:800,fontSize:13,fontVariantNumeric:"tabular-nums"}}>{sharedComps.length} shared competition{sharedComps.length===1?"":"s"}</span>
+          </div>
+        </div>
+        {sharedGroups.map(g=>(
+          <div key={g.cname}>
+            <div style={{position:"sticky",top:0,padding:"9px 14px 7px",zIndex:1,display:"flex"}}>
+              <span style={{display:"inline-flex",alignItems:"center",gap:8,background:"rgba(120,160,210,.16)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",border:"1px solid rgba(120,160,210,.3)",borderRadius:980,padding:"5px 13px",color:"#eaf3fc",fontWeight:700,fontFamily:"'Barlow',sans-serif",fontSize:13,letterSpacing:".02em",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)"}}>
+                <span style={{fontSize:16,lineHeight:1}}>{g.iso?isoFlag(g.iso):""}</span>{g.cname}
+                <span style={{color:"#9fc4ec",fontWeight:800}}>{g.items.length}</span>
+              </span>
+            </div>
+            {g.items.map((ev,i)=>{const ng=ev.cls?nuggetFor(ev.cls,ev.subclass):null;return(
+              <div key={i} onClick={()=>onOpenEventRef.current&&onOpenEventRef.current(ev.id)} title="Open results"
+                style={{margin:"7px 12px",padding:"10px 12px",borderRadius:10,cursor:"pointer",transition:"all .15s",
+                  background:"rgba(120,160,210,.08)",border:"1px solid rgba(120,160,210,.16)"}}
+                onMouseEnter={e=>{e.currentTarget.style.background="rgba(90,150,215,.2)";e.currentTarget.style.borderColor="rgba(120,180,235,.5)";}}
+                onMouseLeave={e=>{e.currentTarget.style.background="rgba(120,160,210,.08)";e.currentTarget.style.borderColor="rgba(120,160,210,.16)";}}>
+                <div style={{fontWeight:700,color:"#eaf3fc",fontSize:13.5,marginBottom:3}}>{ev.name}</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:"4px 10px",fontSize:12,color:"#9fbdd9",alignItems:"center"}}>
+                  <span>{formatDate(ev.date)}</span>
+                  {ng&&<span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 9px",fontWeight:700,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>}
+                </div>
+              </div>);})}
+          </div>
+        ))}
+        {sharedComps.length===0&&<div style={{padding:16,color:"#9fbdd9",fontSize:12}}>No shared competitions found.</div>}
+      </div>);
+  return(
+    <div style={{display:"flex",width:"100%",height}}>
+      <div style={{flex:"0 0 70%",height}}>{canvasPane}</div>
+      <div style={{flex:"0 0 30%",height,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)"}}>{sidebar}</div>
     </div>
   );
 }
@@ -2222,8 +2365,11 @@ function FootprintLegend({label="Competitions / country",showHost=false,rank=fal
 }
 
 /* ── FootprintModal: dark popup · big globe · sticky country spotlight ──────── */
-function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffix="Competition footprint"}){
+function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffix="Globe",webProps=null,initialTab="footprint"}){
   const [sel,setSel]=React.useState(null); // selected ISO (sticky)
+  const [ftab,setFtab]=React.useState(webProps?initialTab:"footprint"); // footprint(globe) | web
+  const [webSel,setWebSel]=React.useState(null); // athlete selected inside the web
+  const [deselectKey,setDeselectKey]=React.useState(0); // bump to clear the web selection
   const groups=React.useMemo(()=>{
     const m={};
     ag.history.forEach(h=>{
@@ -2240,11 +2386,26 @@ function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffi
       <div className="modal wide" onClick={e=>e.stopPropagation()}
         style={{maxWidth:1000,background:"linear-gradient(160deg,rgba(13,35,64,0.82),rgba(9,26,49,0.82))",border:"1px solid rgba(120,160,210,.22)"}}>
         <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
-          <Flag size={18}/><h3>{name} — {titleSuffix}</h3>
-          {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
+          <Flag size={18}/><h3>{name} — {ftab==="web"?"Athlete web":titleSuffix}</h3>
+          {((ftab==="footprint"&&sel)||(ftab==="web"&&webSel))&&
+            <button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}}
+              onClick={()=>{if(ftab==="web")setDeselectKey(k=>k+1);else setSel(null);}}>Deselect</button>}
+          {webProps&&<div style={{display:"flex",gap:4}}>
+            {[["footprint","Globe",Globe],["web","Web",WebIcon]].map(([k,lab,Ico])=>(
+              <button key={k} onClick={()=>setFtab(k)}
+                style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,letterSpacing:".02em",
+                  border:"1px solid rgba(120,160,210,.3)",borderRadius:980,padding:"4px 12px",cursor:"pointer",transition:"all .2s ease",
+                  boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
+                  background:ftab===k?"rgba(146,180,222,.34)":"rgba(120,160,210,.16)",color:ftab===k?"#fff":"#cfe0f2"}}>
+                <Ico size={12}/>{lab}
+              </button>
+            ))}
+          </div>}
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
-        <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
+        {ftab==="web"
+        ? <div style={{height:540}}><AthleteWeb {...webProps} enlarged height={540} dark onSelectionChange={setWebSel} deselectKey={deselectKey}/></div>
+        : <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
           <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
             <SailingGlobe countryData={countryCounts} height={460} pulseIso={sel} dark/>
             <FootprintLegend/>
@@ -2253,10 +2414,10 @@ function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffi
                onClick={e=>{if(e.target===e.currentTarget)setSel(null);}}>
             {groups.map(g=>(
               <div key={g.cname}>
-                <div style={{position:"sticky",top:0,backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",
-                     padding:"9px 14px 7px",zIndex:1,display:"flex"}}>
+                <div style={{position:"sticky",top:0,padding:"9px 14px 7px",zIndex:1,display:"flex"}}>
                   <span style={{display:"inline-flex",alignItems:"center",gap:8,
-                     background:"rgba(120,160,210,.16)",border:"1px solid rgba(120,160,210,.3)",
+                     background:"rgba(120,160,210,.16)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",
+                     border:"1px solid rgba(120,160,210,.3)",
                      borderRadius:980,padding:"5px 13px",color:"#eaf3fc",fontWeight:700,
                      fontFamily:"'Barlow',sans-serif",fontSize:13,letterSpacing:".02em",
                      boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)"}}>
@@ -2291,7 +2452,7 @@ function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffi
             ))}
             {groups.length===0&&<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>No competitions recorded yet.</div>}
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );
@@ -6266,8 +6427,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .tb-sport{font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.01em;cursor:pointer;padding:5px 11px 5px 6px;border-radius:980px;transition:.15s;}
     .tb-sport:hover{background:rgba(19,49,78,.10);}
     .tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
-    .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:border-radius .32s cubic-bezier(.2,.85,.2,1),background .32s;}
-    .menupill.open{border-radius:24px;background:rgba(255,255,255,.70);}
+    /* Fixed 25px radius (≈ half the closed bar height, so it reads as a capsule when
+       closed). Height-independent: as the panel elongates only the body grows — the
+       top half keeps its exact shape, no radius reflow, no stretch-and-snap. */
+    .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:background .34s ease;}
+    .menupill.open{background:rgba(255,255,255,.70);}
     .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
     .mp-burger{flex:none;width:38px;height:38px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
     .mp-burger:hover{background:rgba(255,255,255,.5);}
@@ -6276,7 +6440,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);}
     .mp-search input::placeholder{color:var(--mut);}
     .mp-clear{flex:none;border:0;background:none;cursor:pointer;color:var(--mut);display:flex;padding:0;}
-    .mp-panel{max-height:0;overflow:hidden;opacity:0;display:flex;flex-direction:column;gap:1px;padding:0 12px;transition:max-height .36s cubic-bezier(.2,.85,.2,1),opacity .26s,padding .3s;}
+    .mp-panel{max-height:0;overflow:hidden;opacity:0;display:flex;flex-direction:column;gap:1px;padding:0 12px;transition:max-height .34s cubic-bezier(.33,0,.2,1),opacity .3s ease,padding .34s cubic-bezier(.33,0,.2,1);}
     .menupill.open .mp-panel{max-height:340px;opacity:1;padding:2px 12px 13px;}
     .mp-link{align-self:flex-start;text-align:left;border:0;background:none;cursor:pointer;font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;color:var(--ink);padding:8px 6px;border-radius:12px;transition:color .15s;}
     .mp-link:hover,.mp-link.on{color:var(--accent);}
@@ -6443,7 +6607,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .ai-srch:focus-within{box-shadow:inset 0 1px 0 rgba(255,255,255,.65),0 0 0 4px var(--halo);}
     .ai-srch input{flex:1;border:0;outline:0;font:inherit;font-size:13px;padding:9px 10px 9px 0;background:none;color:var(--ink);}
     .ai-srch input::placeholder{color:#9fb2c8;}
-    .filter-chip{display:inline-flex;align-items:center;gap:6px;background:#eef4fb;border:1px solid #b9cee4;border-radius:20px;padding:4px 10px 4px 12px;font-size:12px;font-weight:600;color:var(--navy);margin-bottom:12px;}
+    .filter-chip{display:inline-flex;align-items:center;gap:6px;background:#eef4fb;border:1px solid #b9cee4;border-radius:20px;padding:4px 10px 4px 12px;font-size:12px;font-weight:600;color:var(--navy);}
     .filter-chip button{border:0;background:none;cursor:pointer;color:var(--mut);padding:0;display:flex;align-items:center;line-height:1;}
     .filter-chip button:hover{color:#c0392b;}
     /* ── Apple WWDC25 liquid-glass effect (lucasromerodb/liquid-glass-effect-macos), adapted for dark navy ── */
@@ -6765,7 +6929,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </span>
             : <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
                 color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>}
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",marginLeft:"auto"}}>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flex:"1 1 0",minWidth:0}}>
             <HostClassPills classIds={classIds}/>
             {devMode&&<button onClick={e=>deleteHost(a.id,a.name,e)} title="Delete host/portal (dev)" style={{border:0,background:"rgba(232,72,85,.15)",color:"#c0392b",borderRadius:980,width:26,height:26,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Trash2 size={14}/></button>}
           </div>
@@ -7666,10 +7830,16 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 {extras?.photo_url
                   ? <img className="av" src={extras.photo_url} alt={name} style={{width:111,height:111,objectFit:"cover"}}/>
                   : <div className="av" style={{background:avatarColor(name),width:111,height:111,fontSize:38}}>{initials(name)}</div>}
-                <button className="portal-pill" style={{minWidth:0,width:111,padding:"6px 0",fontSize:12,justifyContent:"center"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
+                <button style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,width:111,padding:"7px 0",fontSize:12,fontWeight:700,letterSpacing:".02em",marginTop:14,
+                  borderRadius:980,cursor:"pointer",transition:"all .2s ease",
+                  border:"1px solid rgba(120,160,210,.3)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
+                  background:"rgba(120,160,210,.16)",color:"#cfe0f2"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
                   <Calendar size={13} style={{flex:"none"}}/>Calendar
                 </button>
-                {extras?.instagram_url&&<a href={extras.instagram_url} target="_blank" rel="noopener noreferrer" className="portal-pill" style={{minWidth:0,width:111,padding:"6px 0",fontSize:12,justifyContent:"center",textDecoration:"none"}}>
+                {extras?.instagram_url&&<a href={extras.instagram_url} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,width:111,padding:"7px 0",fontSize:12,fontWeight:700,letterSpacing:".02em",
+                  borderRadius:980,cursor:"pointer",transition:"all .2s ease",textDecoration:"none",
+                  border:"1px solid rgba(120,160,210,.3)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
+                  background:"rgba(120,160,210,.16)",color:"#cfe0f2"}}>
                   <Instagram size={13} style={{flex:"none"}}/>Instagram
                 </a>}
               </div>
@@ -7727,11 +7897,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             {ag.events>0&&hasFootprint&&(
               <div className="globe-wrap" style={{flex:"0 0 260px",maxWidth:"100%"}}>
                 <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6}}>
-                  {[["footprint","Footprint",Globe],["web","Web",Users]].map(([k,lab,Ico])=>(
+                  {[["footprint","Globe",Globe],["web","Web",WebIcon]].map(([k,lab,Ico])=>(
                     <button key={k} onClick={()=>setProfileTab(k)}
                       style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,letterSpacing:".02em",
-                        border:"1px solid rgba(120,160,210,.28)",borderRadius:980,padding:"4px 12px",cursor:"pointer",transition:"all .2s ease",
-                        background:profileTab===k?"rgba(13,142,207,.92)":"rgba(120,160,210,.12)",color:profileTab===k?"#fff":"#9fbdd9"}}>
+                        border:"1px solid rgba(120,160,210,.3)",borderRadius:980,padding:"4px 12px",cursor:"pointer",transition:"all .2s ease",
+                        boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
+                        background:profileTab===k?"rgba(146,180,222,.34)":"rgba(120,160,210,.16)",color:profileTab===k?"#fff":"#cfe0f2"}}>
                       <Ico size={12}/>{lab}
                     </button>
                   ))}
@@ -7747,16 +7918,21 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="web"?1:0,transform:profileTab==="web"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="web"?"auto":"none"}}>
-                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onPick={nm=>go({name:"profile",id:nm})}/>}
+                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})}/>}
+                    <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click a node to open ⤢</div>
                   </div>
                 </div>
+                {/* Caption sits below the globe (not over it) so it clears the sphere + glow. */}
+                {profileTab==="footprint"&&<div style={{textAlign:"center",fontSize:10,color:"#7fa0c0",marginTop:10}}>Competition footprint</div>}
               </div>
             )}
           </div>
 
           {/* expanded footprint popup */}
           {footprintOpen&&hasFootprint&&(
-            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)}/>
+            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)}
+              initialTab={profileTab==="web"?"web":"footprint"}
+              webProps={{name,events,onPick:nm=>{setFootprintOpen(false);go({name:"profile",id:nm});},onOpenEvent:id=>{setFootprintOpen(false);go({name:"event",id});}}}/>
           )}
         </>);
       })()}
@@ -7792,14 +7968,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </>)}
           </div>
-          {profileFilterChips.map((c,ci)=>(
-            <div className="filter-chip" key={ci}>
-              <Sparkles size={11}/>{c.label}
-              <button onClick={()=>setProfileFilterChips(prev=>prev.filter((_,j)=>j!==ci))}><X size={13}/></button>
+          {profileFilterChips.length>0&&(
+            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8}}>
+              {profileFilterChips.map((c,ci)=>(
+                <div className="filter-chip" key={ci}>
+                  <Sparkles size={11}/>{c.label}
+                  <button onClick={()=>setProfileFilterChips(prev=>prev.filter((_,j)=>j!==ci))}><X size={13}/></button>
+                </div>
+              ))}
+              {profileFilterChips.length>1&&(
+                <button onClick={()=>setProfileFilterChips([])} style={{border:0,background:"none",color:"var(--mut)",fontSize:11.5,cursor:"pointer",textDecoration:"underline"}}>Clear all</button>
+              )}
             </div>
-          ))}
-          {profileFilterChips.length>1&&(
-            <button onClick={()=>setProfileFilterChips([])} style={{border:0,background:"none",color:"var(--mut)",fontSize:11.5,cursor:"pointer",textDecoration:"underline"}}>Clear all</button>
           )}
         </div>
         {(()=>{
