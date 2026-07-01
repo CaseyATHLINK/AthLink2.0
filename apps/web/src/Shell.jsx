@@ -2,9 +2,10 @@
    each sport portal. Sports register themselves in sports.js (via create-sport),
    so this file never needs editing when a sport is added. */
 import React, { Suspense } from "react";
-import { ThemeRoot, Card, PageHeader } from "@athlink/design-system";
-import { Loader2, ChevronRight, ArrowLeft } from "lucide-react";
+import { ThemeRoot } from "@athlink/design-system";
+import { Loader2, ArrowLeft } from "lucide-react";
 import { sports } from "./sports.js";
+import Landing from "./Landing.jsx";
 
 function useHashRoute() {
   const [hash, setHash] = React.useState(window.location.hash);
@@ -14,36 +15,6 @@ function useHashRoute() {
     return () => window.removeEventListener("hashchange", f);
   }, []);
   return hash.replace(/^#\/?/, "").split("/")[0];
-}
-
-function Landing() {
-  return (
-    <div className="wrap" style={{ paddingTop: 40, paddingBottom: 60 }}>
-      <PageHeader title="AthLink" sub="Competition results & athlete profiles across sports" />
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))",
-          gap: 16,
-          marginTop: 18,
-        }}
-      >
-        {sports.map((s) => (
-          <a key={s.id} href={`#/${s.id}`} style={{ textDecoration: "none", color: "inherit" }}>
-            <Card hoverable>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: 18, color: "var(--ink)" }}>{s.name}</div>
-                  <div style={{ fontSize: 13, color: "var(--mut)", marginTop: 4 }}>{s.tagline}</div>
-                </div>
-                <ChevronRight size={20} color="var(--accent)" />
-              </div>
-            </Card>
-          </a>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function Spinner() {
@@ -76,11 +47,7 @@ export default function Shell() {
   const sport = sports.find((s) => s.id === route);
 
   if (!sport) {
-    return (
-      <ThemeRoot>
-        <Landing />
-      </ThemeRoot>
-    );
+    return <Landing sports={sports} />;
   }
 
   const Portal = sport.Portal;
