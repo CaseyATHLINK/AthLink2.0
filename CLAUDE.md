@@ -101,6 +101,7 @@ organizer_name, fingerprint, sources
 Audited against live DB 2026-06-25 — see migrations/README.md for full notes.
 - migrations/0001_baseline_schema.sql — full live schema (ALREADY APPLIED, no-op to re-run)
 - migrations/0002_custom_classes.sql — custom_classes table — APPLIED 2026-07-01 (custom classes now persist to DB; grey-nugget bug fixed)
+- migrations/0007_usernames.sql — APPLIED 2026-07-01 — public URL identity: athlete_usernames table (name_key→username, default FirstnameLastname, owner-editable, ~1,854 backfilled) + hosts.slug (editable, backfilled PascalCase) + athlink_pascal() + ensure_athlete_username() trigger on entries insert. RLS: public read, owner/admin write.
 - migrations/0099_cleanup_duplicate_policies.sql — OPTIONAL dedupe of redundant RLS policies
 Already applied (CLAUDE.md previously mislabelled these "pending"):
 profiles.username, host_invites.short_code, event provenance columns,
@@ -123,11 +124,26 @@ resolution priority: reserved word > host > athlete.
   don't 404 on refresh. Never let it swallow `/api`.
 - Back/forward buttons are driven by real browser history; the in-app Back
   button calls `history.back()`. `navStack` now only feeds the Back label.
-- KNOWN LIMIT: PDF-derived athletes are keyed by name (not the profiles.username
-  slug), so duplicate names collide (first match wins) and an athlete slug equal
-  to a host slug loses to the host. Wire athlete URLs to a unique slug column
-  before scaling beyond the HK beachhead.
 - Unknown/unresolvable slugs silently fall to sailing home (by design).
+
+## Public usernames (URL identity) — migration 0007
+Two namespaces share the root path, so usernames are unique case-insensitively
+across BOTH: athletes (`athlete_usernames.username`, keyed by name_key =
+lower(btrim(name))) and hosts (`hosts.slug`; internal `hosts.id` is unchanged —
+still the FK everywhere). Default athlete username = FirstnameLastname
+(`athlink_pascal`), numbered on clash by first appearance; assigned to every new
+athlete by the `ensure_athlete_username` trigger. This is DISTINCT from
+`profiles.username` (the lowercase account/login handle).
+- Frontend: `ATHLETE_USERNAMES` module registry (loaded from athlete_usernames
+  before events); `usernameForName`/`nameForUsername`/`hostSlug`/`hostBySlug`
+  drive stateToPath/pathToState. Falls back to PascalCase(name) if unloaded.
+- Editing: verified owner/admin only. Athlete → AthleteEditModal "Profile link"
+  field → `saveAthleteUsername`. Host → HostEditModal "Portal link" → `saveHostSlug`.
+  Both validate [A-Za-z0-9]{3,30}, block reserved routes, check availability
+  across athletes+hosts, show a "taken" message, then replaceState the new URL.
+- Identical names stay ONE profile (product decision); numbering only breaks real
+  clashes. Same-name-different-person separation is still unsolved (needs identity
+  resolution) — the numbering is a safety net, not a person-splitter.
 
 ## Auth architecture
 Multi-step SignInModal: credentials → role pick → details.

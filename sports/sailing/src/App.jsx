@@ -283,6 +283,7 @@ function applyDbHosts(rows){
   const norm=t=>(rows||[]).filter(r=>r.type===t).map(r=>({
     id:r.id, type:r.type, scope:r.scope||"HK", name:r.name,
     ...(r.cls?{cls:r.cls}:{}), ...(r.country?{country:r.country}:{}),
+    ...(r.slug?{slug:r.slug}:{}),
   }));
   // DB rows are the source of truth: defaults seed first, DB overwrites on id clash.
   // (Seeded once via hosts_seed_migration.sql; defaults remain only as an
@@ -327,8 +328,30 @@ const hostById=id=>assocById(id)||clubById(id)||fedById(id)||null;
 const pascalSlug=(s)=>String(s||"").replace(/[^A-Za-z0-9]+/g," ").trim()
   .split(/\s+/).filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join("");
 const slugKey=(s)=>pascalSlug(s).toLowerCase();
-const hostBySlug=(slug)=>{const k=slugKey(slug);
-  return [...ASSOCIATIONS,...CLUBS,...FEDERATIONS].find(h=>slugKey(h.name)===k)||null;};
+// A host's public slug: the editable hosts.slug if set, else PascalCase(name).
+const hostSlug=(host)=>{const h=(host&&host.id)?host:hostById(host);
+  return h?(h.slug||pascalSlug(h.name)):"";};
+const hostBySlug=(slug)=>{const k=String(slug||"").toLowerCase();
+  return [...ASSOCIATIONS,...CLUBS,...FEDERATIONS]
+    .find(h=>(h.slug&&h.slug.toLowerCase()===k)||slugKey(h.name)===k)||null;};
+
+/* ── Public athlete usernames (name_key ⇄ username) ────────────────────────
+   Loaded from the athlete_usernames table; default is FirstnameLastname. The
+   registry is a module-level mutable map so the routing helpers below (module
+   scope) can read it. Falls back to PascalCase(name) for any not-yet-loaded
+   name so URLs still work before/without the table. */
+const uNameKey=(s)=>String(s||"").trim().toLowerCase();
+let ATHLETE_USERNAMES={byKey:new Map(),byUser:new Map()};
+function applyAthleteUsernames(rows){
+  const byKey=new Map(),byUser=new Map();
+  (rows||[]).forEach(r=>{ if(!r||!r.username) return;
+    byKey.set(r.name_key,r.username);
+    byUser.set(String(r.username).toLowerCase(),r.display_name||r.name_key);
+  });
+  ATHLETE_USERNAMES={byKey,byUser};
+}
+const usernameForName=(name)=>ATHLETE_USERNAMES.byKey.get(uNameKey(name))||pascalSlug(name);
+const nameForUsername=(u)=>ATHLETE_USERNAMES.byUser.get(String(u||"").toLowerCase())||null;
 const collectAthleteNames=(events)=>{const s=new Set();
   (events||[]).forEach(ev=>(ev.entries||[]).forEach(e=>{
     [e&&e.helm,e&&e.crew,e&&e.name,e&&e.helm_name,e&&e.crew_name].forEach(n=>{if(n)s.add(n);});
@@ -336,18 +359,18 @@ const collectAthleteNames=(events)=>{const s=new Set();
 // Current {portal,view} → the path it should live at.
 const stateToPath=(portal,view)=>{
   const v=view||{name:"portals"};
-  if(v.name==="profile") return "/"+pascalSlug(v.id||"");
+  if(v.name==="profile") return "/"+usernameForName(v.id||"");
   if(v.name==="event")   return "/event/"+encodeURIComponent(v.id||"");
   if(v.name==="ranking") return "/ranking";
   const isClassPortal=portal&&String(portal).startsWith("class:");
   if(v.name==="athletes"){
-    if(portal&&!isClassPortal) return "/"+pascalSlug((hostById(portal)||{}).name||"")+"/athletes";
+    if(portal&&!isClassPortal) return "/"+hostSlug(portal)+"/athletes";
     if(isClassPortal) return "/class/"+encodeURIComponent(String(portal).slice(6))+"/athletes";
     return "/athletes";
   }
   // events / portals home
   if(isClassPortal) return "/class/"+encodeURIComponent(String(portal).slice(6));
-  if(portal) return "/"+pascalSlug((hostById(portal)||{}).name||"");
+  if(portal) return "/"+hostSlug(portal);
   return "/sailing";
 };
 // A path → the {portal,view} it represents, or null if it resolves to nothing.
@@ -367,6 +390,10 @@ const pathToState=(pathname,athleteNames)=>{
     const isAth=(seg[1]||"").toLowerCase()==="athletes";
     return {portal:host.id,view:{name:isAth?"athletes":"events"}};
   }
+  // Athlete: match the registered username first, then fall back to a
+  // PascalCase scan of loaded names (covers any not yet in the table).
+  const byUser=nameForUsername(seg[0]);
+  if(byUser) return {portal:null,view:{name:"profile",id:byUser}};
   if(athleteNames){
     const k=slugKey(seg[0]); let found=null;
     athleteNames.forEach(n=>{if(!found&&slugKey(n)===k)found=n;});
@@ -4126,10 +4153,12 @@ function PhotoCropper({initialSrc=null,onCancel,onConfirm}){
   );
 }
 
-function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClose}){
+function AthleteEditModal({name,profile,onSaveExtras,onRename,onSaveUsername,uploadPhoto,onClose}){
   const parts=(name||"").trim().split(/\s+/);
   const[first,setFirst]=React.useState(parts.length>1?parts.slice(0,-1).join(" "):(parts[0]||""));
   const[last,setLast]=React.useState(parts.length>1?parts[parts.length-1]:"");
+  const[username,setUsername]=React.useState(usernameForName(name));
+  const[uErr,setUErr]=React.useState("");
   const[bio,setBio]=React.useState(profile?.bio||"");
   const[insta,setInsta]=React.useState(profile?.instagram_url||"");
   const[nat,setNat]=React.useState(profile?.nat_override||"");
@@ -4156,12 +4185,17 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
     return `https://instagram.com/${ig.replace(/^\/+/,"")}`;
   };
   const save=async()=>{
-    setBusy(true); setErr("");
+    setBusy(true); setErr(""); setUErr("");
     const newName=`${first} ${last}`.trim()||name;
     const patch={bio:bio.trim()||null,instagram_url:normIg(insta),nat_override:(nat||"").trim().toUpperCase()||null,photo_url:photo||null};
     try{
       if(newName!==name) await onRename(name,newName);   // rename follows ownership + migrates extras key
       await onSaveExtras(newName,patch);
+      // Public username (URL). Save last so it keys off the final name.
+      if(onSaveUsername&&(username||"").trim()&&username.trim()!==usernameForName(newName)){
+        const r=await onSaveUsername(newName,username.trim());
+        if(r&&r.error){setUErr(r.error);setBusy(false);return;}
+      }
       onClose(newName);
     }catch(e){console.error("athlete edit save",e);setErr("Couldn't save changes. Try again.");setBusy(false);}
   };
@@ -4194,6 +4228,20 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
               <p style={lbl}>Last name</p>
               <input value={last} onChange={e=>setLast(e.target.value)} style={field}/>
             </div>
+          </div>
+          {/* Public username — drives the profile URL (athlink.win/<username>) */}
+          <div style={{marginBottom:14}}>
+            <p style={lbl}>Profile link (username)</p>
+            <div style={{display:"flex",alignItems:"center",gap:0,...field,padding:0,overflow:"hidden"}}>
+              <span style={{padding:"9px 2px 9px 11px",fontSize:13.5,color:"var(--mut)",whiteSpace:"nowrap"}}>athlink.win/</span>
+              <input value={username}
+                onChange={e=>{setUsername(e.target.value.replace(/[^A-Za-z0-9]/g,"").slice(0,30));setUErr("");}}
+                placeholder="CaseyLaw"
+                style={{flex:1,minWidth:0,border:0,outline:"none",background:"transparent",font:"inherit",fontSize:13.5,padding:"9px 11px 9px 0"}}/>
+            </div>
+            {uErr
+              ? <div style={{fontSize:12,color:"#c0392b",marginTop:5,fontWeight:600}}>{uErr}</div>
+              : <div style={{fontSize:11,color:"var(--mut)",marginTop:4}}>Letters and numbers only. This is your shareable link.</div>}
           </div>
           {/* Nationality — dropdown, on the row below the photo */}
           <div style={{marginBottom:14}}>
@@ -4229,18 +4277,25 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,uploadPhoto,onClos
    Members (embedded member management). Owners/editors/dev use this to rename
    the host, set its location (→ globe by the title), and manage co-admins.
    ═══════════════════════════════════════════════════════════════════════ */
-function HostEditModal({host,onSave,onClose,canManage,membersProps}){
+function HostEditModal({host,onSave,onSaveSlug,onClose,canManage,membersProps}){
   const[tab,setTab]=React.useState("details");
   const[name,setName]=React.useState(host?.name||"");
   const[country,setCountry]=React.useState(host?.country||"");
+  const[slug,setSlug]=React.useState(host?.slug||pascalSlug(host?.name||""));
+  const[slugErr,setSlugErr]=React.useState("");
   const[busy,setBusy]=React.useState(false);
   const iso=IOC_ISO[(country||"").toUpperCase()]||"";
   const barStyle={width:"100%",border:"0",borderRadius:980,padding:"13px 18px",font:"inherit",fontSize:15,outline:"none",
     background:"rgba(255,255,255,.55)",backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",
     boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",transition:"box-shadow .16s"};
   const save=async()=>{
-    setBusy(true);
+    setBusy(true); setSlugErr("");
     await onSave({name:name.trim()||host.name,country:(country||"").toUpperCase()||null});
+    // Public slug (URL). Saved separately so a "taken" clash can be reported.
+    if(onSaveSlug&&(slug||"").trim()&&slug.trim()!==(host?.slug||pascalSlug(host?.name||""))){
+      const r=await onSaveSlug(host.id,slug.trim());
+      if(r&&r.error){setSlugErr(r.error);setBusy(false);return;}
+    }
     setBusy(false); onClose();
   };
   return(
@@ -4270,6 +4325,17 @@ function HostEditModal({host,onSave,onClose,canManage,membersProps}){
                 <div>
                   <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Portal name</label>
                   <input value={name} onChange={e=>setName(e.target.value)} style={barStyle}/>
+                </div>
+                <div style={{marginTop:14}}>
+                  <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Portal link <span style={{fontWeight:400}}>(username)</span></label>
+                  <div style={{...barStyle,display:"flex",alignItems:"center",padding:0,overflow:"hidden"}}>
+                    <span style={{padding:"13px 2px 13px 18px",fontSize:15,color:"var(--mut)",whiteSpace:"nowrap"}}>athlink.win/</span>
+                    <input value={slug}
+                      onChange={e=>{setSlug(e.target.value.replace(/[^A-Za-z0-9]/g,"").slice(0,30));setSlugErr("");}}
+                      placeholder="HKSF"
+                      style={{flex:1,minWidth:0,border:0,outline:"none",background:"transparent",font:"inherit",fontSize:15,padding:"13px 18px 13px 0"}}/>
+                  </div>
+                  {slugErr&&<div style={{fontSize:12,color:"#c0392b",marginTop:6,fontWeight:600}}>{slugErr}</div>}
                 </div>
                 <div style={{marginTop:14}}>
                   <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Location <span style={{fontWeight:400}}>(IOC country code)</span></label>
@@ -4619,6 +4685,55 @@ export default function AthLinkMVP(){
     }
   };
 
+  // ── Public username / host-slug editing (the URL identity) ──────────────────
+  // Distinct from profiles.username (login handle). Athlete usernames live in
+  // athlete_usernames; host slugs in hosts.slug. Case preserved (CaseyLaw, HKSF);
+  // uniqueness is case-insensitive and spans BOTH athletes and hosts.
+  const[usernamesVersion,setUsernamesVersion]=useState(0); // bump → routing re-reads the map
+  const USERNAME_RESERVED=new Set(["sailing","athletes","ranking","event","class","api","sailti","host","hosts","athlete","profile","landing"]);
+  const validateUsername=(u)=>{
+    const s=String(u||"").trim();
+    if(!/^[A-Za-z0-9]{3,30}$/.test(s)) return {ok:false,msg:"3–30 characters, letters and numbers only (no spaces or symbols)."};
+    if(USERNAME_RESERVED.has(s.toLowerCase())) return {ok:false,msg:"That word is reserved — pick another."};
+    return {ok:true,value:s};
+  };
+  // Free across athletes AND hosts (case-insensitive), ignoring the row we own.
+  const usernameAvailable=async(desired,{selfNameKey=null,selfHostId=null}={})=>{
+    const q=encodeURIComponent(desired); // ilike w/o wildcards = case-insensitive equality
+    const au=await sbGet(`athlete_usernames?username=ilike.${q}&select=name_key`);
+    if(au&&au.some(r=>r.name_key!==selfNameKey)) return false;
+    const hs=await sbGet(`hosts?slug=ilike.${q}&select=id`);
+    if(hs&&hs.some(r=>r.id!==selfHostId)) return false;
+    return true;
+  };
+  const saveAthleteUsername=async(name,desired)=>{
+    const v=validateUsername(desired); if(!v.ok) return {error:v.msg};
+    if(!auth?.user?.id||!auth?.token) return {error:"Please sign in again."};
+    const nk=profileNameKey(name);
+    if((ATHLETE_USERNAMES.byKey.get(nk)||"")===v.value) return {ok:true,username:v.value};
+    if(!(await usernameAvailable(v.value,{selfNameKey:nk}))) return {error:"That username is taken. Try another."};
+    const body={name_key:nk,username:v.value,display_name:name,is_custom:true,updated_by:auth.user.id,updated_at:new Date().toISOString()};
+    const res=await hostRest("athlete_usernames",{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=representation"},body:JSON.stringify(body)},auth.token);
+    if(!res) return {error:"Couldn't save — you may not be the verified owner of this profile."};
+    const old=ATHLETE_USERNAMES.byKey.get(nk); if(old) ATHLETE_USERNAMES.byUser.delete(old.toLowerCase());
+    ATHLETE_USERNAMES.byKey.set(nk,v.value); ATHLETE_USERNAMES.byUser.set(v.value.toLowerCase(),name);
+    setUsernamesVersion(x=>x+1);
+    if(view.name==="profile"&&profileNameKey(view.id)===nk) window.history.replaceState(null,"","/"+v.value);
+    return {ok:true,username:v.value};
+  };
+  const saveHostSlug=async(hostId,desired)=>{
+    const v=validateUsername(desired); if(!v.ok) return {error:v.msg};
+    if(!auth?.token) return {error:"Please sign in again."};
+    const h=hostById(hostId); if(!h) return {error:"Host not found."};
+    if((h.slug||"")===v.value) return {ok:true,slug:v.value};
+    if(!(await usernameAvailable(v.value,{selfHostId:hostId}))) return {error:"That username is taken. Try another."};
+    const res=await hostRest(`hosts?id=eq.${encodeURIComponent(hostId)}`,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify({slug:v.value})},auth.token);
+    if(!res) return {error:"Couldn't save — you may not have permission."};
+    h.slug=v.value; setHostsVersion(x=>x+1);
+    if(portal===hostId) window.history.replaceState(null,"",stateToPath(portal,view));
+    return {ok:true,slug:v.value};
+  };
+
   // ── Load all event claims (host claims on externally-contributed events) ──
   const reloadEventClaims=React.useCallback(async()=>{
     if(!auth?.token){setAllEventClaims([]);return;}
@@ -4912,10 +5027,13 @@ export default function AthLinkMVP(){
         return;
       }
       console.log("Loaded",data.length,"events from Supabase");
-      setEvents(data.map(dbToApp));
-      // Load any dev-added hosts (clubs/associations/federations) and merge them in.
+      // Load hosts (with slugs) + the public athlete-username registry BEFORE
+      // events, so the clean-URL resolvers can map slugs/usernames on first paint.
       const hostRows=await sbGet("hosts?select=*");
       if(hostRows){applyDbHosts(hostRows);setHostsVersion(v=>v+1);}
+      const uRows=await sbGet("athlete_usernames?select=name_key,username,display_name");
+      if(uRows){applyAthleteUsernames(uRows);}
+      setEvents(data.map(dbToApp));
     })();
   },[]);
 
@@ -6922,7 +7040,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const nm=showAthEdit;
     return <AthleteEditModal
       name={nm} profile={athleteProfileOf(nm)}
-      onSaveExtras={saveAthleteExtras} onRename={renameOwnedAthlete}
+      onSaveExtras={saveAthleteExtras} onRename={renameOwnedAthlete} onSaveUsername={saveAthleteUsername}
       uploadPhoto={(file)=>uploadAthletePhoto(file,nm,auth?.token)}
       onClose={(finalName)=>{setShowAthEdit(null); if(typeof finalName==="string"&&finalName&&finalName!==nm) go({name:"profile",id:finalName});}}/>;
   })()}
@@ -6944,7 +7062,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const pendingEventClaimsHere=allEventClaims.filter(c=>c.status==="pending"&&c.host_id===portal).map(c=>({...c,_eventName:(events.find(e=>e.id===c.event_id)||{}).name||"(event)"}));
     return(
     <HostEditModal host={hostById(portal)} canManage={canManageMembers}
-      onSave={(patch)=>saveHost(portal,patch)}
+      onSave={(patch)=>saveHost(portal,patch)} onSaveSlug={saveHostSlug}
       membersProps={{hostId:portal,hostName:hostById(portal).name,auth,myMembership:myPortalMembership,
         pendingClaims:pendingClaimsHere,pendingEventClaims:pendingEventClaimsHere,canVouch:!!myPortalMembership&&myPortalMembership.verified,
         onDecideClaim:(claim,approve)=>resolveClaim(claim,approve,portal),
