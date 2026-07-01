@@ -75,7 +75,14 @@ approve the hook. Manual run any time: `bash tools/pre_push_test.sh`.
 Class colours: 29er #E84855 · ILCA #2E78C8 · 49er #5FAF4E · Optimist #3D3D3D
 Custom classes: muted navy-palette tones only (--navy2, --mut, --accent).
 No aggressive highlight colours.
-Typography: Barlow 700/800 (headings) + DM Sans (body).
+Typography: SF Pro — Apple's system font — everywhere: headings, body, AND the
+  AthLink wordmark. Use the system stack: -apple-system, BlinkMacSystemFont,
+  'SF Pro Display', 'SF Pro Text', system-ui, sans-serif. Wordmark = SF Pro
+  Display, weight 800, letter-spacing -.04em. (Any legacy Barlow / DM Sans refs
+  are overridden to SF Pro on purpose — see packages/design-system tokens.css.)
+Logo: ONE mark only — the rounded "A + chain-link" icon. Word logo = "AthLink"
+  set in SF Pro (icon + live text on site). Never use any other logo style.
+  Assets: apps/web/public/brand/ (site) + LOGOS folder (full brand kit).
 No Tailwind. All CSS in the <style> block inside App.jsx using var(--*).
 
 ## Locked terminology — never change

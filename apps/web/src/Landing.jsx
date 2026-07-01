@@ -4,7 +4,7 @@
    are driven by the sports registry passed in as `sports`. */
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Link2, Menu, Sparkles, ArrowRight, Copy, Check, X,
+  Menu, Sparkles, ArrowRight, Copy, Check, X,
   Upload, Database, BarChart3, Globe2, Share2, Clock, ShieldCheck, Trophy,
 } from "lucide-react";
 
@@ -30,6 +30,14 @@ const CSS = `
 .tb-logo{width:32px;height:32px;border-radius:980px;background:var(--accent);color:#fff;display:grid;place-items:center;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}
 .tb-divider{width:1px;height:18px;background:rgba(0,0,0,.12);flex:none;margin:0 4px 0 10px;}
 .tb-sport{font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.02em;padding:5px 4px 5px 6px;}
+/* Brand lockup = A icon + "AthLink" in SF Pro (system font stack). */
+.tb-mark{width:26px;height:26px;border-radius:7px;display:block;flex:none;}
+.tb-word{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.03em;padding:0 6px 0 9px;}
+.hero-lockup{display:flex;align-items:center;justify-content:center;gap:16px;margin:0 auto 30px;filter:drop-shadow(0 6px 22px rgba(0,0,0,.28));}
+.hero-mark{height:60px;width:auto;display:block;}
+.hero-word{font-weight:800;font-size:54px;color:#fff;letter-spacing:-.04em;line-height:1;}
+.foot-mark{width:26px;height:26px;border-radius:7px;display:block;flex:none;}
+@media (max-width:640px){.hero-mark{height:40px;} .hero-word{font-size:38px;} .hero-lockup{gap:12px;margin-bottom:22px;}}
 .tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
 .menupill{pointer-events:auto;position:relative;width:100%;max-width:460px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:background .34s ease;}
 .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
@@ -324,9 +332,8 @@ export default function Landing({ sports = [] }) {
       {/* TOP BAR */}
       <div className={"topbar2" + (navHidden ? " hidden" : "")}>
         <div className="tb-brand" title="Back to top" onClick={toTop}>
-          <span className="tb-logo"><Link2 size={16} /></span>
-          <span className="tb-divider" />
-          <span className="tb-sport">AthLink</span>
+          <img className="tb-mark" src="/brand/icon-app.png" alt="" aria-hidden="true" />
+          <span className="tb-word">AthLink</span>
         </div>
         <div className="tb-center">
           <div className={"menupill" + (menuOpen ? " open" : "")}>
@@ -362,6 +369,10 @@ export default function Landing({ sports = [] }) {
         <canvas ref={heroRef} className="hero-liquid" aria-hidden="true" />
         <div className="hero-veil" />
         <div className="wrap hero-inner">
+          <div className="hero-lockup">
+            <img className="hero-mark" src="/brand/icon-white.png" alt="" aria-hidden="true" />
+            <span className="hero-word">AthLink</span>
+          </div>
           <h1>The ultimate <span className="g">datacentre</span> for sports results</h1>
           <p className="sub">Recording legacy of the future.</p>
           <div className="portals">
@@ -447,7 +458,7 @@ export default function Landing({ sports = [] }) {
         <div className="wrap">
           <div className="foot">
             <div>
-              <div className="brand"><span className="mark"><Link2 size={15} /></span>AthLink</div>
+              <div className="brand"><img className="foot-mark" src="/brand/icon-app.png" alt="" aria-hidden="true" />AthLink</div>
               <p className="tag">The ultimate datacentre for sports results. LinkedIn for athletes and sponsors.</p>
             </div>
             <div className="foot-links">
