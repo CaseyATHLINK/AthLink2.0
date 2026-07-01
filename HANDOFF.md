@@ -1,9 +1,16 @@
-# AthLink 2.0 — HANDOFF (Athlete Web + profile/menu polish)
+# AthLink 2.0 — HANDOFF (Landing page + Athlete Web)
 
 Resume in a new chat with: **"Read HANDOFF.md and continue."**
 Last updated: **2026-07-01**. Repo: `~/Desktop/AthLink2.0` (CaseyATHLINK/AthLink2.0) · Live: athlink.win (Vercel) · Supabase ref: `ylzoburtpibbgqdggjty`.
 
-## Where we are
+## Landing page (front door) — IN PROGRESS, on `design-sync-setup`
+The AthLink shell front door (`apps/web`) had only a stub `Landing()`. It's now a full one-page marketing/brand landing, built in **`apps/web/src/Landing.jsx`** (new) and wired into **`apps/web/src/Shell.jsx`** (renders `<Landing/>` for the no-sport route, **outside** `ThemeRoot` so the Fraunces serif accents survive the `.al-ds` font override). Fraunces font added to `apps/web/index.html`. Structure inspired by cartesia.ai, reskinned in AthLink tokens.
+- **Sections:** floating sailing-style top bar (logo→top, hide-on-scroll, `ask me anything` search with local smart answers, no profile btn) → dark hero with interactive liquid balls + Sailing/Golf portal cards → mission (editorial, Fraunces serif gradient accents on "ultimate data centre") → vision ("LinkedIn for athletes and sponsors" + accent on "connecting athletes with brands through AI-driven matchmaking") → ecosystem (Hosts/Athletes/Sponsors tabs, 3 alternating feature rows each, "Solves:" pain pills) → traction (enlarged class nuggets 29er/ILCA/OPTI/49er + 47 comps / 1,775 athletes) → contact (modal w/ copy `casey@athlink.win`) → footer. Global moving-ball background across the whole page.
+- **Images:** all 9 feature screenshots live in `apps/web/public/landing/` served at `/landing/*.png` (`host-1/2/3`, `athlete-1/2/3`, `sponsor-1/2/3`), each shown inside a browser-window chrome frame. `FeatureRow` falls back to a clean icon+title placeholder if an image 404s.
+- **Follow-ups:** (1) wire the nav search to the app's real AI search (currently local canned answers — Casey asked re: Kimi vs the existing `claude-haiku-4-5`); (2) make hero portal stats live from data. Standalone HTML preview kept at `~/Claude/Projects/ATHLINK/landing-preview/`.
+- **Validation:** esbuild PASS on `Landing.jsx` + `Shell.jsx`; TDZ reviewed. Note: `tools/pre_push_test.sh` matches `^src/`, so it no-ops on `apps/web` changes — esbuild is authoritative here.
+
+## Where we are (previous work — Athlete Web, SHIPPED)
 The **Athlete Web** (force-directed graph of co-competitors on the athlete profile) has been heavily iterated. All edits are in the monorepo app: **`sports/sailing/src/App.jsx`** (NOT the old `src/App.jsx`). Casey commits + pushes from his terminal; the Cowork sandbox edits + validates (esbuild/TDZ) but cannot push. Merges to `main` are done in the browser via the Chrome extension.
 
 **Status: SHIPPED.** The whole Athlete Web + profile/menu polish body of work is **merged to `main` and live on athlink.win** — PR **#12** (`design-sync-setup` → `main`, commit `35d69d9`) merged 2026-07-01, all 4 checks green, Vercel production deploy triggered. Everything below is implemented, passing the esbuild/TDZ gate, and in production. `design-sync-setup` branch still exists (not deleted) and is Casey's working branch — start the next round of design tweaks on it (it's now level with `main` after the merge; `git pull` first).
