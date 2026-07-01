@@ -7,14 +7,26 @@ import { Loader2, ArrowLeft } from "lucide-react";
 import { sports } from "./sports.js";
 import Landing from "./Landing.jsx";
 
-function useHashRoute() {
-  const [hash, setHash] = React.useState(window.location.hash);
+// Path-based routing. The first segment picks the view:
+//   ""            → AthLink landing (all sports)
+//   a sport id    → that sport's portal (e.g. /sailing)
+//   anything else → the default sport, which owns the flat entity namespace
+//                   (/HongKongSailingFederation, /CaseyLaw, /ranking, …)
+// Sports push new paths via history + a "locationchange" event, so we listen to
+// both that and the native popstate (back/forward buttons).
+const DEFAULT_SPORT = "sailing";
+function usePathRoute() {
+  const [path, setPath] = React.useState(window.location.pathname);
   React.useEffect(() => {
-    const f = () => setHash(window.location.hash);
-    window.addEventListener("hashchange", f);
-    return () => window.removeEventListener("hashchange", f);
+    const f = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", f);
+    window.addEventListener("locationchange", f);
+    return () => {
+      window.removeEventListener("popstate", f);
+      window.removeEventListener("locationchange", f);
+    };
   }, []);
-  return hash.replace(/^#\/?/, "").split("/")[0];
+  return path.split("/").filter(Boolean)[0] || "";
 }
 
 function Spinner() {
@@ -28,7 +40,8 @@ function Spinner() {
 function HomeLink() {
   return (
     <a
-      href="#/"
+      href="/"
+      onClick={(e) => { e.preventDefault(); window.history.pushState(null, "", "/"); window.dispatchEvent(new Event("locationchange")); }}
       style={{
         position: "fixed", top: 12, left: 14, zIndex: 200,
         display: "inline-flex", alignItems: "center", gap: 6,
@@ -43,8 +56,15 @@ function HomeLink() {
 }
 
 export default function Shell() {
-  const route = useHashRoute();
-  const sport = sports.find((s) => s.id === route);
+  const seg0 = usePathRoute();
+
+  if (!seg0) {
+    return <Landing sports={sports} />;
+  }
+  // Explicit sport id wins; otherwise a bare entity slug (host/athlete) belongs
+  // to the default sport, which resolves it internally from the full path.
+  const sport =
+    sports.find((s) => s.id === seg0) || sports.find((s) => s.id === DEFAULT_SPORT);
 
   if (!sport) {
     return <Landing sports={sports} />;

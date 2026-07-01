@@ -31,13 +31,14 @@ const CSS = `
 .tb-divider{width:1px;height:18px;background:rgba(0,0,0,.12);flex:none;margin:0 4px 0 10px;}
 .tb-sport{font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.02em;padding:5px 4px 5px 6px;}
 /* Brand lockup = A icon + "AthLink" in SF Pro (system font stack). */
-.tb-mark{width:26px;height:26px;border-radius:7px;display:block;flex:none;}
-.tb-word{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.03em;padding:0 6px 0 9px;}
-.hero-lockup{display:flex;align-items:center;justify-content:center;gap:16px;margin:0 auto 30px;filter:drop-shadow(0 6px 22px rgba(0,0,0,.28));}
+.tb-mark{width:28px;height:28px;border-radius:50%;display:block;flex:none;}
+.tb-word{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.03em;padding:0 6px 0 5px;}
+.hero-lockup{display:flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 30px;filter:drop-shadow(0 6px 22px rgba(0,0,0,.28));}
 .hero-mark{height:60px;width:auto;display:block;}
 .hero-word{font-weight:800;font-size:54px;color:#fff;letter-spacing:-.04em;line-height:1;}
-.foot-mark{width:26px;height:26px;border-radius:7px;display:block;flex:none;}
-@media (max-width:640px){.hero-mark{height:40px;} .hero-word{font-size:38px;} .hero-lockup{gap:12px;margin-bottom:22px;}}
+.foot-mark{width:28px;height:28px;border-radius:7px;display:block;flex:none;}
+.al-landing .brand{gap:7px;}
+@media (max-width:640px){.hero-mark{height:40px;} .hero-word{font-size:38px;} .hero-lockup{gap:8px;margin-bottom:22px;}}
 .tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
 .menupill{pointer-events:auto;position:relative;width:100%;max-width:460px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:background .34s ease;}
 .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
@@ -322,7 +323,7 @@ export default function Landing({ sports = [] }) {
 
   const answer = searchFocus ? searchAnswer(query) : "";
   const rows = { hosts: HOSTS, athletes: ATHLETES, sponsors: SPONSORS }[tab];
-  const goSailing = () => { window.location.hash = "#/sailing"; };
+  const goSailing = () => { window.history.pushState(null, "", "/sailing"); window.dispatchEvent(new Event("locationchange")); };
 
   return (
     <div className="al-landing">
@@ -332,7 +333,7 @@ export default function Landing({ sports = [] }) {
       {/* TOP BAR */}
       <div className={"topbar2" + (navHidden ? " hidden" : "")}>
         <div className="tb-brand" title="Back to top" onClick={toTop}>
-          <img className="tb-mark" src="/brand/icon-app.png" alt="" aria-hidden="true" />
+          <img className="tb-mark" src="/brand/icon-app-circle.png" alt="" aria-hidden="true" />
           <span className="tb-word">AthLink</span>
         </div>
         <div className="tb-center">
