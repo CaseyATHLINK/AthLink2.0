@@ -108,6 +108,27 @@ country column on hosts AND events — all live.
 ACTION: is_athlink_admin() is still a placeholder that grants admin to ANY
 logged-in user — replace with real admin UUID(s). See README "Action items".
 
+## URL routing — clean flat paths (added 2026-07-01)
+Path-based, not hash. State ⇄ URL sync lives in `sports/sailing/src/App.jsx`
+(`stateToPath`/`pathToState` at module scope + the "Clean-URL sync" effect
+block). Scheme: `/sailing` (home), `/<Host>` (portal), `/<Host>/athletes`,
+`/<Athlete>`, `/athletes`, `/ranking`, `/event/<id>`, `/class/<clsId>`.
+Slugs = PascalCase, punctuation-stripped, case-insensitive. Single-segment
+resolution priority: reserved word > host > athlete.
+- Shell (`apps/web/src/Shell.jsx`) routes by first path segment; a bare entity
+  slug that isn't a sport id falls to the default sport (sailing), which
+  resolves it internally. Sports push paths via `history.pushState` +
+  `dispatchEvent(new Event("locationchange"))`; shell listens to that + popstate.
+- `vercel.json` has an SPA rewrite `/((?!api/).*) → /index.html` so deep links
+  don't 404 on refresh. Never let it swallow `/api`.
+- Back/forward buttons are driven by real browser history; the in-app Back
+  button calls `history.back()`. `navStack` now only feeds the Back label.
+- KNOWN LIMIT: PDF-derived athletes are keyed by name (not the profiles.username
+  slug), so duplicate names collide (first match wins) and an athlete slug equal
+  to a host slug loses to the host. Wire athlete URLs to a unique slug column
+  before scaling beyond the HK beachhead.
+- Unknown/unresolvable slugs silently fall to sailing home (by design).
+
 ## Auth architecture
 Multi-step SignInModal: credentials → role pick → details.
 Google OAuth via Supabase redirect; new users route into onboarding.

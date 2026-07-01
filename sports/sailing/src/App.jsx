@@ -310,6 +310,70 @@ const isClubId=id=>!!clubById(id);
 const isFedId=id=>!!fedById(id);
 // Resolve any host id (association, club OR federation) to its record / name.
 const hostById=id=>assocById(id)||clubById(id)||fedById(id)||null;
+
+/* ── Clean-URL slugs & path <-> state mapping ─────────────────────────────
+   Fully-flat scheme so links read cleanly and share well:
+     /                     → AthLink landing (all sports) — handled by the shell
+     /sailing              → sailing home (all portals)
+     /<Host>               → that host's competitions   e.g. /HongKongSailingFederation
+     /<Host>/athletes      → that host's athletes
+     /<Athlete>            → an athlete profile          e.g. /CaseyLaw
+     /athletes             → all athletes
+     /ranking              → season ranking
+     /event/<id>           → one competition
+     /class/<clsId>[/athletes] → the per-class "all results" portal
+   Resolution priority for a single segment: reserved word > host > athlete.
+   Slugs are PascalCase, punctuation-stripped; matching is case-insensitive. */
+const pascalSlug=(s)=>String(s||"").replace(/[^A-Za-z0-9]+/g," ").trim()
+  .split(/\s+/).filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join("");
+const slugKey=(s)=>pascalSlug(s).toLowerCase();
+const hostBySlug=(slug)=>{const k=slugKey(slug);
+  return [...ASSOCIATIONS,...CLUBS,...FEDERATIONS].find(h=>slugKey(h.name)===k)||null;};
+const collectAthleteNames=(events)=>{const s=new Set();
+  (events||[]).forEach(ev=>(ev.entries||[]).forEach(e=>{
+    [e&&e.helm,e&&e.crew,e&&e.name,e&&e.helm_name,e&&e.crew_name].forEach(n=>{if(n)s.add(n);});
+  }));return s;};
+// Current {portal,view} → the path it should live at.
+const stateToPath=(portal,view)=>{
+  const v=view||{name:"portals"};
+  if(v.name==="profile") return "/"+pascalSlug(v.id||"");
+  if(v.name==="event")   return "/event/"+encodeURIComponent(v.id||"");
+  if(v.name==="ranking") return "/ranking";
+  const isClassPortal=portal&&String(portal).startsWith("class:");
+  if(v.name==="athletes"){
+    if(portal&&!isClassPortal) return "/"+pascalSlug((hostById(portal)||{}).name||"")+"/athletes";
+    if(isClassPortal) return "/class/"+encodeURIComponent(String(portal).slice(6))+"/athletes";
+    return "/athletes";
+  }
+  // events / portals home
+  if(isClassPortal) return "/class/"+encodeURIComponent(String(portal).slice(6));
+  if(portal) return "/"+pascalSlug((hostById(portal)||{}).name||"");
+  return "/sailing";
+};
+// A path → the {portal,view} it represents, or null if it resolves to nothing.
+const pathToState=(pathname,athleteNames)=>{
+  const seg=decodeURIComponent(pathname||"/").split("/").filter(Boolean);
+  const s0=(seg[0]||"").toLowerCase();
+  if(seg.length===0||s0==="sailing") return {portal:null,view:{name:"portals"}};
+  if(s0==="athletes") return {portal:null,view:{name:"athletes"}};
+  if(s0==="ranking")  return {portal:null,view:{name:"ranking"}};
+  if(s0==="event")    return {portal:null,view:{name:"event",id:seg[1]}};
+  if(s0==="class"){
+    const isAth=(seg[2]||"").toLowerCase()==="athletes";
+    return {portal:"class:"+(seg[1]||""),view:{name:isAth?"athletes":"events"}};
+  }
+  const host=hostBySlug(seg[0]);
+  if(host){
+    const isAth=(seg[1]||"").toLowerCase()==="athletes";
+    return {portal:host.id,view:{name:isAth?"athletes":"events"}};
+  }
+  if(athleteNames){
+    const k=slugKey(seg[0]); let found=null;
+    athleteNames.forEach(n=>{if(!found&&slugKey(n)===k)found=n;});
+    if(found) return {portal:null,view:{name:"profile",id:found}};
+  }
+  return null;
+};
 const assocName=id=>hostById(id)?.name||id;
 // Association → ISO country flag (HK gets a flag; International gets none)
 const assocFlag=scope=>scope==="HK"?"🇭🇰":"";
@@ -4634,6 +4698,7 @@ export default function AthLinkMVP(){
   const[portal,setPortal]=useState(null);
   const[view,setView]=useState({name:"portals"});
   const[navStack,setNavStack]=useState([]); // universal back-button history
+  const[urlReady,setUrlReady]=useState(false); // true once the initial deep-link has been resolved → forward URL sync active
   const[q,setQ]=useState("");const[filter,setFilter]=useState("all");
 
   // ── Merge duplicate athlete profiles ───────────────────────
@@ -5105,15 +5170,54 @@ export default function AthLinkMVP(){
     return()=>window.removeEventListener("scroll",onScroll);
   },[]);
   useEffect(()=>{setBarHidden(false);setMenuOpen(false);},[view.name,portal]);
-  const navBack=()=>{
-    setNavStack(s=>{
-      if(!s.length){setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);return s;}
-      const prev=s[s.length-1];
-      setPortal(prev.portal??null);
-      setView(prev.view||{name:"portals"});
+
+  /* ── Clean-URL sync (shareable links + native back/forward) ───────────────
+     stateToPath / pathToState (module scope) define the mapping. This block is
+     the only place that touches window.history for in-app navigation. */
+  // 1) On load, resolve the incoming path once the data needed for it exists.
+  useEffect(()=>{
+    if(urlReady) return;
+    const path=window.location.pathname;
+    const seg=decodeURIComponent(path).split("/").filter(Boolean);
+    const s0=(seg[0]||"").toLowerCase();
+    const RESERVED=["","sailing","athletes","ranking","event","class"];
+    // Athlete slugs can only be resolved after events (hence names) have loaded.
+    const needsAthlete=seg.length>0&&!RESERVED.includes(s0)&&!hostBySlug(seg[0]);
+    if(needsAthlete&&events.length===0) return; // wait for events, effect re-runs on load
+    const st=pathToState(path,collectAthleteNames(events));
+    if(st){setPortal(st.portal);setView(st.view);}
+    window.history.replaceState(null,"",stateToPath(st?st.portal:null,st?st.view:{name:"portals"}));
+    setUrlReady(true);
+  },[events,urlReady]);
+  // Safety net: enable forward sync even if data never arrives.
+  useEffect(()=>{const t=setTimeout(()=>setUrlReady(true),8000);return()=>clearTimeout(t);},[]);
+  // 2) Forward: reflect every view change into the path.
+  useEffect(()=>{
+    if(!urlReady) return;
+    const path=stateToPath(portal,view);
+    if(path!==window.location.pathname){
+      window.history.pushState(null,"",path);
+      window.dispatchEvent(new Event("locationchange")); // let the shell re-sync
+    }
+  },[portal,view,urlReady]);
+  // 3) Back/forward buttons: restore state from the URL (no push — guard above skips it).
+  useEffect(()=>{
+    const onPop=()=>{
+      const st=pathToState(window.location.pathname,collectAthleteNames(events));
+      setPortal(st?st.portal:null);
+      setView(st?st.view:{name:"portals"});
+      setNavStack(s=>s.slice(0,-1));
       setQ("");setAthleteSmart(null);window.scrollTo(0,0);
-      return s.slice(0,-1);
-    });
+    };
+    window.addEventListener("popstate",onPop);
+    return()=>window.removeEventListener("popstate",onPop);
+  },[events]);
+
+  const navBack=()=>{
+    // Drive the in-app Back button through real browser history so it stays in
+    // lock-step with the native back button; fall back to home on a cold deep-link.
+    if(navStack.length){window.history.back();return;}
+    setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);
   };
   const navLabelFor=(snap)=>{
     if(!snap) return "Back";
@@ -6644,7 +6748,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     {/* left: two targets on one pill — logo → AthLink landing (shell); "Sailing" → sailing home. */}
     <div className="tb-brand">
       <span className="tb-logo" title="Back to AthLink — all sports"
-        onClick={()=>{window.location.hash="#/";}}><Link2 size={15}/></span>
+        onClick={()=>{window.history.pushState(null,"","/");window.dispatchEvent(new Event("locationchange"));}}><Link2 size={15}/></span>
       <span className="tb-divider"/>
       <span className="tb-sport" title="Sailing home" onClick={goHome}>Sailing</span>
     </div>
