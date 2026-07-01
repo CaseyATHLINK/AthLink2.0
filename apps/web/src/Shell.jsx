@@ -58,6 +58,11 @@ function HomeLink() {
 export default function Shell() {
   const seg0 = usePathRoute();
 
+  // The shell landing owns the tab title; sport portals set their own per-page.
+  React.useEffect(() => {
+    if (!seg0) document.title = "AthLink";
+  }, [seg0]);
+
   if (!seg0) {
     return <Landing sports={sports} />;
   }

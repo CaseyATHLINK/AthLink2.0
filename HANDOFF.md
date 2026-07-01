@@ -1,90 +1,143 @@
-# AthLink 2.0 — HANDOFF (Landing page + Athlete Web)
+# AthLink 2.0 — HANDOFF
 
 Resume in a new chat with: **"Read HANDOFF.md and continue."**
-Last updated: **2026-07-01**. Repo: `~/Desktop/AthLink2.0` (CaseyATHLINK/AthLink2.0) · Live: athlink.win (Vercel) · Supabase ref: `ylzoburtpibbgqdggjty`.
+Last updated: **2026-07-02**. Repo: `~/Desktop/AthLink2.0` (CaseyATHLINK/AthLink2.0) · Live: **athlink.win** (Vercel) · Supabase ref: `ylzoburtpibbgqdggjty`.
 
-## Landing page (front door) — IN PROGRESS, on `design-sync-setup`
-The AthLink shell front door (`apps/web`) had only a stub `Landing()`. It's now a full one-page marketing/brand landing, built in **`apps/web/src/Landing.jsx`** (new) and wired into **`apps/web/src/Shell.jsx`** (renders `<Landing/>` for the no-sport route, **outside** `ThemeRoot` so the Fraunces serif accents survive the `.al-ds` font override). Fraunces font added to `apps/web/index.html`. Structure inspired by cartesia.ai, reskinned in AthLink tokens.
-- **Sections:** floating sailing-style top bar (logo→top, hide-on-scroll, `ask me anything` search with local smart answers, no profile btn) → dark hero with interactive liquid balls + Sailing/Golf portal cards → mission (editorial, Fraunces serif gradient accents on "ultimate data centre") → vision ("LinkedIn for athletes and sponsors" + accent on "connecting athletes with brands through AI-driven matchmaking") → ecosystem (Hosts/Athletes/Sponsors tabs, 3 alternating feature rows each, "Solves:" pain pills) → traction (enlarged class nuggets 29er/ILCA/OPTI/49er + 47 comps / 1,775 athletes) → contact (modal w/ copy `casey@athlink.win`) → footer. Global moving-ball background across the whole page.
-- **Images:** all 9 feature screenshots live in `apps/web/public/landing/` served at `/landing/*.png` (`host-1/2/3`, `athlete-1/2/3`, `sponsor-1/2/3`), each shown inside a browser-window chrome frame. `FeatureRow` falls back to a clean icon+title placeholder if an image 404s.
-- **Follow-ups:** (1) wire the nav search to the app's real AI search (currently local canned answers — Casey asked re: Kimi vs the existing `claude-haiku-4-5`); (2) make hero portal stats live from data. Standalone HTML preview kept at `~/Claude/Projects/ATHLINK/landing-preview/`.
-- **Validation:** esbuild PASS on `Landing.jsx` + `Shell.jsx`; TDZ reviewed. Note: `tools/pre_push_test.sh` matches `^src/`, so it no-ops on `apps/web` changes — esbuild is authoritative here.
+> ⚠️ **Branch state:** latest work merged to `main` via **PR #18** (merge commit `950bad2` — clean flat URLs + persistent athlete usernames + editable host slugs). The routing groundwork + brand icons landed on `main` just before it. Source branch `design-sync-setup` is **still present** (not deleted this round) — reuse it, or start fresh off `main` (`git checkout main && git pull && git checkout -b <new-branch>`).
+> ⚠️ **This HANDOFF edit is uncommitted** — commit it with the next push.
 
-## Where we are (previous work — Athlete Web, SHIPPED)
-The **Athlete Web** (force-directed graph of co-competitors on the athlete profile) has been heavily iterated. All edits are in the monorepo app: **`sports/sailing/src/App.jsx`** (NOT the old `src/App.jsx`). Casey commits + pushes from his terminal; the Cowork sandbox edits + validates (esbuild/TDZ) but cannot push. Merges to `main` are done in the browser via the Chrome extension.
+## How we work (the loop)
+Casey braindumps → assistant shows a short plan → implements directly → shows it live (localhost or a standalone HTML preview) → Casey says **"push"**. The **Cowork sandbox edits + validates (esbuild/TDZ) but cannot auth git** — Casey commits + pushes from his terminal; the assistant then opens the PR and **merges to `main` in the browser via the Chrome extension** once CI is green. Never push/merge without Casey's go-ahead.
 
-**Status: SHIPPED.** The whole Athlete Web + profile/menu polish body of work is **merged to `main` and live on athlink.win** — PR **#12** (`design-sync-setup` → `main`, commit `35d69d9`) merged 2026-07-01, all 4 checks green, Vercel production deploy triggered. Everything below is implemented, passing the esbuild/TDZ gate, and in production. `design-sync-setup` branch still exists (not deleted) and is Casey's working branch — start the next round of design tweaks on it (it's now level with `main` after the merge; `git pull` first).
+---
 
-⚠️ **Uncommitted:** this `HANDOFF.md` update is not yet committed — commit it with the next push.
+## MOST RECENT: Dev-mode hardening + logo + tab titles + member usernames — IN PROGRESS (uncommitted, 2026-07-02)
+Five changes, all validated (esbuild PASS on `sports/sailing/src/App.jsx` + `apps/web/src/Shell.jsx`; TDZ reviewed — new hooks reference only already-declared state). Awaiting Casey's localhost eyeball + **"push"**. Files touched: `sports/sailing/src/App.jsx`, `apps/web/src/Shell.jsx`, `CLAUDE.md`.
 
-### What shipped in PR #12 (commit 35d69d9, 2026-07-01)
-- **Portal class nuggets** (`HostClassPills`): when >3 classes the pills now **fan into an overlapping stack on one row** (in line with the host-type pill), most-popular at the back, `+N` opaque (`#2c3444`) on top at the right. Separator ring uses `var(--mat-reg)` (the card background token) so it reads as the card surface and tracks the background colour. `OVER=-12` overlap dial.
-- **Menu pill open/close** (`.menupill`): now **seamless, no bounce**. Root cause was `border-radius:980px` (height-capped) reflowing as the panel grew + animating to 24px = stretch-and-snap. Fixed to a constant `border-radius:25px` (≈ half closed bar height → still a capsule when closed, height-independent), so only the body elongates; top half never moves. Only `background` transitions now. Panel uses one unified ease `cubic-bezier(.33,0,.2,1)`.
-- **Profile filter chips** (`.filter-chip`): now **content-width and wrap inline** in their own flex-wrap row (were stretching full-width in a column). Dropped the chip `margin-bottom` (row gap handles it).
-- **Athlete web**: top rivals **10 → 15** (`slice(0,15)`); mini caption **"Top rivals" → "Top 15 Rivals"** (enlarged still dynamic `Top {count} rivals · …`).
-- **Competition footprint caption** moved **below** the globe container (`marginTop:10`, only on footprint tab) so it clears the sphere + glow (was pinned `bottom:4` over it).
+1. **Dev view never auto-on.** `devMode` now inits to `false` unconditionally; removed the `?dev=1` URL trigger, the localStorage read/write, and the post-launch admin-restore effect. Only **Ctrl/Cmd+Shift+D** toggles it, per session. Nobody lands in dev by accident or via a stale `?dev=1` link. (`~4418–4436`; "turn off" button no longer writes localStorage.)
+2. **Dev overrides auth fully (client-side).** In dev mode `canVouch` is forced true at both `HostMembersModal` call sites (standalone `~6983` + embedded via `HostEditModal` membersProps `~7054`), killing the "Your account must be verified before you can vouch/approve" warnings. The "pending AthLink verification" banner (`~3545`) is suppressed when `canManage`. `canEdit`/`canManageMembers`/claim-nudge already respected dev mode. ⚠️ DB writes still hit Supabase RLS — persisting needs a signed-in session.
+3. **Member usernames.** `fetchProfileNames` now returns `{names,usernames}` (was a bare name map — **both** callers updated: members modal `~3436` + DevApprovals `~3754`). Members tab renders the account `@username` in grey (`var(--mut)`) after the first/last name, on both active + pending rows.
+4. **Logo → canonical brand mark.** Sailing top-bar logo swapped from the lucide `<Link2>` chain-link to `<img src="/brand/icon-app-circle.png">` (the navy "A + chain-link" circle, matching Landing's `.tb-mark`). `.tb-logo` CSS now transparent + `overflow:hidden`. This bar shows on every sailing page. (Landing + favicons already used the brand assets.)
+5. **Dynamic tab title.** New effect (`~4` in the Clean-URL sync block) sets `document.title` to the current page's entity name — host portal → host name (e.g. "Hong Kong Sailing Federation"), athlete → name, event → event name, `/ranking` → "Ranking", `/athletes` → "Athletes", sailing home → "AthLink". Shell resets title to "AthLink" on the landing route.
 
-## What the Athlete Web is
-A tab beside the competition-footprint globe on the athlete profile. Each node = an athlete the focal has raced. There are two render modes from the same `AthleteWeb` component:
-- **Mini-web** — the small card on the profile (tab toggle: **Globe / Web**).
-- **Enlarged web** — opens in the same popup as the globe (tabbed **Globe / Web**), with a 70% canvas + 30% sidebar.
+6. **Blank event page on Back/deep-link — FIXED.** The event detail view was gated `{portal&&view.name==="event"}`, but `pathToState` resolves `/event/<id>` with `portal:null`, so any deep link, refresh, or Back-from-athlete-profile rendered a blank page (only top bar + footer). Dropped the `portal&&` — event view now renders on `view.name==="event"` alone (`~7656`). Guards stay mutually exclusive by `view.name`, so no double-render.
 
-## Key code locations (all in `sports/sailing/src/App.jsx`; long lines — grep, don't read whole)
-- `function WebIcon(` — custom spider-web SVG icon (lucide has none). Used by the Globe/Web toggles.
-- `function AthleteWeb(` — the component. Props:
-  - `name, events, height, dark, enlarged`
-  - `onPick(name)` — open an athlete profile (name pill / double-click node)
-  - `onOpen()` — mini-web: a node click fires this to open the popup
-  - `onOpenEvent(id)` — enlarged sidebar: clicking a competition opens its results (`go({name:"event",id})`)
-  - `onSelectionChange(node|null)` — reports the selected athlete up to the popup (drives the header Deselect button)
-  - `deselectKey` (number) — bump it to clear the web's selection from outside (the popup's Deselect)
-- `graph` useMemo — builds nodes/links from `events`. Per rival it also computes `nat` (mode of entry `nat`) and `cls` (the boat class they shared the **most** competitions with the focal in — drives node color).
-- The d3-force `useEffect` — sizing, scatter, forces, canvas draw, pointer/zoom/pan handlers. `st.draw` is stashed on the state ref so the external-deselect effect can repaint.
-- `function FootprintModal(` — the popup. Now renders the web **itself** (`<AthleteWeb {...webProps} enlarged .../>`) so it can own selection/deselect. Tabs are **Globe / Web**; default `titleSuffix="Globe"`.
-- Profile wiring: grep `profileTab` and `webProps={{`. Mini globe/web swap + the captions live there.
+**Console 403 on `host_invites` (`code 42501`, "new row violates row-level security policy") is NOT a bug** — it's Supabase RLS correctly rejecting an invite-creation write from a session that isn't a verified owner/admin. Harmless (the app keeps running); it just means the UI let an unauthorized create be attempted. Same class as the dev-mode caveat: UI open, DB enforces RLS.
 
-## Current tuning values (the dials Casey keeps adjusting)
-- **Node sizing** (`const F=...; const rad=...`): focal radius `F = enlarged?12.6:7.65`. Rivals = `F*0.8*ratio` where `ratio = shared/maxShared` (linear), floored at `enlarged?3.3:1.95`. So: top rival = **80% of focal**, everyone else scales linearly off the top rival, **no rival bigger than focal**. (History this session: focal 50% smaller → +20% → +50%; rival ratio 0.6 → 0.8.)
-- **Color**: focal = gold `#ffcf2e`; rivals = `classColor(n.cls)` (dominant shared boat class).
-- **Node count**: `.slice(0,15)` in the graph memo (top 15 rivals).
-- **Spread / physics** (in the `forceSimulation` chain):
-  - `velocityDecay(enlarged?.62:.58)` — damping (raised for relaxed, non-bouncy motion).
-  - link `.distance`: focal-incident = `(enlarged?126:47)+(1-ratio)*(enlarged?414:104)` → **big nodes sit closer to focal, small ones further**; rival-rival = `enlarged?270:91`. `.strength`: focal-edge `enlarged?.5:.45`, rival-rival `.04`.
-  - `charge` = `enlarged?-270:-60`, `distanceMax enlarged?1100:390`.
-  - `collide` = `rad(d)+(enlarged?10:7)`, strength `.6`.
-  - `forceX/forceY` center strength `enlarged?.04:.05`.
-  - **`bounds` custom force** — soft walls: any non-pinned node outside `[m, w-m]` gets nudged back (`a*0.6`). This brings dragged-off nodes back into frame; `endDrag` also does `sim.alpha(.55).restart()`.
-  - Initial **scatter**: rivals seeded radially by size with random jitter (bigger nearer) so layout looks organic.
-- **Labels**: enlarged = label **all** nodes, drawn in **screen space** (constant size, do NOT scale with zoom). Mini = label **only the hovered node** (no resting labels). See `labelFor` + the screen-space label pass in `draw`.
-- **Interactions**:
-  - Mini: drag nodes; **click a node → opens popup** (`onOpen`); empty space does nothing; no pan.
-  - Enlarged: drag nodes; click node → select (sidebar); **click empty → deselect**; scroll = zoom (labels don't grow); drag background = pan; double-click node → profile. Edges/connectors are non-interactive.
-- **Sidebar** (enlarged, 30%): athlete name as a plain **title** (same size as popup title, flag **after** the name, clickable → profile, no button chrome). Below: shared competitions **grouped by country** (sticky country pills, blur lives **inside** the pill not across the row), each competition row **clickable → results page**.
+**Open follow-ups:** none blocking. Optional: also surface usernames in the Audit-log rows; consider a subtle " · AthLink" title suffix if Casey wants branding on deep pages (currently bare page name by his request). Optional: gate the "Create invite link" button behind real authorization so it doesn't attempt RLS-blocked writes.
 
-## Other changes this session (outside the web)
-- **Globe popup country pills**: blur moved inside the pill (no full-row banner). Deselect button moved **left of the Globe/Web tabs**, works for both tabs.
-- **Profile**: "Footprint" renamed to **"Globe"** (toggle + popup tab + title). Web toggle uses the spider `WebIcon`. **Calendar** + **Instagram** buttons restyled to the translucent unselected pill (match Globe/Web; dropped `portal-pill` to kill the blue tint). Calendar nudged down (`marginTop:14`) to line up with "Athlete overview" — **approximate, may need a px nudge**. Mini-globe caption **"Competition footprint"** now sits **below** the globe (`marginTop:10`); mini-web caption is **"Top 15 Rivals"**.
-- **Home portal thumbnails**: class nuggets now **fan into an overlapping single-row stack** when >3 (see Latest push above). (Superseded the earlier `flex:1 1 0` second-row wrap approach.)
-- **Menu pill open animation**: **seamless, no bounce** — constant `border-radius:25px`, only the body elongates (see Latest push above). (Superseded the earlier top-ease/bottom-spring approach.)
+---
+
+## MOST RECENT: Clean flat URLs + native back/forward + persistent usernames — SHIPPED (PR #18, `950bad2`, 2026-07-01)
+Two linked changes, both live on `main` → athlink.win. DB migration applied to prod Supabase (`ylzoburtpibbgqdggjty`).
+
+### A. Path-based routing (replaced the hash router)
+- URLs are now real paths, not `#/…`. Scheme: `/` (landing, shell) · `/sailing` (sailing home) · `/<Host>` (portal) · `/<Host>/athletes` · `/<Athlete>` (profile) · `/athletes` · `/ranking` · `/event/<id>` · `/class/<clsId>`.
+- State⇄URL sync lives in **`sports/sailing/src/App.jsx`**: module-scope `stateToPath`/`pathToState` + the **"Clean-URL sync"** effect block (deep-link resolve on load, `pushState` on nav, `popstate` handler restores state). Guard `path !== location.pathname` prevents feedback loops; `urlReady` gates forward-sync until the initial deep-link resolves. Deep-link waits for `events` to load before resolving an athlete slug.
+- **Shell** (`apps/web/src/Shell.jsx`): `usePathRoute` routes by first path segment; a bare entity slug that isn't a sport id falls to `DEFAULT_SPORT` (sailing), which resolves it internally. Sports broadcast nav via `dispatchEvent(new Event("locationchange"))`; shell listens to that **+ popstate**. Landing `goSailing` + the in-app logo use path nav.
+- **`vercel.json`**: SPA rewrite `/((?!api/).*) → /index.html` so deep links don't 404 on refresh. Never let it swallow `/api`.
+- In-app **Back** button now calls `history.back()`; `navStack` only feeds the Back *label* now.
+
+### B. Persistent usernames (athletes) + editable slugs (hosts) — migration `0007_usernames.sql`
+- **`athlete_usernames`** table: `name_key` PK (= `lower(btrim(name))`, same key as `athlete_profiles`), `username` unique-ci, `display_name`, `is_custom`, `created_at`. Backfilled **~1,854** — default `FirstnameLastname` via `athlink_pascal()`, numbered by first appearance on clash, avoiding host slugs + reserved words. **`ensure_athlete_username` trigger** on `entries` insert covers all future imports. RLS: public read, verified-owner (approved `athlete_claims`) / admin write.
+- **`hosts.slug`** — editable public slug, unique-ci, backfilled to PascalCase(name). Internal **`hosts.id` UNCHANGED** (still the FK everywhere).
+- Uniqueness spans **both** namespaces (athlete usernames + host slugs) case-insensitively, since both live at the root path.
+- Frontend: **`ATHLETE_USERNAMES`** module registry (loaded from `athlete_usernames` **before** events); `usernameForName`/`nameForUsername`/`hostSlug`/`hostBySlug` drive the routing. `applyDbHosts` now carries `slug`. Falls back to `PascalCase(name)` if the map isn't loaded.
+- Editing UI: `AthleteEditModal` **"Profile link"** → `saveAthleteUsername`; `HostEditModal` **"Portal link"** → `saveHostSlug`. Both: case preserved (`[A-Za-z0-9]{3,30}`), reserved-word block, live availability check across athletes+hosts, "taken" message, then `replaceState` the new URL. DISTINCT from `profiles.username` (lowercase account/login handle — unchanged).
+
+**Product decisions locked (asked + answered):** fully-flat scheme (over prefixed); backfill-everyone-now; case-preserved usernames; identical athlete names stay **ONE** profile (numbering only breaks real clashes — same-name-different-person separation is still unsolved, needs identity resolution).
+
+**Validation:** esbuild PASS (App.jsx / Shell.jsx / Landing.jsx via `/tmp` Linux esbuild); TDZ reviewed (new handlers reference `view`/`portal` only inside closures — safe; all setters declared above use). Full `vite build` can't run in the sandbox (macOS `node_modules`), but the **Vercel CI frontend build PASSED on PR #18** — that's the authoritative full-build check.
+
+**Open follow-ups (this work):**
+1. **Non-ASCII usernames are cosmetically rough** — `Martina Díaz-Salguero` → `MartinaDAzSalguero` (accents stripped, letters split). Fix = transliterate (í→i) in `athlink_pascal` + re-backfill, or just let owners edit. Functional + unique today.
+2. **🔴 `is_athlink_admin()` still returns true for ANY logged-in user** (placeholder, see CLAUDE.md action items). That makes the username/slug write RLS effectively open to any signed-in user. Replace with real admin UUID(s) — HIGH priority before public launch.
+3. Default host slug is the full name (e.g. `HongKongSailingFederation`); Casey/hosts shorten to `HKSF` in **Edit portal → Portal link**.
+4. Optional: sync `profiles.username` (account handle) with the roster username on edit so they don't diverge.
+
+---
+
+## RECENT (prior session): Landing polish — SHIPPED (PR #15, `7c9edf2`, 2026-07-01)
+Follow-up tweaks to the landing (`apps/web/src/Landing.jsx`), all CSS/copy — no logic changes:
+- **Hero spacing fix.** The hero heading was cut off under the fixed nav. Root cause: the hero container is `class="wrap hero-inner"`, and `.al-landing .wrap` (2 classes, sets `padding:0 24px`) **out-specificities** `.hero-inner` (1 class), forcing vertical padding to `0`. Neither the old `150px` nor an interim `190px` ever applied. **Fix:** selector is now `.al-landing .hero-inner` → `padding:200px 24px 150px` (200 top clears the 78px nav with ~130px gap; 150 bottom gives room under the portal cards). ⚠️ **Gotcha:** any landing element that also carries `.wrap` needs a **2-class** selector to override padding/margins.
+- **Serif accents → Newsreader, upright.** Swapped `--serif` from **Fraunces** to **Newsreader**. (Cartesia — the design inspiration — actually uses the *commercial* **PP Kyoto** headings + **ABC Diatype** body; Newsreader is the closest free match. If Casey licenses PP Kyoto, self-host the `.woff2` in `apps/web/public/fonts/` for an exact match.) Font now loads via a self-contained `@import` **inside the component `<style>`** (no longer depends on `index.html`), plus `font-optical-sizing:auto`. Accents (`.hero .sub`, `.em`) changed `font-style:italic` → **normal** to mirror Cartesia. ⚠️ The Fraunces `<link>` in `apps/web/index.html` is now **unused** — safe to delete (cleanup).
+- **Traction copy:** label "Verified athletes" → **"100% real data"**; heading "Built with Hong Kong's class associations" → **"Every profile is verified by top organizations"**.
+
+Verified live via Chrome DevTools on localhost before merge (computed `padding-top:200px`, nav-to-h1 gap 130px, `font-style:normal`, family `Newsreader`). esbuild PASS; TDZ n/a (CSS/text only).
+
+---
+
+## EARLIER: Landing page — front-door build — SHIPPED (PR #14, `74ad598`, 2026-07-01)
+> Fonts + hero spacing have since changed — see **PR #15** above for current state (Newsreader/upright serif, `.al-landing .hero-inner` padding). Notes below describe the original build.
+
+The AthLink shell front door (`apps/web`) previously had only a stub `Landing()`. It is now a full one-page marketing/brand landing. Structure inspired by cartesia.ai, reskinned entirely in AthLink tokens (navy + liquid glass + SF Pro).
+
+**Files:**
+- **`apps/web/src/Landing.jsx`** (NEW) — the whole landing. Self-styled via an injected `<style>` block; renders **outside** `ThemeRoot` on purpose so the Fraunces serif accents survive the `.al-ds *{font-family…!important}` override. Design tokens (`--navy`, `--accent`, `--mat-*`, etc.) come from `@athlink/design-system` `tokens.css` (`:root`); class colours (`--c29/--cilca/--c49/--copt`) + `--serif` are defined locally on `.al-landing`.
+- **`apps/web/src/Shell.jsx`** — no-sport route now returns `<Landing sports={sports} />` (no `ThemeRoot`). Old stub `Landing()` + unused `Card/PageHeader/ChevronRight` imports removed.
+- **`apps/web/index.html`** — added the Fraunces Google Font link.
+- **`apps/web/public/landing/*.png`** — all 9 feature screenshots, served at `/landing/*.png` (`host-1/2/3`, `athlete-1/2/3`, `sponsor-1/2/3`).
+
+**Sections (top → bottom):** floating sailing-style top bar (logo→scroll-top, hide-on-scroll-down, `ask me anything` search, **no profile button**) → dark hero with interactive liquid balls + **Sailing (Live) / Golf (Soon)** portal cards → **mission** (editorial, light body, Fraunces italic-gradient accent on "ultimate data centre") → **vision** ("LinkedIn for athletes and sponsors" + accent on "connecting athletes with brands through AI-driven matchmaking") → **ecosystem** ("Built by elite athletes" / "Making data actually interesting"; Hosts/Athletes/Sponsors tabs, 3 alternating feature rows each, "Solves:" red pain-pills, each screenshot in a **browser-window chrome frame**) → **traction** ("Verified athletes"; enlarged class nuggets 29er/ILCA/OPTI/49er + stats 47 competitions / 1,775 athletes) → **contact** (modal with copy-to-clipboard `casey@athlink.win`) → footer. **Global moving-ball background** across the whole page (`.al-liquid`, opacity .42); hero has its own brighter dark-tuned ball canvas.
+
+**Behaviours:** `FeatureRow` shows a clean icon+title placeholder if an image 404s. Search (`searchAnswer`) is **local canned answers** for now (contact, sports, athletes, competitions, classes). Liquid ball logic (`useLiquid`) is ported from the sailing app's `LiquidBackground`.
+
+**Validation:** esbuild PASS on `Landing.jsx` + `Shell.jsx`; TDZ reviewed; fixed a CSS stacking bug (`isolation:isolate` + `z-index:-1` on `.al-liquid`, matching the sailing `.al-ds` trick) so the fixed nav/modal aren't overridden. Standalone HTML preview kept at **`~/Claude/Projects/ATHLINK/landing-preview/`** (mirror of the React version; images in its `shots/`).
+
+**Open follow-ups (landing):**
+1. **Wire the nav search to real AI** — currently local canned answers. Casey to decide: keep the app's existing `claude-haiku-4-5`, or switch to **Kimi** (he mentioned "same API key it already has"). Needs a backend endpoint.
+2. **Live hero portal stats** — the `47 competitions / 1,775 athletes` are hardcoded; wire to live counts from app/Supabase data.
+3. Golf portal is a placeholder ("Soon") — no golf sport in the registry yet.
+
+---
+
+## PRIOR: Athlete Web + profile/menu polish — SHIPPED (PR #12, `35d69d9`, 2026-07-01)
+All in the monorepo app **`sports/sailing/src/App.jsx`** (NOT the old `src/App.jsx`). Merged and live. Reference below for the co-competitor graph on the athlete profile.
+
+### What shipped in PR #12
+- **Portal class nuggets** (`HostClassPills`): >3 classes fan into an overlapping one-row stack, most-popular at back, `+N` opaque (`#2c3444`) on top; separator ring uses `var(--mat-reg)`. `OVER=-12`.
+- **Menu pill open/close** (`.menupill`): seamless, no bounce — constant `border-radius:25px`, only the body elongates; one ease `cubic-bezier(.33,0,.2,1)`.
+- **Profile filter chips** (`.filter-chip`): content-width, wrap inline.
+- **Athlete web**: top rivals 10 → 15 (`slice(0,15)`); mini caption "Top 15 Rivals".
+- **Competition footprint caption** moved below the globe (`marginTop:10`).
+
+### What the Athlete Web is
+A tab beside the competition-footprint globe on the athlete profile. Each node = an athlete the focal has raced. Two render modes from the same `AthleteWeb` component: **Mini-web** (small card on profile, Globe/Web toggle) and **Enlarged web** (in the globe popup, 70% canvas + 30% sidebar).
+
+### Key code locations (all in `sports/sailing/src/App.jsx`; long lines — grep, don't read whole)
+- `function WebIcon(` — custom spider-web SVG icon. Used by the Globe/Web toggles.
+- `function AthleteWeb(` — props: `name, events, height, dark, enlarged`; `onPick(name)`, `onOpen()`, `onOpenEvent(id)`, `onSelectionChange(node|null)`, `deselectKey`.
+- `graph` useMemo — builds nodes/links from `events`; per rival computes `nat` (mode) and `cls` (dominant shared boat class → node colour).
+- The d3-force `useEffect` — sizing, scatter, forces, canvas draw, pointer/zoom/pan. `st.draw` stashed on the state ref for external-deselect repaint.
+- `function FootprintModal(` — the popup; renders the web itself so it owns selection/deselect. Tabs Globe / Web; default `titleSuffix="Globe"`.
+- Profile wiring: grep `profileTab` and `webProps={{`.
+
+### Current tuning values (dials Casey keeps adjusting)
+- **Node sizing**: focal `F = enlarged?12.6:7.65`; rivals `F*0.8*ratio` (`ratio = shared/maxShared`), floored `enlarged?3.3:1.95`. Top rival = 80% of focal; none bigger than focal.
+- **Colour**: focal gold `#ffcf2e`; rivals `classColor(n.cls)`.
+- **Count**: `.slice(0,15)`.
+- **Physics** (`forceSimulation`): `velocityDecay(enlarged?.62:.58)`; link `.distance` focal-incident `(enlarged?126:47)+(1-ratio)*(enlarged?414:104)`, rival-rival `enlarged?270:91`; `.strength` focal `enlarged?.5:.45`, rival-rival `.04`; `charge enlarged?-270:-60`, `distanceMax enlarged?1100:390`; `collide rad(d)+(enlarged?10:7)` str `.6`; `forceX/Y` center `enlarged?.04:.05`; custom `bounds` soft walls (`a*0.6`); `endDrag` → `sim.alpha(.55).restart()`; radial size-seeded initial scatter.
+- **Labels**: enlarged = all nodes, screen-space constant size; mini = hovered node only.
+- **Interactions**: mini → click node opens popup, no pan; enlarged → click select / empty deselect / scroll zoom / drag pan / dbl-click profile.
+- **Sidebar** (enlarged 30%): name as plain title (flag after name, clickable), shared competitions grouped by country (sticky pills, blur inside pill), rows clickable → results.
+
+### Athlete-web eyeball items
+- Enlarged spread is aggressive — dial `charge`/link `distance`/center strength if too edge-packed.
+- Calendar vertical alignment (`marginTop:14`) approximate vs "Athlete overview".
+- Smallest rival nodes have a visibility floor — Casey may want full shrink.
+- Possible refactor: extract `AthleteWeb` to its own module during the design-system extraction.
+
+---
 
 ## Validation gates (before push)
-- **JSX/TDZ**: esbuild syntax check. Sandbox is Linux, so install esbuild in `/tmp` (`cd /tmp && npm i esbuild`) and run with externals `react,react-dom,lucide-react,recharts,d3-force`. On Casey's Mac use `pnpm --filter @athlink/web build`. **TDZ is the #1 white-screen vector** — manually review any new hook/useEffect for use-before-declare.
-- Parser untouched this work; if `api/*.py` changes, run `python3 -c "import ast..."` + `python3 tools/test_parser.py --diff`.
-- ⚠️ `tools/pre_push_test.sh` (Stop-hook gate) still matches `^src/`, NOT the monorepo `sports/*/src/`, so it **silently no-ops on these frontend changes**. Fix it to match `sports/*/src/` when convenient.
+- **JSX/TDZ**: esbuild syntax check. Sandbox is Linux → install esbuild in `/tmp` (`cd /tmp && npm i esbuild`), run with externals `react,react-dom,lucide-react,recharts,d3-force`. On Casey's Mac: `pnpm --filter @athlink/web build`. **TDZ is the #1 white-screen vector** — manually review any new hook/useEffect for use-before-declare.
+- Parser: if `api/*.py` changes, run `python3 -c "import ast..."` + `python3 tools/test_parser.py --diff`.
+- ⚠️ **`tools/pre_push_test.sh` matches `^src/` only** — it **no-ops on `apps/web` and `sports/*/src/`** changes. esbuild is the authoritative gate for those. Fix the glob when convenient (add `apps/*/src/` and `sports/*/src/`).
 
 ## Dev loop & environment quirks
-- Always `cd ~/Desktop/AthLink2.0` first. Run `pnpm dev` (often lands on http://localhost:5174). HMR picks up edits — just refresh.
-- Sandbox can't auth git/push or run pnpm; Casey runs/validates/pushes. `d3-force` is installed (`pnpm --filter @athlink/sport-sailing add d3-force`).
-
-## Push workflow ("push" trigger)
-Casey says **"push"** → run the pre-push gate, then on PASS Casey commits + pushes from his terminal; Vercel preview builds; once green + CI passes, merge the PR to `main` in the browser → athlink.win. Never push without Casey's go-ahead.
-
-## Open follow-ups / things to eyeball
-- **+80% enlarged spread** is aggressive — nodes may pack toward the frame edges (soft walls hold them). Dial `charge` / link `distance` / center strength if Casey wants it tighter.
-- **Calendar vertical alignment** (`marginTop:14`) is approximate — confirm against "Athlete overview".
-- Smallest rival nodes have a visibility **floor** (so 2%-of-top nodes don't vanish) — Casey may want them to shrink fully instead.
-- Possible refactor: extract `AthleteWeb` to its own module when the monorepo design-system extraction happens.
-- Fix `tools/pre_push_test.sh` path glob (see Validation gates).
+- Always `cd ~/Desktop/AthLink2.0` first. `pnpm dev` (often lands on http://localhost:5174). Routing is now **path-based** (not hash): `/` = landing, `/sailing` = sailing home, `/<Host>`, `/<Athlete>`, `/<Host>/athletes`, `/ranking`, `/event/<id>` — see the MOST RECENT section. HMR — just refresh; test deep-link + browser back/forward.
+- ⚠️ **Watch the port `pnpm dev` prints.** Stale/zombie servers hold 5173/5174, so a new `pnpm dev` silently jumps to **5175** etc. — editing source while viewing an old port looks like "nothing changed." Kill zombies: `lsof -ti:5173,5174,5175 | xargs kill`. Also: the built `apps/web/dist/` is stale; `pnpm dev` runs `vite` (live HMR), not `vite preview`, so don't serve `dist/`.
+- Sandbox can't auth git/push or run pnpm; Casey runs/validates/pushes. `d3-force` installed on `@athlink/sport-sailing`.
 
 ## Key references
 `CLAUDE.md` (tokens, parser rules, gotchas) · `migrations/README.md` · `MONOREPO_SETUP.md` / `MONOREPO_STATUS.md` (historical).
