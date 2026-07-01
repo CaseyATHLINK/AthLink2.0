@@ -9,8 +9,10 @@ import {
 } from "lucide-react";
 
 const CSS = `
-.al-landing{--c29:#E84855;--cilca:#2E78C8;--c49:#5FAF4E;--copt:#3D3D3D;--serif:'Fraunces',ui-serif,Georgia,serif;
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&display=swap');
+.al-landing{--c29:#E84855;--cilca:#2E78C8;--c49:#5FAF4E;--copt:#3D3D3D;--serif:'Newsreader',ui-serif,Georgia,serif;
   font-family:var(--sans,-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif);
+  font-optical-sizing:auto;
   color:var(--ink);-webkit-font-smoothing:antialiased;letter-spacing:-.01em;line-height:1.5;
   background:linear-gradient(165deg,#d5deee 0%,#dfe8f5 45%,#e6eaf3 100%);background-attachment:fixed;min-height:100vh;position:relative;z-index:0;isolation:isolate;}
 .al-landing *{box-sizing:border-box;margin:0;padding:0;}
@@ -52,10 +54,10 @@ const CSS = `
 .hero{position:relative;overflow:hidden;color:#fff;border-radius:0 0 36px 36px;background:radial-gradient(120% 120% at 20% 0%,#1a4372 0%,#12263f 45%,#0a1c31 100%);}
 .hero-liquid{position:absolute;inset:0;width:100%;height:100%;filter:blur(30px) saturate(135%);opacity:.7;}
 .hero-veil{position:absolute;inset:0;background:radial-gradient(80% 60% at 80% 20%,rgba(10,132,255,.22),transparent 60%);}
-.hero-inner{position:relative;z-index:2;padding:150px 0 96px;text-align:center;}
+.al-landing .hero-inner{position:relative;z-index:2;padding:200px 24px 150px;text-align:center;}
 .hero h1{font-size:70px;line-height:1.0;font-weight:800;letter-spacing:-.04em;max-width:15ch;margin:0 auto 20px;}
 .hero h1 .g{background:linear-gradient(100deg,#bfe0ff,#7cb4ff);-webkit-background-clip:text;background-clip:text;color:transparent;}
-.hero .sub{font-family:var(--serif);font-style:italic;font-weight:500;font-size:27px;line-height:1.4;margin:0 auto 44px;background:linear-gradient(100deg,#d3e8ff,#8fbcff);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.hero .sub{font-family:var(--serif);font-style:normal;font-weight:500;font-size:27px;line-height:1.4;margin:0 auto 44px;background:linear-gradient(100deg,#d3e8ff,#8fbcff);-webkit-background-clip:text;background-clip:text;color:transparent;}
 
 .portals{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;}
 .pcard{width:280px;text-align:left;background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border-radius:16px;padding:22px 24px;cursor:pointer;transition:.18s;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 10px 30px -14px rgba(0,0,0,.5);}
@@ -79,7 +81,7 @@ const CSS = `
 
 .mission{text-align:center;}
 .mtext{font-size:27px;line-height:1.5;font-weight:400;color:#33425e;max-width:820px;margin:0 auto;letter-spacing:-.015em;text-align:center;}
-.em{font-family:var(--serif);font-style:italic;font-weight:500;font-size:1.14em;background:linear-gradient(100deg,var(--navy2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent;}
+.em{font-family:var(--serif);font-style:normal;font-weight:500;font-size:1.14em;background:linear-gradient(100deg,var(--navy2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent;}
 .vision-wrap{max-width:920px;margin:0 auto;}
 .vision-tag{font-size:34px;font-weight:800;letter-spacing:-.03em;color:var(--navy);text-align:center;margin-bottom:26px;}
 
@@ -411,8 +413,8 @@ export default function Landing({ sports = [] }) {
       {/* TRACTION / CLASSES */}
       <section className="center" id="classes">
         <div className="wrap">
-          <div className="seclabel">Verified athletes</div>
-          <h2 className="sec-h center">Built with Hong Kong's class associations</h2>
+          <div className="seclabel">100% real data</div>
+          <h2 className="sec-h center">Every profile is verified by top organizations</h2>
           <p className="sec-lead center">Currently partnering with the Hong Kong Sailing Federation, the organization that produces Olympic-track sailors.</p>
           <div className="nuggets">
             <div className="nugget" style={{ background: "rgba(232,72,85,.13)", color: "var(--c29)" }}><div className="nn">29er</div><div className="nc">14 competitions</div></div>
