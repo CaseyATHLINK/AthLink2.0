@@ -2081,9 +2081,27 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
 
   if(graph.nodes.length<=1)
     return(<div ref={wrapRef} style={{height,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#9fbdd9",fontSize:12,padding:"0 16px",lineHeight:1.5}}>Not enough shared competitions yet to build a web.</div>);
+  // Colour key for the nodes: focal (gold) + every boat class present among the rivals
+  // (dynamic — only classes actually on screen), coloured to match the node fills.
+  const legend=(()=>{
+    const out=[{id:"__focal",label:"This athlete",color:"#ffcf2e"}];
+    const seen=new Set();
+    graph.nodes.forEach(n=>{if(n.focal)return;const key=(n.cls||"").toLowerCase();if(seen.has(key))return;seen.add(key);
+      out.push({id:key||"__none",label:n.cls?classLabel(n.cls):"Other",color:classColor(n.cls)});});
+    return out;
+  })();
   const canvasPane=(
     <div ref={wrapRef} style={{position:"relative",width:"100%",height}}>
       <canvas ref={canvasRef} style={{display:"block",width:"100%",height,touchAction:"none"}}/>
+      <div style={{position:"absolute",top:8,left:8,display:"flex",flexDirection:"column",gap:4,pointerEvents:"none",
+        background:"rgba(8,24,45,.5)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",
+        border:"1px solid rgba(120,160,210,.22)",borderRadius:9,padding:"7px 10px"}}>
+        {legend.map(l=>(
+          <div key={l.id} style={{display:"flex",alignItems:"center",gap:7,fontSize:enlarged?11.5:10,color:"#dcecf8",fontWeight:600,lineHeight:1}}>
+            <span style={{width:enlarged?11:9,height:enlarged?11:9,borderRadius:"50%",background:l.color,flex:"none",boxShadow:"0 0 0 1px rgba(255,255,255,.4)"}}/>{l.label}
+          </div>
+        ))}
+      </div>
       <div style={{position:"absolute",bottom:4,left:0,right:0,textAlign:"center",fontSize:10,color:"#7fa0c0",pointerEvents:"none"}}>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 Rivals`}</div>
     </div>
   );
