@@ -1187,13 +1187,14 @@ async function devDeleteProfile(userId,tok){
   await hostRest(`athlete_claims?user_id=eq.${userId}`,{method:"DELETE"},tok);
   await hostRest(`profiles?user_id=eq.${userId}`,{method:"DELETE"},tok);
 }
-// Resolve a set of user_ids to display names. Reads profiles (first/last/display_name);
-// falls back to the public_profiles view, then a short id. Returns {user_id: name}.
+// Resolve a set of user_ids to display names + account usernames. Reads profiles
+// (first/last/display_name/username); falls back to the public_profiles view,
+// then a short id. Returns {names:{user_id:name}, usernames:{user_id:username}}.
 async function fetchProfileNames(ids,tok){
   const uniq=[...new Set((ids||[]).filter(Boolean))];
-  if(!uniq.length) return {};
+  if(!uniq.length) return {names:{},usernames:{}};
   const inList="("+uniq.map(encodeURIComponent).join(",")+")";
-  const out={};
+  const out={}; const unames={};
   // Try the full profiles table first (RLS may scope this).
   let rows=await hostRest(`profiles?user_id=in.${inList}&select=user_id,first_name,last_name,display_name,username`,{},tok);
   // Fall back to the public_profiles view for any ids not resolved.
@@ -1210,10 +1211,10 @@ async function fetchProfileNames(ids,tok){
     const full=`${r.first_name||""} ${r.last_name||""}`.trim();
     return full||r.display_name||r.username||null;
   };
-  (rows||[]).forEach(r=>{const n=nameOf(r); if(n) out[r.user_id]=n;});
+  (rows||[]).forEach(r=>{const n=nameOf(r); if(n) out[r.user_id]=n; if(r.username) unames[r.user_id]=r.username;});
   (pub||[]).forEach(r=>{if(!out[r.user_id]&&r.display_name) out[r.user_id]=r.display_name;});
   uniq.forEach(id=>{if(!out[id]) out[id]=`User ${id.slice(0,8)}`;});
-  return out;
+  return {names:out,usernames:unames};
 }
 async function logHostAudit(hostId,actorId,action,targetId,detail,tok){
   return hostRest("host_audit",{method:"POST",body:JSON.stringify({host_id:hostId,actor_user_id:actorId,action,target_user_id:targetId||null,detail:detail||null})},tok);
@@ -3414,6 +3415,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pe
   const[invites,setInvites]=React.useState([]);
   const[audit,setAudit]=React.useState([]);
   const[memberNames,setMemberNames]=React.useState({});
+  const[memberUsernames,setMemberUsernames]=React.useState({});
   const[busy,setBusy]=React.useState(false);
   const[err,setErr]=React.useState("");
   const[newInvite,setNewInvite]=React.useState(null); // {url,role}
@@ -3433,9 +3435,10 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pe
     ]);
     setMembers(m||[]); setInvites(inv||[]); setAudit(a||[]);
     const ids=[...new Set([...(m||[]).map(x=>x.user_id),...(a||[]).flatMap(x=>[x.actor_user_id,x.target_user_id])])].filter(Boolean);
-    if(ids.length){ const nm=await fetchProfileNames(ids,tok); setMemberNames(nm); }
+    if(ids.length){ const {names,usernames}=await fetchProfileNames(ids,tok); setMemberNames(names); setMemberUsernames(usernames); }
   },[hostId,tok]);
   const displayName=(id)=>id?(memberNames[id]||`User ${id.slice(0,8)}`):"—";
+  const usernameOf=(id)=>id?(memberUsernames[id]||null):null;
   React.useEffect(()=>{ load(); },[load]);
 
   const refresh=async()=>{ await load(); onChanged&&onChanged(); };
@@ -3542,7 +3545,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pe
               Your request to join is pending approval from an owner.
             </div>
           )}
-          {myMembership&&myMembership.status==="active"&&!myMembership.verified&&(
+          {myMembership&&myMembership.status==="active"&&!myMembership.verified&&!canManage&&(
             <div style={{background:"rgba(10,132,255,.07)",border:"1px solid rgba(10,132,255,.2)",borderRadius:12,padding:"12px 15px",fontSize:13,color:"var(--navy)"}}>
               You're an active <b>{myMembership.role}</b>, pending AthLink verification before import/edit access is enabled.
             </div>
@@ -3565,7 +3568,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pe
                   {pending.map(m=>(
                     <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:"1px solid var(--line)"}}>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{displayName(m.user_id)}</div>
+                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{displayName(m.user_id)}{usernameOf(m.user_id)&&<span style={{marginLeft:6,fontSize:12,color:"var(--mut)",fontWeight:500}}>@{usernameOf(m.user_id)}</span>}</div>
                         <div style={{fontSize:11.5,color:"var(--mut)"}}>requested {m.role}</div>
                       </div>
                       <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={busy} onClick={()=>grant(m)}><CheckCircle size={13}/>Grant</button>
@@ -3583,7 +3586,7 @@ function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pe
                   return(
                     <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid var(--line)"}}>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{displayName(m.user_id)}{isMe?" (you)":""}{!m.verified&&<span style={{marginLeft:6,fontSize:10.5,color:"#a85c00",fontWeight:700}}>unverified</span>}</div>
+                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{displayName(m.user_id)}{usernameOf(m.user_id)&&<span style={{marginLeft:6,fontSize:12,color:"var(--mut)",fontWeight:500}}>@{usernameOf(m.user_id)}</span>}{isMe?" (you)":""}{!m.verified&&<span style={{marginLeft:6,fontSize:10.5,color:"#a85c00",fontWeight:700}}>unverified</span>}</div>
                       </div>
                       <RoleBadge role={m.role}/>
                       {!isMe&&(
@@ -3748,8 +3751,8 @@ function DevApprovalsModal({auth,hosts,nameForHost,eventCountFor,memberCountFor,
   const load=React.useCallback(async()=>{
     const r=await fetchUnverifiedMembers(tok);
     setRows(r||[]);
-    const nm=await fetchProfileNames((r||[]).map(x=>x.user_id),tok);
-    setNames(nm);
+    const {names}=await fetchProfileNames((r||[]).map(x=>x.user_id),tok);
+    setNames(names);
   },[tok]);
   React.useEffect(()=>{load();},[load]);
 
@@ -4416,35 +4419,20 @@ export default function AthLinkMVP(){
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
   // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
-  // Lets Casey edit the platform pre-launch without signing in. Forces full
-  // (association) access. Enable with ?dev=1 in the URL or Ctrl/Cmd+Shift+D;
-  // persists in localStorage. REMOVE / set DEV_VIEW_ENABLED=false at publish.
-  // Open to everyone until public launch. After launch, flip DEV_VIEW_ENABLED to
-  // false and dev view stays available ONLY to the admin login below (persists).
+  // Lets Casey edit the platform without signing in. Forces full (association)
+  // access. ALWAYS starts OFF on every page load — dev view is strictly opt-in
+  // per session via Ctrl/Cmd+Shift+D. No URL param, no localStorage, so nobody
+  // ever lands in dev mode by accident (or by keeping a stale ?dev=1 link).
   const DEV_VIEW_ENABLED=true;
   const ADMIN_EMAIL="casey@athlink.win";
   const isAdminUser=(auth?.user?.email||"").toLowerCase()===ADMIN_EMAIL;
   const devEligible=DEV_VIEW_ENABLED||isAdminUser;
-  const[devMode,setDevMode]=useState(()=>{
-    try{
-      if(!DEV_VIEW_ENABLED) return false; // post-launch: admin re-enabled by the effect below
-      if(typeof window!=="undefined"&&new URLSearchParams(window.location.search).get("dev")==="1"){localStorage.setItem("athlink_dev","1");return true;}
-      return localStorage.getItem("athlink_dev")==="1";
-    }catch{return false;}
-  });
-  // Post-launch: restore the admin's persisted dev view once they're signed in.
-  useEffect(()=>{
-    if(DEV_VIEW_ENABLED||!isAdminUser) return;
-    try{
-      const want=new URLSearchParams(window.location.search).get("dev")==="1"||localStorage.getItem("athlink_dev")==="1";
-      if(want) setDevMode(true);
-    }catch{}
-  },[isAdminUser]);
+  const[devMode,setDevMode]=useState(false); // never auto-on — keyboard shortcut only
   useEffect(()=>{
     if(!devEligible){ setDevMode(false); return; }
     const onKey=(e)=>{ if((e.ctrlKey||e.metaKey)&&e.shiftKey&&(e.key==="D"||e.key==="d")){
       e.preventDefault();
-      setDevMode(d=>{const nv=!d;try{localStorage.setItem("athlink_dev",nv?"1":"0");}catch{};return nv;});
+      setDevMode(d=>!d);
     }};
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
   },[devEligible]);
@@ -5330,6 +5318,21 @@ export default function AthLinkMVP(){
     window.addEventListener("popstate",onPop);
     return()=>window.removeEventListener("popstate",onPop);
   },[events]);
+  // 4) Browser tab title ⇄ current page. Each page reads as its own entity name
+  //    (e.g. "Hong Kong Sailing Federation", an athlete name, an event) so tabs
+  //    and history are legible; the sailing home / unknown falls back to AthLink.
+  useEffect(()=>{
+    const v=view||{name:"portals"};
+    const hostName=id=>{const h=hostById(id); if(h) return h.name; if(typeof id==="string"&&id.startsWith("class:")) return classLabel(id.slice(6)); return null;};
+    let t;
+    if(v.name==="profile")      t=v.id||"Athlete";
+    else if(v.name==="event"){  const ev=events.find(e=>e.id===v.id); t=ev?ev.name:"Competition"; }
+    else if(v.name==="ranking") t="Ranking";
+    else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:"Athletes";
+    else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else sailing home
+    else                        t="AthLink"; // portals home
+    document.title=t||"AthLink";
+  },[portal,view,events]);
 
   const navBack=()=>{
     // Drive the in-app Back button through real browser history so it stays in
@@ -6661,8 +6664,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .topbar2.hidden{transform:translateY(-135%);opacity:0;}
     .topbar2>*{pointer-events:auto;}
     .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 8px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;}
-    .tb-logo{width:32px;height:32px;border-radius:980px;background:var(--accent);color:#fff;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}
-    .tb-logo:hover{filter:brightness(1.08);transform:scale(1.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 4px 12px -3px rgba(10,132,255,.5);}
+    .tb-logo{width:32px;height:32px;border-radius:980px;overflow:hidden;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;}
+    .tb-logo img{width:100%;height:100%;display:block;border-radius:inherit;}
+    .tb-logo:hover{transform:scale(1.06);box-shadow:0 4px 12px -3px rgba(22,58,99,.5);}
     .tb-divider{width:1px;height:18px;background:rgba(0,0,0,.12);flex:none;margin:0 4px 0 10px;}
     .tb-sport{font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.01em;cursor:pointer;padding:5px 11px 5px 6px;border-radius:980px;transition:.15s;}
     .tb-sport:hover{background:rgba(19,49,78,.10);}
@@ -6866,7 +6870,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     {/* left: two targets on one pill — logo → AthLink landing (shell); "Sailing" → sailing home. */}
     <div className="tb-brand">
       <span className="tb-logo" title="Back to AthLink — all sports"
-        onClick={()=>{window.history.pushState(null,"","/");window.dispatchEvent(new Event("locationchange"));}}><Link2 size={15}/></span>
+        onClick={()=>{window.history.pushState(null,"","/");window.dispatchEvent(new Event("locationchange"));}}><img src="/brand/icon-app-circle.png" alt="AthLink"/></span>
       <span className="tb-divider"/>
       <span className="tb-sport" title="Sailing home" onClick={goHome}>Sailing</span>
     </div>
@@ -6892,7 +6896,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           <MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>
           {devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevApprovals(true);}}>Pending approvals</MagneticItem>}
           {devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevProfiles(true);}}>All profiles</MagneticItem>}
-          {devMode&&<button className="mp-dev" onClick={()=>{setDevMode(false);try{localStorage.setItem("athlink_dev","0");}catch{}}}><Pencil size={11}/>Dev view ON — turn off</button>}
+          {devMode&&<button className="mp-dev" onClick={()=>setDevMode(false)}><Pencil size={11}/>Dev view ON — turn off</button>}
         </div>
         {gSearchOpen&&gSearchResults.length>0&&(
           <div className="mp-drop">
@@ -6993,7 +6997,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const pendingEventClaimsHere=allEventClaims.filter(c=>c.status==="pending"&&c.host_id===portal).map(c=>({...c,_eventName:(events.find(e=>e.id===c.event_id)||{}).name||"(event)"}));
     return(
     <HostMembersModal hostId={portal} hostName={host.name} auth={auth} myMembership={myPortalMembership}
-      pendingClaims={pendingClaimsHere} pendingEventClaims={pendingEventClaimsHere} canVouch={!!myPortalMembership&&myPortalMembership.verified}
+      pendingClaims={pendingClaimsHere} pendingEventClaims={pendingEventClaimsHere} canVouch={devMode||(!!myPortalMembership&&myPortalMembership.verified)} canManage={canManageMembers}
       onDecideClaim={(claim,approve)=>resolveClaim(claim,approve,portal)}
       onDecideEventClaim={async(claim,approve)=>{
         await decideEventClaim(claim.id,approve,auth.user.id,portal,auth.token);
@@ -7064,7 +7068,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <HostEditModal host={hostById(portal)} canManage={canManageMembers}
       onSave={(patch)=>saveHost(portal,patch)} onSaveSlug={saveHostSlug}
       membersProps={{hostId:portal,hostName:hostById(portal).name,auth,myMembership:myPortalMembership,
-        pendingClaims:pendingClaimsHere,pendingEventClaims:pendingEventClaimsHere,canVouch:!!myPortalMembership&&myPortalMembership.verified,
+        pendingClaims:pendingClaimsHere,pendingEventClaims:pendingEventClaimsHere,canVouch:devMode||(!!myPortalMembership&&myPortalMembership.verified),
         onDecideClaim:(claim,approve)=>resolveClaim(claim,approve,portal),
         onDecideEventClaim:async(claim,approve)=>{
           await decideEventClaim(claim.id,approve,auth.user.id,portal,auth.token);
@@ -7649,7 +7653,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   )}
 
   {/* ── PORTAL: Event detail ── */}
-  {portal&&view.name==="event"&&(()=>{
+  {view.name==="event"&&(()=>{
+    // NOTE: not gated on `portal` — events are viewable globally (deep link,
+    // refresh, or Back from an athlete profile all arrive with portal=null).
     const ev=events.find(e=>e.id===view.id);
     const notFound=(msg)=>(<div className="wrap sec" style={{paddingTop:18}}>
       <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>

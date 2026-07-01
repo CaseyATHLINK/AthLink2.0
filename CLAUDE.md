@@ -200,7 +200,16 @@ Table: athlete_claims.
 - TDZ is the primary white-screen vector — mandatory check after every edit
 - Trailing /rest/v1/ in VITE_SUPABASE_URL breaks the Supabase client
 - Non-UUID IDs cause silent 400s (events.id = uuid; host ids = text)
-- DEV_VIEW_ENABLED must be flipped to false before going public
+- Dev view ALWAYS starts OFF on every page load — opt-in per session via
+  Ctrl/Cmd+Shift+D only. No ?dev=1, no localStorage persistence (removed
+  2026-07-02), so nobody lands in dev mode by accident. In dev mode: full
+  (association) access, all auth/verification gates bypassed client-side
+  (canEdit/canManage/canVouch forced true, verify warnings suppressed). DB
+  writes still hit Supabase RLS, so persisting changes needs a signed-in
+  session. To hard-disable the keyboard toggle at launch, set
+  DEV_VIEW_ENABLED=false.
+- Tab title: sports/sailing sets document.title per page (host/athlete/event
+  name); the shell resets it to "AthLink" on the landing route.
 - custom: prefix in stored class ids — always use classLabel() to display,
   never render a raw class id directly
 - useEffect hooks that reference importerHost/_orgHost/_orgMode must be
