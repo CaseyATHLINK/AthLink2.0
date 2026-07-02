@@ -1022,6 +1022,284 @@ def try_sailwave_text(full_text):
         entries.append(_text_line_entry(rank, helm, '', sail, nat, '', races, net))
     return entries or None
 
+def try_sailwave_geometry(pdf_bytes):
+    """Two-person Sailwave (29er / 49er / 49erFX / Nacra): a helm+crew boat spans
+    several lines — helm + first club line on the rank line, crew + wrapped
+    name/club stacked below, Nat on the second line. pdfplumber's flat text
+    interleaves these columns unusably, so we parse by WORD X-POSITION: read the
+    'Rank Tally Fleet Nat Sail Boat Division Helm Club Sponsor … Total Nett'
+    header to fix each column's x, assign every word to a column, then take helm
+    from the rank line and crew from the lines below (same Helm/Crew column).
+    Fleet colour splits (1-Gold, 2-Silver, …) are tagged as div and merged
+    downstream. Gated on a Helm+Crew header, so single-hander Sailwave is
+    untouched."""
+    if pdfplumber is None:
+        return None
+    import bisect
+    NUM = re.compile(r'^\(?-?\d+(?:\.\d+)?\)?$')
+    COLOUR = re.compile(r'(\d+\s*-\s*)?(Gold|Silver|Bronze|Emerald|Sapphire)\s*Fleet', re.IGNORECASE)
+    entries = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        # Confirm this is the two-person template before doing anything.
+        head_probe = ' '.join(fix_doubled(w) for w in
+                              re.findall(r'\S+', (pdf.pages[0].extract_text() or '')))
+        if 'Helm' not in head_probe or 'Crew' not in head_probe or 'Tally' not in head_probe:
+            return None
+        anchors = None            # {col_name: x0} from the most recent header
+        current_fleet = ''
+        for page in pdf.pages:
+            words = page.extract_words()
+            from collections import defaultdict
+            rows = defaultdict(list)
+            for w in words:
+                rows[round(w['top'])].append(w)
+            tops = sorted(rows)
+            for i, t in enumerate(tops):
+                line = sorted(rows[t], key=lambda x: x['x0'])
+                texts = [fix_doubled(w['text']) for w in line]
+                joined = ' '.join(texts)
+                # Fleet section header (e.g. "1-Gold Fleet")
+                cm = COLOUR.search(joined)
+                if cm and len(line) <= 4:
+                    current_fleet = re.sub(r'\s+', ' ', cm.group(0)).strip()
+                    continue
+                # Column header row → (re)learn anchors
+                if 'Rank' in texts and 'Helm' in texts and 'Nett' in texts:
+                    a = {}
+                    for w in line:
+                        a[fix_doubled(w['text'])] = w['x0']
+                    anchors = a
+                    continue
+                if not anchors:
+                    continue
+                # Is this a rank (block-start) line? integer left of the Tally col
+                tally_x = anchors.get('Tally', 60)
+                rank_word = next((w for w in line
+                                  if re.match(r'^\d+$', w['text']) and w['x0'] < tally_x), None)
+                if not rank_word:
+                    continue
+                # Gather this competitor's block: this line + following lines
+                # until the next rank line (or page end).
+                block = [(t, line)]
+                for t2 in tops[i + 1:]:
+                    l2 = sorted(rows[t2], key=lambda x: x['x0'])
+                    if next((w for w in l2 if re.match(r'^\d+$', w['text']) and w['x0'] < tally_x), None):
+                        break
+                    if COLOUR.search(' '.join(fix_doubled(w['text']) for w in l2)):
+                        break
+                    block.append((t2, l2))
+
+                def col_range(name, nxt):
+                    lo = anchors.get(name)
+                    hi = anchors.get(nxt)
+                    return (lo, hi)
+
+                helm_lo, helm_hi = col_range('Helm', 'Club')
+                nat_lo,  nat_hi  = col_range('Nat', 'Sail')
+                sail_lo, sail_hi = col_range('Sail', 'Boat')
+                boat_lo, boat_hi = col_range('Boat', 'Division')
+                div_lo,  div_hi  = col_range('Division', 'Helm')
+                race_lo = anchors.get('F1') or anchors.get('Club')
+                cf_x    = anchors.get('CarriedFwd') or anchors.get('Total')
+                if helm_lo is None or helm_hi is None:
+                    continue
+
+                def in_col(w, lo, hi):
+                    return lo is not None and hi is not None and (lo - 4) <= w['x0'] < (hi - 4)
+
+                helm = ' '.join(w['text'] for w in line if in_col(w, helm_lo, helm_hi))
+                crew_parts = []
+                for (_, l2) in block[1:]:
+                    seg = ' '.join(w['text'] for w in l2 if in_col(w, helm_lo, helm_hi))
+                    if seg:
+                        crew_parts.append(seg)
+                crew = ' '.join(crew_parts)
+                nat = ''
+                for (_, l2) in block:
+                    for w in l2:
+                        if re.match(r'^[A-Z]{3}$', w['text']) and in_col(w, nat_lo, nat_hi):
+                            nat = w['text']; break
+                    if nat:
+                        break
+                sail = ' '.join(w['text'] for w in line if in_col(w, sail_lo, sail_hi)).strip()
+                gender_raw = ' '.join(w['text'] for w in line if in_col(w, boat_lo, boat_hi))
+                div_raw = ' '.join(w['text'] for w in line if in_col(w, div_lo, div_hi))
+                # numeric columns on the rank line
+                nums = [w for w in line if NUM.match(w['text']) and w['x0'] >= (race_lo - 6 if race_lo else 380)]
+                nums.sort(key=lambda x: x['x0'])
+                if len(nums) < 2:
+                    continue
+                net_tok = nums[-1]['text']
+                race_toks = [w['text'] for w in nums[:-2]
+                             if cf_x is None or w['x0'] < cf_x - 4]
+                e = _text_line_entry(int(rank_word['text']), helm, crew, sail, nat,
+                                     current_fleet, race_toks, net_tok)
+                g = norm_gender(gender_raw)
+                if g:
+                    e['gender'] = g
+                if div_raw.strip():
+                    e['category'] = norm_category(div_raw)
+                entries.append(e)
+    return entries or None
+
+def try_sailti(full_text):
+    """Sailti Scoring Soft results (TCPDF 'HTML2PDF'). One fleet, layout:
+        Pos | NAT sail | SURNAME, Forename | Cat | race scores | TOTAL | NET
+    The column header appears once (page 1); rows run continuously across pages
+    (footer 'Sailti Scoring Soft  Page x/y'). Penalty-coded scores (STP, BFD,
+    DNC, DNS, DSQ…) wrap onto the lines above/below the row, leaving that one
+    cell blank on the row line — but Pos, name, sail, Cat, TOTAL and NET are
+    always intact on the row line, so we anchor on those and read the row-line
+    race cells best-effort (a wrapped cell is left blank for manual review)."""
+    if 'sailti' not in full_text.lower():
+        return None
+    RACE = re.compile(r'^\(?-?\d+(?:\.\d+)?\)?$')
+    CAT = {'M', 'W', 'F', 'X'}
+    row_re = re.compile(r'^\s*\d+\s+[A-Z]{3}\s+\S')
+    entries = []
+    for l in full_text.split('\n'):
+        if not row_re.match(l):
+            continue
+        toks = l.split()
+        try:
+            pos = int(toks[0])
+        except ValueError:
+            continue
+        if not re.match(r'^[A-Z]{3}$', toks[1]) or len(toks) < 6:
+            continue
+        nat, sail, rest = toks[1], toks[2], toks[3:]
+        ridx = next((k for k, t in enumerate(rest) if RACE.match(t)), None)
+        if not ridx:                       # need ≥1 name token before races
+            continue
+        if rest[ridx - 1] in CAT:
+            cat, name_toks = rest[ridx - 1], rest[:ridx - 1]
+        else:
+            cat, name_toks = '', rest[:ridx]
+        tail = rest[ridx:]
+        # TOTAL and NET are the last two numeric tokens; strip them off races.
+        seen, cut = 0, len(tail)
+        for i in range(len(tail) - 1, -1, -1):
+            if RACE.match(tail[i]):
+                seen += 1
+                if seen == 2:
+                    cut = i; break
+        if seen < 2:
+            continue
+        race_tokens, net_tok = tail[:cut], tail[-1]
+        name = ' '.join(name_toks)
+        if ',' in name:                    # "SURNAME, Forename" → "Forename Surname"
+            sur, _, fore = name.partition(',')
+            name = (fore.strip() + ' ' + sur.strip()).strip()
+        if not name:
+            continue
+        e = _text_line_entry(pos, name, '', sail, nat, '', race_tokens, net_tok)
+        e['gender'] = 'F' if cat in ('W', 'F') else ('M' if cat == 'M' else '')
+        entries.append(e)
+    return entries or None
+
+# ── "Overall Results of <division>" championship books ──────────────────────
+# Bilingual multi-division layout (e.g. the ILCA Asian Championships): one PDF,
+# many divisions, each headed "Overall Results of …". pdfplumber finds no ruled
+# table, and rows carry an optional age-category ("Group") column, multi-token
+# score codes ("(42 BFD)", "6 SP1", "16.6 SCP30%") and names that wrap onto the
+# lines above/below the rank line.
+_WSID_RE  = re.compile(r'^[A-Z]{3}[A-Z]{1,4}\d{1,4}$')   # CHNYC14, MASMA27, HKGNH5
+_OR_GROUP = re.compile(r'^(U\d{2}|Masters?|Master|Youth|Junior|Jr|Veteran|Open)$', re.IGNORECASE)
+_OR_ROW   = re.compile(r'^\s*\d+\s+[A-Z]{3}\s?\d{2,7}\b')  # nat+sail glued or spaced
+_OR_NAMEFRAG = re.compile(r"^[A-Za-z][A-Za-z '’\-]+$")
+
+def _or_race_cells(toks):
+    """Segment the trailing token run into race cells, re-joining a numeric
+    score with its following penalty code so clean_score_with_code sees one
+    cell: '42','UFD' → '42 UFD'; '(42','BFD)' → '(42 BFD)'; '16.6','SCP30%'."""
+    code_re = re.compile(r'^\(?[A-Za-z]{2,5}\d*%?\)?$')
+    cells, i = [], 0
+    while i < len(toks):
+        t = toks[i]
+        if re.search(r'\d', t):                      # numeric → start a cell
+            cell = t; i += 1
+            while i < len(toks) and code_re.match(toks[i]):
+                cell += ' ' + toks[i]; i += 1
+            cells.append(cell)
+        else:                                        # stray code → attach to prev
+            if cells:
+                cells[-1] += ' ' + t
+            i += 1
+    return cells
+
+def try_overall_results(full_text):
+    low = full_text.lower()
+    if 'overall results of' not in low:
+        return None
+    lines = full_text.split('\n')
+    hdr = re.compile(r'overall results of\s+(.+)', re.IGNORECASE)
+    heads = [(i, re.sub(r'\s+', ' ', hdr.search(l).group(1)).strip())
+             for i, l in enumerate(lines) if hdr.search(l)]
+    if not heads:
+        return None
+    heads.append((len(lines), None))
+
+    entries = []
+    for hi in range(len(heads) - 1):
+        start, label = heads[hi]
+        end = heads[hi + 1][0]
+        block = lines[start:end]
+        gender = ('F' if re.search(r'\b(girls?|women|female|ladies)\b', label, re.I)
+                  else 'M' if re.search(r'\b(boys?|men|male)\b', label, re.I) else '')
+        idxs = [j for j, l in enumerate(block) if _OR_ROW.match(l)]
+        idxset = set(idxs)
+        for j in idxs:
+            toks = block[j].split()
+            try:
+                rank = int(toks[0])
+            except ValueError:
+                continue
+            # nat+sail: glued ("CHN200777") or spaced ("CHN 200777")
+            if re.match(r'^[A-Z]{3}\d{2,7}$', toks[1]):
+                nat, sail, rest = toks[1][:3], toks[1][3:], toks[2:]
+            elif re.match(r'^[A-Z]{3}$', toks[1]) and len(toks) > 2 and re.match(r'^\d{2,7}$', toks[2]):
+                nat, sail, rest = toks[1], toks[2], toks[3:]
+            else:
+                continue
+            widx = next((k for k, t in enumerate(rest) if _WSID_RE.match(t)), None)
+            if widx is None or widx + 2 >= len(rest):
+                continue
+            head_toks = rest[:widx]
+            total_tok, net_tok = rest[widx + 1], rest[widx + 2]
+            race_cells = _or_race_cells(rest[widx + 3:])
+            cat, name_toks = '', []
+            for t in head_toks:
+                if _OR_GROUP.match(t):
+                    if t.lower() != 'open':          # "Open" is not an age category
+                        cat = t.upper() if t[0] in 'Uu' else t.title()
+                else:
+                    name_toks.append(t)
+            # Names wrap onto the nearest text-only line above and/or below the
+            # rank line — pull them in when the rank line has no inline name.
+            if not name_toks:
+                above = below = ''
+                k = j - 1
+                while k >= 0 and not block[k].strip():
+                    k -= 1
+                if k >= 0 and k not in idxset and _OR_NAMEFRAG.match(block[k].strip()):
+                    above = block[k].strip()
+                k = j + 1
+                while k < len(block) and not block[k].strip():
+                    k += 1
+                if k < len(block) and k not in idxset and _OR_NAMEFRAG.match(block[k].strip()):
+                    below = block[k].strip()
+                name = (above + ' ' + below).strip()
+            else:
+                name = ' '.join(name_toks)
+            if not name:
+                continue
+            e = _text_line_entry(rank, name, '', sail, nat, label, race_cells, net_tok)
+            e['gender'] = gender
+            if cat:
+                e['category'] = norm_category(cat)
+            entries.append(e)
+    return entries or None
+
 # ── Fleet detection ────────────────────────────────────────────────────────
 FLEET_PATTERNS = re.compile(
     r'(?i)\b(29er|49erFX|49er|Nacra\s*\d+|ILCA\s*\d?'
@@ -1454,6 +1732,64 @@ def _is_colour_fleet(label):
     """True for qualifying/final splits of ONE championship (Gold/Silver/…)."""
     return bool(re.search(r'gold|silver|bronze|emerald|sapphire', label or '', re.IGNORECASE))
 
+_COLOUR_ORDER = {'gold': 0, 'silver': 1, 'bronze': 2, 'emerald': 3, 'sapphire': 4}
+
+def _colour_rank(label):
+    """Sort order for colour splits so a merged fleet reads Gold→Silver→Bronze
+    (Silver boats genuinely place below all Gold boats)."""
+    m = re.search(r'\b(gold|silver|bronze|emerald|sapphire)\b', str(label or ''), re.IGNORECASE)
+    return _COLOUR_ORDER.get(m.group(1).lower(), 9) if m else 9
+
+def _fleet_base(label):
+    """The base championship a colour split belongs to: strip the colour word
+    and 'fleet' but KEEP gender/age so 'Boys ILCA 4 Gold Fleet' and
+    'Girls ILCA 4 Gold Fleet' stay distinct ('Boys ILCA 4' vs 'Girls ILCA 4')."""
+    s = re.sub(r'^\s*\d+\s*-\s*', ' ', str(label or ''))     # "1-Gold Fleet" → "Gold Fleet"
+    s = re.sub(r'\b(gold|silver|bronze|emerald|sapphire)\b', ' ', s, flags=re.IGNORECASE)
+    s = re.sub(r'\b(fleet|flight)\b', ' ', s, flags=re.IGNORECASE)
+    return re.sub(r'\s+', ' ', s).strip()
+
+def _sailwave_fleet_map(full_text):
+    """Map each sail number → its fleet-section name for a multi-fleet Sailwave
+    PDF ('Boys ILCA 4 Gold Fleet', 'Girls ILCA 4 Silver Fleet', …). The table
+    extractor can't attach these centred fleet headings to their rows, so every
+    fleet arrives with a blank div and collapses into one table with duplicate
+    ranks. Fleet sections are delimited by the per-fleet 'Sailed: N … Entries:
+    E …' summary line; the name is the nearest heading line above it, and the
+    sail numbers listed under it belong to that fleet. Returns {} unless ≥2
+    distinct fleets are present."""
+    lines = full_text.split('\n')
+    summ = [i for i, l in enumerate(lines)
+            if re.search(r'sailed:\s*\d+.*entries:\s*\d+', l, re.IGNORECASE)]
+    if len(summ) < 2:
+        return {}
+
+    def section_name(si):
+        for k in range(si - 1, max(-1, si - 6), -1):
+            t = lines[k].strip()
+            if not t:
+                continue
+            tl = t.lower()
+            if tl.startswith('rank') or 'sailed:' in tl or tl.startswith('contents'):
+                continue
+            return re.sub(r'\s+', ' ', t)
+        return ''
+
+    # NAT + sail number, anchored so a glued WS_id (e.g. GREKP16) can't match.
+    sail_re = re.compile(r'(?:^|\s)[A-Z]{3}\s?(\d{2,7})\b')
+    out = {}
+    for n, si in enumerate(summ):
+        name = section_name(si)
+        if not name:
+            continue
+        end = summ[n + 1] if n + 1 < len(summ) else len(lines)
+        for l in lines[si + 1:end]:
+            for m in sail_re.finditer(l):
+                out.setdefault(m.group(1), name)
+    if len(set(out.values())) < 2:
+        return {}
+    return out
+
 def _resolve_birth_years(entries, ev_year):
     for e in entries:
         if e.get('birth_year') is None and e.get('_age') and ev_year:
@@ -1556,29 +1892,52 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
                 'discards':g_disc,'entries':ents,'notes':notes,'nat_from_flags':nat_from_flags,
                 'detected_class':detected_class,'detected_host':detected_host}
 
-    non_main = [k for k in real if k != '__main__']
-    # Every labelled group is a Gold/Silver/Bronze split → merge to one championship
-    if non_main and '__main__' not in real and all(_is_colour_fleet(k) for k in non_main):
+    # Group fleets by their base championship. Colour splits (Gold/Silver/Bronze)
+    # of the SAME base merge into one result (Silver places below Gold); different
+    # bases stay separate. This keeps a single-gender Gold/Silver championship as
+    # one event, while Boys-Gold/Boys-Silver/Girls-Gold/Girls-Silver become two
+    # (Boys, Girls) — not one merged blob with duplicate ranks. Non-colour keys
+    # (distinct classes / handicap divisions) are each their own base.
+    bases = OrderedDict()
+    for k in real:
+        b = _fleet_base(k) if (k != '__main__' and _is_colour_fleet(k)) else k
+        bases.setdefault(b, []).append(k)
+
+    def _merge_keys(keys):
         merged, mseen = [], set()
-        for k in sorted(non_main):
-            for e in groups[k]:
+        for kk in sorted(keys, key=_colour_rank):
+            for e in groups[kk]:
                 sk = (e['helm'].lower(), e.get('sail', ''))
                 if sk not in mseen:
                     mseen.add(sk); merged.append(e)
-        notes.append(f"Merged {len(non_main)} qualifying/final fleets into one result.")
-        g_disc = _discards_from_brackets(merged, discards)
-        for e in merged: e.pop('_disc', None)
-        return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
-                'discards':g_disc,'entries':merged,'notes':notes,'nat_from_flags':nat_from_flags,
-                'detected_class':detected_class,'detected_host':detected_host}
+        # Colour splits are qualifying/final fleets of ONE championship: Silver
+        # boats place below all Gold boats, but each fleet's ranks restart at 1.
+        # Renumber to the true overall standing (Gold order, then Silver order).
+        if len(keys) > 1 and all(_is_colour_fleet(k) for k in keys):
+            for pos, e in enumerate(merged, 1):
+                e['pdf_rank'] = pos
+        return merged
 
-    # Genuine separate fleets/classes → one competition each
+    # Exactly one base, made of ≥2 colour splits → one merged championship.
+    if len(bases) == 1:
+        only_keys = next(iter(bases.values()))
+        if len(only_keys) > 1 and all(_is_colour_fleet(k) for k in only_keys):
+            merged = _merge_keys(only_keys)
+            notes.append(f"Merged {len(only_keys)} qualifying/final fleets into one result.")
+            g_disc = _discards_from_brackets(merged, discards)
+            for e in merged: e.pop('_disc', None)
+            return {'ok':True,'multi':False,'name':ev_name,'date':ev_date,
+                    'discards':g_disc,'entries':merged,'notes':notes,'nat_from_flags':nat_from_flags,
+                    'detected_class':detected_class,'detected_host':detected_host}
+
+    # Otherwise: one competition per base (colour splits merged within each base).
     fleets = []
-    for k in real:
-        g_disc = _discards_from_brackets(groups[k], discards)
-        for e in groups[k]: e.pop('_disc', None)
-        fleets.append({'name': (k if k != '__main__' else ''),
-                       'entries': groups[k], 'discards': g_disc, 'count': len(groups[k])})
+    for b, keys in bases.items():
+        ents = _merge_keys(keys) if len(keys) > 1 else groups[keys[0]]
+        g_disc = _discards_from_brackets(ents, discards)
+        for e in ents: e.pop('_disc', None)
+        fleets.append({'name': (b if b != '__main__' else ''),
+                       'entries': ents, 'discards': g_disc, 'count': len(ents)})
     labels = [f['name'] or 'Main' for f in fleets]
     notes.append(f"Separated into {len(fleets)} fleets: {', '.join(labels)}.")
     return {'ok':True,'multi':True,'name':ev_name,'date':ev_date,'notes':notes,'fleets':fleets,
@@ -1654,9 +2013,66 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         declared = max([int(x) for x in re.findall(r'[Ee]ntries:\s*(\d+)', full_text)] or [0])
         deficient = (not all_parsed) or len(all_parsed) < 5 or (declared and len(all_parsed) < 0.5 * declared)
         if deficient:
-            sw = try_sailwave_text(full_text)
-            if sw and len(sw) > len(all_parsed):
-                all_parsed = sw
+            # Two-person Sailwave (helm+crew, wrapped) needs word-geometry; the
+            # flat-text parser handles the single-hander ordinal layout.
+            gw = try_sailwave_geometry(pdf_bytes)
+            if gw and len(gw) > len(all_parsed):
+                all_parsed = gw
+            else:
+                sw = try_sailwave_text(full_text)
+                if sw and len(sw) > len(all_parsed):
+                    all_parsed = sw
+
+    # Sailti Scoring Soft (TCPDF): pdfplumber finds no usable table, so parse
+    # from text. Deterministic + complete (reads every page) — replaces the slow,
+    # token-heavy AI path that truncated long fields and misaligned rows.
+    if 'sailti scoring soft' in sig:
+        declared = max([int(x) for x in re.findall(r'Entries\s*:\s*(\d+)', full_text)] or [0])
+        deficient = (not all_parsed) or len(all_parsed) < max(5, 0.5 * declared)
+        if deficient:
+            st = try_sailti(full_text)
+            if st and len(st) > len(all_parsed):
+                all_parsed = st
+
+    # "Overall Results of <division>" books (bilingual, no ruled table) — parse
+    # from text and tag div per section so divisions stay separate.
+    if not all_parsed and 'overall results of' in sig:
+        orr = try_overall_results(full_text)
+        if orr:
+            all_parsed = orr
+
+    # Sailwave multi-fleet: the table extractor drops the fleet headings, so
+    # rows from every fleet arrive with a blank div and collapse into one table
+    # with duplicate ranks. Recover each row's fleet from the text sections
+    # (sail number → fleet), then carry that assignment forward in document
+    # order to fill any row whose sail didn't match. Only split when the map
+    # covers a strong majority (else leave as-is — safe), and only fill a blank
+    # div (a real per-row class/fleet column still wins).
+    if ('sailwave results for' in sig or re.search(r'sailed:\s*\d+.*entries:\s*\d+', sig)) \
+       and not any((e.get('div') or '').strip() for e in all_parsed) and all_parsed:
+        fleet_map = _sailwave_fleet_map(full_text)
+        if fleet_map:
+            cand = [fleet_map.get(re.sub(r'\D', '', str(e.get('sail') or ''))) for e in all_parsed]
+            hit = sum(1 for c in cand if c)
+            distinct = len({c for c in cand if c})
+            if distinct >= 2 and hit >= 0.6 * len(all_parsed):
+                # Fill gaps by carrying the last seen fleet forward, then
+                # back-fill any leading gap with the first fleet seen.
+                last = None
+                for i, c in enumerate(cand):
+                    if c:
+                        last = c
+                    elif last:
+                        cand[i] = last
+                first = next((c for c in cand if c), None)
+                for i in range(len(cand)):
+                    if cand[i] is None:
+                        cand[i] = first
+                    else:
+                        break
+                for e, c in zip(all_parsed, cand):
+                    if c and not (e.get('div') or '').strip():
+                        e['div'] = c
 
     if not all_parsed:
         raise ValueError(
