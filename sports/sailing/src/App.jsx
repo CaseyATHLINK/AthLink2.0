@@ -1276,6 +1276,27 @@ async function uploadAthletePhoto(file,name,tok){
     return `${SB_URL}/storage/v1/object/public/athlete-photos/${path}`;
   }catch(e){console.error("uploadAthletePhoto network",e);return null;}
 }
+// Upload a gallery media file (image OR video) to the public `athlete-media`
+// bucket under a `<slug>/` prefix. Returns {url,type} or null. The bucket allows
+// image + video MIME and a larger size cap than athlete-photos (see
+// migrations/0010_athlete_media_bucket.sql); type is inferred from the MIME.
+const ATHLETE_MEDIA_BUCKET="athlete-media";
+async function uploadAthleteMedia(file,name,tok){
+  if(!SB_URL||!file||!tok) return null;   // storage write needs a signed-in token
+  const mime=file.type||"application/octet-stream";
+  const isVideo=mime.startsWith("video/");
+  const extMap={"image/png":"png","image/webp":"webp","image/gif":"gif","image/jpeg":"jpg","video/mp4":"mp4","video/quicktime":"mov","video/webm":"webm"};
+  const ext=extMap[mime]||(isVideo?"mp4":"jpg");
+  const slug=profileNameKey(name).replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"athlete";
+  const path=`${slug}/${Date.now()}-${Math.random().toString(36).slice(2,7)}.${ext}`;
+  try{
+    const r=await fetch(`${SB_URL}/storage/v1/object/${ATHLETE_MEDIA_BUCKET}/${path}`,{method:"POST",
+      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":mime,"x-upsert":"true"},
+      body:file});
+    if(!r.ok){console.error("uploadAthleteMedia",r.status,await r.text().catch(()=>""));return null;}
+    return {url:`${SB_URL}/storage/v1/object/public/${ATHLETE_MEDIA_BUCKET}/${path}`,type:isVideo?"video":"image"};
+  }catch(e){console.error("uploadAthleteMedia network",e);return null;}
+}
 
 /* ── Custom boat classes (custom_classes) ─────────────────────────────────────
    Persisted mirror of the in-memory CUSTOM_CLASSES registry. Read is public;
@@ -4156,6 +4177,113 @@ function PhotoCropper({initialSrc=null,onCancel,onConfirm}){
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Athlete media gallery — popup opened from the profile (button between
+   Calendar and Instagram). Shows photos + uploaded videos. The verified owner
+   (or dev) can add, caption, remove, and save; visitors get a read-only gallery
+   with a click-to-expand lightbox. Files upload to the athlete-photos bucket
+   via uploadMedia; the array persists to athlete_profiles.media via onSaveMedia.
+   ═══════════════════════════════════════════════════════════════════════ */
+const MAX_MEDIA_MB=50;
+function MediaModal({name,media,canEdit,uploadMedia,onSaveMedia,onClose}){
+  const[items,setItems]=React.useState(Array.isArray(media)?media:[]);
+  const[uploading,setUploading]=React.useState(false);
+  const[busy,setBusy]=React.useState(false);
+  const[err,setErr]=React.useState("");
+  const[light,setLight]=React.useState(null); // index in lightbox, or null
+  const dirty=JSON.stringify(items)!==JSON.stringify(Array.isArray(media)?media:[]);
+
+  const onPick=async(e)=>{
+    const files=Array.from(e.target.files||[]); e.target.value="";
+    if(!files.length) return;
+    setErr(""); setUploading(true);
+    const added=[];
+    for(const f of files){
+      if(f.size>MAX_MEDIA_MB*1024*1024){setErr(`"${f.name}" is over ${MAX_MEDIA_MB}MB — please upload a smaller file.`);continue;}
+      const res=await uploadMedia(f);
+      if(res&&res.url) added.push({url:res.url,type:res.type||"image",caption:""});
+      else setErr("Upload failed — make sure you're signed in and try again.");
+    }
+    if(added.length) setItems(prev=>[...prev,...added]);
+    setUploading(false);
+  };
+  const setCaption=(i,v)=>setItems(prev=>prev.map((it,j)=>j===i?{...it,caption:v.slice(0,140)}:it));
+  const remove=(i)=>setItems(prev=>prev.filter((_,j)=>j!==i));
+  const save=async()=>{ setBusy(true); try{ await onSaveMedia(name,items); onClose(); }catch(e){console.error("media save",e);setErr("Couldn't save. Try again.");setBusy(false);} };
+
+  const tile={position:"relative",borderRadius:12,overflow:"hidden",background:"var(--grouped,#eef3f9)",aspectRatio:"1 / 1",cursor:"pointer"};
+  const mediaFit={width:"100%",height:"100%",objectFit:"cover",display:"block"};
+  return(<>
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:720}}>
+        <div className="mhead" style={{padding:"18px 24px"}}>
+          <LayoutGrid size={18}/>
+          <h3 style={{flex:1}}>{name} — Media</h3>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div style={{padding:"18px 24px 24px"}}>
+          {canEdit&&(
+            <div style={{marginBottom:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+              <label className="btn cta liquidGlass-wrapper" style={{cursor:uploading?"default":"pointer"}}>
+                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                <div className="liquidGlass-text">{uploading?<Loader2 size={14} className="spin"/>:<Upload size={14}/>}{uploading?"Uploading…":"Add photos or videos"}</div>
+                <input type="file" accept="image/*,video/*" multiple disabled={uploading} style={{display:"none"}} onChange={onPick}/>
+              </label>
+              <span style={{fontSize:11.5,color:"var(--mut)"}}>Images & video, up to {MAX_MEDIA_MB}MB each.</span>
+            </div>
+          )}
+          {err&&<div style={{fontSize:12.5,color:"#c0392b",margin:"0 0 12px"}}>{err}</div>}
+          {items.length===0
+            ? <div style={{padding:"38px 0",textAlign:"center",color:"var(--mut)",fontSize:13.5}}>{canEdit?"No media yet — add photos or videos to showcase your sailing.":"No media yet."}</div>
+            : <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+                {items.map((it,i)=>(
+                  <div key={i}>
+                    <div style={tile} onClick={()=>setLight(i)}>
+                      {it.type==="video"
+                        ? <><video src={it.url} style={mediaFit} muted playsInline preload="metadata"/>
+                            <div style={{position:"absolute",inset:0,display:"grid",placeItems:"center",pointerEvents:"none"}}>
+                              <span style={{width:38,height:38,borderRadius:"50%",background:"rgba(8,24,45,.62)",color:"#fff",display:"grid",placeItems:"center",fontSize:15,paddingLeft:3}}>▶</span>
+                            </div></>
+                        : <img src={it.url} alt={it.caption||""} style={mediaFit}/>}
+                      {canEdit&&<button onClick={e=>{e.stopPropagation();remove(i);}} title="Remove"
+                        style={{position:"absolute",top:6,right:6,width:26,height:26,borderRadius:980,border:0,background:"rgba(8,24,45,.66)",color:"#fff",display:"grid",placeItems:"center",cursor:"pointer"}}><Trash2 size={13}/></button>}
+                    </div>
+                    {canEdit
+                      ? <input value={it.caption||""} onChange={e=>setCaption(i,e.target.value)} placeholder="Caption (optional)"
+                          style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"6px 8px",font:"inherit",fontSize:12,marginTop:6,outline:"none",background:"rgba(255,255,255,.9)"}}/>
+                      : (it.caption?<div style={{fontSize:12,color:"var(--mut)",marginTop:6,lineHeight:1.4}}>{it.caption}</div>:null)}
+                  </div>
+                ))}
+              </div>}
+          {canEdit&&(
+            <div style={{display:"flex",gap:10,marginTop:18}}>
+              <button className="btn cta liquidGlass-wrapper" disabled={busy||uploading||!dirty} onClick={save} style={{flex:1}}>
+                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={14} className="spin"/>:<CheckCircle size={14}/>}Save changes</div>
+              </button>
+              <button className="btn ghost" onClick={onClose} style={{padding:"0 18px"}}>Cancel</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+    {light!=null&&items[light]&&(
+      <div className="ov" style={{zIndex:120,background:"rgba(6,18,36,.86)"}} onClick={()=>setLight(null)}>
+        <div onClick={e=>e.stopPropagation()} style={{maxWidth:"92vw",maxHeight:"88vh",position:"relative",display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
+          <button className="x" onClick={()=>setLight(null)} style={{position:"absolute",top:-6,right:-6,zIndex:2}}><X size={18}/></button>
+          {items.length>1&&<button onClick={()=>setLight((light-1+items.length)%items.length)} title="Previous"
+            style={{position:"absolute",left:-52,top:"50%",transform:"translateY(-50%)",width:40,height:40,borderRadius:980,border:0,background:"rgba(255,255,255,.16)",color:"#fff",cursor:"pointer",fontSize:18}}>‹</button>}
+          {items[light].type==="video"
+            ? <video src={items[light].url} controls autoPlay playsInline style={{maxWidth:"92vw",maxHeight:"80vh",borderRadius:12,background:"#000"}}/>
+            : <img src={items[light].url} alt={items[light].caption||""} style={{maxWidth:"92vw",maxHeight:"80vh",borderRadius:12,objectFit:"contain"}}/>}
+          {items.length>1&&<button onClick={()=>setLight((light+1)%items.length)} title="Next"
+            style={{position:"absolute",right:-52,top:"50%",transform:"translateY(-50%)",width:40,height:40,borderRadius:980,border:0,background:"rgba(255,255,255,.16)",color:"#fff",cursor:"pointer",fontSize:18}}>›</button>}
+          {items[light].caption&&<div style={{color:"#dce8f8",fontSize:13,textAlign:"center",maxWidth:640}}>{items[light].caption}</div>}
+        </div>
+      </div>
+    )}
+  </>);
+}
+
 function AthleteEditModal({name,profile,onSaveExtras,onRename,onSaveUsername,uploadPhoto,onClose}){
   const parts=(name||"").trim().split(/\s+/);
   const[first,setFirst]=React.useState(parts.length>1?parts.slice(0,-1).join(" "):(parts[0]||""));
@@ -4407,6 +4535,7 @@ export default function AthLinkMVP(){
   const[showClaimModal,setShowClaimModal]=useState(false); // guided claim modal open
   const[athleteProfiles,setAthleteProfiles]=useState({});  // name_key -> athlete_profiles row (owner extras)
   const[showAthEdit,setShowAthEdit]=useState(null);        // profile name being edited by its owner
+  const[showMedia,setShowMedia]=useState(null);            // profile name whose media gallery is open
   const[savingResults,setSavingResults]=useState(null);    // "draft" | "publish" while the preview save runs
   const[pendingHostNotice,setPendingHostNotice]=useState(null); // hostId — shows "pending approval" toast after host signup
   const[pendingInviteToken,setPendingInviteToken]=useState(null); // raw token from ?invite= URL param
@@ -4656,6 +4785,12 @@ export default function AthLinkMVP(){
     await upsertAthleteProfile(nm,patch,auth.user.id,auth.token);
     await reloadAthleteProfiles();
   };
+  // Persist the athlete's media gallery (array of {url,type,caption}), then refresh.
+  const saveAthleteMedia=async(nm,media)=>{
+    if(!auth?.user?.id||!auth?.token) return;
+    await upsertAthleteProfile(nm,{media:media||[]},auth.user.id,auth.token);
+    await reloadAthleteProfiles();
+  };
   // Owner/dev rename: rename entries everywhere, keep the approved claim pointing
   // at the new name (so the owner keeps edit rights), and migrate the extras row.
   const renameOwnedAthlete=async(oldName,newName)=>{
@@ -4668,7 +4803,7 @@ export default function AthLinkMVP(){
       await reloadClaims();
     }
     if(extras&&auth?.user?.id){
-      await upsertAthleteProfile(nn,{bio:extras.bio,instagram_url:extras.instagram_url,nat_override:extras.nat_override,photo_url:extras.photo_url},auth.user.id,auth.token);
+      await upsertAthleteProfile(nn,{bio:extras.bio,instagram_url:extras.instagram_url,nat_override:extras.nat_override,photo_url:extras.photo_url,media:extras.media||[]},auth.user.id,auth.token);
       await reloadAthleteProfiles();
     }
   };
@@ -7048,6 +7183,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       uploadPhoto={(file)=>uploadAthletePhoto(file,nm,auth?.token)}
       onClose={(finalName)=>{setShowAthEdit(null); if(typeof finalName==="string"&&finalName&&finalName!==nm) go({name:"profile",id:finalName});}}/>;
   })()}
+  {showMedia&&(()=>{
+    const nm=showMedia;
+    return <MediaModal
+      name={nm} media={athleteProfileOf(nm)?.media||[]} canEdit={isProfileOwner(nm)}
+      uploadMedia={(file)=>uploadAthleteMedia(file,nm,auth?.token)} onSaveMedia={saveAthleteMedia}
+      onClose={()=>setShowMedia(null)}/>;
+  })()}
   {showDevApprovals&&devMode&&(
     <DevApprovalsModal auth={auth} hosts={[...ASSOCIATIONS,...CLUBS,...FEDERATIONS]}
       nameForHost={(id)=>hostById(id)?.name||id}
@@ -8082,6 +8224,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   background:"rgba(120,160,210,.16)",color:"#cfe0f2"}} onClick={()=>{setSailorCalName(name);setSailorCalClsSet(new Set());setShowSailorCal(true);}}>
                   <Calendar size={13} style={{flex:"none"}}/>Calendar
                 </button>
+                {((extras?.media?.length>0)||isProfileOwner(name))&&<button style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,width:111,padding:"7px 0",fontSize:12,fontWeight:700,letterSpacing:".02em",
+                  borderRadius:980,cursor:"pointer",transition:"all .2s ease",
+                  border:"1px solid rgba(120,160,210,.3)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
+                  background:"rgba(120,160,210,.16)",color:"#cfe0f2"}} onClick={()=>setShowMedia(name)}>
+                  <LayoutGrid size={13} style={{flex:"none"}}/>Media{extras?.media?.length>0?` (${extras.media.length})`:""}
+                </button>}
                 {extras?.instagram_url&&<a href={extras.instagram_url} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,width:111,padding:"7px 0",fontSize:12,fontWeight:700,letterSpacing:".02em",
                   borderRadius:980,cursor:"pointer",transition:"all .2s ease",textDecoration:"none",
                   border:"1px solid rgba(120,160,210,.3)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",

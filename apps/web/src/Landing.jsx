@@ -52,6 +52,10 @@ const CSS = `
 .menupill.open .mp-panel{max-height:300px;opacity:1;padding:2px 12px 13px;}
 .mp-link{align-self:flex-start;border:0;background:none;cursor:pointer;font-weight:700;font-size:18px;color:var(--ink);padding:8px 6px;transition:color .15s;}
 .mp-link:hover{color:var(--accent);}
+/* Landing menu: a single circular button top-right that drops a glass panel. */
+.menu-wrap{position:relative;flex:none;}
+.menu-drop{position:absolute;top:calc(100% + 8px);right:0;min-width:184px;display:flex;flex-direction:column;gap:1px;background:rgba(255,255,255,.72);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 18px 44px -16px rgba(0,0,0,.32);padding:10px 12px;opacity:0;transform:translateY(-6px);pointer-events:none;transition:opacity .25s ease,transform .25s ease;}
+.menu-wrap.open .menu-drop{opacity:1;transform:none;pointer-events:auto;}
 
 .btn{font:inherit;font-weight:600;font-size:15px;border:0;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:12px 22px;letter-spacing:-.01em;transition:transform .18s cubic-bezier(.4,0,.2,1),filter .18s,background .18s,box-shadow .18s;white-space:nowrap;}
 .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.30),inset 0 1px 0 rgba(255,255,255,.45),0 1px 3px rgba(10,132,255,.35);}
@@ -178,18 +182,6 @@ const SPONSORS = [
 
 const EMAIL = "casey@athlink.win";
 
-function searchAnswer(raw) {
-  const q = (raw || "").toLowerCase().trim();
-  if (!q) return "";
-  if (q.includes("contact") || q.includes("email") || q.includes("reach")) return `Email <b>${EMAIL}</b>, or use the Contact button below.`;
-  if (q.includes("sport")) return "<b>1 live</b> now (Sailing), with Golf coming soon.";
-  if (q.includes("athlete") || q.includes("profile")) return "<b>1,775</b> athlete profiles, built automatically from results.";
-  if (q.includes("competition") || q.includes("event") || q.includes("regatta")) return "<b>47</b> competitions parsed across the four classes.";
-  if (q.includes("class")) return "Four Olympic-track classes: <b>29er, ILCA, 49er, Optimist</b>.";
-  if (q.includes("mission") || q.includes("vision")) return "To become the <b>ultimate data centre</b> for global sport.";
-  return "Try: contact, how many sports, athletes, competitions, classes.";
-}
-
 function useLiquid(ref, { scoped, count, alpha, palette }) {
   useEffect(() => {
     const canvas = ref.current;
@@ -288,8 +280,6 @@ export default function Landing({ sports = [] }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [query, setQuery] = useState("");
-  const [searchFocus, setSearchFocus] = useState(false);
   const [navHidden, setNavHidden] = useState(false);
   const bgRef = useRef(null);
   const heroRef = useRef(null);
@@ -321,7 +311,6 @@ export default function Landing({ sports = [] }) {
     } else { legacy(); }
   };
 
-  const answer = searchFocus ? searchAnswer(query) : "";
   const rows = { hosts: HOSTS, athletes: ATHLETES, sponsors: SPONSORS }[tab];
   const goSailing = () => { window.history.pushState(null, "", "/sailing"); window.dispatchEvent(new Event("locationchange")); };
 
@@ -336,33 +325,17 @@ export default function Landing({ sports = [] }) {
           <img className="tb-mark" src="/brand/icon-app-circle.png" alt="" aria-hidden="true" />
           <span className="tb-word">AthLink</span>
         </div>
-        <div className="tb-center">
-          <div className={"menupill" + (menuOpen ? " open" : "")}>
-            <div className="mp-bar">
-              <button className="mp-burger" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu">
-                {menuOpen ? <X size={17} /> : <Menu size={17} />}
-              </button>
-              <div className="mp-search">
-                <Sparkles size={14} color="var(--accent)" />
-                <input
-                  placeholder="ask me anything"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onFocus={() => setSearchFocus(true)}
-                  onBlur={() => setTimeout(() => setSearchFocus(false), 150)}
-                />
-              </div>
-            </div>
-            {answer && <div className="mp-answer" dangerouslySetInnerHTML={{ __html: answer }} />}
-            <div className="mp-panel">
-              <a className="mp-link" href="#mission" onClick={() => setMenuOpen(false)}>Mission</a>
-              <a className="mp-link" href="#ecosystem" onClick={() => setMenuOpen(false)}>Who it's for</a>
-              <a className="mp-link" href="#classes" onClick={() => setMenuOpen(false)}>Classes</a>
-              <a className="mp-link" onClick={openContact}>Contact</a>
-            </div>
+        <div className={"menu-wrap" + (menuOpen ? " open" : "")}>
+          <button className="mp-burger" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu">
+            {menuOpen ? <X size={17} /> : <Menu size={17} />}
+          </button>
+          <div className="menu-drop">
+            <a className="mp-link" href="#mission" onClick={() => setMenuOpen(false)}>Mission</a>
+            <a className="mp-link" href="#ecosystem" onClick={() => setMenuOpen(false)}>Who it's for</a>
+            <a className="mp-link" href="#classes" onClick={() => setMenuOpen(false)}>Classes</a>
+            <a className="mp-link" onClick={openContact}>Contact</a>
           </div>
         </div>
-        <div style={{ flex: "none", width: 44 }} />
       </div>
 
       {/* HERO */}
