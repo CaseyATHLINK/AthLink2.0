@@ -1,5 +1,16 @@
 # AthLink 2.0 — Claude Code context
-_Last updated: 23 June 2026_
+_Last updated: 2 July 2026_
+
+## ⛔ File-write policy — READ FIRST (non-negotiable)
+- **All code and file writes happen in this repo (`~/Desktop/AthLink2.0`).**
+- **Casey's Obsidian vault ("Casey's dome" / the `AIOS` folder at
+  `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Casey's dome/AIOS`)
+  is READ-ONLY.** It is attached for CONTEXT ONLY (me.md, Vault Map, Skill Map).
+  NEVER create, edit, move, or delete anything there — not notes, not maps, not
+  scratch files — unless Casey explicitly says to write to the vault in that
+  request. Reading is fine; writing is not.
+- If a task seems to need a vault write, do it in `AthLink2.0` (or the outputs
+  scratchpad) instead, and tell Casey — don't touch the vault.
 
 ## Product
 B2B sailing results + athlete-data platform. Hosts (clubs, associations,
@@ -102,6 +113,9 @@ Audited against live DB 2026-06-25 — see migrations/README.md for full notes.
 - migrations/0001_baseline_schema.sql — full live schema (ALREADY APPLIED, no-op to re-run)
 - migrations/0002_custom_classes.sql — custom_classes table — APPLIED 2026-07-01 (custom classes now persist to DB; grey-nugget bug fixed)
 - migrations/0007_usernames.sql — APPLIED 2026-07-01 — public URL identity: athlete_usernames table (name_key→username, default FirstnameLastname, owner-editable, ~1,854 backfilled) + hosts.slug (editable, backfilled PascalCase) + athlink_pascal() + ensure_athlete_username() trigger on entries insert. RLS: public read, owner/admin write.
+- migrations/0008_host_logos.sql — APPLIED 2026-07-02, FEATURE PAUSED — hosts.logo_url column exists in the DB but the host-logo UI was removed from src/App.jsx on 2026-07-02 (circle back later). To resume: re-add logo state/uploader in HostEditModal (downscale to ≤256px data URL), pass logo_url through applyDbHosts + saveHost upsert + save patch, and render it in a circular frame above the portal title (keep the globe). Column is harmless meanwhile.
+- migrations/0009_athlete_media.sql — APPLIED 2026-07-02 — athlete_profiles.media jsonb ('[]'). Athlete-owned photo+video gallery (array of {url,type,caption}); owner-write via existing 0004/0005 RLS. Managed in MediaModal (popup opened by a Media button between Calendar and Instagram under the profile photo), saved via saveAthleteMedia/upsertAthleteProfile.
+- migrations/0010_athlete_media_bucket.sql — APPLIED 2026-07-02 — public `athlete-media` storage bucket (50MB, image+video MIME) + public-read/authenticated-write policies mirroring athlete-photos. REQUIRED for athlete video uploads (athlete-photos is images-only, 5MB). Uploaded to by uploadAthleteMedia.
 - migrations/0099_cleanup_duplicate_policies.sql — OPTIONAL dedupe of redundant RLS policies
 Already applied (CLAUDE.md previously mislabelled these "pending"):
 profiles.username, host_invites.short_code, event provenance columns,
