@@ -2013,12 +2013,18 @@ function WebIcon({size=12}){
 }
 
 /* === AthleteWeb: force-directed "web" of co-competitors ======================
-   Each node is an athlete the focal athlete has raced against. Node size scales
-   with how many competitions they have SHARED with the focal athlete (sqrt
-   scale, the way Obsidian sizes nodes by reference count). Edges connect any two
-   athletes who appeared in the same event (weight = times together). Limited to
-   the top 100 co-competitors. Drag nodes; hover to spotlight a node and its
-   connections; click to pin; double-click to open that athlete's profile.
+   Each node is an athlete the focal athlete has raced against. Rivals are
+   ranked and sized by a Jaccard correlation on a 0–1 scale:
+       corr = shared / (focalTotal + rivalTotal − shared)
+   i.e. shared competitions over the union of both athletes' competition sets.
+   Jaccard (over shared/min) damps one-event wonders — a newcomer whose only 2
+   comps were with the focal isn't a "perfect 1.0" — and damps mega-active
+   athletes who co-appear with everyone by sheer volume. Raw shared count stays
+   on the node for human-readable display. Edges connect any two shown athletes
+   who appeared in the same event (weight = times together). Limited to the
+   top 15 co-competitors. Drag nodes; hover to spotlight a node and its
+   connections; click to pin (sidebar shows shared comps + connections);
+   double-click to open that athlete's profile.
    Self-contained 2D canvas (matches SailingGlobe) + d3-force physics. */
 function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,onSelectionChange,deselectKey=0,enlarged=false}){
   const canvasRef=React.useRef(null);
@@ -2036,6 +2042,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     const focal=canonName(name);
     const disp=new Map();                 // canon -> display name
     const shared=new Map();               // canon -> # events shared with focal
+    const totals=new Map();               // canon -> total events appeared in (for Jaccard union)
     const focalEvents=[];                 // [Set(canon)] events the focal sailed
     const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
     const natCount=new Map();             // canon -> Map(nat -> count)
@@ -2046,16 +2053,22 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
       if(ev.status==="Draft")return;
       const present=new Set();
       (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
+      present.forEach(k=>totals.set(k,(totals.get(k)||0)+1));
       if(!present.has(focal))return;
       focalEvents.push(present);
       present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
     });
-    const top=[...shared.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15);
+    // Jaccard correlation (0–1): shared / union of the two competition sets.
+    const focalTotal=focalEvents.length;
+    const corrOf=(k,sh)=>{const u=focalTotal+(totals.get(k)||sh)-sh;return u>0?sh/u:0;};
+    const top=[...shared.entries()].map(([k,sh])=>[k,sh,corrOf(k,sh)])
+      .sort((a,b)=>b[2]-a[2]||b[1]-a[1]).slice(0,15);   // rank by corr, tie-break raw shared
     const keep=new Set(top.map(([k])=>k)); keep.add(focal);
-    const maxShared=top.length?top[0][1]:1;
+    const maxShared=top.length?Math.max(...top.map(t=>t[1])):1;
+    const maxCorr=top.length?top[0][2]:1;
     // node class = the boat class they shared MOST competitions with the focal in (drives node colour)
-    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOf(natCount.get(focal)),shared:maxShared,focal:true}];
-    top.forEach(([k,c])=>nodes.push({id:k,name:disp.get(k)||k,cls:modeOf(clsCount.get(k)),nat:modeOf(natCount.get(k)),shared:c,focal:false}));
+    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOf(natCount.get(focal)),shared:maxShared,corr:maxCorr||1,focal:true}];
+    top.forEach(([k,c,q])=>nodes.push({id:k,name:disp.get(k)||k,cls:modeOf(clsCount.get(k)),nat:modeOf(natCount.get(k)),shared:c,corr:q,focal:false}));
     const ew=new Map();
     focalEvents.forEach(present=>{
       const arr=[...present].filter(k=>keep.has(k));
@@ -2065,7 +2078,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
       }
     });
     const links=[...ew.entries()].map(([key,w])=>{const p=key.split("|");return{source:p[0],target:p[1],w};});
-    return{nodes,links,maxShared,focal,count:top.length};
+    return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:top.length};
   },[name,events]);
 
   // selected node (lifted to React state so the enlarged sidebar can render it)
@@ -2073,6 +2086,22 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   React.useEffect(()=>{onSelChangeRef.current&&onSelChangeRef.current(selNode);},[selNode]);
   // external "Deselect" (from the popup header) clears the current selection
   React.useEffect(()=>{const st=stateRef.current;st.sel=null;setSelNode(null);st.draw&&st.draw();},[deselectKey]);
+  // select a node programmatically (sidebar "connections" chips)
+  const selectById=(id)=>{
+    const st=stateRef.current;const n=st.byId?.get(id);if(!n)return;
+    st.sel=n;setSelNode({id:n.id,name:n.name,shared:n.shared,cls:n.cls,nat:n.nat});
+    st.draw&&st.draw();
+  };
+  // who the selected athlete is connected to in the visible web (edge weight desc)
+  const selConnections=React.useMemo(()=>{
+    if(!selNode)return [];
+    const byId=new Map(graph.nodes.map(n=>[n.id,n]));
+    return graph.links
+      .filter(l=>l.source===selNode.id||l.target===selNode.id)
+      .map(l=>({n:byId.get(l.source===selNode.id?l.target:l.source),w:l.w}))
+      .filter(x=>x.n)
+      .sort((a,b)=>b.w-a.w);
+  },[selNode,graph]);
   // the competitions the focal + selected athlete both sailed
   const sharedComps=React.useMemo(()=>{
     if(!selNode)return [];
@@ -2100,25 +2129,25 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     const nodes=graph.nodes.map(n=>({...n}));
     const byId=new Map(nodes.map(n=>[n.id,n]));
     const links=graph.links.map(l=>({...l}));
-    st.nodes=nodes;st.links=links;st.byId=byId;st.maxShared=graph.maxShared;st.hover=null;st.sel=null;st.scale=1;st.ox=0;st.oy=0;st.pan=null;
+    st.nodes=nodes;st.links=links;st.byId=byId;st.maxShared=graph.maxShared;st.maxCorr=graph.maxCorr;st.hover=null;st.sel=null;st.scale=1;st.ox=0;st.oy=0;st.pan=null;
     setSelNode(null);
     const focalNode=byId.get(graph.focal);
     if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}
-    // scatter rivals radially: bigger (more-shared) start nearer the focal,
+    // scatter rivals radially: bigger (more-correlated) start nearer the focal,
     // smaller start further out, with random jitter so the layout looks organic.
-    nodes.forEach(n=>{if(n.focal)return;const ratio=(n.shared||1)/(graph.maxShared||1);
+    nodes.forEach(n=>{if(n.focal)return;const ratio=(n.corr||0)/(graph.maxCorr||1);
       const ang=Math.random()*Math.PI*2,dist=(enlarged?144:55)+(1-ratio)*(enlarged?414:104)+(Math.random()-.5)*(enlarged?90:26);
       n.x=st.w/2+Math.cos(ang)*dist;n.y=st.h/2+Math.sin(ang)*dist;});
-    // Sizing is relative to the focal node: the rival with the most shared
-    // competitions is 60% of the focal's size, and everyone else scales linearly
-    // by their shared count vs. that top rival. No rival is ever bigger than focal.
+    // Sizing is relative to the focal node: the MOST-CORRELATED rival (Jaccard)
+    // is 80% of the focal's size, everyone else scales linearly by their
+    // correlation vs. that top rival. No rival is ever bigger than focal.
     const F=enlarged?12.6:7.65;               // focal radius (50% smaller, +20%, then +50%)
     const rad=d=>{if(d.focal)return F;
-      const ratio=(d.shared||1)/(st.maxShared||1);
+      const ratio=(d.corr||0)/(st.maxCorr||1);
       return Math.max(enlarged?3.3:1.95,F*0.8*ratio);};   // top rival = 80% of focal
     st.rad=rad;
     const lerpText=(n,strong,sx,sy)=>{
-      ctx.font=(strong?"700 ":"600 ")+(strong?12:10.5)+"px 'DM Sans',system-ui,sans-serif";
+      ctx.font=(strong?"700 ":"600 ")+(strong?12:10.5)+"px -apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif";
       const t=n.name,tw=ctx.measureText(t).width,x=sx,y=sy-rad(n)*st.scale-6;
       ctx.fillStyle="rgba(8,24,45,.82)";
       const px=6,h=15,bx=x-tw/2-px,by=y-h+3,bw=tw+px*2;
@@ -2173,12 +2202,12 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     st.draw=draw;
     const sim=forceSimulation(nodes)
       .velocityDecay(enlarged?.62:.58)        // higher damping = relaxed, fluid motion (less bounce)
-      // link distance is driven by node size: bigger (more-shared) nodes sit
-      // closer to the focal, smaller ones further out. Focal links hold the
-      // radial structure; rival-rival links stay weak so they don't clump.
+      // link distance is driven by correlation: more-correlated nodes sit
+      // closer to the focal, less-correlated ones further out. Focal links hold
+      // the radial structure; rival-rival links stay weak so they don't clump.
       .force("link",forceLink(links).id(d=>d.id)
         .distance(l=>{const a=l.source,b=l.target,other=a.focal?b:(b.focal?a:null);
-          if(other){const ratio=(other.shared||1)/(st.maxShared||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
+          if(other){const ratio=(other.corr||0)/(st.maxCorr||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
           return enlarged?270:91;})
         .strength(l=>(l.source.focal||l.target.focal)?(enlarged?.5:.45):.04))
       .force("charge",forceManyBody().strength(enlarged?-270:-60).distanceMax(enlarged?1100:390))
@@ -2274,6 +2303,23 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
             {selNode.cls&&(()=>{const ng=nuggetFor(selNode.cls);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
             <span style={{color:"#9fc4ec",fontWeight:800,fontSize:13,fontVariantNumeric:"tabular-nums"}}>{sharedComps.length} shared competition{sharedComps.length===1?"":"s"}</span>
           </div>
+          {selConnections.length>0&&(
+            <div style={{marginTop:11}}>
+              <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:6}}>Connected to</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {selConnections.map(({n,w})=>(
+                  <button key={n.id} onClick={()=>selectById(n.id)} title={`${w} competition${w===1?"":"s"} together — view`}
+                    style={{display:"inline-flex",alignItems:"center",gap:6,border:"1px solid rgba(120,160,210,.3)",
+                      background:"rgba(120,160,210,.12)",color:"#dcecf8",borderRadius:980,padding:"3px 10px",
+                      fontFamily:"inherit",fontSize:11.5,fontWeight:700,cursor:"pointer",lineHeight:1.4}}>
+                    <span style={{width:7,height:7,borderRadius:"50%",flex:"none",
+                      background:n.focal?"#ffcf2e":classColor(n.cls),boxShadow:"0 0 0 1px rgba(255,255,255,.35)"}}/>
+                    {n.name}<span style={{color:"#9fc4ec",fontWeight:800}}>{w}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         {sharedGroups.map(g=>(
           <div key={g.cname}>
@@ -2373,6 +2419,11 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
       if(cur&&cur.length>1)out.push(cur);return out;};
 
     const draw=()=>{
+      // Wrapper may have 0 width on first paint (hidden tab / pre-layout) —
+      // size() bails without setting W/H/baseR/cx/cy, and NaN maths here would
+      // throw in createRadialGradient and take down the whole profile via the
+      // ErrorBoundary. Retry sizing until layout settles instead of crashing.
+      if(!Number.isFinite(baseR)||!(W>0)){size();if(!Number.isFinite(baseR)||!(W>0)){raf=requestAnimationFrame(draw);return;}}
       const D2=drawRef.current;
       const data=D2.data,tinyEntries=D2.tinyEntries,hostIso=D2.hostIso,dark=D2.dark,shadeFor=D2.shadeFor;
       const ocean=dark?'#081a33':'#0e2c50';
