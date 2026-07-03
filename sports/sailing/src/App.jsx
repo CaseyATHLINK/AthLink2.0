@@ -5190,6 +5190,7 @@ export default function AthLinkMVP(){
   // Ranking page
   const[rankCls,setRankCls]=useState("29er");
   const[rankMode,setRankMode]=useState("cumulative"); // "cumulative" (every race) | "position" (regatta placings)
+  const[rankCountry,setRankCountry]=useState(""); // country lens on the Rankings page ("" = all)
   const[rankDiscards,setRankDiscards]=useState(0);    // configurable; default 0
   const[rankSourceOpen,setRankSourceOpen]=useState(null);   // collapsed by default
   const[rankSelected,setRankSelected]=useState(()=>{
@@ -8031,6 +8032,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     });
     // Lowest total wins; tiebreak = best result in the most recent regatta, then name.
     rows.sort((a,b)=>a.total-b.total||a.lastRes-b.lastRes||(a.name||a.helm||"").localeCompare(b.name||b.helm||""));
+    // Country lens (helm nationality) — re-ranked within the filtered view.
+    const natOfRow=r=>{const k=canonName(dh?(r.helm||""):(r.name||""));return (cardStats.get(k)||{}).nat||"";};
+    const rankCountries=[...new Set(rows.map(natOfRow).filter(Boolean))]
+      .sort((x,y)=>(GLOBE_NAMES[IOC_ISO[x]]||x).localeCompare(GLOBE_NAMES[IOC_ISO[y]]||y));
+    if(rankCountry) rows=rows.filter(r=>natOfRow(r)===rankCountry);
     rows.forEach((r,i)=>r.rankNum=i+1);
     const podium=n=>n===1?"#e3b341":n===2?"#9aa6b2":n===3?"#c08457":"var(--navy)";
     const clsShort=classLabel(rankCls);
@@ -8046,29 +8052,25 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const Nug=({children,color})=><span style={{display:"inline-block",fontSize:10,fontWeight:700,color:"#fff",background:color||"var(--mut)",borderRadius:5,padding:"2px 6px",marginRight:4}}>{children}</span>;
     return(
       <div className="wrap sec" style={{paddingTop:16}}>
-        <div className="page-head" style={{paddingLeft:22}}>
+        <div className="page-head">
           <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
-          <h1 className="page-title">Ranking</h1>
-          {/* Stats row directly under the title (mirrors the class-portal layout) */}
-          <div className="pillbar" style={{marginTop:12}}>
-            <div className="pill"><Trophy size={16}/><b>{comps.length}</b> competition{comps.length!==1?"s":""}</div>
-            <div className="pill"><Users size={16}/><b>{rankAthleteCount}</b> athlete{rankAthleteCount!==1?"s":""}</div>
-          </div>
+          <h1 className="page-title">Rankings</h1>
+          <p className="page-sub">{comps.length} competition{comps.length!==1?"s":""} · {rankAthleteCount} athlete{rankAthleteCount!==1?"s":""} in the {clsShort} series</p>
         </div>
-        {/* Class tabs */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
-          {CLASSES.map(c=>{
-            const on=rankCls===c.id;const solid=classColor(c.id);
-            return(<button key={c.id} onClick={()=>{setRankCls(c.id);setRankSourceOpen(null);setRankExpanded(new Set());}}
-              style={{border:`1px solid ${on?solid:classColorA(c.id,.5)}`,borderRadius:16,background:on?solid:`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`,color:on?"#fff":solid,cursor:"pointer",
-                backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.6)",
-                padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Barlow',sans-serif",transition:".15s"}}
-              onMouseEnter={e=>{if(on)return;e.currentTarget.style.background=solid;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=solid;}}
-              onMouseLeave={e=>{if(on)return;e.currentTarget.style.background=`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`;e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.5);}}>
-              <span style={{fontWeight:800,fontSize:16}}>{c.short}</span>
-              <span style={{fontSize:11,opacity:.85,fontWeight:600}}>Ranking</span>
-            </button>);
-          })}
+        {/* Lenses — class chips + country select, same idiom as every other list page */}
+        <div className="strip-chips" style={{margin:"0 0 14px"}}>
+          {CLASSES.map(c=>(
+            <button key={c.id} className={`lens-chip${rankCls===c.id?" on":""}`} onClick={()=>{setRankCls(c.id);setRankSourceOpen(null);setRankExpanded(new Set());}}>
+              <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
+            </button>
+          ))}
+          <span className="lens-selwrap">
+            <select className="lens-select" value={rankCountry} onChange={e=>setRankCountry(e.target.value)}>
+              <option value="">All countries</option>
+              {rankCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+            </select>
+            <ChevronRight size={13} className="lens-selchev"/>
+          </span>
         </div>
         {/* Source nuggets */}
         <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
@@ -8135,51 +8137,51 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             <span style={{fontSize:11.5,color:"var(--mut)"}}>{rankMode==="cumulative"?"Combined series · every race counts · DNC = entries+1":"Sum of competition placings · DNC = entries+1"}</span>
           </div>
-          <div style={{overflowX:"auto",background:"rgba(255,255,255,0.85)",backdropFilter:"blur(34px) saturate(195%)",WebkitBackdropFilter:"blur(34px) saturate(195%)",borderRadius:16,boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06)"}}>
-            <table style={{borderCollapse:"collapse",width:"100%",fontSize:13,minWidth:640}}>
+          <div className="panel" style={{overflowX:"auto"}}>
+            <table>
               <thead>
-                <tr style={{background:"linear-gradient(180deg,rgba(31,78,128,.92),rgba(19,49,78,.94))",color:"#fff",textAlign:"left"}}>
-                  <th style={{padding:"10px 12px"}}>#</th>
-                  <th style={{padding:"10px 10px",textAlign:"center"}}>Div</th>
-                  <th style={{padding:"10px 12px"}}>{dh?"Team":"Name"}</th>
-                  {comps.map((c,i)=><th key={c.id} title={c.name} style={{padding:"10px 10px",textAlign:"center",maxWidth:130}}><div style={{maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div></th>)}
-                  <th style={{padding:"10px 12px",textAlign:"center"}}>Total</th>
+                <tr>
+                  <th style={{width:48}}>Rank</th>
+                  <th className="l">{dh?"Team":"Athlete"}</th>
+                  {comps.map((c,i)=><th key={c.id} title={c.name} style={{maxWidth:130}}><div style={{maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",margin:"0 auto"}}>{c.name}</div></th>)}
+                  <th>Total</th>
+                  <th>Div</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(r=>{
                   const expanded=comps.filter(c=>rankExpanded.has(`${r.key}|${c.id}`)&&r.perComp[c.id]);
                   return(<React.Fragment key={r.key}>
-                    <tr style={{borderTop:"1px solid var(--line)"}}>
-                      <td style={{padding:"9px 12px",fontWeight:800,color:podium(r.rankNum),fontSize:r.rankNum<=3?15:13}}>{r.rankNum}</td>
-                      <td style={{padding:"9px 10px",textAlign:"center",whiteSpace:"nowrap"}}>
-                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
-                        {r.division&&<Nug>{r.division}</Nug>}
-                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
-                      </td>
-                      <td style={{padding:"9px 12px",fontWeight:600,whiteSpace:"nowrap"}}>
+                    <tr>
+                      <td className={"rk"+(r.rankNum===1?" p1":r.rankNum===2?" p2":r.rankNum===3?" p3":"")}>{r.rankNum}</td>
+                      <td className="l" style={{whiteSpace:"nowrap"}}>
                         {dh
                           ?<div style={{lineHeight:1.35}}>
-                            <div style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>r.helm&&go({name:"profile",id:r.helm})}>{r.helm||"—"} <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>HELM</span></div>
-                            {r.crew&&<div style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>go({name:"profile",id:r.crew})}>{r.crew} <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>CREW</span></div>}
+                            <div><span className="namelink" onClick={()=>r.helm&&go({name:"profile",id:r.helm})}>{r.helm||"—"}</span> <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>HELM</span></div>
+                            {r.crew&&<div><span className="namelink" onClick={()=>go({name:"profile",id:r.crew})}>{r.crew}</span> <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>CREW</span></div>}
                           </div>
-                          :<span style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
+                          :<span className="namelink" onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
                       </td>
                       {comps.map(c=>{
                         const pc=r.perComp[c.id];const pcell=r.per[c.id];
                         const shown=rankMode==="position"?(pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–")):pcell.contrib;
                         const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
-                        return <td key={c.id} style={{padding:"9px 10px",textAlign:"center"}}>
+                        return <td key={c.id}>
                           <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this competition (entries+1)":"Tap for race detail"}
                             style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:pcell.dnc?"var(--mut)":"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:pc?"pointer":"default",fontSize:13,fontStyle:pcell.dnc?"italic":"normal"}}>{shown}{pcell.dnc?" DNC":""}</button>
                         </td>;
                       })}
-                      <td style={{padding:"9px 12px",textAlign:"center",fontWeight:800}}>{r.total}</td>
+                      <td style={{fontWeight:800}}>{r.total}</td>
+                      <td style={{whiteSpace:"nowrap"}}>
+                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
+                        {r.division&&<Nug>{r.division}</Nug>}
+                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
+                      </td>
                     </tr>
                     {expanded.map(c=>{
                       const pc=r.perComp[c.id];
                       return(<tr key={r.key+c.id} style={{background:"#f3f8fd"}}>
-                        <td/><td/><td colSpan={2+comps.length} style={{padding:"8px 14px"}}>
+                        <td/><td colSpan={3+comps.length} style={{padding:"8px 14px",textAlign:"left"}}>
                           <div style={{fontSize:12.5,color:"var(--navy)"}}>
                             <strong>{c.name}</strong> — finished #{pc.rank??"–"} {pc.sail&&pc.sail!=="—"?`(${pc.sail})`:""}
                             <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:6}}>
