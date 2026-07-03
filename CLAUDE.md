@@ -211,6 +211,18 @@ Dedup via canonical key (normalised lowercase, strip punctuation).
 classLabel(clsId) helper resolves display name for any id — strips "custom:"
 prefix from legacy-stored ids, never displays the raw id.
 DB persistence: custom_classes table — migration 0002 applied 2026-07-01.
+Load/persist path (2026-07-03 fix — no more grey nuggets):
+- Load is PUBLIC: fetchCustomClasses runs for anon viewers too (RLS allows
+  anon SELECT), so logged-out pages get real labels/colours. DB rows are
+  authoritative — they replace same-canonical local entries on load.
+- Writes are verified: addCustomClass → persistCustomClass checks the insert
+  result (hostRest returns null on failure — a .catch alone NEVER fires).
+  Failed/signed-out writes queue in localStorage
+  ("athlink_pending_custom_classes") and re-try on next signed-in load; a
+  toast tells the user when a class couldn't be written yet.
+- Safety net: any event referencing a custom:<slug> id with no registry entry
+  gets a synthesized in-memory entry (prettified label + palette colour), so
+  a grey "unrecognized" nugget can never render even if a write was lost.
 
 ## Event provenance
 Source (contributor) ≠ organizer. External imports stay out of importer's
@@ -258,6 +270,13 @@ Table: athlete_claims.
   name); the shell resets it to "AthLink" on the landing route.
 - custom: prefix in stored class ids — always use classLabel() to display,
   never render a raw class id directly
+- hostRest/sbGet return null on ANY failure (RLS, HTTP, network) without
+  throwing — .catch on their callers never fires; always check for null
+- Date recency: use dateKey(str) (module helper) for dd/mm/yyyy sort keys —
+  it zero-pads 1-digit day/month and returns "" for missing dates. Never
+  compare raw split("/").reverse().join("") keys: unpadded parts mis-sort and
+  the "—" placeholder (dbToApp's null-date fallback) outranks all digits,
+  which let one undated event hijack every athlete's recentCls
 - useEffect hooks that reference importerHost/_orgHost/_orgMode must be
   placed AFTER those variables are declared (TDZ risk)
 - Vercel CLI is logged in as personal account (casey-9955) but project is

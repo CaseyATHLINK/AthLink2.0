@@ -204,6 +204,18 @@ function formatDate(str){
   if(m){const d=parseInt(m[1]),mo=parseInt(m[2])-1,y=m[3];if(mo>=0&&mo<=11) return `${d} ${MON[mo]} ${y}`;}
   return str;
 }
+// Sortable YYYYMMDD key from a dd/mm/yyyy-ish date string. Zero-pads 1-digit
+// day/month (naive split-reverse-join mis-sorts "5/6/2024" vs "20/11/2024") and
+// tolerates ranges like "12-15/06/2024" (uses the last complete d/m/yyyy found).
+// Returns "" for missing/unparseable dates — callers must treat "" as "no date",
+// NOT as "most recent" (the old code let the "—" placeholder outrank all digits).
+function dateKey(str){
+  const s=String(str||"");
+  const re=/(\d{1,2})\/(\d{1,2})\/(\d{4})/g;
+  let m,last=null;
+  while((m=re.exec(s))) last=m;
+  return last?last[3]+last[2].padStart(2,"0")+last[1].padStart(2,"0"):"";
+}
 
 /* ── static data ──────────────────────────────────────────────────────── */
 const META={
@@ -956,8 +968,7 @@ function aggregate(name,evList){
   }
   // Sort newest-first via a robust YYYYMMDD key (dates are DD/MM/YYYY; new Date()
   // misreads that, which previously left history[0] = wrong "most recent").
-  const _dk=ev=>(ev.date||"").split("/").reverse().join("");
-  history.sort((a,b)=>_dk(b.ev).localeCompare(_dk(a.ev)));
+  history.sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date)));
   return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
 }
 
@@ -973,7 +984,7 @@ function buildAthleteAttrs(evList){
   const m=new Map();
   for(const ev of (evList||[])){
     if(ev.status==="Draft") continue;
-    const dk=(ev.date||"").split("/").reverse().join("");
+    const dk=dateKey(ev.date); // "" = undated; never allowed to claim recency
     for(const e of (ev.entries||[])){
       const gc=genderCatOf(e); // resolves real fields + legacy div
       // helm + crew, each with their own stated gender where derivable
@@ -985,7 +996,9 @@ function buildAthleteAttrs(evList){
         let o=m.get(k); if(!o){o={gender:{},birthYear:{},recentDK:"",recentCls:null,recentSub:null};m.set(k,o);}
         if(g&&g!=="Mix") o.gender[g]=(o.gender[g]||0)+1;
         if(by) o.birthYear[by]=(o.birthYear[by]||0)+1;
-        if(dk>=o.recentDK){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
+        // Undated events may seed recentCls (better than nothing) but any DATED
+        // event beats them; among dated events the latest date wins.
+        if(dk?dk>=o.recentDK:!o.recentDK&&!o.recentCls){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
       }
     }
   }
@@ -1302,13 +1315,37 @@ async function uploadAthleteMedia(file,name,tok){
 }
 
 /* ── Custom boat classes (custom_classes) ─────────────────────────────────────
-   Persisted mirror of the in-memory CUSTOM_CLASSES registry. Read is public;
-   insert is gated to verified hosts or admins (see migrations/0002). */
+   Persisted mirror of the in-memory CUSTOM_CLASSES registry. Read is public
+   (anon SELECT allowed by RLS) so logged-out viewers still get labels/colours;
+   insert is gated to verified hosts or admins (see migrations/0002).
+   hostRest returns null on ANY failure (RLS, network) without throwing, so
+   callers MUST check for null — a .catch alone never fires. Writes that fail
+   (or happen while signed out, e.g. dev-mode imports) are queued in
+   localStorage and re-tried on the next signed-in load, so a class can no
+   longer be silently lost between sessions. */
 const fetchCustomClasses=(tok)=>hostRest("custom_classes?select=*",{},tok);
 async function insertCustomClass(cc,userId,tok){
   return hostRest("custom_classes",{method:"POST",
     headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
     body:JSON.stringify({id:cc.id,canonical:cc.canonical,short:cc.short,full:cc.full,color:cc.color,created_by:userId})},tok);
+}
+// Write-behind queue for custom classes that couldn't be persisted yet.
+const PENDING_CC_KEY="athlink_pending_custom_classes";
+function readPendingCustomClasses(){
+  try{const a=JSON.parse(localStorage.getItem(PENDING_CC_KEY)||"[]");return Array.isArray(a)?a:[];}catch{return[];}
+}
+function queuePendingCustomClass(cc){
+  try{
+    const q=readPendingCustomClasses().filter(p=>p.canonical!==cc.canonical);
+    q.push({id:cc.id,canonical:cc.canonical,short:cc.short,full:cc.full,color:cc.color});
+    localStorage.setItem(PENDING_CC_KEY,JSON.stringify(q));
+  }catch(e){console.error("queuePendingCustomClass",e);}
+}
+function dropPendingCustomClass(canonical){
+  try{
+    const q=readPendingCustomClasses().filter(p=>p.canonical!==canonical);
+    localStorage.setItem(PENDING_CC_KEY,JSON.stringify(q));
+  }catch(e){console.error("dropPendingCustomClass",e);}
 }
 
 /* ── Event claims (event_claims) ──────────────────────────────────────────────
@@ -4509,9 +4546,22 @@ export default function AthLinkMVP(){
   // ── Custom boat classes (global, in-memory) ──
   // State mirrors the module-level CUSTOM_CLASSES registry so the UI re-renders.
   const[customClasses,setCustomClasses]=useState(CUSTOM_CLASSES);
+  const[classNote,setClassNote]=useState(null); // {name} — toast when a custom class couldn't be persisted
+  // Persist a custom class to the DB, verifying the write actually landed.
+  // hostRest resolves null on failure (never rejects), so the result must be
+  // checked — the old fire-and-forget .catch silently lost classes. Failures
+  // (and signed-out adds, e.g. dev mode) go to the localStorage queue and are
+  // re-tried on the next signed-in load.
+  const persistCustomClass=async(cc)=>{
+    if(!(auth?.user?.id&&auth?.token)){queuePendingCustomClass(cc);return;}
+    const res=await insertCustomClass(cc,auth.user.id,auth.token); // [] = duplicate (fine), null = failed
+    if(res===null){queuePendingCustomClass(cc);setClassNote({name:cc.short});}
+    else dropPendingCustomClass(cc.canonical);
+  };
   // Add (or reuse) a custom class by name. Dedups on canonical key; returns the
-  // class id so the caller can select it. Persists to custom_classes when the
-  // creator is signed in, so it survives reloads and appears for everyone.
+  // class id so the caller can select it. Persists to custom_classes so it
+  // survives reloads and appears for everyone (queued + retried if it can't be
+  // written right now).
   const addCustomClass=(name)=>{
     const nm=String(name||"").trim();
     if(!nm) return null;
@@ -4523,7 +4573,7 @@ export default function AthLinkMVP(){
     const cc={id:`custom:${canonical}`,short:nm,full:nm,color,canonical};
     CUSTOM_CLASSES=[...CUSTOM_CLASSES,cc];
     setCustomClasses(CUSTOM_CLASSES);
-    if(auth?.user?.id&&auth?.token) insertCustomClass(cc,auth.user.id,auth.token).catch(e=>console.error("persist custom class",e));
+    persistCustomClass(cc);
     return cc.id;
   };
   const[auth,setAuth]=useState(null);
@@ -4769,15 +4819,43 @@ export default function AthLinkMVP(){
   useEffect(()=>{ reloadAthleteProfiles(); },[reloadAthleteProfiles]);
 
   // ── Load persisted custom boat classes (public read; merge into the registry) ──
+  // DB rows are authoritative for their canonical key (they replace any locally
+  // synthesized entry so everyone sees the creator's exact label/colour). Runs
+  // for anon viewers too — custom_classes has public SELECT — so logged-out
+  // pages never show grey nuggets. When signed in, any queued writes that
+  // previously failed (or were made while signed out) are re-tried here.
   useEffect(()=>{
     (async()=>{
       const rows=await fetchCustomClasses(auth?.token);
-      if(!Array.isArray(rows)||!rows.length) return;
-      const have=new Set(CUSTOM_CLASSES.map(c=>c.canonical));
-      const add=rows.filter(r=>r.canonical&&!have.has(r.canonical)).map(r=>({id:r.id,short:r.short,full:r.full||r.short,color:r.color,canonical:r.canonical}));
-      if(add.length){ CUSTOM_CLASSES=[...CUSTOM_CLASSES,...add]; setCustomClasses(CUSTOM_CLASSES); }
+      if(Array.isArray(rows)&&rows.length){
+        const db=new Map(rows.filter(r=>r.canonical).map(r=>[r.canonical,{id:r.id,short:r.short,full:r.full||r.short,color:r.color,canonical:r.canonical}]));
+        CUSTOM_CLASSES=[...db.values(),...CUSTOM_CLASSES.filter(c=>!db.has(c.canonical))];
+        setCustomClasses(CUSTOM_CLASSES);
+        rows.forEach(r=>dropPendingCustomClass(r.canonical)); // already in DB — no retry needed
+      }
+      if(auth?.user?.id&&auth?.token){
+        for(const cc of readPendingCustomClasses()) await persistCustomClass(cc);
+      }
     })();
   },[auth]);
+  // ── Safety net: never show a grey "unrecognized" nugget ──
+  // Any event that references a custom:<slug> id with no registry entry (legacy
+  // rows whose insert was lost before the write-behind queue existed) gets a
+  // synthesized entry — prettified label + palette colour. In-memory only: the
+  // DB write path stays with the real creator flow above.
+  useEffect(()=>{
+    const missing=new Map();
+    events.forEach(ev=>{
+      const id=ev.cls;
+      if(typeof id!=="string"||!id.startsWith("custom:")) return;
+      const canonical=id.slice(7);
+      if(!canonical||missing.has(canonical)||CUSTOM_CLASSES.some(c=>c.canonical===canonical)) return;
+      const color=CUSTOM_CLASS_PALETTE[(CUSTOM_CLASSES.length+missing.size)%CUSTOM_CLASS_PALETTE.length];
+      const nm=prettifyClassSlug(canonical);
+      missing.set(canonical,{id,short:nm,full:nm,color,canonical});
+    });
+    if(missing.size){ CUSTOM_CLASSES=[...CUSTOM_CLASSES,...missing.values()]; setCustomClasses(CUSTOM_CLASSES); }
+  },[events,customClasses]);
   // Extras row for a profile name (or null).
   const athleteProfileOf=(nm)=>athleteProfiles[profileNameKey(nm)]||null;
   // Can the signed-in user edit this profile's extras? Verified owner, or dev.
@@ -5274,7 +5352,7 @@ export default function AthLinkMVP(){
     const sc=(()=>{try{return scoreEvent(ev);}catch{return null;}})();
     return {ev:{...ev,class:nuggetFor(ev.cls,ev.subclass).label},row:{rank:0},fleet:sc?sc.fleet:(ev.entries?.length||0),
       countries:new Set(ev.entries.flatMap(e=>[e.nat]).filter(Boolean)).size};
-  }).sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return db.localeCompare(da);}),[classEvents]);
+  }).sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date))),[classEvents]);
 
   // ── Duplicate detection (review pile) ───────────────────────
   // Exact canonical matches (word order / case / accents / hyphens / punctuation)
@@ -5364,7 +5442,7 @@ export default function AthLinkMVP(){
     for(const ev of statScope){
       if(ev.status==="Draft") continue;
       const s=scoreEvent(ev);
-      const dk=(ev.date||"").split("/").reverse().join("");
+      const dk=dateKey(ev.date); // "" = undated; never allowed to claim recency
       for(const row of s.rows){
         [row.helm,row.crew].forEach(nm=>{
           if(!nm) return;const k=canonName(nm);if(!k) return;
@@ -5372,7 +5450,7 @@ export default function AthLinkMVP(){
           const sig=`${eventKey(ev)}|${row.sail||""}|${row.rank}|${row.net}|${(row.races||[]).join(",")}`;
           if(!o.evset.has(sig)){o.evset.add(sig);if(row.rank&&row.rank<o.best)o.best=row.rank;}
           if(row.nat)o.nat[row.nat]=(o.nat[row.nat]||0)+1;
-          if(dk>=o.recentDK){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
+          if(dk?dk>=o.recentDK:!o.recentDK&&!o.recentCls){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
         });
       }
     }
@@ -5794,14 +5872,14 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
       const best=ag.best?"#"+ag.best:"unknown";
       const evs=ag.events;const pods=ag.podiums;const wins=ag.wins;
       // First & most-recent event years (for "started together" / trajectory context).
-      const sorted=ag.history.slice().sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return da.localeCompare(db);});
+      const sorted=ag.history.slice().sort((a,b)=>dateKey(a.ev.date).localeCompare(dateKey(b.ev.date)));
       const firstYr=sorted[0]?.ev.date?.split('/')?.[2]||"";
       let prompt;
       if(crew){
         const agCrew=aggregate(crew,events);
         // Events both sailed together (shared regattas with this partner).
         const together=ag.history.filter(h=>h.partner&&canonName(h.partner)===canonName(crew));
-        const firstTog=together.slice().sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return da.localeCompare(db);})[0];
+        const firstTog=together.slice().sort((a,b)=>dateKey(a.ev.date).localeCompare(dateKey(b.ev.date)))[0];
         const togLine=together.length?`Sailed together in ${together.length} regatta(s) since ${firstTog?.ev.date?.split('/')?.[2]||"?"}; best together #${Math.min(...together.map(h=>h.row.rank))}.`:"First/few events as a pair.";
         prompt=`Write a SHORT scouting blurb for a sailing PAIR (helm+crew): 2 sentences, MAX 38 words. Cover (a) when they started sailing together and how they've performed as a pair, (b) any standout milestone by either sailor, and (c) how they stack up against similar-calibre competition. Factual, no markdown, no heading. Always refer to each sailor by their FULL name exactly as "${name}" and "${crew}" (first and last together) — never just a first name or just a last name.
 Helm: ${name} (${evs} regattas since ${firstYr||"?"}, best ${best}, ${pods} podiums, ${wins} race wins).
@@ -7255,6 +7333,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div><b>Claim submitted</b>
       <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>Your claim on <b>{claimNote.name}</b> is pending — a verified host admin will review it.</div></div>
       <button className="x" style={{marginLeft:8}} onClick={()=>setClaimNote(null)}><X size={15}/></button>
+    </div>
+  )}
+  {classNote&&(
+    <div className="notice"><div className="ico"><AlertCircle size={18}/></div>
+      <div><b>Class not saved yet</b>
+      <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>"<b>{classNote.name}</b>" couldn't be written to the database — it will be retried automatically next time you load AthLink signed in.</div></div>
+      <button className="x" style={{marginLeft:8}} onClick={()=>setClassNote(null)}><X size={15}/></button>
     </div>
   )}
   {showClaimModal&&(()=>{
