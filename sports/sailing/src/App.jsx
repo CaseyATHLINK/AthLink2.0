@@ -4985,7 +4985,6 @@ export default function AthLinkMVP(){
   };
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
-  const[homeQ,setHomeQ]=useState(""); // search on home portals page
   const[compQ,setCompQ]=useState(""); // filter on the global Competitions page
   const[note,setNote]=useState(null);
   const[open,setOpen]=useState(false);
@@ -6828,6 +6827,26 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .home-hero{background:none;color:var(--ink);padding:8px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:36px;font-weight:800;margin:0 0 6px;}
     .home-hero p{color:var(--mut);font-size:15px;margin:0 0 20px;}
+    /* Search-first hero — one large glass search spanning athletes + competitions + clubs.
+       z-index sits above the click-away overlay (55) so the field stays interactive. */
+    .hero-srch{position:relative;z-index:56;display:flex;align-items:center;gap:10px;max-width:640px;margin:20px 0 8px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:14px 20px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 8px 26px -14px rgba(0,0,0,.25);transition:box-shadow .16s,background .16s;}
+    .hero-srch:focus-within{background:rgba(255,255,255,.74);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 0 0 4px var(--halo),0 8px 26px -14px rgba(0,0,0,.25);}
+    .hero-srch input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:16px;color:var(--ink);}
+    .hero-srch input::placeholder{color:var(--mut);}
+    .hero-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:380px;overflow:auto;z-index:5;}
+    /* Breadth strip — quiet chips + cards under the hero */
+    .strip-chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 30px;}
+    .strip-chip{display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:13.5px;font-weight:700;color:var(--navy);border:0;background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border-radius:980px;padding:9px 16px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.7),0 1px 2px rgba(0,0,0,.08);transition:.16s;}
+    .strip-chip:hover{transform:translateY(-2px);background:rgba(255,255,255,.85);}
+    .strip-chip .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
+    .strip-chip .cnt{font-weight:600;font-size:12px;color:var(--mut);}
+    .strip-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:12px;margin-bottom:32px;}
+    .strip-card{background:var(--mat-reg);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border-radius:16px;padding:16px;cursor:pointer;transition:.18s;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);animation:rise .5s both;}
+    .strip-card:hover{transform:translateY(-4px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 20px 40px -18px rgba(0,0,0,.28);}
+    .strip-card .sc-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;}
+    .strip-card .sc-date{font-size:12px;font-weight:600;color:var(--mut);}
+    .strip-card .sc-name{margin:0;font-size:15px;font-weight:700;color:var(--ink);line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+    .strip-card .sc-sub{margin:6px 0 0;font-size:12.5px;color:var(--mut);}
     .home-search{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:9px 14px;max-width:380px;margin-bottom:20px;}
     .home-search input{border:0;outline:0;font:inherit;font-size:14px;background:none;color:#fff;width:100%;}
     .home-search input::placeholder{color:#9fbdd9;}
@@ -7179,6 +7198,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <div className="devstrip">
       <button onClick={()=>setShowDevApprovals(true)}>Pending approvals</button>
       <button onClick={()=>setShowDevProfiles(true)}>All profiles</button>
+      <button onClick={()=>setShowAddHost(true)}><Plus size={11}/>Add host</button>
       <button onClick={()=>setDevMode(false)}><Pencil size={11}/>Dev view ON — turn off</button>
     </div>
   )}
@@ -7359,12 +7379,33 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     );
   })()}
 
-  {/* ── HOME HERO (no portal) ── */}
+  {/* ── HOME HERO — search-first: one action, spanning athletes + competitions + clubs ── */}
   {!portal&&view.name==="portals"&&(
     <div className="home-hero">
       <div className="wrap">
         <h1 className="disp" style={{margin:0}}>Sailing</h1>
-        <p style={{marginTop:6,marginBottom:18}}>Results, athlete profiles and class standings for competitive sailing</p>
+        <p style={{marginTop:6,marginBottom:0}}>Results, athlete profiles and class standings for competitive sailing</p>
+        <div className="hero-srch" onClick={e=>e.stopPropagation()}>
+          <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
+          <input placeholder="Search athletes, competitions & clubs…" value={gSearch}
+            onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
+            onFocus={()=>setGSearchOpen(true)}
+            onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
+            onKeyDown={e=>{if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}}}/>
+          {gSearch&&<button className="mp-clear" onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={15}/></button>}
+          {!navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
+            <div className="hero-drop">
+              {gSearchResults.map((r,i)=>(
+                <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
+                  <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
+                    {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
+                  </div>
+                  <div><div className="gi-label">{r.label}</div><div className="gi-sub">{r.sub}</div></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )}
@@ -7389,100 +7430,61 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   {/* (Calendar is now a popup modal — see RACE CALENDAR MODAL below) */}
 
-  {/* ── HOME: Association portals grid ── */}
+  {/* ── HOME: breadth strip — class chips, recent competitions, featured athletes.
+      Quiet proof the catalog is deep; the two old grids (class buttons + HK/INT
+      host matrix) are gone — clubs are reached via search and Competitions. ── */}
   {!portal&&view.name==="portals"&&(()=>{
-    const matchA=a=>!homeQ||a.name.toLowerCase().includes(homeQ.toLowerCase())||(a.cls||"").toLowerCase().includes(homeQ.toLowerCase());
-    const renderCard=(a,i)=>{
-      const ce=events.filter(e=>eventAssocs(e).includes(a.id));
-      const cp=new Set();ce.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)cp.add(e.helm);if(e.crew)cp.add(e.crew);}));
-      const isClub=!a.cls;  // clubs and federations have no single class
-      const typeLabel=a.type==="federation"?"Federation":a.type==="club"?"Club":"Association";
-      // Class nuggets shown top-right: a club/federation shows every class (main
-      // OR custom) it has events in; an association shows its single class. Main
-      // classes lead in canonical order, then any custom classes.
-      const hostClsIds=isClub
-        ? Array.from(new Set(ce.map(e=>e.cls).filter(Boolean)))
-        : (a.cls?[a.cls]:[]);
-      const mainIds=CLASSES.filter(c=>hostClsIds.includes(c.id)).map(c=>c.id);
-      const classIds=[...mainIds,...hostClsIds.filter(id=>!mainIds.includes(id))];
-      // Purple host-role pill when the signed-in user is a verified member here.
-      const myHere=myMemberships.find(m=>m.host_id===a.id&&m.verified);
-      return(<div className="class-card" key={a.id} style={{animationDelay:`${i*70}ms`}} onClick={()=>enterPortal(a.id)}>
-        {/* Header: host-type (or owner/editor) pill left, class nugget(s) right — all centered on one row */}
-        <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
-          {myHere
-            ? <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
-                color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 10px",whiteSpace:"nowrap"}}>
-                <BadgeCheck size={11} style={{flex:"none"}}/>{myHere.role}
-              </span>
-            : <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",
-                color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>}
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flex:"1 1 0",minWidth:0}}>
-            <HostClassPills classIds={classIds}/>
-            {devMode&&<button onClick={e=>deleteHost(a.id,a.name,e)} title="Delete host/portal (dev)" style={{border:0,background:"rgba(232,72,85,.15)",color:"#c0392b",borderRadius:980,width:26,height:26,display:"grid",placeItems:"center",cursor:"pointer",flex:"none"}}><Trash2 size={14}/></button>}
-          </div>
-        </div>
-        <p className="class-name">{a.name}</p>
-        <div className="class-stats" style={{marginBottom:0}}><div><b>{ce.length}</b>competitions</div><div><b>{cp.size}</b>athletes</div></div>
-      </div>);
-    };
-    const hkFeds=FEDERATIONS.filter(f=>f.scope==="HK").filter(matchA);
-    const hkClubs=CLUBS.filter(c=>c.scope==="HK").filter(matchA);
-    // Associations governed by a federation live inside the federation portal — hide
-    // them from the home page to reduce clutter (shown only if no federation governs the scope).
-    const scopeHasFed=s=>FEDERATIONS.some(f=>f.scope===s);
-    const hkAssoc=scopeHasFed("HK")?[]:ASSOCIATIONS.filter(a=>a.scope==="HK").filter(matchA);
-    const intFeds=FEDERATIONS.filter(f=>f.scope==="INT").filter(matchA);
-    const intClubs=CLUBS.filter(c=>c.scope==="INT").filter(matchA);
-    const intAssoc=scopeHasFed("INT")?[]:ASSOCIATIONS.filter(a=>a.scope==="INT").filter(matchA);
-    const subLabel=t=><p className="seclabel" style={{fontSize:12,opacity:.75,marginTop:4,marginLeft:2}}>{t}</p>;
+    const published=events.filter(ev=>ev.status!=="Draft");
+    const recent=published.slice().sort((a,b)=>{
+      const da=a.date?.split('/').reverse().join('')||'';
+      const db=b.date?.split('/').reverse().join('')||'';
+      return db.localeCompare(da);
+    }).slice(0,4);
+    // Most-active athletes across all published competitions — breadth, not a ranking.
+    const counts=new Map();
+    published.forEach(ev=>ev.entries.forEach(en=>{[en.helm,en.crew].forEach(nm=>{if(!nm)return;const k=canonName(nm);if(k)counts.set(k,(counts.get(k)||0)+1);});}));
+    const featured=[...counts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,n])=>({
+      key:k,name:displayNameFor(k)||k,cls:ATHLETE_ATTRS.get(k)?.recentCls||null,n
+    }));
     return(
     <div className="wrap sec">
-      <div className="toolbar" style={{marginBottom:14,display:"flex",gap:10,alignItems:"center"}}>
-        <div className="srch" style={{flex:1}}>
-          <Search size={16} color="#9fb2c8"/>
-          <input placeholder="Search clubs & associations…" value={homeQ} onChange={e=>setHomeQ(e.target.value)}/>
-        </div>
-        {devMode&&<button className="btn ghost" style={{fontSize:13,padding:"8px 13px",whiteSpace:"nowrap"}} onClick={()=>setShowAddHost(true)}><Plus size={15}/>Add host</button>}
-      </div>
-      {/* Global class portals — total results per class, across all associations */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:26}}>
+      <div className="strip-chips">
         {CLASSES.map(c=>{
-          const n=events.filter(e=>e.cls===c.id).length;
-          const solid=classColor(c.id);
+          const n=published.filter(e=>e.cls===c.id).length;
           return(
-            <button key={c.id} onClick={()=>enterPortal("class:"+c.id)}
-              style={{border:`1px solid ${classColorA(c.id,.5)}`,borderRadius:16,background:`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`,color:solid,cursor:"pointer",
-                backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
-                boxShadow:"inset 0 1px 0 rgba(255,255,255,.6)",
-                padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,
-                fontFamily:"'Barlow',sans-serif",transition:".15s"}}
-              onMouseEnter={e=>{e.currentTarget.style.background=solid;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=solid;}}
-              onMouseLeave={e=>{e.currentTarget.style.background=`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`;e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.5);}}>
-              <span style={{fontWeight:800,fontSize:16,letterSpacing:".01em"}}>{c.short}</span>
-              <span style={{fontSize:11,opacity:.85,fontWeight:600}}>{n} competition{n!==1?"s":""}</span>
+            <button key={c.id} className="strip-chip" onClick={()=>enterPortal("class:"+c.id)}>
+              <span className="dot" style={{background:classColor(c.id)}}/>{c.short}<span className="cnt">{n}</span>
             </button>
           );
         })}
+        <button className="strip-chip" onClick={()=>goTop("competitions")}>All competitions<ChevronRight size={13}/></button>
       </div>
-      {(hkFeds.length>0||hkClubs.length>0||hkAssoc.length>0)&&<>
-        <p className="seclabel" style={{fontSize:17}}><span style={{fontSize:16,marginRight:2}}>🇭🇰</span>Hong Kong Sailing</p>
-        {hkFeds.length>0&&<>{subLabel("Federations")}
-          <div className="classes-grid" style={{marginBottom:(hkClubs.length>0||hkAssoc.length>0)?22:32}}>{hkFeds.map(renderCard)}</div></>}
-        {hkClubs.length>0&&<>{subLabel("Clubs")}
-          <div className="classes-grid" style={{marginBottom:hkAssoc.length>0?22:32}}>{hkClubs.map(renderCard)}</div></>}
-        {hkAssoc.length>0&&<>{subLabel("Associations")}
-          <div className="classes-grid" style={{marginBottom:32}}>{hkAssoc.map(renderCard)}</div></>}
-      </>}
-      {(intFeds.length>0||intClubs.length>0||intAssoc.length>0)&&<>
-        <p className="seclabel" style={{fontSize:17}}><Globe size={15} style={{marginRight:2}}/>International Sailing</p>
-        {intFeds.length>0&&<>{subLabel("Federations")}
-          <div className="classes-grid" style={{marginBottom:(intClubs.length>0||intAssoc.length>0)?22:32}}>{intFeds.map(renderCard)}</div></>}
-        {intClubs.length>0&&<>{subLabel("Clubs")}
-          <div className="classes-grid" style={{marginBottom:intAssoc.length>0?22:32}}>{intClubs.map(renderCard)}</div></>}
-        {intAssoc.length>0&&<>{subLabel("Associations")}
-          <div className="classes-grid">{intAssoc.map(renderCard)}</div></>}
-      </>}
+      <p className="seclabel">Recent competitions</p>
+      <div className="strip-cards">
+        {recent.map(ev=>{
+          const host=hostById(ev.owner)?.name||ev.organizer_name||"";
+          const n=nuggetFor(ev.cls,ev.subclass);
+          return(
+          <div key={ev.id} className="strip-card" onClick={()=>go({name:"event",id:ev.id})}>
+            <div className="sc-top"><span className="sc-date">{formatDate(ev.date)}</span><span className="cls" style={{background:n.color}}>{n.label}</span></div>
+            <p className="sc-name">{ev.name}</p>
+            {host&&<p className="sc-sub">{host}</p>}
+          </div>);
+        })}
+      </div>
+      <p className="seclabel">Featured athletes</p>
+      <div className="strip-cards">
+        {featured.map(a=>(
+          <div key={a.key} className="strip-card" onClick={()=>go({name:"profile",id:a.name})}>
+            <div className="sc-top">
+              <span className="av" style={{background:"var(--navy2)",width:34,height:34,fontSize:12}}>{a.name.split(/\s+/).map(w=>w[0]).filter(Boolean).slice(0,2).join("").toUpperCase()}</span>
+              {a.cls&&(()=>{const n=nuggetFor(a.cls);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
+            </div>
+            <p className="sc-name">{a.name}</p>
+            <p className="sc-sub">{a.n} competition{a.n!==1?"s":""}</p>
+          </div>
+        ))}
+      </div>
     </div>
     );
   })()}
