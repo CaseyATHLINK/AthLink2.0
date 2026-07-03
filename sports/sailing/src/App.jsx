@@ -7902,10 +7902,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <Calendar size={14} style={{flex:"none"}}/> Calendar
             </MagneticItem>
             {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
-              <Trophy size={14} style={{flex:"none"}}/> Ranking
+              <Trophy size={14} style={{flex:"none"}}/> Rankings
             </MagneticItem>}
             {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
-              <Settings size={14} style={{flex:"none"}}/> Edit portal
+              <Settings size={14} style={{flex:"none"}}/> Edit page
             </MagneticItem>}
           </div>
         </div>
