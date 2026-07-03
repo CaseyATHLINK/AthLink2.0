@@ -374,11 +374,13 @@ const stateToPath=(portal,view)=>{
   if(v.name==="profile") return "/"+usernameForName(v.id||"");
   if(v.name==="event")   return "/competition/"+encodeURIComponent(v.id||"");
   if(v.name==="competitions") return v.cls?"/class/"+encodeURIComponent(v.cls):"/competitions";
+  if(v.name==="hosts")   return "/hosts";
   if(v.name==="ranking") return "/rankings";
   const isClassPortal=portal&&String(portal).startsWith("class:");
   if(v.name==="athletes"){
     if(portal&&!isClassPortal) return "/"+hostSlug(portal)+"/athletes";
     if(isClassPortal) return "/class/"+encodeURIComponent(String(portal).slice(6))+"/athletes";
+    if(v.cls) return "/class/"+encodeURIComponent(v.cls)+"/athletes";
     return "/athletes";
   }
   // events / portals home
@@ -392,13 +394,16 @@ const pathToState=(pathname,athleteNames)=>{
   const s0=(seg[0]||"").toLowerCase();
   if(seg.length===0||s0==="sailing") return {portal:null,view:{name:"portals"}};
   if(s0==="athletes") return {portal:null,view:{name:"athletes"}};
+  if(s0==="hosts")    return {portal:null,view:{name:"hosts"}};
   if(s0==="competitions") return {portal:null,view:{name:"competitions"}};
   if(s0==="ranking"||s0==="rankings")  return {portal:null,view:{name:"ranking"}};
   // "/competition/<id>" is canonical; "/event/<id>" kept as an alias so old shared links never break.
   if(s0==="event"||s0==="competition") return {portal:null,view:{name:"event",id:seg[1]}};
   if(s0==="class"){
-    // Class is a filter, not a door: /class/<id> = Competitions filtered to that class.
-    return {portal:null,view:{name:"competitions",cls:seg[1]||""}};
+    // Class is a filter, not a door: /class/<id> = Competitions filtered to that
+    // class; /class/<id>/athletes = the global Athletes page under the same lens.
+    const isAth=(seg[2]||"").toLowerCase()==="athletes";
+    return {portal:null,view:{name:isAth?"athletes":"competitions",cls:seg[1]||""}};
   }
   const host=hostBySlug(seg[0]);
   if(host){
@@ -5115,6 +5120,7 @@ export default function AthLinkMVP(){
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[compQ,setCompQ]=useState(""); // filter on the global Competitions page
+  const[hostQ,setHostQ]=useState(""); // filter on the global Hosts page
   const[note,setNote]=useState(null);
   const[open,setOpen]=useState(false);
   const[tab,setTab]=useState("ai");  // "ai" | "manual"
@@ -5534,11 +5540,28 @@ export default function AthLinkMVP(){
   const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   // Top-bar primary nav: always leaves any portal scope — the 3 doors are global.
   const goTop=(name,extra)=>{pushNav();setPortal(null);setView({name,...(extra||{})});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
-  // Which of the 3 nav doors the current page lives behind (drives the .on state).
+  // Which of the 4 nav doors the current page lives behind (drives the .on state).
   const navOn=view.name==="ranking"?"ranking"
     :(view.name==="competitions"||view.name==="event")?"competitions"
+    :(view.name==="hosts"||(portal&&!String(portal).startsWith("class:")))?"hosts"
     :((view.name==="athletes"&&!portal)||view.name==="profile")?"athletes"
     :null;
+  // Jump straight to a host's athletes (nav "Athletes › by host" submenu).
+  const enterPortalAthletes=id=>{pushNav();setPortal(id);setView({name:"athletes"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  // Jump to the ranking page with a class preselected (nav "Rankings › by class").
+  const goRankingClass=id=>{pushNav();setPortal(null);setRankCls(id);setRankSourceOpen(null);setRankExpanded(new Set());setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  // Hosts + competition counts + home country — feeds the nav mega-menus and the Hosts page.
+  const navHosts=(()=>{
+    const pub=events.filter(ev=>ev.status!=="Draft");
+    return [
+      ...FEDERATIONS.map(h=>({...h,htype:"federation"})),
+      ...CLUBS.map(h=>({...h,htype:"club"})),
+      ...ASSOCIATIONS.map(h=>({...h,htype:"association"})),
+    ].map(h=>({...h,n:pub.filter(ev=>eventAssocs(ev).includes(h.id)).length,loc:hostLocation(h.id,events)||""}))
+     .sort((a,b)=>b.n-a.n);
+  })();
+  const hostCountries=[...new Set(navHosts.map(h=>h.loc).filter(Boolean))]
+    .sort((a,b)=>(GLOBE_NAMES[IOC_ISO[a]]||a).localeCompare(GLOBE_NAMES[IOC_ISO[b]]||b));
   // Floating top bar: hide on scroll-down, reveal on scroll-up. Reset to shown on page change.
   useEffect(()=>{
     let lastY=window.scrollY;
@@ -5562,7 +5585,7 @@ export default function AthLinkMVP(){
     const path=window.location.pathname;
     const seg=decodeURIComponent(path).split("/").filter(Boolean);
     const s0=(seg[0]||"").toLowerCase();
-    const RESERVED=["","sailing","athletes","ranking","rankings","event","competition","competitions","class"];
+    const RESERVED=["","sailing","athletes","ranking","rankings","event","competition","competitions","hosts","class"];
     // Athlete slugs can only be resolved after events (hence names) have loaded.
     const needsAthlete=seg.length>0&&!RESERVED.includes(s0)&&!hostBySlug(seg[0]);
     if(needsAthlete&&events.length===0) return; // wait for events, effect re-runs on load
@@ -5605,7 +5628,8 @@ export default function AthLinkMVP(){
     else if(v.name==="event"){  const ev=events.find(e=>e.id===v.id); t=ev?ev.name:"Competition"; }
     else if(v.name==="ranking") t="Rankings";
     else if(v.name==="competitions") t=v.cls?`${classLabel(v.cls)} — Competitions`:"Competitions";
-    else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:"Athletes";
+    else if(v.name==="hosts") t="Hosts";
+    else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:(v.cls?`${classLabel(v.cls)} — Athletes`:"Athletes");
     else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else sailing home
     else                        t="AthLink"; // portals home
     document.title=t||"AthLink";
@@ -5623,6 +5647,7 @@ export default function AthLinkMVP(){
     const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`All ${classLabel(id.slice(6))} Results`;return null;};
     if(v.name==="portals") return "Sailing";
     if(v.name==="competitions") return "Competitions";
+    if(v.name==="hosts") return "Hosts";
     if(v.name==="ranking") return "Rankings";
     if(v.name==="athletes") return snap.portal?`${pName(snap.portal)||""} Athletes`:"All Athletes";
     if(v.name==="events") return pName(snap.portal)||"Competitions";
@@ -6977,6 +7002,28 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .lens-chip.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .lens-chip .dot{width:8px;height:8px;border-radius:50%;flex:none;}
     .lens-chip .cnt{font-weight:600;font-size:11.5px;color:var(--mut);}
+    /* Nav mega-menus — hover panels under the 4 doors */
+    .np-item{position:relative;}
+    .np-drop{position:absolute;top:calc(100% + 10px);left:50%;transform:translateX(-50%) translateY(-6px);min-width:232px;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:12px;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:70;}
+    .np-drop::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px;}
+    .np-item:hover .np-drop,.np-item:focus-within .np-drop{opacity:1;pointer-events:auto;transform:translateX(-50%);}
+    .nd-label{margin:2px 4px 8px;font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);}
+    .nd-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 2px 10px;}
+    .nd-chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;font-weight:700;color:var(--navy);border:0;background:rgba(255,255,255,.6);border-radius:980px;padding:6px 12px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),0 1px 2px rgba(0,0,0,.06);transition:.14s;}
+    .nd-chip:hover{background:#fff;transform:translateY(-1px);}
+    .nd-chip .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+    .nd-row{display:flex;align-items:center;gap:8px;width:100%;font:inherit;font-size:13px;font-weight:600;color:var(--ink);border:0;background:none;border-radius:10px;padding:8px 10px;cursor:pointer;text-align:left;transition:background .12s;white-space:nowrap;}
+    .nd-row:hover{background:rgba(255,255,255,.78);}
+    .nd-cnt{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--mut);padding-left:10px;}
+    .nd-subwrap{position:relative;}
+    .nd-sub{position:absolute;left:calc(100% + 6px);top:-8px;min-width:256px;max-height:330px;overflow:auto;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;opacity:0;pointer-events:none;transition:opacity .16s ease;z-index:71;}
+    .nd-sub::before{content:"";position:absolute;left:-8px;top:0;bottom:0;width:8px;}
+    .nd-subwrap:hover .nd-sub{opacity:1;pointer-events:auto;}
+    /* Glass select — the country/host dropdowns on list pages */
+    .lens-selwrap{position:relative;display:inline-flex;align-items:center;}
+    .lens-select{font:inherit;font-size:12.5px;font-weight:700;color:var(--navy);border:0;background:rgba(255,255,255,.6);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);border-radius:980px;padding:7px 30px 7px 14px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.7),0 1px 2px rgba(0,0,0,.08);-webkit-appearance:none;appearance:none;outline:none;max-width:230px;text-overflow:ellipsis;}
+    .lens-select:hover{background:rgba(255,255,255,.85);}
+    .lens-selchev{position:absolute;right:11px;pointer-events:none;color:var(--mut);transform:rotate(90deg);}
     .strip-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:12px;margin-bottom:32px;}
     .strip-card{background:var(--mat-reg);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border-radius:16px;padding:16px;cursor:pointer;transition:.18s;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);animation:rise .5s both;}
     .strip-card:hover{transform:translateY(-4px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 20px 40px -18px rgba(0,0,0,.28);}
@@ -7240,9 +7287,88 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
           : <div className="np-bar">
-              <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
-              <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
-              <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
+              {/* Athletes — by class / by country / by host */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
+                <div className="np-drop">
+                  <p className="nd-label">By class</p>
+                  <div className="nd-chips">
+                    {CLASSES.map(c=>(
+                      <button key={c.id} className="nd-chip" onClick={()=>goTop("athletes",{cls:c.id})}>
+                        <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="nd-row" onClick={()=>goTop("athletes")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
+                  <div className="nd-subwrap">
+                    <button className="nd-row" onClick={()=>goTop("hosts")}><Waves size={14} style={{flex:"none",color:"var(--navy2)"}}/>By host<ChevronRight size={13} style={{marginLeft:"auto",opacity:.6}}/></button>
+                    <div className="nd-sub">
+                      {navHosts.map(h=>(
+                        <button key={h.id} className="nd-row" onClick={()=>enterPortalAthletes(h.id)}>{h.name}<span className="nd-cnt">{h.n}</span></button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Competitions — by class / by country / by host */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
+                <div className="np-drop">
+                  <p className="nd-label">By class</p>
+                  <div className="nd-chips">
+                    {CLASSES.map(c=>(
+                      <button key={c.id} className="nd-chip" onClick={()=>goTop("competitions",{cls:c.id})}>
+                        <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="nd-row" onClick={()=>goTop("competitions")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
+                  <div className="nd-subwrap">
+                    <button className="nd-row" onClick={()=>goTop("hosts")}><Waves size={14} style={{flex:"none",color:"var(--navy2)"}}/>By host<ChevronRight size={13} style={{marginLeft:"auto",opacity:.6}}/></button>
+                    <div className="nd-sub">
+                      {navHosts.map(h=>(
+                        <button key={h.id} className="nd-row" onClick={()=>enterPortal(h.id)}>{h.name}<span className="nd-cnt">{h.n}</span></button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Hosts — by type / by country */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="hosts"?" on":""}`} onClick={()=>goTop("hosts")}>Hosts</button>
+                <div className="np-drop">
+                  <p className="nd-label">By type</p>
+                  {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
+                    <button key={t} className="nd-row" onClick={()=>goTop("hosts",{type:t})}>{label}<span className="nd-cnt">{navHosts.filter(h=>h.htype===t).length}</span></button>
+                  ))}
+                  <div className="nd-subwrap">
+                    <button className="nd-row" onClick={()=>goTop("hosts")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country<ChevronRight size={13} style={{marginLeft:"auto",opacity:.6}}/></button>
+                    <div className="nd-sub">
+                      {hostCountries.map(cc=>(
+                        <button key={cc} className="nd-row" onClick={()=>goTop("hosts",{country:cc})}>
+                          <span style={{fontSize:15,flex:"none"}}>{iocFlag(cc)}</span>{GLOBE_NAMES[IOC_ISO[cc]]||cc}
+                          <span className="nd-cnt">{navHosts.filter(h=>h.loc===cc).length}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Rankings — by class / by country */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
+                <div className="np-drop">
+                  <p className="nd-label">By class</p>
+                  <div className="nd-chips">
+                    {CLASSES.map(c=>(
+                      <button key={c.id} className="nd-chip" onClick={()=>goRankingClass(c.id)}>
+                        <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="nd-row" onClick={()=>goTop("ranking")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
+                </div>
+              </div>
               <button className="np-srchbtn" title="Search" onClick={()=>setNavSearchOpen(true)}><Search size={16}/></button>
             </div>}
         {navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
@@ -7504,7 +7630,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       else crumbs.push({label:cls});
     }else if(portal){
       const h=hostById(portal);
-      crumbs.push({label:"Clubs"});
+      crumbs.push({label:"Hosts",go:()=>goTop("hosts")});
       if(view.name==="athletes") crumbs.push({label:h?.name||"Club",go:()=>{pushNav();setView({name:"events"});window.scrollTo(0,0);}},{label:"Athletes"});
       else crumbs.push({label:h?.name||"Club"});
     }
@@ -7722,6 +7848,66 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
         </>);
       })()}
+    </div>
+    );
+  })()}
+
+  {/* ── HOSTS: global directory — federations, clubs and associations ── */}
+  {!portal&&view.name==="hosts"&&(()=>{
+    const q=hostQ.trim().toLowerCase();
+    const tLens=view.type||null, cLens=view.country||null;
+    const list=navHosts
+      .filter(h=>!tLens||h.htype===tLens)
+      .filter(h=>!cLens||h.loc===cLens)
+      .filter(h=>!q||h.name.toLowerCase().includes(q));
+    const published=events.filter(ev=>ev.status!=="Draft");
+    return(
+    <div className="wrap sec">
+      <div className="page-head">
+        <h1 className="page-title">Hosts</h1>
+        <p className="page-sub">{navHosts.length} federations, clubs and associations on AthLink</p>
+      </div>
+      <div className="toolbar" style={{marginBottom:12,display:"flex",gap:10,alignItems:"center"}}>
+        <div className="srch" style={{flex:1}}>
+          <Search size={16} color="#9fb2c8"/>
+          <input placeholder="Search hosts…" value={hostQ} onChange={e=>setHostQ(e.target.value)}/>
+        </div>
+      </div>
+      <div className="strip-chips" style={{margin:"0 0 16px"}}>
+        <button className={`lens-chip${!tLens?" on":""}`} onClick={()=>setView(v=>({...v,type:undefined}))}>All</button>
+        {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
+          <button key={t} className={`lens-chip${tLens===t?" on":""}`} onClick={()=>setView(v=>({...v,type:v.type===t?undefined:t}))}>{label}<span className="cnt">{navHosts.filter(h=>h.htype===t).length}</span></button>
+        ))}
+        <span className="lens-selwrap">
+          <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
+            <option value="">All countries</option>
+            {hostCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+          </select>
+          <ChevronRight size={13} className="lens-selchev"/>
+        </span>
+      </div>
+      <div className="classes-grid">
+        {list.map((h,i)=>{
+          const typeLabel=h.htype==="federation"?"Federation":h.htype==="club"?"Club":"Association";
+          const pub=published.filter(ev=>eventAssocs(ev).includes(h.id));
+          const ppl=new Set();pub.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)ppl.add(canonName(e.helm));if(e.crew)ppl.add(canonName(e.crew));}));
+          const ids=Array.from(new Set(pub.map(e=>e.cls).filter(Boolean)));
+          const main=CLASSES.filter(c=>ids.includes(c.id)).map(c=>c.id);
+          const clsIds=[...main,...ids.filter(id=>!main.includes(id))];
+          return(
+          <div className="class-card" key={h.id} style={{animationDelay:`${Math.min(i,10)*60}ms`}} onClick={()=>enterPortal(h.id)}>
+            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
+              <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flex:"1 1 0",minWidth:0}}>
+                <HostClassPills classIds={clsIds}/>
+              </div>
+            </div>
+            <p className="class-name">{h.loc?<span style={{marginRight:6}}>{iocFlag(h.loc)}</span>:null}{h.name}</p>
+            <div className="class-stats" style={{marginBottom:0}}><div><b>{h.n}</b>competitions</div><div><b>{ppl.size}</b>athletes</div></div>
+          </div>);
+        })}
+      </div>
+      {list.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No hosts match. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setHostQ("");setView({name:"hosts"});}}>Clear</button></p>}
     </div>
     );
   })()}
