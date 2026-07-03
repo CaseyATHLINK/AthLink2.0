@@ -360,8 +360,9 @@ const collectAthleteNames=(events)=>{const s=new Set();
 const stateToPath=(portal,view)=>{
   const v=view||{name:"portals"};
   if(v.name==="profile") return "/"+usernameForName(v.id||"");
-  if(v.name==="event")   return "/event/"+encodeURIComponent(v.id||"");
-  if(v.name==="ranking") return "/ranking";
+  if(v.name==="event")   return "/competition/"+encodeURIComponent(v.id||"");
+  if(v.name==="competitions") return "/competitions";
+  if(v.name==="ranking") return "/rankings";
   const isClassPortal=portal&&String(portal).startsWith("class:");
   if(v.name==="athletes"){
     if(portal&&!isClassPortal) return "/"+hostSlug(portal)+"/athletes";
@@ -379,8 +380,10 @@ const pathToState=(pathname,athleteNames)=>{
   const s0=(seg[0]||"").toLowerCase();
   if(seg.length===0||s0==="sailing") return {portal:null,view:{name:"portals"}};
   if(s0==="athletes") return {portal:null,view:{name:"athletes"}};
-  if(s0==="ranking")  return {portal:null,view:{name:"ranking"}};
-  if(s0==="event")    return {portal:null,view:{name:"event",id:seg[1]}};
+  if(s0==="competitions") return {portal:null,view:{name:"competitions"}};
+  if(s0==="ranking"||s0==="rankings")  return {portal:null,view:{name:"ranking"}};
+  // "/competition/<id>" is canonical; "/event/<id>" kept as an alias so old shared links never break.
+  if(s0==="event"||s0==="competition") return {portal:null,view:{name:"event",id:seg[1]}};
   if(s0==="class"){
     const isAth=(seg[2]||"").toLowerCase()==="athletes";
     return {portal:"class:"+(seg[1]||""),view:{name:isAth?"athletes":"events"}};
@@ -4544,7 +4547,7 @@ export default function AthLinkMVP(){
   const[usernameInput,setUsernameInput]=useState("");
   const[usernameBusy,setUsernameBusy]=useState(false);
   const[usernameErr,setUsernameErr]=useState("");
-  const[menuOpen,setMenuOpen]=useState(false);   // floating menu pill expanded
+  const[navSearchOpen,setNavSearchOpen]=useState(false); // top-bar nav pill flipped into search mode
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
   // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
@@ -4813,7 +4816,7 @@ export default function AthLinkMVP(){
   // athlete_usernames; host slugs in hosts.slug. Case preserved (CaseyLaw, HKSF);
   // uniqueness is case-insensitive and spans BOTH athletes and hosts.
   const[usernamesVersion,setUsernamesVersion]=useState(0); // bump → routing re-reads the map
-  const USERNAME_RESERVED=new Set(["sailing","athletes","ranking","event","class","api","sailti","host","hosts","athlete","profile","landing"]);
+  const USERNAME_RESERVED=new Set(["sailing","athletes","ranking","rankings","event","competition","competitions","clubs","class","classes","api","sailti","host","hosts","athlete","profile","landing"]);
   const validateUsername=(u)=>{
     const s=String(u||"").trim();
     if(!/^[A-Za-z0-9]{3,30}$/.test(s)) return {ok:false,msg:"3–30 characters, letters and numbers only (no spaces or symbols)."};
@@ -4983,6 +4986,7 @@ export default function AthLinkMVP(){
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[homeQ,setHomeQ]=useState(""); // search on home portals page
+  const[compQ,setCompQ]=useState(""); // filter on the global Competitions page
   const[note,setNote]=useState(null);
   const[open,setOpen]=useState(false);
   const[tab,setTab]=useState("ai");  // "ai" | "manual"
@@ -5400,19 +5404,26 @@ export default function AthLinkMVP(){
   const go=v=>{pushNav();setView(v);setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
   const goHome=()=>{pushNav();setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
+  // Top-bar primary nav: always leaves any portal scope — the 3 doors are global.
+  const goTop=name=>{pushNav();setPortal(null);setView({name});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
+  // Which of the 3 nav doors the current page lives behind (drives the .on state).
+  const navOn=view.name==="ranking"?"ranking"
+    :(view.name==="competitions"||view.name==="event")?"competitions"
+    :((view.name==="athletes"&&!portal)||view.name==="profile")?"athletes"
+    :null;
   // Floating top bar: hide on scroll-down, reveal on scroll-up. Reset to shown on page change.
   useEffect(()=>{
     let lastY=window.scrollY;
     const onScroll=()=>{
       const y=window.scrollY;
-      if(y>lastY+6&&y>90){setBarHidden(true);setMenuOpen(false);}
+      if(y>lastY+6&&y>90){setBarHidden(true);setNavSearchOpen(false);}
       else if(y<lastY-6){setBarHidden(false);}
       lastY=y;
     };
     window.addEventListener("scroll",onScroll,{passive:true});
     return()=>window.removeEventListener("scroll",onScroll);
   },[]);
-  useEffect(()=>{setBarHidden(false);setMenuOpen(false);},[view.name,portal]);
+  useEffect(()=>{setBarHidden(false);setNavSearchOpen(false);},[view.name,portal]);
 
   /* ── Clean-URL sync (shareable links + native back/forward) ───────────────
      stateToPath / pathToState (module scope) define the mapping. This block is
@@ -5423,7 +5434,7 @@ export default function AthLinkMVP(){
     const path=window.location.pathname;
     const seg=decodeURIComponent(path).split("/").filter(Boolean);
     const s0=(seg[0]||"").toLowerCase();
-    const RESERVED=["","sailing","athletes","ranking","event","class"];
+    const RESERVED=["","sailing","athletes","ranking","rankings","event","competition","competitions","class"];
     // Athlete slugs can only be resolved after events (hence names) have loaded.
     const needsAthlete=seg.length>0&&!RESERVED.includes(s0)&&!hostBySlug(seg[0]);
     if(needsAthlete&&events.length===0) return; // wait for events, effect re-runs on load
@@ -5464,7 +5475,8 @@ export default function AthLinkMVP(){
     let t;
     if(v.name==="profile")      t=v.id||"Athlete";
     else if(v.name==="event"){  const ev=events.find(e=>e.id===v.id); t=ev?ev.name:"Competition"; }
-    else if(v.name==="ranking") t="Ranking";
+    else if(v.name==="ranking") t="Rankings";
+    else if(v.name==="competitions") t="Competitions";
     else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:"Athletes";
     else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else sailing home
     else                        t="AthLink"; // portals home
@@ -5482,6 +5494,8 @@ export default function AthLinkMVP(){
     const v=snap.view||{};
     const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`All ${classLabel(id.slice(6))} Results`;return null;};
     if(v.name==="portals") return "Sailing";
+    if(v.name==="competitions") return "Competitions";
+    if(v.name==="ranking") return "Rankings";
     if(v.name==="athletes") return snap.portal?`${pName(snap.portal)||""} Athletes`:"All Athletes";
     if(v.name==="events") return pName(snap.portal)||"Competitions";
     if(v.name==="event"){const ev=events.find(e=>e.id===v.id);return ev?ev.name:"Competition";}
@@ -5739,7 +5753,7 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
 
   const execGSearch=(r)=>{
     // Close search UI immediately
-    setGSearch("");setGSearchOpen(false);setGSearchResults([]);
+    setGSearch("");setGSearchOpen(false);setGSearchResults([]);setNavSearchOpen(false);
     const n=r.nav;
     if(n.type==="portal"){
       // enterPortal sets portal+view in one batch — no defer needed
@@ -6841,26 +6855,39 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        closed). Height-independent: as the panel elongates only the body grows — the
        top half keeps its exact shape, no radius reflow, no stretch-and-snap. */
     .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:background .34s ease;}
-    .menupill.open{background:rgba(255,255,255,.70);}
+    .menupill.navmode{width:auto;}
+    .menupill.searching{background:rgba(255,255,255,.70);}
+    /* 3-item primary nav — seg-control idiom inside the glass capsule */
+    .np-bar{display:flex;align-items:center;gap:2px;padding:5px;}
+    .np-link{font:inherit;font-size:14px;font-weight:700;border:0;background:none;color:var(--mut);padding:9px 18px;border-radius:980px;cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);white-space:nowrap;letter-spacing:-.01em;}
+    .np-link:hover{color:var(--navy);}
+    .np-link.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
+    .np-srchbtn{flex:none;width:36px;height:36px;margin-left:2px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
+    .np-srchbtn:hover{background:rgba(255,255,255,.85);}
     .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
-    .mp-burger{flex:none;width:38px;height:38px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
-    .mp-burger:hover{background:rgba(255,255,255,.5);}
     .mp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.45);border-radius:980px;padding:8px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
     .mp-star{color:var(--accent);flex:none;}
     .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);}
     .mp-search input::placeholder{color:var(--mut);}
     .mp-clear{flex:none;border:0;background:none;cursor:pointer;color:var(--mut);display:flex;padding:0;}
-    .mp-panel{max-height:0;overflow:hidden;opacity:0;display:flex;flex-direction:column;gap:1px;padding:0 12px;transition:max-height .34s cubic-bezier(.33,0,.2,1),opacity .3s ease,padding .34s cubic-bezier(.33,0,.2,1);}
-    .menupill.open .mp-panel{max-height:340px;opacity:1;padding:2px 12px 13px;}
-    .mp-link{align-self:flex-start;text-align:left;border:0;background:none;cursor:pointer;font-family:'Barlow',sans-serif;font-weight:700;font-size:19px;color:var(--ink);padding:8px 6px;border-radius:12px;transition:color .15s;}
-    .mp-link:hover,.mp-link.on{color:var(--accent);}
-    .mp-dev{margin-top:8px;align-self:flex-start;display:inline-flex;align-items:center;gap:5px;background:rgba(124,58,237,.16);color:#7c3aed;border:0;border-radius:980px;font-weight:700;font-size:11px;padding:5px 11px;cursor:pointer;}
     .mp-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:340px;overflow:auto;z-index:5;}
     .tb-right{flex:none;}
+    /* Dev tools strip — replaces the retired hamburger's dev links */
+    .devstrip{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:59;display:flex;gap:6px;}
+    .devstrip button{display:inline-flex;align-items:center;gap:5px;background:rgba(124,58,237,.16);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:#7c3aed;border:0;border-radius:980px;font-weight:700;font-size:11px;padding:5px 11px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}
+    .devstrip button:hover{background:rgba(124,58,237,.26);}
+    /* Breadcrumb — quiet "you are here" text above entity pages */
+    .crumbs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;font-weight:600;color:var(--mut);padding:14px 2px 0;}
+    .crumbs .c-link{font:inherit;font-weight:600;border:0;background:none;padding:0;color:var(--mut);cursor:pointer;transition:color .15s;}
+    .crumbs .c-link:hover{color:var(--accent);}
+    .crumbs .c-sep{opacity:.55;flex:none;}
+    .crumbs .c-cur{color:var(--navy);font-weight:700;}
+    .crumbs .c-root{color:var(--mut);}
     .tb-profile{width:44px;height:44px;border-radius:980px;border:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.72),0 8px 24px -12px rgba(0,0,0,.28);transition:.18s;}
     .tb-profile:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
     .tb-acct{position:absolute;right:0;top:calc(100% + 8px);background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;min-width:200px;z-index:80;}
-    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}}
+    @media(max-width:640px){.np-link{font-size:12.5px;padding:8px 10px;}.np-srchbtn{width:32px;height:32px;}}
+    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}.tb-divider{display:none;}}
     .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
     .class-card{background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border:0;border-radius:16px;padding:24px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .class-card:hover{transform:translateY(-5px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),inset 0 0 0 .5px rgba(255,255,255,.55),0 24px 48px -20px rgba(0,0,0,.34);}
@@ -7040,31 +7067,29 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <span className="tb-divider"/>
       <span className="tb-sport" title="Sailing home" onClick={goHome}>Sailing</span>
     </div>
-    {/* center: floating menu pill */}
+    {/* center: 3-item primary nav — Athletes · Competitions · Rankings — with an
+        expanding search in the utility slot. No hamburger on desktop by design. */}
     <div className="tb-center">
-      <div className={`menupill${menuOpen?" open":""}`} onClick={e=>e.stopPropagation()}>
-        <div className="mp-bar">
-          <button className="mp-burger" onClick={()=>setMenuOpen(o=>!o)} title="Menu">{menuOpen?<X size={17}/>:<Menu size={17}/>}</button>
-          <div className="mp-search">
-            <Sparkles size={14} className="mp-star"/>
-            <input placeholder="Search athletes, events, pages…" value={gSearch}
-              onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
-              onFocus={()=>setGSearchOpen(true)}
-              onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
-              onKeyDown={e=>{if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}}}/>
-            {gSearch&&<button className="mp-clear" onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={13}/></button>}
-          </div>
-        </div>
-        <div className="mp-panel">
-          <MagneticItem className={`mp-link${view.name==="portals"?" on":""}`} onClick={()=>{setMenuOpen(false);goHome();}}>Class Portals</MagneticItem>
-          <MagneticItem className={`mp-link${view.name==="athletes"?" on":""}`} onClick={()=>{setMenuOpen(false);go({name:"athletes"});}}>Athletes</MagneticItem>
-          <MagneticItem className={`mp-link`} onClick={()=>{setMenuOpen(false);openCalendar(portal||null);}}>Calendar</MagneticItem>
-          <MagneticItem className={`mp-link${view.name==="ranking"?" on":""}`} onClick={()=>{setMenuOpen(false);pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}}>Ranking</MagneticItem>
-          {devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevApprovals(true);}}>Pending approvals</MagneticItem>}
-          {devMode&&<MagneticItem className="mp-link" onClick={()=>{setMenuOpen(false);setShowDevProfiles(true);}}>All profiles</MagneticItem>}
-          {devMode&&<button className="mp-dev" onClick={()=>setDevMode(false)}><Pencil size={11}/>Dev view ON — turn off</button>}
-        </div>
-        {gSearchOpen&&gSearchResults.length>0&&(
+      <div className={`menupill${navSearchOpen?" searching":" navmode"}`} onClick={e=>e.stopPropagation()}>
+        {navSearchOpen
+          ? <div className="mp-bar">
+              <div className="mp-search">
+                <Sparkles size={14} className="mp-star"/>
+                <input autoFocus placeholder="Search athletes, competitions & clubs…" value={gSearch}
+                  onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
+                  onFocus={()=>setGSearchOpen(true)}
+                  onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
+                  onKeyDown={e=>{if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);setNavSearchOpen(false);}if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}}}/>
+                <button className="mp-clear" title="Close search" onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);setNavSearchOpen(false);}}><X size={13}/></button>
+              </div>
+            </div>
+          : <div className="np-bar">
+              <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
+              <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
+              <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
+              <button className="np-srchbtn" title="Search" onClick={()=>setNavSearchOpen(true)}><Search size={16}/></button>
+            </div>}
+        {navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
           <div className="mp-drop">
             {gSearchResults.map((r,i)=>(
               <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
@@ -7149,6 +7174,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         : <button className="tb-profile" onClick={()=>setShowSignIn(true)} title="Sign in / sign up"><User size={18}/></button>}
     </div>
   </div>
+  {/* Dev tools moved out of the retired hamburger — a small strip under the top bar. */}
+  {devMode&&(
+    <div className="devstrip">
+      <button onClick={()=>setShowDevApprovals(true)}>Pending approvals</button>
+      <button onClick={()=>setShowDevProfiles(true)}>All profiles</button>
+      <button onClick={()=>setDevMode(false)}><Pencil size={11}/>Dev view ON — turn off</button>
+    </div>
+  )}
   <div style={{height:74}}/>
   {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
     clubs={CLUBS} associations={ASSOCIATIONS} federations={FEDERATIONS}
@@ -7286,7 +7319,45 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       </div>
     </div>
   )}
-  {(gSearchOpen||menuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setMenuOpen(false);}}/>}
+  {(gSearchOpen||navSearchOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setNavSearchOpen(false);}}/>}
+
+  {/* ── Breadcrumb wayfinding — entity pages only (top-level pages carry their own
+      titles; the top bar has no back button by rule, so this is the "you are here"). ── */}
+  {(()=>{
+    const isCls=portal&&String(portal).startsWith("class:");
+    const crumbs=[];
+    if(view.name==="event"){
+      const ev=events.find(e=>e.id===view.id);
+      crumbs.push({label:"Competitions",go:()=>goTop("competitions")},{label:ev?ev.name:"Competition"});
+    }else if(view.name==="profile"){
+      crumbs.push({label:"Athletes",go:()=>goTop("athletes")},{label:view.id||"Athlete"});
+    }else if(isCls){
+      const cls=classLabel(String(portal).slice(6));
+      crumbs.push({label:"Classes"});
+      if(view.name==="athletes") crumbs.push({label:cls,go:()=>{pushNav();setView({name:"events"});window.scrollTo(0,0);}},{label:"Athletes"});
+      else crumbs.push({label:cls});
+    }else if(portal){
+      const h=hostById(portal);
+      crumbs.push({label:"Clubs"});
+      if(view.name==="athletes") crumbs.push({label:h?.name||"Club",go:()=>{pushNav();setView({name:"events"});window.scrollTo(0,0);}},{label:"Athletes"});
+      else crumbs.push({label:h?.name||"Club"});
+    }
+    if(!crumbs.length) return null;
+    return(
+      <div className="wrap">
+        <nav className="crumbs" aria-label="Breadcrumb">
+          {crumbs.map((c,i)=>(
+            <React.Fragment key={i}>
+              {i>0&&<ChevronRight size={13} className="c-sep"/>}
+              {c.go
+                ? <button className="c-link" onClick={c.go}>{c.label}</button>
+                : <span className={i===crumbs.length-1?"c-cur":"c-root"}>{c.label}</span>}
+            </React.Fragment>
+          ))}
+        </nav>
+      </div>
+    );
+  })()}
 
   {/* ── HOME HERO (no portal) ── */}
   {!portal&&view.name==="portals"&&(
@@ -7412,6 +7483,81 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {intAssoc.length>0&&<>{subLabel("Associations")}
           <div className="classes-grid">{intAssoc.map(renderCard)}</div></>}
       </>}
+    </div>
+    );
+  })()}
+
+  {/* ── COMPETITIONS: global list — every published competition across all hosts ── */}
+  {!portal&&view.name==="competitions"&&(()=>{
+    const q=compQ.trim().toLowerCase();
+    const published=events.filter(ev=>ev.status!=="Draft");
+    const list=published
+      .filter(ev=>!q
+        ||(ev.name||"").toLowerCase().includes(q)
+        ||classLabel(ev.cls||"").toLowerCase().includes(q)
+        ||(hostById(ev.owner)?.name||ev.organizer_name||"").toLowerCase().includes(q))
+      .slice().sort((a,b)=>{
+        const da=a.date?.split('/').reverse().join('')||'';
+        const db=b.date?.split('/').reverse().join('')||'';
+        return db.localeCompare(da);
+      });
+    const evItems=[];let lastYear=null;
+    list.forEach((ev,i)=>{
+      const yr=ev.date?.split('/')?.[2]||null;
+      if(yr&&yr!==lastYear){evItems.push({type:'divider',year:yr});lastYear=yr;}
+      evItems.push({type:'ev',ev,i});
+    });
+    return(
+    <div className="wrap sec">
+      <div className="page-head" style={{display:"flex",alignItems:"flex-end",gap:14,flexWrap:"wrap"}}>
+        <div style={{flex:"1 1 auto",minWidth:0}}>
+          <h1 className="page-title">Competitions</h1>
+          <p className="page-sub">{published.length} competition{published.length!==1?"s":""} across all clubs and classes</p>
+        </div>
+        <button className="btn ghost" style={{fontSize:13,padding:"8px 14px",flex:"none"}} onClick={()=>openCalendar(null)}><Calendar size={15}/>Calendar</button>
+      </div>
+      <div className="toolbar" style={{marginBottom:14,display:"flex",gap:10,alignItems:"center"}}>
+        <div className="srch" style={{flex:1}}>
+          <Search size={16} color="#9fb2c8"/>
+          <input placeholder="Search competitions, classes & clubs…" value={compQ} onChange={e=>setCompQ(e.target.value)}/>
+        </div>
+      </div>
+      {evItems.map(item=>{
+        if(item.type==='divider') return(
+          <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+            <span style={{fontSize:12,fontWeight:700,color:"var(--mut)",letterSpacing:".1em"}}>{item.year}</span>
+            <div style={{flex:1,height:1,background:"var(--line)"}}/>
+          </div>
+        );
+        const{ev,i}=item;
+        const s=scoreEvent(ev);
+        const hostName=hostById(ev.owner)?.name||ev.organizer_name||null;
+        return(<div className="ev" key={ev.id} style={{animationDelay:`${Math.min(i,12)*50}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
+          {(()=>{
+            const dp=ev.date?.split('/');
+            const hasDate=dp&&dp.length===3&&dp[0]&&dp[2];
+            return(<div style={{display:"flex",alignItems:"center",gap:6}}>
+              {hasDate&&<div className="evicon-year">{dp[2].split('').map((ch,ci)=><span key={ci}>{ch}</span>)}</div>}
+              {hasDate
+                ?<div className="evicon-date"><span className="eid">{dp[0]}</span><span className="eim">{MON[parseInt(dp[1])-1]||""}</span></div>
+                :<div className="evicon"><Anchor size={20}/></div>}
+            </div>);
+          })()}
+          <div style={{flex:1,minWidth:0}}>
+            <p className="evname">{ev.name}</p>
+            <div className="evmeta">
+              {hostName&&<span><Waves size={13}/>{hostName}</span>}
+              <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
+              <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={e=>{e.stopPropagation();openCalendarAt(ev.date);}}>{formatDate(ev.date)}</span></span>
+              <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
+            </div>
+          </div>
+          {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
+          <ChevronRight size={18} color="#9fb2c8"/>
+        </div>);
+      })}
+      {list.length===0&&published.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions match this search. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>setCompQ("")}>Clear search</button></p>}
+      {published.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions yet.</p>}
     </div>
     );
   })()}
