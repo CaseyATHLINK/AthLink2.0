@@ -5489,7 +5489,7 @@ export default function AthLinkMVP(){
   const portalName=host?host.name:(isClassPortal?`All ${classLabel(portalCls)} Results`:"");
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
-  const athleteTitle=isGlobal?"All Athletes":(cls?`${cls.short} Athletes`:`${portalName} Athletes`);
+  const athleteTitle=isGlobal?(view.name==="athletes"&&view.cls?`${classLabel(view.cls)} Athletes`:"All Athletes"):(cls?`${cls.short} Athletes`:`${portalName} Athletes`);
   // Precompute every athlete's card stats in ONE pass (events count, best rank,
   // nationality, most-recent class/subclass). Avoids calling aggregate()/athleteNat()
   // — each O(events) — once per card, which was making All Athletes very slow.
@@ -5519,6 +5519,18 @@ export default function AthLinkMVP(){
     return out;
   },[statScope]);
   const statOf=nm=>cardStats.get(canonName(nm))||{events:0,best:null,nat:"",recentCls:null,recentSub:null};
+  // Global Athletes lenses — class + country carried in the view (class deep-links via /class/<id>/athletes)
+  const athCls=(isGlobal&&view.name==="athletes")?(view.cls||null):null;
+  const athCountry=(isGlobal&&view.name==="athletes")?(view.country||null):null;
+  const athClsSet=useMemo(()=>{
+    if(!athCls) return null;
+    const s2=new Set();
+    events.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
+    return s2;
+  },[events,athCls]);
+  const lensPeople=(athClsSet||athCountry)
+    ?currentPeople.filter(p=>(!athClsSet||athClsSet.has(canonName(p.name)))&&(!athCountry||statOf(p.name).nat===athCountry))
+    :currentPeople;
   // Progressive reveal so the page paints immediately and fills in as you scroll.
   const[athLimit,setAthLimit]=useState(120);
   const athSentinelRef=React.useRef(null);
@@ -7618,6 +7630,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const crumbs=[];
     if(view.name==="competitions"&&view.cls){
       crumbs.push({label:"Competitions",go:()=>goTop("competitions")},{label:classLabel(view.cls)});
+    }else if(view.name==="athletes"&&!portal&&view.cls){
+      crumbs.push({label:"Athletes",go:()=>goTop("athletes")},{label:classLabel(view.cls)});
     }else if(view.name==="event"){
       const ev=events.find(e=>e.id===view.id);
       crumbs.push({label:"Competitions",go:()=>goTop("competitions")},{label:ev?ev.name:"Competition"});
@@ -7748,10 +7762,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const q=compQ.trim().toLowerCase();
     const published=events.filter(ev=>ev.status!=="Draft");
     const lens=view.cls||null; // class filter — carried in the view so /class/<id> deep-links
+    const cLens=view.country||null; // country filter (competition's host country)
     // Chip row: the 4 main classes plus any custom classes that actually have competitions
     const customIds=[...new Set(published.map(e=>e.cls).filter(Boolean))].filter(id=>!CLASSES.some(c=>c.id===id));
     const chipDefs=[...CLASSES.map(c=>({id:c.id,label:c.short})),...customIds.map(id=>({id,label:classLabel(id)}))];
-    const inLens=published.filter(ev=>!lens||ev.cls===lens);
+    const compCountries=[...new Set(published.map(ev=>eventCountryCode(ev)).filter(Boolean))]
+      .sort((x,y)=>(GLOBE_NAMES[IOC_ISO[x]]||x).localeCompare(GLOBE_NAMES[IOC_ISO[y]]||y));
+    const inLens=published.filter(ev=>(!lens||ev.cls===lens)&&(!cLens||eventCountryCode(ev)===cLens));
     const list=inLens
       .filter(ev=>!q
         ||(ev.name||"").toLowerCase().includes(q)
@@ -7773,7 +7790,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className="page-head" style={{display:"flex",alignItems:"flex-end",gap:14,flexWrap:"wrap"}}>
         <div style={{flex:"1 1 auto",minWidth:0}}>
           <h1 className="page-title">{lens?`${classLabel(lens)} competitions`:"Competitions"}</h1>
-          <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{lens?"":" across all clubs and classes"}</p>
+          <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{(lens||cLens)?"":" across all clubs and classes"}</p>
         </div>
         <button className="btn ghost" style={{fontSize:13,padding:"8px 14px",flex:"none"}} onClick={()=>openCalendar(null)}><Calendar size={15}/>Calendar</button>
       </div>
@@ -7784,16 +7801,30 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         </div>
       </div>
       <div className="strip-chips" style={{margin:"0 0 14px"}}>
-        <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({name:"competitions"}))}>All</button>
+        <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:undefined}))}>All</button>
         {chipDefs.map(c=>{
           const n=published.filter(e=>e.cls===c.id).length;
           if(!n) return null;
           return(
-            <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
+            <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
               <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
             </button>
           );
         })}
+        <span className="lens-selwrap">
+          <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
+            <option value="">All countries</option>
+            {compCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+          </select>
+          <ChevronRight size={13} className="lens-selchev"/>
+        </span>
+        <span className="lens-selwrap">
+          <select className="lens-select" value="" onChange={e=>{if(e.target.value)enterPortal(e.target.value);}}>
+            <option value="">By host…</option>
+            {navHosts.map(h=>(<option key={h.id} value={h.id}>{h.name}</option>))}
+          </select>
+          <ChevronRight size={13} className="lens-selchev"/>
+        </span>
       </div>
       {evItems.map(item=>{
         if(item.type==='divider') return(
@@ -8561,7 +8592,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className="page-head">
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",width:"100%"}}>
-          <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
+          <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{lensPeople.length}</span></h1>
           {portal&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
             <Users size={14} style={{flex:"none"}}/>All Athletes</button>}
         </div>
@@ -8587,7 +8618,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
               <span style={{display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15}}>
                 <span>{f[0].toUpperCase()+f.slice(1)}</span>
-                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:currentPeople.length}</span>
+                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:lensPeople.length}</span>
               </span>
             </button>
           ));
@@ -8603,6 +8634,41 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </button>
         )}
       </div>
+      {/* Lenses — class chips + country + host (mirrors the Athletes nav menu) */}
+      {isGlobal&&(()=>{
+        const clsSets={};
+        events.forEach(ev=>{if(ev.status==="Draft"||!ev.cls)return;const s2=clsSets[ev.cls]||(clsSets[ev.cls]=new Set());(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
+        const customIds=Object.keys(clsSets).filter(id=>!CLASSES.some(c=>c.id===id));
+        const chipDefs=[...CLASSES.map(c=>({id:c.id,label:c.short})),...customIds.map(id=>({id,label:classLabel(id)}))];
+        const natSet=new Set();cardStats.forEach(v=>{if(v.nat)natSet.add(v.nat);});
+        const natList=[...natSet].sort((x,y)=>(GLOBE_NAMES[IOC_ISO[x]]||x).localeCompare(GLOBE_NAMES[IOC_ISO[y]]||y));
+        return(
+        <div className="strip-chips" style={{margin:"0 0 14px"}}>
+          <button className={`lens-chip${!athCls?" on":""}`} onClick={()=>setView(v=>({...v,cls:undefined}))}>All</button>
+          {chipDefs.map(c=>{
+            const n=clsSets[c.id]?clsSets[c.id].size:0;
+            if(!n) return null;
+            return(
+            <button key={c.id} className={`lens-chip${athCls===c.id?" on":""}`} onClick={()=>setView(v=>({...v,cls:v.cls===c.id?undefined:c.id}))}>
+              <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
+            </button>);
+          })}
+          <span className="lens-selwrap">
+            <select className="lens-select" value={athCountry||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
+              <option value="">All countries</option>
+              {natList.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+            </select>
+            <ChevronRight size={13} className="lens-selchev"/>
+          </span>
+          <span className="lens-selwrap">
+            <select className="lens-select" value="" onChange={e=>{if(e.target.value)enterPortalAthletes(e.target.value);}}>
+              <option value="">By host…</option>
+              {navHosts.map(h=>(<option key={h.id} value={h.id}>{h.name}</option>))}
+            </select>
+            <ChevronRight size={13} className="lens-selchev"/>
+          </span>
+        </div>);
+      })()}
       {athleteSmart&&(
         <div className="filter-chip" style={{marginBottom:14}}>
           <Sparkles size={11}/>{athleteSmart.label}
@@ -8677,7 +8743,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       {filter!=="duplicates"&&(()=>{
         const evScope=isGlobal?events:classEvents;
         const qlc=q.trim().toLowerCase();
-        const shown=currentPeople
+        const shown=lensPeople
           .filter(p=>true)
           .filter(p=>{
             if(athleteSmart){
