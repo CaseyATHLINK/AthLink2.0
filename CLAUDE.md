@@ -1,5 +1,5 @@
 # AthLink 2.0 — Claude Code context
-_Last updated: 2 July 2026_
+_Last updated: 3 July 2026_
 
 ## ⛔ File-write policy — READ FIRST (non-negotiable)
 - **All code and file writes happen in this repo (`~/Desktop/AthLink2.0`).**
@@ -28,13 +28,21 @@ Beachhead: Hong Kong class associations (29er, ILCA, Optimist, 49er).
 - Repo: CaseyATHLINK/AthLink2.0
 
 ## Local dev workflow
+Primary driver is **Claude Code Desktop app** (Code tab) — same app as Cowork,
+but with per-session git isolation, an app-preview pane for localhost, and PR
+status inline. Terminal (`claude`) still works identically for anything the
+Desktop app doesn't cover.
 ```bash
 npm run dev          # frontend at localhost:5173; /api proxied to live Vercel parser
-claude               # Claude Code session
-git add . && git commit -m "description" && git push   # deploys to athlink.win
+claude               # Claude Code session (terminal, if not using Desktop app)
 ```
+To push: just say **"push"** (or run `/push`) inside a Claude Code session —
+`.claude/commands/push.md` runs the full sync-and-test routine (see "Pre-push
+test gate" below) and pushes itself. Don't hand-run a bare `git push`.
 Parser changes are NOT testable locally — they require a git push to deploy,
 then test at localhost:5173 (the Vite proxy hits the newly deployed parser).
+Cowork (chat) is still the driver for anything outside this repo — other
+ventures, the Obsidian vault, cross-cutting planning.
 
 ## Env vars (.env.local — never commit)
 - VITE_SUPABASE_URL — base URL only, no trailing /rest/v1/
@@ -76,6 +84,30 @@ script is the single source of truth (the `athlink-tester` agent calls it too);
 it's a silent no-op when nothing testable changed, and self-guards against
 re-running in a loop. First run in a new session, Claude Code will ask you to
 approve the hook. Manual run any time: `bash tools/pre_push_test.sh`.
+
+### /push command — the standing sync rule
+Casey runs several AthLink tasks in parallel, each often started from an older
+base. `.claude/commands/push.md` codifies the standing rule: before ANY push,
+fetch origin, rebase the current branch's changes onto the latest remote HEAD
+(resolving conflicts in favor of the most recently pushed work), THEN run the
+test gate above, THEN push — one task's branch at a time, never batched. Say
+"push" in any Claude Code session (terminal or Desktop app) to trigger it.
+Parser/risky changes push to their feature branch (Vercel preview) first, not
+straight to `main`.
+
+### Parallel tasks — git worktrees
+Casey typically has several feature branches in flight at once (check
+`git branch -a` for the current set). Running two Claude Code sessions against
+the same working directory on different branches risks one session's checkout
+clobbering another's uncommitted files. Give each actively-driven branch its
+own worktree instead:
+```bash
+git worktree add ../AthLink2.0-<branch> <branch>   # one-time per branch
+git worktree remove ../AthLink2.0-<branch>          # after it merges
+```
+Open each worktree folder as its own Desktop app session/tab. Combined with
+the `/push` sync step above, this makes the parallel-task pattern safe by
+construction instead of by remembering a rule.
 
 ## Design tokens — never change
 --navy:  #163a63   --navy2: #1f4e80   --accent: #0d8ecf

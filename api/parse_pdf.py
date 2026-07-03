@@ -430,6 +430,22 @@ def norm_category(raw):
     cleaned = re.sub(r'\s+', ' ', s).strip()
     return cleaned[:12] if len(cleaned) <= 14 else ''
 
+def _is_age_cat_token(s):
+    """True only for a BARE age-group token (U16, U-18, Under 17, Junior, Youth,
+    Cadet, Master, Veteran, Senior). Deliberately strict: used to recover an
+    UNLABELLED category column (e.g. the Sailwave 'Group' column in the ILCA
+    Youth Worlds whose header cell renders blank), so it must never match names,
+    clubs, sail numbers or scores."""
+    low = str(s or '').strip().lower()
+    if not low:
+        return False
+    if re.fullmatch(r'u[\s\-]?\d{1,2}', low):          # U16, U-18, U 16
+        return True
+    if re.fullmatch(r'under[\s\-]?\d{1,2}', low):       # Under 17
+        return True
+    return low in ('junior', 'jr', 'youth', 'cadet', 'master', 'masters',
+                   'veteran', 'veterans', 'senior')
+
 # ── metadata ───────────────────────────────────────────────────────────────
 def extract_event_name(text):
     kw = r'(?i)(championship|regatta|nationals|cup|trophy|open|series|race|sailing|woche|ovington)'
@@ -785,6 +801,38 @@ def parse_table(tbl, fleet_hint=''):
     has_races = ('race_start' in cols)
     if not (has_name and has_races):
         return None
+
+    # Recover an UNLABELLED age-category column. Some exports (e.g. the Sailwave
+    # 'Group' column in the ILCA Youth Worlds) render category values — U16/U18 —
+    # under a blank header cell, so detect_cols never maps them. If no category
+    # column was found, scan the body for an unclaimed column whose non-empty
+    # values are overwhelmingly bare age tokens and adopt it, so the per-row
+    # division survives (it was silently dropped before).
+    if 'category' not in cols:
+        claimed = set()
+        for _k, _v in cols.items():
+            if isinstance(_v, int):
+                claimed.add(_v)
+            elif _k == '_skip' and isinstance(_v, set):
+                claimed |= _v
+        _rs, _re = cols.get('race_start'), cols.get('race_end')
+        if _rs is not None and _re is not None:
+            claimed |= set(range(_rs, _re + 1))
+        _body  = tbl[header_end:]
+        _width = max((len(r) for r in _body if r), default=0)
+        _best_idx, _best_hits = None, 0
+        for _ci in range(_width):
+            if _ci in claimed:
+                continue
+            _vals = [str(r[_ci]).strip() for r in _body
+                     if _ci < len(r) and str(r[_ci] or '').strip()]
+            if len(_vals) < 2:
+                continue
+            _hits = sum(1 for v in _vals if _is_age_cat_token(v))
+            if _hits >= 2 and _hits >= 0.8 * len(_vals) and _hits > _best_hits:
+                _best_idx, _best_hits = _ci, _hits
+        if _best_idx is not None:
+            cols['category'] = _best_idx
 
     # An "Open Division" / handicap / PY section is ONE fleet of mixed classes —
     # tell the row parser not to split it by its per-row class column.
@@ -1470,9 +1518,10 @@ _KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 _GEMINI_PROMPT = """Parse this sailing regatta results file. Return ONLY a JSON object, no markdown/explanation.
 
 Structure:
-{"name":"event name","date":"dd/mm/yyyy or empty","discards":1,"entries":[{"helm":"First Last","crew":"First Last or empty","sail":"88 or NZL 7","nat":"3-letter IOC or empty","div":"fleet/division or empty","gender":"M/F/Mix or empty","category":"U17/U19/U23/Jr or empty","pdf_rank":1,"pdf_net":67.0,"birth_year":2005,"crew_birth_year":2004,"races":[5,12,4,"DNF",7],"race_codes":[null,null,null,null,null]}]}
+{"name":"event name","division":"section heading or empty","date":"dd/mm/yyyy or empty","discards":1,"entries":[{"helm":"First Last","crew":"First Last or empty","sail":"88 or NZL 7","nat":"3-letter IOC or empty","div":"fleet/division or empty","gender":"M/F/Mix or empty","category":"U17/U19/U23/Jr or empty","pdf_rank":1,"pdf_net":67.0,"birth_year":2005,"crew_birth_year":2004,"races":[5,12,4,"DNF",7],"race_codes":[null,null,null,null,null]}]}
 
 RULES:
+- division: the results TABLE's own section heading if it has one, e.g. "Overall Results of ILCA4 Youth Girls U18" -> "ILCA4 Youth Girls U18", or "Gold Fleet". This is the specific fleet/division/class this table ranks, NOT the overall event name. Empty if the table has no heading of its own (e.g. a continuation page).
 - Use the OVERALL/FINAL table (skip preliminary per-fleet tables).
 - helm/crew: title case "First Last"; convert "SMITH, John" to "John Smith".
 - IGNORE club, team, and sponsor text entirely. The name cell often lists a sailor's name followed by " / Club / Sponsor / Sponsor". Keep ONLY the person's name; never put club/sponsor text in any field.
@@ -1715,6 +1764,9 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
     return {
         "ok": True, "multi": False,
         "name": ev_name,
+        # The table's own section heading (per page), used by the client to
+        # group multi-page scans into divisions and collapse subset tables.
+        "division": str(data.get("division") or "").strip(),
         "date": str(data.get("date") or ""),
         # Never invent discards: default to 0 when the model didn't report one.
         "discards": int(data.get("discards") or 0),
