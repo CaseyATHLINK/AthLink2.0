@@ -361,7 +361,7 @@ const stateToPath=(portal,view)=>{
   const v=view||{name:"portals"};
   if(v.name==="profile") return "/"+usernameForName(v.id||"");
   if(v.name==="event")   return "/competition/"+encodeURIComponent(v.id||"");
-  if(v.name==="competitions") return "/competitions";
+  if(v.name==="competitions") return v.cls?"/class/"+encodeURIComponent(v.cls):"/competitions";
   if(v.name==="ranking") return "/rankings";
   const isClassPortal=portal&&String(portal).startsWith("class:");
   if(v.name==="athletes"){
@@ -385,8 +385,8 @@ const pathToState=(pathname,athleteNames)=>{
   // "/competition/<id>" is canonical; "/event/<id>" kept as an alias so old shared links never break.
   if(s0==="event"||s0==="competition") return {portal:null,view:{name:"event",id:seg[1]}};
   if(s0==="class"){
-    const isAth=(seg[2]||"").toLowerCase()==="athletes";
-    return {portal:"class:"+(seg[1]||""),view:{name:isAth?"athletes":"events"}};
+    // Class is a filter, not a door: /class/<id> = Competitions filtered to that class.
+    return {portal:null,view:{name:"competitions",cls:seg[1]||""}};
   }
   const host=hostBySlug(seg[0]);
   if(host){
@@ -5404,7 +5404,7 @@ export default function AthLinkMVP(){
   const goHome=()=>{pushNav();setPortal(null);setView({name:"portals"});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   // Top-bar primary nav: always leaves any portal scope — the 3 doors are global.
-  const goTop=name=>{pushNav();setPortal(null);setView({name});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
+  const goTop=(name,extra)=>{pushNav();setPortal(null);setView({name,...(extra||{})});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   // Which of the 3 nav doors the current page lives behind (drives the .on state).
   const navOn=view.name==="ranking"?"ranking"
     :(view.name==="competitions"||view.name==="event")?"competitions"
@@ -5475,7 +5475,7 @@ export default function AthLinkMVP(){
     if(v.name==="profile")      t=v.id||"Athlete";
     else if(v.name==="event"){  const ev=events.find(e=>e.id===v.id); t=ev?ev.name:"Competition"; }
     else if(v.name==="ranking") t="Rankings";
-    else if(v.name==="competitions") t="Competitions";
+    else if(v.name==="competitions") t=v.cls?`${classLabel(v.cls)} — Competitions`:"Competitions";
     else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:"Athletes";
     else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else sailing home
     else                        t="AthLink"; // portals home
@@ -5702,7 +5702,7 @@ Partial query: "${q}"`;
     });
     // Global class portals
     CLASSES.filter(c=>c.short.toLowerCase().includes(ql)||(c.full||"").toLowerCase().includes(ql)).forEach(c=>{
-      results.push({type:"portal",label:`${c.short} — All Results`,sub:"Class — all results",nav:{type:"portal",assoc:"class:"+c.id}});
+      results.push({type:"portal",label:`${c.short} — all competitions`,sub:"Class",nav:{type:"competitions",cls:c.id}});
     });
     // Club portals
     CLUBS.filter(c=>c.name.toLowerCase().includes(ql)).forEach(c=>{
@@ -5757,6 +5757,8 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
     if(n.type==="portal"){
       // enterPortal sets portal+view in one batch — no defer needed
       enterPortal(n.assoc);
+    } else if(n.type==="competitions"){
+      goTop("competitions",n.cls?{cls:n.cls}:undefined);
     } else if(n.type==="home"){
       goHome();
     } else if(n.type==="athletes"){
@@ -6840,6 +6842,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .strip-chip:hover{transform:translateY(-2px);background:rgba(255,255,255,.85);}
     .strip-chip .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
     .strip-chip .cnt{font-weight:600;font-size:12px;color:var(--mut);}
+    /* Lens chips — the progressive class filter on results pages */
+    .lens-chip{display:inline-flex;align-items:center;gap:7px;font:inherit;font-size:12.5px;font-weight:700;color:var(--mut);border:0;background:rgba(255,255,255,.45);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);border-radius:980px;padding:7px 13px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.55),inset 0 1px 0 rgba(255,255,255,.6);transition:.15s;}
+    .lens-chip:hover{color:var(--navy);background:rgba(255,255,255,.7);}
+    .lens-chip.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
+    .lens-chip .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+    .lens-chip .cnt{font-weight:600;font-size:11.5px;color:var(--mut);}
     .strip-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:12px;margin-bottom:32px;}
     .strip-card{background:var(--mat-reg);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border-radius:16px;padding:16px;cursor:pointer;transition:.18s;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);animation:rise .5s both;}
     .strip-card:hover{transform:translateY(-4px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 20px 40px -18px rgba(0,0,0,.28);}
@@ -7346,7 +7354,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   {(()=>{
     const isCls=portal&&String(portal).startsWith("class:");
     const crumbs=[];
-    if(view.name==="event"){
+    if(view.name==="competitions"&&view.cls){
+      crumbs.push({label:"Competitions",go:()=>goTop("competitions")},{label:classLabel(view.cls)});
+    }else if(view.name==="event"){
       const ev=events.find(e=>e.id===view.id);
       crumbs.push({label:"Competitions",go:()=>goTop("competitions")},{label:ev?ev.name:"Competition"});
     }else if(view.name==="profile"){
@@ -7434,7 +7444,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {CLASSES.map(c=>{
           const n=published.filter(e=>e.cls===c.id).length;
           return(
-            <button key={c.id} className="strip-chip" onClick={()=>enterPortal("class:"+c.id)}>
+            <button key={c.id} className="strip-chip" onClick={()=>goTop("competitions",{cls:c.id})}>
               <span className="dot" style={{background:classColor(c.id)}}/>{c.short}<span className="cnt">{n}</span>
             </button>
           );
@@ -7475,7 +7485,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   {!portal&&view.name==="competitions"&&(()=>{
     const q=compQ.trim().toLowerCase();
     const published=events.filter(ev=>ev.status!=="Draft");
-    const list=published
+    const lens=view.cls||null; // class filter — carried in the view so /class/<id> deep-links
+    // Chip row: the 4 main classes plus any custom classes that actually have competitions
+    const customIds=[...new Set(published.map(e=>e.cls).filter(Boolean))].filter(id=>!CLASSES.some(c=>c.id===id));
+    const chipDefs=[...CLASSES.map(c=>({id:c.id,label:c.short})),...customIds.map(id=>({id,label:classLabel(id)}))];
+    const inLens=published.filter(ev=>!lens||ev.cls===lens);
+    const list=inLens
       .filter(ev=>!q
         ||(ev.name||"").toLowerCase().includes(q)
         ||classLabel(ev.cls||"").toLowerCase().includes(q)
@@ -7495,16 +7510,28 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <div className="wrap sec">
       <div className="page-head" style={{display:"flex",alignItems:"flex-end",gap:14,flexWrap:"wrap"}}>
         <div style={{flex:"1 1 auto",minWidth:0}}>
-          <h1 className="page-title">Competitions</h1>
-          <p className="page-sub">{published.length} competition{published.length!==1?"s":""} across all clubs and classes</p>
+          <h1 className="page-title">{lens?`${classLabel(lens)} competitions`:"Competitions"}</h1>
+          <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{lens?"":" across all clubs and classes"}</p>
         </div>
         <button className="btn ghost" style={{fontSize:13,padding:"8px 14px",flex:"none"}} onClick={()=>openCalendar(null)}><Calendar size={15}/>Calendar</button>
       </div>
-      <div className="toolbar" style={{marginBottom:14,display:"flex",gap:10,alignItems:"center"}}>
+      <div className="toolbar" style={{marginBottom:12,display:"flex",gap:10,alignItems:"center"}}>
         <div className="srch" style={{flex:1}}>
           <Search size={16} color="#9fb2c8"/>
           <input placeholder="Search competitions, classes & clubs…" value={compQ} onChange={e=>setCompQ(e.target.value)}/>
         </div>
+      </div>
+      <div className="strip-chips" style={{margin:"0 0 14px"}}>
+        <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({name:"competitions"}))}>All</button>
+        {chipDefs.map(c=>{
+          const n=published.filter(e=>e.cls===c.id).length;
+          if(!n) return null;
+          return(
+            <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
+              <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
+            </button>
+          );
+        })}
       </div>
       {evItems.map(item=>{
         if(item.type==='divider') return(
@@ -7540,8 +7567,25 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           <ChevronRight size={18} color="#9fb2c8"/>
         </div>);
       })}
-      {list.length===0&&published.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions match this search. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>setCompQ("")}>Clear search</button></p>}
+      {list.length===0&&published.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions match{q?" this search":""}{lens?` in ${classLabel(lens)}`:""}. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setCompQ("");setView({name:"competitions"});}}>Clear</button></p>}
       {published.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions yet.</p>}
+      {/* Clubs — browse point (clubs are not a top-level door; they live here + in search) */}
+      {(()=>{
+        const hosts=[...FEDERATIONS,...CLUBS,...ASSOCIATIONS].map(h=>({
+          ...h,n:published.filter(ev=>eventAssocs(ev).includes(h.id)).length
+        })).filter(h=>h.n>0).sort((a,b)=>b.n-a.n);
+        if(!hosts.length) return null;
+        return(<>
+          <p className="seclabel" style={{marginTop:34}}>Clubs & organisations</p>
+          <div className="strip-chips">
+            {hosts.map(h=>(
+              <button key={h.id} className="strip-chip" onClick={()=>enterPortal(h.id)}>
+                {h.name}<span className="cnt">{h.n}</span>
+              </button>
+            ))}
+          </div>
+        </>);
+      })()}
     </div>
     );
   })()}
