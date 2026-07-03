@@ -1,13 +1,40 @@
 # AthLink 2.0 — HANDOFF
 
 Resume in a new chat with: **"Read HANDOFF.md and continue."**
-Last updated: **2026-07-02**. Repo: `~/Desktop/AthLink2.0` (CaseyATHLINK/AthLink2.0) · Live: **athlink.win** (Vercel) · Supabase ref: `ylzoburtpibbgqdggjty`.
+Last updated: **2026-07-03**. Repo: `~/Desktop/AthLink2.0` (CaseyATHLINK/AthLink2.0) · Live: **athlink.win** (Vercel) · Supabase ref: `ylzoburtpibbgqdggjty`.
 
-> ⚠️ **Branch state:** latest work merged to `main` via **PR #18** (merge commit `950bad2` — clean flat URLs + persistent athlete usernames + editable host slugs). The routing groundwork + brand icons landed on `main` just before it. Source branch `design-sync-setup` is **still present** (not deleted this round) — reuse it, or start fresh off `main` (`git checkout main && git pull && git checkout -b <new-branch>`).
-> ⚠️ **This HANDOFF edit is uncommitted** — commit it with the next push.
+> ⚠️ **Branch state:** on `design-sync-setup`, with real **uncommitted work** — see the MOST RECENT entry below before touching anything. Prior merged work: **PR #18** (`950bad2` — clean flat URLs + persistent usernames + editable host slugs) is on `main`.
+> 🔴 **Read the MOST RECENT entry below first** — the pre-push test gate has a live gap discovered today (2026-07-03) that means frontend changes have NOT been validated by the Stop hook during the whole monorepo migration.
 
 ## How we work (the loop)
-Casey braindumps → assistant shows a short plan → implements directly → shows it live (localhost or a standalone HTML preview) → Casey says **"push"**. The **Cowork sandbox edits + validates (esbuild/TDZ) but cannot auth git** — Casey commits + pushes from his terminal; the assistant then opens the PR and **merges to `main` in the browser via the Chrome extension** once CI is green. Never push/merge without Casey's go-ahead.
+**Primary driver is now Claude Code Desktop app** (Code tab, `~/Desktop/AthLink2.0`) — it runs on Casey's own machine with real git/SSH access, so unlike the old Cowork-sandbox loop it can commit **and** push itself. Casey braindumps → assistant shows a short plan → implements directly → shows it live (localhost app-preview or a standalone HTML preview) → Casey says **"push"** → `.claude/commands/push.md` syncs with origin, runs the test gate, and pushes — no more handing Casey a push command. Parser/risky changes go to a feature branch (Vercel preview) first, not straight to `main`. Cowork (chat) is still the driver for anything outside this repo. Never push/merge without Casey's go-ahead. Full setup: `CLAUDE_CODE_DESKTOP_SETUP.md`.
+
+---
+
+## MOST RECENT: Cowork → Claude Code Desktop transition + critical pre-push gate gap found — 2026-07-03
+
+**What shipped:** `.claude/commands/push.md` (codifies the standing "sync before push" rule — fetch → rebase onto latest origin → resolve toward remote → run `tools/pre_push_test.sh` → push, feature-branch-first for parser changes), `CLAUDE_CODE_DESKTOP_SETUP.md` (full transition guide: worktree-per-branch for the 7 parallel feature branches, Desktop app as primary driver), and `CLAUDE.md` updates pointing at both.
+
+**🔴 Critical gap found while wiring this up — fix before trusting the gate again:**
+`tools/pre_push_test.sh` detects frontend changes with `grep -qE '^src/'` and then hardcodes `esbuild src/App.jsx` as the file it checks. **`src/App.jsx` no longer exists** — confirmed via `ls` (not present). The monorepo migration moved the real frontend to `sports/sailing/src/App.jsx` (704KB, the file actually being edited today) plus `apps/web/src/{Shell,Landing,main}.jsx`, with real internal workspace deps (`@athlink/core`, `@athlink/design-system`, `@athlink/sport-kit`, `@athlink/sport-sailing` — not stubs, per each package's `package.json`). Net effect: **`^src/` never matches anything anymore, so `FRONT` never gets set to 1, so the Stop hook's frontend esbuild/TDZ check has been silently no-op-ing for the entire monorepo migration** — only the backend Python check (`^api/.*\.py$`) has actually been firing. This has been true for a while, not something today's changes caused, but it means any frontend work since the monorepo migration went out without the automated gate actually running.
+- **Correct fix** (documented, not yet applied — needs Casey's Mac to test since this Linux sandbox only has Mac-incompatible `node_modules`): (a) extend the detection glob to also match `^apps/[^/]+/src/`, `^sports/[^/]+/src/`, `^packages/[^/]+/src/`; (b) replace the hardcoded single-file `esbuild src/App.jsx` step with the real build — `pnpm --filter @athlink/web build` (turbo-orchestrated, resolves the workspace packages for real instead of stubbing them as esbuild externals). HANDOFF already flagged `pnpm --filter @athlink/web build` as "the authoritative check" (see Validation gates section below) — `pre_push_test.sh` was just never updated to actually run it.
+- Don't just patch the glob without also fixing the esbuild target — that would make FRONT=1 fire against a file that doesn't exist and hard-fail every push instead of silently skipping. Fix both together.
+
+**Current uncommitted state on `design-sync-setup`** (none of it has been through a working frontend gate):
+- `api/parse_pdf.py` — modified (53 insertions, 1 deletion)
+- `sports/sailing/src/App.jsx` — modified (162-line diff)
+- `CLAUDE.md` — modified (today's Desktop-app/push-command docs)
+- Untracked: `CLAUDE_CODE_DESKTOP_SETUP.md`, `STRUCTURE_PROPOSAL.md`
+
+**Minor:** saw a `.git/index.lock` "unable to unlink" permission warning in the sandbox mount — likely a sandbox quirk, not necessarily present on the actual Mac, but worth a quick `ls -la .git/index.lock` sanity check first thing. (`settings.local.json` already has an allowlisted cleanup command for this from a prior incident, so it's happened before.)
+
+### Detailed instructions to get started coding (do these in order, in the new Claude Code Desktop session)
+1. Open Claude Code Desktop app → **Code** tab → AthLink2.0 project, on branch `design-sync-setup`.
+2. `git status` — confirm the four items above are still there; nothing should be lost between this handoff and the new session.
+3. Fix the pre-push gate (see the two-part fix above) in `tools/pre_push_test.sh`, then deliberately break something trivial in `sports/sailing/src/App.jsx` (e.g. an unclosed brace) and confirm the gate now actually catches it — don't trust it again until it's proven to fail on a real error.
+4. Revert the deliberate break, then run the fixed gate for real against the current uncommitted changes (`api/parse_pdf.py` + `sports/sailing/src/App.jsx`) before doing anything else with them.
+5. Once clean, resume the **Active development focus** list in `CLAUDE.md`: parser `detected_host`/`detected_class` frontend wiring, `custom_classes` + host-country migrations (mostly done, check migrations/README), association/federation signup flows, publish flow.
+6. When ready to save progress: say **"push"** — `/push` now runs the full sync + (fixed) test gate + push in one step.
 
 ---
 

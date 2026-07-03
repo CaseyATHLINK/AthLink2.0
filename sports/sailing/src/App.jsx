@@ -5051,6 +5051,8 @@ export default function AthLinkMVP(){
   const[calScopePortal,setCalScopePortal]=useState(null); // null = global; else portal id for popup scope
   // Ranking page
   const[rankCls,setRankCls]=useState("29er");
+  const[rankMode,setRankMode]=useState("cumulative"); // "cumulative" (every race) | "position" (regatta placings)
+  const[rankDiscards,setRankDiscards]=useState(0);    // configurable; default 0
   const[rankSourceOpen,setRankSourceOpen]=useState(null);   // collapsed by default
   const[rankSelected,setRankSelected]=useState(()=>{
     try{const s=localStorage.getItem("athlink_rank_selected");return s?new Set(JSON.parse(s)):new Set();}catch{return new Set();}
@@ -6105,36 +6107,68 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         }catch(e){ err="network/timeout"; d=null; }
         if(attempt===0) await new Promise(r=>setTimeout(r,1200)); // brief backoff before retry
       }
-      if(d) pageResults[pi]={entries:d.entries,name:d.name,date:d.date,discards:d.discards};
+      if(d) pageResults[pi]={entries:d.entries,name:d.name,date:d.date,discards:d.discards,division:d.division||""};
       else pageErrors.push({page:pi+1,error:err});
       onProgress&&onProgress(pi+1,pageCount);
     }
 
-    // 3) stitch: concat entries in page order; dedupe by helm+crew+sail
-    const seen=new Set(); const entries=[];
-    let name="",date="",discards=1;
+    // 3) group pages into DIVISIONS by their section heading. A page that
+    //    repeats the current heading — or carries none (a continuation page) —
+    //    stitches onto the current division; a NEW heading opens a new one.
+    //    If no page returns a heading at all, everything lands in one group,
+    //    degrading safely to a single stitched table (the old behaviour).
+    const rowKey=e=>`${String(e.sail||"").replace(/\s+/g,"").toLowerCase()}|${(e.helm||"").toLowerCase()}|${(e.crew||"").toLowerCase()}`;
+    const groups=[]; let name="",date="",discards=1,cur=null,curDiv="";
     pageResults.forEach(pr=>{
       if(!pr) return;
       if(pr.name&&!name) name=pr.name;
       if(pr.date&&!date) date=pr.date;
       if(pr.discards) discards=Math.max(discards,pr.discards|0);
+      const div=String(pr.division||"").trim();
+      const sameDiv=div&&curDiv&&div.toLowerCase()===curDiv.toLowerCase();
+      if(!cur||(div&&!sameDiv)){
+        cur={division:div,entries:[],keys:new Set(),discards:pr.discards||1};
+        groups.push(cur);
+      }
+      if(div) curDiv=div;
       (pr.entries||[]).forEach(e=>{
-        const key=`${(e.helm||"").toLowerCase()}|${(e.crew||"").toLowerCase()}|${(e.sail||"").toLowerCase()}`;
-        if(seen.has(key)) return;
-        seen.add(key); entries.push(e);
+        const k=rowKey(e);
+        if(cur.keys.has(k)) return;              // dedupe page overlap within a division
+        cur.keys.add(k); cur.entries.push(e);
       });
+      cur.discards=Math.max(cur.discards||1,pr.discards||1);
+    });
+    const divs=groups.filter(g=>g.entries.length);
+
+    // 4) subset-collapse: keep only SUPERSET divisions. Drop any division whose
+    //    sailors are ≥90% contained in a strictly larger one (e.g. "Girls U16" ⊂
+    //    "Girls U18"). Genuinely distinct divisions (different gender/class)
+    //    barely overlap, so the high ratio uniquely flags a real subset.
+    const containedIn=(a,b)=>{ if(!a.keys.size) return false; let n=0; a.keys.forEach(k=>{if(b.keys.has(k))n++;}); return n/a.keys.size>=0.9; };
+    const dropped=[];
+    const keep=divs.filter((g,gi)=>{
+      const hasSuper=divs.some((h,hi)=>hi!==gi&&h.entries.length>g.entries.length&&containedIn(g,h));
+      if(hasSuper){ dropped.push(g.division||`${g.entries.length} rows`); return false; }
+      return true;
     });
 
-    if(!entries.length){
+    if(!keep.length){
       const firstErr=pageErrors.length?pageErrors[0].error:"";
       return{ok:false,error:pageErrors.length
         ?`AI parser couldn't read this PDF (${pageErrors.length}/${pageCount} pages failed). Reason: ${firstErr}. Try the built-in parser, or a Sailwave/Manage2sail export.`
         :"AI parser returned no entries."};
     }
-    const notes=[`AI-parsed ${pageCount} pages → ${entries.length} competitors.`];
+    const total=keep.reduce((n,g)=>n+g.entries.length,0);
+    const notes=[keep.length>1
+      ?`AI-parsed ${pageCount} pages → ${keep.length} divisions, ${total} competitors.`
+      :`AI-parsed ${pageCount} pages → ${total} competitors.`];
+    if(dropped.length) notes.push(`Collapsed ${dropped.length} subset division(s) into their superset: ${dropped.join(", ")}.`);
     if(pageErrors.length) notes.push(`⚠ ${pageErrors.length} page(s) failed (${pageErrors.map(x=>x.page).join(", ")}) — review for gaps before publishing.`);
-    return{ok:true,multi:false,name:name||file.name.replace(/\.pdf$/i,""),date,discards,entries,ai_parsed:true,notes,
-      partial:pageErrors.length>0};
+    const evName=name||file.name.replace(/\.pdf$/i,"");
+    if(keep.length===1)
+      return{ok:true,multi:false,name:evName,date,discards,entries:keep[0].entries,ai_parsed:true,notes,partial:pageErrors.length>0};
+    return{ok:true,multi:true,name:evName,date,discards,ai_parsed:true,notes,partial:pageErrors.length>0,
+      fleets:keep.map(g=>({name:g.division||"Division",entries:g.entries,discards:g.discards||discards}))};
   };
 
   // Fetch + parse a live results link server-side (browser can't, due to CORS).
@@ -6223,22 +6257,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const isPdf=f.name.toLowerCase().endsWith(".pdf")||f.type==="application/pdf";
       let data;
       if(mode==="ai"&&isPdf){
-        // Flow: built-in (rule) parser → whole-file Claude → per-page Claude.
-        // parseOneFile(…, "ai") hits the server, which tries the rule parser
-        // FIRST (handles Sailwave / Manage2sail / Sailti instantly, all pages,
-        // exact names) and only falls back to a whole-file Claude pass for
-        // unknown formats. Most files finish right here with no AI at all.
+        // Flow: built-in (rule) parser → per-page Claude for multi-page scans.
+        // parseOnePdfPaged tries the rule parser FIRST (handles Sailwave /
+        // Manage2sail / Sailti instantly, all pages, exact names), does ONE
+        // whole-file Claude call for single-page unknowns, and only chunks
+        // page-by-page for MULTI-PAGE image/unknown PDFs — where a single
+        // whole-file pass silently returns just page 1 (each page is often its
+        // own division). Most files finish in the rule parser with no AI at all.
         setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading with the built-in parser…"]}:l));
-        data=await parseOneFile(f,"ai");
-        // Only if the whole-file pass couldn't read it (unknown format too big
-        // for one Claude call, or it timed out) do we chunk it page-by-page.
-        if(!data.ok){
-          data=await parseOnePdfPaged(f,(p,t)=>{
-            setParseLog(prev=>prev.map((l,li)=>li===i
-              ?{...l,status:"parsing",notes:[t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"]}
-              :l));
-          });
-        }
+        data=await parseOnePdfPaged(f,(p,t)=>{
+          setParseLog(prev=>prev.map((l,li)=>li===i
+            ?{...l,status:"parsing",notes:[t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"]}
+            :l));
+        });
       }else{
         data=await parseOneFile(f,mode);
       }
@@ -7402,12 +7433,24 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const years=Object.keys(byYear).sort().reverse();
     // Selected competitions become columns (date asc)
     const comps=clsEvents.filter(e=>rankSelected.has(e.id)).sort((a,b)=>dateKey(a).localeCompare(dateKey(b)));
-    // Aggregate: teams (doublehanded) or solo sailors (singlehanded)
+    // ── Selection-series engine (verified vs HKSF 2025 29er sheet) ────────
+    // Unit = boat (crew pair for 29er/49er, else solo). Every boat that sails
+    // ANY selected regatta is scored across ALL of them; absence from a regatta
+    // scores a DNC for each of that regatta's races.
+    //   DNC value  = that regatta's entries + 1 (Appendix A, per-regatta).
+    //   Cumulative = one long series of every race; discards drop the worst races.
+    //   Position   = sum of each regatta's finishing place; discards drop the worst.
+    //   Tiebreak   = best result in the most recent regatta.
+    // PDF stays ground truth — per-race points/ranks come from scoreEvent.
+    const compMeta={};                                  // ev.id -> {fleetN, dncVal, raceCount}
     const byComp=new Map();
     comps.forEach(ev=>{
       const sc=scoreEvent(ev);
+      const raceCount=sc.rows.reduce((m,r)=>Math.max(m,(r.races||[]).length),0)||1;
+      const fleetN=ev.entries.length||sc.rows.length||1;
+      compMeta[ev.id]={fleetN,dncVal:fleetN+1,raceCount};
       sc.rows.forEach(r=>{
-        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail};
+        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,pts:r.pts||[]};
         if(dh){
           const hk=canonName(r.helm||""),ck=canonName(r.crew||"");
           const key=[hk,ck].filter(Boolean).sort().join("|")||hk||ck;if(!key) return;
@@ -7425,14 +7468,42 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         }
       });
     });
+    const disc=Math.max(0,rankDiscards|0);
+    const lastComp=comps[comps.length-1]||null;
     let rows=[...byComp.entries()].map(([k,a])=>{
-      const comped=comps.filter(c=>a.perComp[c.id]);
-      const total=comped.reduce((s,c)=>s+(a.perComp[c.id].net||0),0);
+      const per={};                       // ev.id -> {contrib, rank, dnc}
+      const seriesRaces=[];               // flat race-score list (cumulative)
+      comps.forEach(c=>{
+        const m=compMeta[c.id],pc=a.perComp[c.id];
+        if(pc){
+          const raceScores=(pc.pts&&pc.pts.length)?pc.pts.slice():[];
+          per[c.id]={rank:pc.rank,dnc:false,
+            contrib:rankMode==="position"?(pc.rank??m.dncVal):raceScores.reduce((s,v)=>s+v,0)};
+          if(rankMode!=="position") raceScores.forEach(v=>seriesRaces.push(v));
+        }else{
+          per[c.id]={rank:null,dnc:true,
+            contrib:rankMode==="position"?m.dncVal:m.dncVal*m.raceCount};
+          if(rankMode!=="position") for(let i=0;i<m.raceCount;i++) seriesRaces.push(m.dncVal);
+        }
+      });
+      let total;
+      if(rankMode==="position"){
+        const vals=comps.map(c=>per[c.id].contrib).sort((x,y)=>y-x);
+        const d=Math.min(disc,Math.max(0,vals.length-1));
+        total=vals.slice(d).reduce((s,v)=>s+v,0);
+      }else{
+        const vals=seriesRaces.slice().sort((x,y)=>y-x);
+        const d=Math.min(disc,Math.max(0,vals.length-1));
+        total=vals.slice(d).reduce((s,v)=>s+v,0);
+      }
+      const lastRes=lastComp?(per[lastComp.id]?.rank??compMeta[lastComp.id]?.dncVal??9999):9999;
       const gender=a.genders.length?mode(a.genders):null;
       const division=a.divs.length?mode(a.divs):null;
-      return{key:k,type:a.type,name:a.name,helm:a.helm,crew:a.crew,perComp:a.perComp,total,count:comped.length,gender,division};
+      return{key:k,type:a.type,name:a.name,helm:a.helm,crew:a.crew,perComp:a.perComp,per,total,lastRes,
+        count:comps.filter(c=>a.perComp[c.id]).length,gender,division};
     });
-    rows.sort((a,b)=>a.total-b.total||b.count-a.count||(a.name||a.helm||"").localeCompare(b.name||b.helm||""));
+    // Lowest total wins; tiebreak = best result in the most recent regatta, then name.
+    rows.sort((a,b)=>a.total-b.total||a.lastRes-b.lastRes||(a.name||a.helm||"").localeCompare(b.name||b.helm||""));
     rows.forEach((r,i)=>r.rankNum=i+1);
     const podium=n=>n===1?"#e3b341":n===2?"#9aa6b2":n===3?"#c08457":"var(--navy)";
     const clsShort=classLabel(rankCls);
@@ -7507,7 +7578,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           ))}
         </div>}
         {comps.length===0
-          ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Total = sum of net points (lowest wins).</p>
+          ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Selected regattas combine into one series — lowest total wins.</p>
           :<>
           {/* When the source pickers are collapsed, show the selected competitions as removable nuggets */}
           {!rankSourceOpen&&<div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
@@ -7520,6 +7591,23 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </button>
             ))}
           </div>}
+          {/* Ranking controls: mode toggle + discard stepper (verified engine) */}
+          <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:14}}>
+            <div style={{display:"inline-flex",borderRadius:980,overflow:"hidden",border:"1px solid var(--line)"}}>
+              {[["cumulative","Cumulative"],["position","Position"]].map(([id,label])=>{
+                const on=rankMode===id;
+                return<button key={id} onClick={()=>setRankMode(id)} title={id==="cumulative"?"Weighs every race across the combined series":"Weighs each regatta's finishing place equally"}
+                  style={{border:"0",background:on?"var(--navy)":"rgba(255,255,255,.7)",color:on?"#fff":"var(--navy)",padding:"7px 15px",fontSize:12.5,fontWeight:700,cursor:"pointer",transition:".12s"}}>{label}</button>;
+              })}
+            </div>
+            <div style={{display:"inline-flex",alignItems:"center",gap:7,fontSize:12.5,fontWeight:700,color:"var(--navy)"}}>
+              Discards
+              <button onClick={()=>setRankDiscards(d=>Math.max(0,d-1))} title="Fewer discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>–</button>
+              <span style={{minWidth:16,textAlign:"center"}}>{rankDiscards}</span>
+              <button onClick={()=>setRankDiscards(d=>d+1)} title="More discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>+</button>
+            </div>
+            <span style={{fontSize:11.5,color:"var(--mut)"}}>{rankMode==="cumulative"?"Combined series · every race counts · DNC = entries+1":"Sum of regatta placings · DNC = entries+1"}</span>
+          </div>
           <div style={{overflowX:"auto",background:"rgba(255,255,255,0.85)",backdropFilter:"blur(34px) saturate(195%)",WebkitBackdropFilter:"blur(34px) saturate(195%)",borderRadius:16,boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06)"}}>
             <table style={{borderCollapse:"collapse",width:"100%",fontSize:13,minWidth:640}}>
               <thead>
@@ -7551,12 +7639,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                           :<span style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
                       </td>
                       {comps.map(c=>{
-                        const pc=r.perComp[c.id];
-                        if(!pc) return <td key={c.id} style={{padding:"9px 10px",textAlign:"center",color:"#c8d4e0"}}>–</td>;
+                        const pc=r.perComp[c.id];const pcell=r.per[c.id];
+                        const shown=rankMode==="position"?(pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–")):pcell.contrib;
                         const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
                         return <td key={c.id} style={{padding:"9px 10px",textAlign:"center"}}>
-                          <button onClick={()=>toggleRankCell(ek)} title="Tap for race detail"
-                            style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:"pointer",fontSize:13}}>{pc.net}</button>
+                          <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this regatta (entries+1)":"Tap for race detail"}
+                            style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:pcell.dnc?"var(--mut)":"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:pc?"pointer":"default",fontSize:13,fontStyle:pcell.dnc?"italic":"normal"}}>{shown}{pcell.dnc?" DNC":""}</button>
                         </td>;
                       })}
                       <td style={{padding:"9px 12px",textAlign:"center",fontWeight:800}}>{r.total}</td>

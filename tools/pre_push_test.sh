@@ -10,7 +10,7 @@
 #
 # It never fails your shell (always exits 0); it reports, it doesn't abort.
 #
-# Env overrides (for testing): ESBUILD_BIN=/path/to/esbuild ; PREPUSH_FORCE=front,back
+# Env overrides (for testing): PREPUSH_BUILD_CMD="..." ; PREPUSH_FORCE=front,back
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 0
@@ -38,7 +38,9 @@ if [ -n "${PREPUSH_FORCE:-}" ]; then
   case "$PREPUSH_FORCE" in *back*|*both*) BACK=1;; esac
 else
   CHANGED="$(git status --porcelain 2>/dev/null | sed 's/^...//; s/.* -> //')"
-  printf '%s\n' "$CHANGED" | grep -qE '^src/'        && FRONT=1
+  # Frontend lives in the monorepo workspaces after the migration; the legacy
+  # top-level src/ is kept for backward-compat. Match any of them.
+  printf '%s\n' "$CHANGED" | grep -qE '^(src|apps/[^/]+/src|sports/[^/]+/src|packages/[^/]+/src)/' && FRONT=1
   printf '%s\n' "$CHANGED" | grep -qE '^api/.*\.py$' && BACK=1
 fi
 # Nothing testable changed -> stay silent so normal chit-chat turns aren't noisy.
@@ -53,25 +55,49 @@ add(){ REPORT="${REPORT}${1}"$'\n'; }
 # Frontend checks
 # ---------------------------------------------------------------------------
 if [ "$FRONT" -eq 1 ]; then
+  # Fast frontend gate: esbuild-bundle each CHANGED js/jsx frontend file with
+  # react + the @athlink/* workspace packages marked external. Catches syntax /
+  # JSX / broken-local-import errors (the white-screen vector) in well under a
+  # second. Points at the real monorepo paths — the old check hard-coded
+  # `src/App.jsx`, which no longer exists post-migration, so it silently no-op'd.
+  #
+  # This is deliberately NOT the full production build: `pnpm --filter
+  # @athlink/web build` takes minutes (too slow to run on every Stop-hook turn)
+  # and is already run authoritatively by Vercel CI on push. Run it locally
+  # before a merge if you want the full workspace-resolved build.
   ESB="${ESBUILD_BIN:-}"
   if [ -z "$ESB" ]; then
-    if [ -x "$REPO/node_modules/.bin/esbuild" ]; then ESB="$REPO/node_modules/.bin/esbuild"
-    elif command -v esbuild >/dev/null 2>&1; then ESB="esbuild"
-    else ESB="npx --yes esbuild"; fi
+    for c in "$REPO/node_modules/.bin/esbuild" "$REPO/apps/web/node_modules/.bin/esbuild" \
+             "$REPO/.ds-sync/node_modules/.bin/esbuild"; do
+      [ -x "$c" ] && ESB="$c" && break
+    done
   fi
-  ESB_OUT="$($ESB src/App.jsx --loader:.jsx=jsx --bundle \
-    --external:react --external:react-dom --external:lucide-react \
-    --external:recharts --format=esm --outfile=/dev/null 2>&1)"
-  if [ $? -eq 0 ]; then
-    add "PASS  frontend esbuild: clean"
+  [ -z "$ESB" ] && ESB="$(find "$REPO" -path '*/node_modules/.bin/esbuild' -type f 2>/dev/null | head -1)"
+  [ -z "$ESB" ] && command -v esbuild >/dev/null 2>&1 && ESB="esbuild"
+  [ -z "$ESB" ] && ESB="npx --yes esbuild"
+
+  FILES="$(printf '%s\n' "$CHANGED" | grep -E '^(src|apps/[^/]+/src|sports/[^/]+/src|packages/[^/]+/src)/.*\.(jsx?|tsx?)$' || true)"
+  if [ -z "$FILES" ]; then
+    add "PASS  frontend: changed files need no bundle check"
   else
-    HARD_FAIL=1
-    add "FAIL  frontend esbuild error:"
-    add "$(printf '%s' "$ESB_OUT" | head -15)"
+    while IFS= read -r f; do
+      [ -n "$f" ] && [ -f "$f" ] || continue
+      OUT="$($ESB "$f" --bundle --format=esm --outfile=/dev/null \
+        --loader:.jsx=jsx --loader:.js=jsx --loader:.css=empty \
+        --external:react --external:react-dom --external:lucide-react \
+        --external:recharts --external:d3-force --external:"@athlink/*" 2>&1)"
+      if [ $? -eq 0 ]; then
+        add "PASS  esbuild: $f"
+      else
+        HARD_FAIL=1
+        add "FAIL  esbuild $f:"
+        add "$(printf '%s' "$OUT" | head -15)"
+      fi
+    done <<< "$FILES"
   fi
-  add "NOTE  TDZ: esbuild can't catch use-before-declare (the white-screen vector)."
-  add "      Eyeball any new useEffect / importerHost / _orgHost / _orgMode ordering."
-  add "      Then confirm localhost:5173 renders (start dev server if it's down)."
+  add "NOTE  esbuild can't catch TDZ / use-before-declare (the white-screen vector)."
+  add "      Eyeball any new useEffect / importerHost / _orgHost / _orgMode ordering,"
+  add "      then confirm localhost:5173 renders. Full build runs on Vercel CI at push."
 fi
 
 # ---------------------------------------------------------------------------
