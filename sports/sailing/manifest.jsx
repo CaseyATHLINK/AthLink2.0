@@ -18,3 +18,6 @@ export default defineSport({
   providesOwnNav: true,
   Portal: App,
 });
+
+// Live-demo embeds for the all-sports landing page (apps/web/src/Landing.jsx).
+export { SailingGlobe, AthleteWeb, dbToApp, IOC_ISO } from "./src/App.jsx";
