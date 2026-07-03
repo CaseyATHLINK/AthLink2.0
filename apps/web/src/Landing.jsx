@@ -1,11 +1,14 @@
 /* AthLink front-door landing. Self-styled (does NOT sit inside ThemeRoot, so the
-   Fraunces serif accents survive the .al-ds font override). Design tokens come
+   Newsreader serif accents survive the .al-ds font override). Design tokens come
    from @athlink/design-system tokens.css (:root). Sport-agnostic: the sport cards
-   are driven by the sports registry passed in as `sports`. */
+   are driven by the sports registry passed in as `sports`.
+   Layout (2026-07 redesign): search-first hero → partner belt → feature tabs
+   (with live globe + athlete-web demos) → mission/vision + live stats → contact. */
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Menu, Sparkles, ArrowRight, Copy, Check, X,
+  Search, Sparkles, ArrowRight, Copy, Check, X, Loader2,
   Upload, Database, BarChart3, Globe2, Share2, Clock, ShieldCheck, Trophy,
+  User, Landmark, Flag,
 } from "lucide-react";
 
 const CSS = `
@@ -22,40 +25,25 @@ const CSS = `
 
 .al-liquid{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;filter:blur(30px) saturate(115%);opacity:.42;}
 
-.topbar2{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 20px;pointer-events:none;transition:transform .42s cubic-bezier(.2,.85,.2,1),opacity .42s;}
+/* ── Top bar — mirrors the sailing home nav (brand pill left, glass link pill
+   centre) so landing↔sport-home feels like one site. ── */
+.topbar2{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;pointer-events:none;transition:transform .42s cubic-bezier(.2,.85,.2,1),opacity .42s;}
 .topbar2.hidden{transform:translateY(-140%);opacity:0;}
 .topbar2>*{pointer-events:auto;}
 .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 14px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;cursor:pointer;transition:transform .15s;}
 .tb-brand:hover{transform:translateY(-1px);}
-.tb-logo{width:32px;height:32px;border-radius:980px;background:var(--accent);color:#fff;display:grid;place-items:center;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}
-.tb-divider{width:1px;height:18px;background:rgba(0,0,0,.12);flex:none;margin:0 4px 0 10px;}
-.tb-sport{font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.02em;padding:5px 4px 5px 6px;}
-/* Brand lockup = A icon + "AthLink" in SF Pro (system font stack). */
 .tb-mark{width:28px;height:28px;border-radius:50%;display:block;flex:none;}
 .tb-word{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.03em;padding:0 6px 0 5px;}
-.hero-lockup{display:flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 30px;filter:drop-shadow(0 6px 22px rgba(0,0,0,.28));}
-.hero-mark{height:60px;width:auto;display:block;}
-.hero-word{font-weight:800;font-size:54px;color:#fff;letter-spacing:-.04em;line-height:1;}
+.tb-center{position:absolute;left:50%;transform:translateX(-50%);display:flex;pointer-events:auto;}
+.tb-nav{display:inline-flex;align-items:center;gap:2px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);}
+.tb-link{font:inherit;font-size:14px;font-weight:700;color:var(--navy);border:0;background:none;border-radius:980px;padding:9px 18px;cursor:pointer;transition:background .16s;white-space:nowrap;}
+.tb-link:hover{background:rgba(255,255,255,.85);}
+.tb-spacer{width:34px;flex:none;}
+.hero-lockup{display:flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 26px;filter:drop-shadow(0 6px 22px rgba(0,0,0,.28));}
+.hero-mark{height:52px;width:auto;display:block;}
+.hero-word{font-weight:800;font-size:46px;color:#fff;letter-spacing:-.04em;line-height:1;}
 .foot-mark{width:28px;height:28px;border-radius:7px;display:block;flex:none;}
-.al-landing .brand{gap:7px;}
-@media (max-width:640px){.hero-mark{height:40px;} .hero-word{font-size:38px;} .hero-lockup{gap:8px;margin-bottom:22px;}}
-.tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
-.menupill{pointer-events:auto;position:relative;width:100%;max-width:460px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:background .34s ease;}
-.mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
-.mp-burger{flex:none;width:38px;height:38px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);}
-.mp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.45);border-radius:980px;padding:8px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
-.mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);}
-.mp-search input::placeholder{color:var(--mut);}
-.mp-answer{margin:0 10px;padding:11px 4px 13px;border-top:.5px solid rgba(60,60,67,.14);font-size:13.5px;line-height:1.5;color:var(--navy);}
-.mp-answer b{color:var(--accent);}
-.mp-panel{max-height:0;overflow:hidden;opacity:0;display:flex;flex-direction:column;gap:1px;padding:0 12px;transition:max-height .34s cubic-bezier(.33,0,.2,1),opacity .3s,padding .34s cubic-bezier(.33,0,.2,1);}
-.menupill.open .mp-panel{max-height:300px;opacity:1;padding:2px 12px 13px;}
-.mp-link{align-self:flex-start;border:0;background:none;cursor:pointer;font-weight:700;font-size:18px;color:var(--ink);padding:8px 6px;transition:color .15s;}
-.mp-link:hover{color:var(--accent);}
-/* Landing menu: a single circular button top-right that drops a glass panel. */
-.menu-wrap{position:relative;flex:none;}
-.menu-drop{position:absolute;top:calc(100% + 8px);right:0;min-width:184px;display:flex;flex-direction:column;gap:1px;background:rgba(255,255,255,.72);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 18px 44px -16px rgba(0,0,0,.32);padding:10px 12px;opacity:0;transform:translateY(-6px);pointer-events:none;transition:opacity .25s ease,transform .25s ease;}
-.menu-wrap.open .menu-drop{opacity:1;transform:none;pointer-events:auto;}
+@media (max-width:760px){.tb-center{display:none;} .hero-mark{height:38px;} .hero-word{font-size:34px;} .hero-lockup{gap:8px;margin-bottom:20px;}}
 
 .btn{font:inherit;font-weight:600;font-size:15px;border:0;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:12px 22px;letter-spacing:-.01em;transition:transform .18s cubic-bezier(.4,0,.2,1),filter .18s,background .18s,box-shadow .18s;white-space:nowrap;}
 .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.30),inset 0 1px 0 rgba(255,255,255,.45),0 1px 3px rgba(10,132,255,.35);}
@@ -64,40 +52,50 @@ const CSS = `
 .btn:hover{transform:translateY(-2px) scale(1.02);filter:brightness(1.05);}
 .btn:active{transform:translateY(0) scale(.98);}
 
+/* ── Hero (search-first) ── */
 .hero{position:relative;overflow:hidden;color:#fff;border-radius:0 0 36px 36px;background:radial-gradient(120% 120% at 20% 0%,#1a4372 0%,#12263f 45%,#0a1c31 100%);}
 .hero-liquid{position:absolute;inset:0;width:100%;height:100%;filter:blur(30px) saturate(135%);opacity:.7;}
 .hero-veil{position:absolute;inset:0;background:radial-gradient(80% 60% at 80% 20%,rgba(10,132,255,.22),transparent 60%);}
-.al-landing .hero-inner{position:relative;z-index:2;padding:200px 24px 150px;text-align:center;}
-.hero h1{font-size:70px;line-height:1.0;font-weight:800;letter-spacing:-.04em;max-width:15ch;margin:0 auto 20px;}
+.al-landing .hero-inner{position:relative;z-index:2;padding:170px 24px 120px;text-align:center;}
+.hero h1{font-size:62px;line-height:1.02;font-weight:800;letter-spacing:-.04em;max-width:16ch;margin:0 auto 34px;}
 .hero h1 .g{background:linear-gradient(100deg,#bfe0ff,#7cb4ff);-webkit-background-clip:text;background-clip:text;color:transparent;}
-.hero .sub{font-family:var(--serif);font-style:normal;font-weight:500;font-size:27px;line-height:1.4;margin:0 auto 44px;background:linear-gradient(100deg,#d3e8ff,#8fbcff);-webkit-background-clip:text;background-clip:text;color:transparent;}
-
-.portals{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;}
-.pcard{width:280px;text-align:left;background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border-radius:16px;padding:22px 24px;cursor:pointer;transition:.18s;color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 10px 30px -14px rgba(0,0,0,.5);}
-.pcard:hover{transform:translateY(-5px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 26px 50px -20px rgba(0,0,0,.55);}
-.pcard .ptop{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
-.pcard .pname{font-weight:800;font-size:26px;letter-spacing:-.03em;color:var(--navy);}
-.pcard .pstats{display:flex;gap:24px;}
-.pcard .pstats b{display:block;font-size:22px;color:var(--navy);font-weight:800;letter-spacing:-.02em;line-height:1;}
-.pcard .pstats span{font-size:12px;color:var(--mut);}
-.pcard.soon{opacity:.9;cursor:default;}
-.pcard.soon:hover{transform:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 10px 30px -14px rgba(0,0,0,.5);}
-.pill-live{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#0a7a3f;background:rgba(52,199,89,.18);padding:4px 10px;border-radius:980px;}
+.hsearch{position:relative;max-width:620px;margin:0 auto;}
+.hs-bar{display:flex;align-items:center;gap:11px;background:rgba(255,255,255,.15);backdrop-filter:blur(28px) saturate(185%);-webkit-backdrop-filter:blur(28px) saturate(185%);border-radius:980px;padding:15px 24px;box-shadow:inset 0 1px 0 rgba(255,255,255,.3),inset 0 0 0 .5px rgba(255,255,255,.22),0 20px 44px -18px rgba(0,0,0,.5);transition:box-shadow .2s;}
+.hs-bar:focus-within{box-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 0 0 1px rgba(160,205,250,.5),0 20px 44px -18px rgba(0,0,0,.55);}
+.hs-bar input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:17px;color:#fff;letter-spacing:-.01em;}
+.hs-bar input::placeholder{color:rgba(220,236,248,.62);}
+.hs-drop{position:absolute;top:calc(100% + 10px);left:0;right:0;z-index:8;background:rgba(9,26,48,.94);backdrop-filter:blur(30px) saturate(185%);-webkit-backdrop-filter:blur(30px) saturate(185%);border-radius:18px;box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 26px 60px -18px rgba(0,0,0,.6);overflow:hidden;text-align:left;padding:6px;}
+.hs-row{display:flex;align-items:center;gap:11px;padding:11px 14px;border-radius:12px;cursor:pointer;color:#eaf3fc;font-weight:600;font-size:14.5px;transition:background .14s;}
+.hs-row:hover{background:rgba(120,170,220,.16);}
+.hs-row .sub{color:#9fc4ec;font-weight:500;font-size:12.5px;margin-left:auto;flex:none;}
+.hs-type{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:rgba(120,170,220,.16);color:#9fc4ec;flex:none;}
+.hs-empty{padding:14px 16px;color:#9fc4ec;font-size:13.5px;}
+.hero .sub2{font-family:var(--serif);font-weight:500;font-size:19px;line-height:1.45;margin:18px auto 0;background:linear-gradient(100deg,#d3e8ff,#8fbcff);-webkit-background-clip:text;background-clip:text;color:transparent;max-width:52ch;}
+.hero-portals{display:flex;gap:14px;justify-content:center;margin-top:34px;flex-wrap:wrap;}
+.pbtn{display:inline-flex;align-items:center;gap:10px;font:inherit;font-weight:800;font-size:16.5px;letter-spacing:-.02em;color:var(--navy);background:var(--mat-reg,rgba(255,255,255,.7));backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border:0;border-radius:980px;padding:13px 24px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 12px 30px -14px rgba(0,0,0,.5);transition:transform .16s,box-shadow .16s;}
+.pbtn:hover{transform:translateY(-3px);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 22px 44px -18px rgba(0,0,0,.55);}
+.pbtn.soon,.pbtn.soon:hover{opacity:.62;cursor:default;transform:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 12px 30px -14px rgba(0,0,0,.5);}
+.pill-live{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#0a7a3f;background:rgba(52,199,89,.22);padding:4px 10px;border-radius:980px;}
 .pill-soon{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--mut);background:rgba(91,107,128,.16);padding:4px 10px;border-radius:980px;}
 
-.al-landing section{padding:88px 0;}
+.al-landing section{padding:84px 0;}
 .seclabel{font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin-bottom:16px;}
 .sec-h{font-size:44px;line-height:1.06;font-weight:800;letter-spacing:-.03em;color:var(--navy);}
 .center{text-align:center;}
 .sec-lead{font-size:19px;line-height:1.55;color:var(--mut);max-width:60ch;margin-top:20px;font-weight:400;}
 .sec-lead.center{margin-left:auto;margin-right:auto;}
 
-.mission{text-align:center;}
-.mtext{font-size:27px;line-height:1.5;font-weight:400;color:#33425e;max-width:820px;margin:0 auto;letter-spacing:-.015em;text-align:center;}
-.em{font-family:var(--serif);font-style:normal;font-weight:500;font-size:1.14em;background:linear-gradient(100deg,var(--navy2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent;}
-.vision-wrap{max-width:920px;margin:0 auto;}
-.vision-tag{font-size:34px;font-weight:800;letter-spacing:-.03em;color:var(--navy);text-align:center;margin-bottom:26px;}
+/* ── Partner conveyor belt ── */
+.beltsec{padding:56px 0 40px;}
+.beltwrap{overflow:hidden;margin-top:28px;-webkit-mask-image:linear-gradient(90deg,transparent,#000 10%,#000 90%,transparent);mask-image:linear-gradient(90deg,transparent,#000 10%,#000 90%,transparent);}
+.belt{display:flex;gap:18px;width:max-content;animation:al-belt 30s linear infinite;padding:4px 0 10px;}
+.beltwrap:hover .belt{animation-play-state:paused;}
+@keyframes al-belt{from{transform:translateX(-50%);}to{transform:translateX(0);}}
+.pchip{display:inline-flex;align-items:center;gap:13px;background:rgba(255,255,255,.55);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);border-radius:16px;padding:14px 24px;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.4),0 8px 22px -12px rgba(0,0,0,.18);flex:none;}
+.pchip img{height:36px;width:auto;display:block;filter:brightness(0) saturate(100%) invert(18%) sepia(34%) saturate(1710%) hue-rotate(184deg) brightness(94%) contrast(92%);opacity:.92;}
+.pchip span{font-weight:700;font-size:14.5px;color:var(--navy);white-space:nowrap;letter-spacing:-.01em;}
 
+/* ── Feature tabs + rows (no numbered frames) ── */
 .tabs{display:inline-flex;gap:4px;padding:5px;border-radius:980px;margin:34px auto 8px;background:rgba(255,255,255,.5);backdrop-filter:blur(28px) saturate(195%);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 4px 14px -8px rgba(0,0,0,.14);}
 .tabs button{font:inherit;font-size:15px;font-weight:700;border:0;background:none;color:var(--mut);padding:10px 26px;border-radius:980px;cursor:pointer;transition:.16s;}
 .tabs button:hover{color:var(--navy);}
@@ -108,7 +106,6 @@ const CSS = `
 .frow{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;margin-top:64px;}
 .frow:first-child{margin-top:44px;}
 .frow.flip .ftext{order:2;} .frow.flip .fshot{order:1;}
-.fnum{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:9px;background:var(--sky);color:var(--accent);font-weight:800;font-size:14px;margin-bottom:16px;}
 .ftext h3{font-size:28px;font-weight:800;letter-spacing:-.028em;color:var(--navy);line-height:1.1;}
 .pain{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;color:#a8492f;background:rgba(232,72,53,.09);border-radius:980px;padding:6px 13px;margin:14px 0;}
 .pain b{font-weight:800;color:#8f3a22;}
@@ -122,26 +119,40 @@ const CSS = `
 .ph{aspect-ratio:16/10;display:grid;place-items:center;gap:12px;text-align:center;padding:24px;background:rgba(255,255,255,.72);backdrop-filter:blur(20px);}
 .ph .cam{color:var(--accent);opacity:.45;}
 .ph .cap{font-size:14px;font-weight:700;color:var(--navy2);}
+/* Live interactive demo frame (globe / athlete web) — navy stage like the app */
+.demoframe{position:relative;border-radius:14px;overflow:hidden;background:radial-gradient(120% 120% at 20% 0%,#1a4372 0%,#12263f 55%,#0a1c31 100%);box-shadow:0 22px 50px -22px rgba(17,40,66,.6),inset 0 0 0 .5px rgba(255,255,255,.22);min-height:320px;display:flex;align-items:center;justify-content:center;}
+.demoframe>div{width:100%;}
+.demo-hint{position:absolute;top:10px;right:14px;font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9fc4ec;background:rgba(9,26,48,.55);backdrop-filter:blur(8px);border-radius:980px;padding:4px 11px;pointer-events:none;z-index:3;}
+.demo-load{display:flex;flex-direction:column;align-items:center;gap:10px;color:#9fc4ec;font-size:13px;padding:40px 0;}
 
-.nuggets{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:34px 0 0;}
-.nugget{border-radius:16px;padding:20px 14px;text-align:center;backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 0 0 .5px rgba(255,255,255,.4);}
-.nugget .nn{font-size:22px;font-weight:800;letter-spacing:-.01em;}
-.nugget .nc{font-size:12.5px;font-weight:700;margin-top:4px;opacity:.85;}
-.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin:24px auto 0;max-width:480px;}
-.stat{text-align:center;padding:22px 12px;}
-.stat .n{font-size:46px;font-weight:800;letter-spacing:-.03em;color:var(--navy);line-height:1;}
+/* ── Stats strip ── */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:52px auto 0;max-width:720px;}
+.stat{text-align:center;padding:26px 12px;border-radius:18px;background:rgba(255,255,255,.5);backdrop-filter:blur(24px) saturate(190%);box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.4),0 8px 22px -14px rgba(0,0,0,.16);}
+.stat .n{font-size:44px;font-weight:800;letter-spacing:-.03em;color:var(--navy);line-height:1;font-variant-numeric:tabular-nums;}
 .stat .l{font-size:14px;color:var(--mut);margin-top:10px;font-weight:500;}
 
-.contactw{max-width:720px;margin:0 auto;text-align:center;}
+.mission{text-align:center;}
+.mtext{font-size:27px;line-height:1.5;font-weight:400;color:#33425e;max-width:820px;margin:0 auto;letter-spacing:-.015em;text-align:center;}
+.em{font-family:var(--serif);font-style:normal;font-weight:500;font-size:1.14em;background:linear-gradient(100deg,var(--navy2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent;}
+.vision-wrap{max-width:920px;margin:0 auto;}
+.vision-tag{font-size:34px;font-weight:800;letter-spacing:-.03em;color:var(--navy);text-align:center;margin-bottom:26px;}
+
+/* ── Contact quotes ── */
+.quotes{display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:880px;margin:0 auto 44px;}
+.quote{text-align:left;background:rgba(255,255,255,.55);backdrop-filter:blur(26px) saturate(190%);-webkit-backdrop-filter:blur(26px) saturate(190%);border-radius:18px;padding:26px 26px 22px;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.4),0 12px 30px -16px rgba(0,0,0,.22);}
+.quote p{font-family:var(--serif);font-size:20px;line-height:1.45;color:var(--navy);letter-spacing:-.01em;}
+.quote .who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mut);font-weight:700;margin-top:14px;}
+.contactw{max-width:760px;margin:0 auto;text-align:center;}
+
 .al-landing footer{padding:52px 0 44px;}
 .foot{display:flex;justify-content:space-between;align-items:flex-start;gap:40px;flex-wrap:wrap;}
 .foot .tag{font-size:14px;color:var(--mut);margin-top:12px;max-width:32ch;line-height:1.5;}
-.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:20px;letter-spacing:-.03em;color:var(--navy);}
-.brand .mark{width:26px;height:26px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;}
+.brand{display:flex;align-items:center;gap:7px;font-weight:800;font-size:20px;letter-spacing:-.03em;color:var(--navy);}
 .foot-links{display:flex;gap:56px;flex-wrap:wrap;}
 .foot-col h5{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--navy);margin-bottom:12px;}
 .foot-col a{display:block;font-size:14.5px;color:var(--mut);margin-bottom:9px;cursor:pointer;transition:color .15s;}
 .foot-col a:hover{color:var(--accent);}
+.foot-col .dead{display:block;font-size:14.5px;color:var(--mut);margin-bottom:9px;opacity:.6;cursor:default;}
 .foot-base{margin-top:40px;padding-top:22px;border-top:.5px solid rgba(60,60,67,.14);display:flex;justify-content:space-between;font-size:13px;color:var(--mut);flex-wrap:wrap;gap:10px;}
 
 .overlay{position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;background:rgba(17,40,66,.34);backdrop-filter:blur(6px);padding:24px;}
@@ -157,30 +168,76 @@ const CSS = `
 .modal .close{margin-top:18px;border:0;background:none;cursor:pointer;font:inherit;font-size:13px;font-weight:600;color:var(--mut);}
 .modal .close:hover{color:var(--navy);}
 
+.spin{animation:al-spin 1s linear infinite;}
+@keyframes al-spin{to{transform:rotate(360deg);}}
+
 @media(max-width:900px){
-  .hero h1{font-size:44px;} .hero .sub{font-size:22px;} .sec-h{font-size:32px;} .mtext{font-size:22px;} .vision-tag{font-size:26px;}
+  .hero h1{font-size:42px;} .sec-h{font-size:32px;} .mtext{font-size:22px;} .vision-tag{font-size:26px;}
   .frow,.frow.flip{grid-template-columns:1fr;gap:22px;} .frow.flip .ftext{order:1;} .frow.flip .fshot{order:2;}
-  .stats,.nuggets{grid-template-columns:repeat(2,1fr);} .tb-sport{display:none;} .menupill{max-width:none;}
+  .stats{grid-template-columns:1fr;max-width:340px;} .quotes{grid-template-columns:1fr;}
+  .hero .sub2{font-size:16.5px;}
 }
 `;
 
+/* Feature rows. demo:"globe"|"web" renders the live interactive component
+   instead of a screenshot/GIF; gif:true marks a slot awaiting a real GIF
+   (falls back to the current PNG screenshot as the placeholder). */
 const HOSTS = [
-  { n: 1, title: "AI results parsing", pain: "retyping every PDF by hand", value: "PDF in, results out.", desc: "Drop a competition PDF, photo, or results link into Import. Claude AI reads places, classes, and sail numbers, then you review and publish. The PDF stays the single source of truth.", img: "/landing/host-1.png", Icon: Upload },
-  { n: 2, title: "One standardized results database", pain: "results scattered across formats and dead pages", value: "Every result, one format.", desc: "All your events in a single clean, standardized database that is searchable, consistent, and permanent. No more PDFs buried on a club website nobody can find.", img: "/landing/host-2.png", Icon: Database },
-  { n: 3, title: "Standings that build themselves", pain: "maintaining league tables in spreadsheets", value: "Zero admin.", desc: "Season standings and class rankings compute automatically from every event you post. No spreadsheets, no manual re-ranking, always up to date.", img: "/landing/host-3.png", Icon: BarChart3 },
+  { title: "AI results parsing", pain: "retyping every PDF by hand", value: "PDF in, results out.", desc: "Drop a competition PDF, photo, or results link into Import. Claude AI reads places, classes, and sail numbers, then you review and publish. The PDF stays the single source of truth.", img: "/landing/host-1.png", gif: true, Icon: Upload },
+  { title: "One standardized results database", pain: "results scattered across formats and dead pages", value: "Every result, one format.", desc: "All your events in a single clean, standardized database that is searchable, consistent, and permanent. No more PDFs buried on a club website nobody can find.", img: "/landing/host-2.png", gif: true, Icon: Database },
+  { title: "Rankings that build themselves", pain: "maintaining league tables in spreadsheets", value: "Zero admin.", desc: "Season standings and class rankings compute automatically from every event you post — pick which competitions count and watch the ranking update. No spreadsheets, no manual re-ranking.", img: "/landing/host-3.png", gif: true, Icon: BarChart3 },
 ];
 const ATHLETES = [
-  { n: 1, title: "Your career, mapped", pain: "no way to show where you've competed", value: "The globe.", desc: "An interactive globe of every venue and country you've raced. Your international footprint at a glance, the moment someone opens your profile.", img: "/landing/athlete-1.png", Icon: Globe2 },
-  { n: 2, title: "See who you've raced", pain: "your competitive network is invisible", value: "The web.", desc: "A living force-directed web of the athletes you've competed against most. Your rivals, mapped by shared competitions and colour-coded by class.", img: "/landing/athlete-2.png", Icon: Share2 },
-  { n: 3, title: "Every result since day one", pain: "early results forgotten and lost", value: "Nothing lost.", desc: "Your record reaches back to your very first competition. The whole arc of your career in one place, growing automatically every time a host posts a result.", img: "/landing/athlete-3.png", Icon: Clock },
+  { title: "Your career, mapped", pain: "no way to show where you've competed", value: "The globe.", desc: "An interactive globe of every venue and country you've raced. Your international footprint at a glance, the moment someone opens your profile. Go on — drag it.", demo: "globe", Icon: Globe2 },
+  { title: "See who you've raced", pain: "your competitive network is invisible", value: "The web.", desc: "A living force-directed web of the athletes you've competed against most. Your rivals, mapped by shared competitions and colour-coded by class. Drag the nodes around.", demo: "web", Icon: Share2 },
+  { title: "Every result since day one", pain: "early results forgotten and lost", value: "Nothing lost.", desc: "Your record reaches back to your very first competition. The whole arc of your career in one place, growing automatically every time a host posts a result.", img: "/landing/athlete-3.png", gif: true, Icon: Clock },
 ];
 const SPONSORS = [
-  { n: 1, title: "AI that scouts for you", pain: "too many athletes to track by hand", value: "Never miss a rising star.", desc: "AI summaries and signals across every profile surface the best emerging athletes automatically. Sponsor-lens overviews judge each result by the level of the field.", img: "/landing/sponsor-1.png", Icon: Sparkles },
-  { n: 2, title: "100% verified. Zero fakes.", pain: "fake accounts and inflated claims", value: "Vetted at the source.", desc: "Every result is vetted by the host that ran the event. No self-reported records, no fake athlete accounts, just verified results traceable to the original PDF.", img: "/landing/sponsor-2.png", Icon: ShieldCheck },
-  { n: 3, title: "Rank by results, not hype", pain: "hard to compare athletes objectively", value: "Level-adjusted rankings.", desc: "Rank athletes by results weighted for the strength of the field. A mid-fleet finish at a World Championship outranks a win at a club race. Find the best, fast.", img: "/landing/sponsor-3.png", Icon: Trophy },
+  { title: "AI that scouts for you", pain: "too many athletes to track by hand", value: "Never miss a rising star.", desc: "AI summaries and signals across every profile surface the best emerging athletes automatically. Sponsor-lens overviews judge each result by the level of the field.", img: "/landing/sponsor-1.png", gif: true, Icon: Sparkles },
+  { title: "100% verified. Zero fakes.", pain: "fake accounts and inflated claims", value: "Vetted at the source.", desc: "Every result is vetted by the host that ran the event. No self-reported records, no fake athlete accounts, just verified results traceable to the original PDF.", img: "/landing/sponsor-2.png", gif: true, Icon: ShieldCheck },
+  { title: "Ranked, not just results", pain: "hard to compare athletes objectively", value: "Level-adjusted rankings.", desc: "Rank athletes by results weighted for the strength of the field. Add or remove the competitions that count and watch relative positions change. Find the best, fast.", img: "/landing/sponsor-3.png", gif: true, Icon: Trophy },
 ];
 
 const EMAIL = "casey@athlink.win";
+const DEMO_ATHLETE = "Casey Law";
+
+/* ── Supabase (anon, read-only) — live stats + hero search suggestions ── */
+const SB = import.meta.env.VITE_SUPABASE_URL;
+const SK = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const sbHeaders = SB && SK ? { apikey: SK, Authorization: `Bearer ${SK}` } : null;
+async function sbRows(path) {
+  if (!sbHeaders) return null;
+  try {
+    const r = await fetch(`${SB}/rest/v1/${path}`, { headers: sbHeaders });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+async function sbCount(table) {
+  if (!sbHeaders) return null;
+  try {
+    const r = await fetch(`${SB}/rest/v1/${table}?select=id`, {
+      method: "HEAD", headers: { ...sbHeaders, Prefer: "count=exact", Range: "0-0" },
+    });
+    const cr = r.headers.get("content-range");
+    const n = cr ? parseInt(cr.split("/")[1], 10) : NaN;
+    return Number.isFinite(n) ? n : null;
+  } catch { return null; }
+}
+/* Events the demo athlete sailed (2-step: entry rows → events with ALL entries,
+   which the web needs to find co-competitors). Capped, cached per session. */
+async function fetchAthleteEvents(name) {
+  const q = encodeURIComponent(`*${name}*`);
+  const rows = await sbRows(`entries?select=event_id&or=(helm_name.ilike.${q},crew_name.ilike.${q})`);
+  if (!rows || !rows.length) return [];
+  const ids = [...new Set(rows.map((r) => r.event_id).filter(Boolean))].slice(0, 40);
+  if (!ids.length) return [];
+  const evs = await sbRows(`events?select=*,entries(*)&id=in.(${ids.join(",")})`);
+  return Array.isArray(evs) ? evs : [];
+}
+
+/* SPA navigation into a sport app (same event contract as Shell.jsx). */
+const goPath = (path) => { window.history.pushState(null, "", path); window.dispatchEvent(new Event("locationchange")); window.scrollTo(0, 0); };
 
 function useLiquid(ref, { scoped, count, alpha, palette }) {
   useEffect(() => {
@@ -248,41 +305,131 @@ function useLiquid(ref, { scoped, count, alpha, palette }) {
   }, []);
 }
 
-function FeatureRow({ f, flip }) {
+/* Keeps a demo crash from killing the whole landing page. */
+class DemoBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { err: false }; }
+  static getDerivedStateFromError() { return { err: true }; }
+  componentDidCatch(e) { console.error("Landing demo error:", e); }
+  render() {
+    if (this.state.err) return <div className="demo-load">Couldn't load the live demo.</div>;
+    return this.props.children;
+  }
+}
+
+/* Lazy-loads the sailing module + the demo athlete's events the first time the
+   Athletes tab opens; cached for the rest of the session. */
+function useSailingDemo(active) {
+  const [demo, setDemo] = useState(null);
+  useEffect(() => {
+    if (!active || demo) return;
+    let dead = false;
+    (async () => {
+      try {
+        const [mod, rows] = await Promise.all([
+          import("@athlink/sport-sailing"),
+          fetchAthleteEvents(DEMO_ATHLETE),
+        ]);
+        if (dead) return;
+        const events = rows.map(mod.dbToApp);
+        const counts = {};
+        events.forEach((ev) => { const iso = mod.IOC_ISO[ev.country]; if (iso) counts[iso] = (counts[iso] || 0) + 1; });
+        setDemo(events.length ? { mod, events, counts } : { err: true });
+      } catch (e) { console.error("landing demo load", e); if (!dead) setDemo({ err: true }); }
+    })();
+    return () => { dead = true; };
+  }, [active, demo]);
+  return demo;
+}
+
+function DemoPane({ kind, demo }) {
+  if (!demo) return (
+    <div className="demoframe"><div className="demo-load"><Loader2 className="spin" size={20} /><span>Loading live demo…</span></div></div>
+  );
+  if (demo.err) return (
+    <div className="demoframe"><div className="demo-load">Couldn't load the live demo.</div></div>
+  );
+  const { mod, events, counts } = demo;
+  const Globe = mod.SailingGlobe, Web = mod.AthleteWeb;
+  return (
+    <div className="demoframe">
+      <span className="demo-hint">Live — try it</span>
+      <DemoBoundary>
+        {kind === "globe"
+          ? <Globe countryData={counts} height={320} dark bare />
+          : <Web name={DEMO_ATHLETE} events={events} height={320} dark />}
+      </DemoBoundary>
+    </div>
+  );
+}
+
+function FeatureRow({ f, flip, demo }) {
   const [ok, setOk] = useState(true);
   const Icon = f.Icon;
   return (
     <div className={"frow" + (flip ? " flip" : "")}>
       <div className="ftext">
-        <span className="fnum">{f.n}</span>
         <h3>{f.title}</h3>
         <span className="pain"><b>Solves:</b>&nbsp;{f.pain}</span>
         <div className="value">{f.value}</div>
         <p>{f.desc}</p>
       </div>
       <div className="fshot">
-        <div className="shot">
-          <div className="chrome">
-            <i style={{ background: "#ff5f57" }} /><i style={{ background: "#febc2e" }} /><i style={{ background: "#28c840" }} />
-            <span className="url" />
-          </div>
-          {ok
-            ? <img src={f.img} alt={f.title} onError={() => setOk(false)} />
-            : <div className="ph"><Icon className="cam" size={30} strokeWidth={1.6} /><div className="cap">{f.title}</div></div>}
-        </div>
+        {f.demo
+          ? <DemoPane kind={f.demo} demo={demo} />
+          : (
+            <div className="shot">
+              <div className="chrome">
+                <i style={{ background: "#ff5f57" }} /><i style={{ background: "#febc2e" }} /><i style={{ background: "#28c840" }} />
+                <span className="url" />
+              </div>
+              {ok && f.img
+                ? <img src={f.img} alt={f.title} onError={() => setOk(false)} />
+                : <div className="ph"><Icon className="cam" size={30} strokeWidth={1.6} /><div className="cap">{f.title}</div></div>}
+            </div>
+          )}
       </div>
     </div>
   );
 }
 
+/* ── Hero search: debounced anon lookups across athletes, hosts, competitions ── */
+function useHeroSearch(q) {
+  const [res, setRes] = useState(null); // null = idle, [] = no hits
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 2 || !sbHeaders) { setRes(null); return; }
+    let dead = false;
+    const t = setTimeout(async () => {
+      const enc = encodeURIComponent(`*${term}*`);
+      const [aths, hosts, evs] = await Promise.all([
+        sbRows(`athlete_usernames?select=username,display_name&or=(display_name.ilike.${enc},username.ilike.${enc})&limit=5`),
+        sbRows(`hosts?select=id,name,slug&name=ilike.${enc}&limit=3`),
+        sbRows(`events?select=id,name,date&name=ilike.${enc}&limit=3`),
+      ]);
+      if (dead) return;
+      const out = [];
+      (aths || []).forEach((a) => out.push({ type: "athlete", Icon: User, label: a.display_name || a.username, path: `/${a.username}` }));
+      (hosts || []).forEach((h) => out.push({ type: "host", Icon: Landmark, label: h.name, path: `/${h.slug || h.id}` }));
+      (evs || []).forEach((e) => out.push({ type: "competition", Icon: Flag, label: e.name, sub: e.date || "", path: `/event/${e.id}` }));
+      setRes(out.slice(0, 9));
+    }, 260);
+    return () => { dead = true; clearTimeout(t); };
+  }, [q]);
+  return res;
+}
+
 export default function Landing({ sports = [] }) {
   const [tab, setTab] = useState("hosts");
-  const [menuOpen, setMenuOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [navHidden, setNavHidden] = useState(false);
+  const [q, setQ] = useState("");
+  const [searchFocus, setSearchFocus] = useState(false);
+  const [stats, setStats] = useState({ hosts: 11, events: 55, athletes: 2246 }); // live-count fallbacks
   const bgRef = useRef(null);
   const heroRef = useRef(null);
+  const results = useHeroSearch(q);
+  const demo = useSailingDemo(tab === "athletes");
 
   useLiquid(bgRef, { scoped: false, count: 13, alpha: 0.42, palette: [[36, 58, 86], [44, 74, 110], [30, 50, 78], [52, 86, 128], [38, 64, 96], [46, 78, 118]] });
   useLiquid(heroRef, { scoped: true, count: 11, alpha: 0.5, palette: [[31, 78, 128], [40, 92, 150], [23, 58, 98], [54, 120, 190], [28, 70, 120], [46, 104, 168]] });
@@ -294,8 +441,16 @@ export default function Landing({ sports = [] }) {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  // Live platform stats (anon count queries; silently keeps fallbacks offline).
+  useEffect(() => {
+    (async () => {
+      const [h, e, a] = await Promise.all([sbCount("hosts"), sbCount("events"), sbCount("athlete_usernames")]);
+      setStats((s) => ({ hosts: h ?? s.hosts, events: e ?? s.events, athletes: a ?? s.athletes }));
+    })();
+  }, []);
+
   const toTop = () => window.scrollTo({ top: 0, behavior: "smooth" });
-  const openContact = (e) => { if (e) e.preventDefault(); setMenuOpen(false); setContactOpen(true); };
+  const openContact = (e) => { if (e) e.preventDefault(); setContactOpen(true); };
   const copyEmail = () => {
     const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1600); };
     const legacy = () => {
@@ -312,33 +467,40 @@ export default function Landing({ sports = [] }) {
   };
 
   const rows = { hosts: HOSTS, athletes: ATHLETES, sponsors: SPONSORS }[tab];
-  const goSailing = () => { window.history.pushState(null, "", "/sailing"); window.dispatchEvent(new Event("locationchange")); };
+  const goSailing = () => goPath("/sailing");
+  const onSearchKey = (e) => {
+    if (e.key === "Escape") { setQ(""); e.target.blur(); }
+    if (e.key === "Enter") { if (results && results.length) goPath(results[0].path); else goSailing(); }
+  };
+  const belt = [
+    { img: "/partners/rhkyc.png", name: "Royal Hong Kong Yacht Club" },
+    { img: "/partners/hksf.png", name: "Hong Kong Sailing Federation" },
+  ];
+  const beltRow = [...belt, ...belt, ...belt]; // one half of the loop
 
   return (
     <div className="al-landing">
       <style>{CSS}</style>
       <canvas ref={bgRef} className="al-liquid" aria-hidden="true" />
 
-      {/* TOP BAR */}
+      {/* TOP BAR — same pill grammar as the sport homes */}
       <div className={"topbar2" + (navHidden ? " hidden" : "")}>
         <div className="tb-brand" title="Back to top" onClick={toTop}>
           <img className="tb-mark" src="/brand/icon-app-circle.png" alt="" aria-hidden="true" />
           <span className="tb-word">AthLink</span>
         </div>
-        <div className={"menu-wrap" + (menuOpen ? " open" : "")}>
-          <button className="mp-burger" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu">
-            {menuOpen ? <X size={17} /> : <Menu size={17} />}
-          </button>
-          <div className="menu-drop">
-            <a className="mp-link" href="#mission" onClick={() => setMenuOpen(false)}>Mission</a>
-            <a className="mp-link" href="#ecosystem" onClick={() => setMenuOpen(false)}>Who it's for</a>
-            <a className="mp-link" href="#classes" onClick={() => setMenuOpen(false)}>Classes</a>
-            <a className="mp-link" onClick={openContact}>Contact</a>
-          </div>
+        <div className="tb-center">
+          <nav className="tb-nav">
+            <a className="tb-link" href="#trusted">Trusted by</a>
+            <a className="tb-link" href="#ecosystem">Who it's for</a>
+            <a className="tb-link" href="#mission">Mission</a>
+            <a className="tb-link" href="#contact" onClick={openContact}>Contact</a>
+          </nav>
         </div>
+        <div className="tb-spacer" />
       </div>
 
-      {/* HERO */}
+      {/* HERO — search-first */}
       <header className="hero">
         <canvas ref={heroRef} className="hero-liquid" aria-hidden="true" />
         <div className="hero-veil" />
@@ -347,40 +509,58 @@ export default function Landing({ sports = [] }) {
             <img className="hero-mark" src="/brand/icon-white.png" alt="" aria-hidden="true" />
             <span className="hero-word">AthLink</span>
           </div>
-          <h1>The ultimate <span className="g">datacentre</span> for sports results</h1>
-          <p className="sub">Recording legacy of the future.</p>
-          <div className="portals">
-            <div className="pcard" onClick={goSailing}>
-              <div className="ptop"><span className="pname">Sailing</span><span className="pill-live">Live</span></div>
-              <div className="pstats"><div><b>47</b><span>competitions</span></div><div><b>1,775</b><span>athletes</span></div></div>
+          <h1>The ultimate <span className="g">data centre</span> for sports results</h1>
+          <div className="hsearch">
+            <div className="hs-bar">
+              <Search size={19} style={{ flex: "none", opacity: .75 }} />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onFocus={() => setSearchFocus(true)}
+                onBlur={() => setTimeout(() => setSearchFocus(false), 180)}
+                onKeyDown={onSearchKey}
+                placeholder="Search any athlete, club, country or competition…"
+                aria-label="Search AthLink"
+              />
             </div>
-            <div className="pcard soon">
-              <div className="ptop"><span className="pname">Golf</span><span className="pill-soon">Soon</span></div>
-              <div className="pstats"><div><b>&mdash;</b><span>competitions</span></div><div><b>&mdash;</b><span>athletes</span></div></div>
-            </div>
+            {searchFocus && results && (
+              <div className="hs-drop">
+                {results.length === 0 && <div className="hs-empty">No matches yet — try an athlete, club or competition name.</div>}
+                {results.map((r, i) => (
+                  <div className="hs-row" key={i} onMouseDown={(e) => { e.preventDefault(); goPath(r.path); }}>
+                    <span className="hs-type"><r.Icon size={13} /></span>
+                    {r.label}
+                    {r.sub && <span className="sub">{r.sub}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="sub2">find any athlete or results — every sailing competition, every profile — one search.</p>
+          </div>
+          <div className="hero-portals">
+            <button className="pbtn" onClick={goSailing}>Sailing<span className="pill-live">Live</span><ArrowRight size={16} /></button>
+            <button className="pbtn soon" disabled aria-disabled="true">Golf<span className="pill-soon">Coming soon</span></button>
           </div>
         </div>
       </header>
 
-      {/* MISSION */}
-      <section className="mission" id="mission">
+      {/* TRUSTED BY THE BEST */}
+      <section className="beltsec center" id="trusted">
         <div className="wrap">
-          <div className="seclabel">Our mission</div>
-          <p className="mtext">At AthLink, our mission is to become the <span className="em">ultimate data centre</span> for global sport: verifying every result, empowering every athlete, and giving sponsors the trusted foundation they need to back the next generation of champions.</p>
+          <div className="seclabel">Trusted by the best</div>
+          <h2 className="sec-h center">The organizations that run the sport</h2>
+        </div>
+        <div className="beltwrap" aria-hidden="true">
+          <div className="belt">
+            {[...beltRow, ...beltRow].map((p, i) => (
+              <span className="pchip" key={i}><img src={p.img} alt="" /><span>{p.name}</span></span>
+            ))}
+          </div>
         </div>
       </section>
 
-      {/* VISION */}
-      <section style={{ paddingTop: 0 }}>
-        <div className="wrap vision-wrap">
-          <div className="seclabel center">Our vision</div>
-          <div className="vision-tag"><span className="grad">LinkedIn</span> for athletes and sponsors</div>
-          <p className="mtext">Revolutionizing sports sponsorship by <span className="em">connecting athletes with brands through AI-driven matchmaking</span>, empowering athletes to reach their potential and enabling companies to find authentic ambassadors.</p>
-        </div>
-      </section>
-
-      {/* ECOSYSTEM */}
-      <section id="ecosystem">
+      {/* ECOSYSTEM / FEATURES */}
+      <section id="ecosystem" style={{ paddingTop: 40 }}>
         <div className="wrap center">
           <div className="seclabel">Built by elite athletes</div>
           <h2 className="sec-h center">Making data actually interesting</h2>
@@ -391,38 +571,52 @@ export default function Landing({ sports = [] }) {
           </div>
         </div>
         <div className="wrap panel-fade" key={tab}>
-          {rows.map((f, i) => <FeatureRow key={f.title} f={f} flip={i % 2 === 1} />)}
+          {rows.map((f, i) => <FeatureRow key={f.title} f={f} flip={i % 2 === 1} demo={demo} />)}
         </div>
       </section>
 
-      {/* TRACTION / CLASSES */}
-      <section className="center" id="classes">
+      {/* MISSION */}
+      <section className="mission" id="mission">
         <div className="wrap">
-          <div className="seclabel">100% real data</div>
-          <h2 className="sec-h center">Every profile is verified by top organizations</h2>
-          <p className="sec-lead center">Currently partnering with the Hong Kong Sailing Federation, the organization that produces Olympic-track sailors.</p>
-          <div className="nuggets">
-            <div className="nugget" style={{ background: "rgba(232,72,85,.13)", color: "var(--c29)" }}><div className="nn">29er</div><div className="nc">14 competitions</div></div>
-            <div className="nugget" style={{ background: "rgba(46,120,200,.13)", color: "var(--cilca)" }}><div className="nn">ILCA</div><div className="nc">12 competitions</div></div>
-            <div className="nugget" style={{ background: "rgba(61,61,61,.11)", color: "var(--copt)" }}><div className="nn">OPTI</div><div className="nc">12 competitions</div></div>
-            <div className="nugget" style={{ background: "rgba(95,175,78,.14)", color: "var(--c49)" }}><div className="nn">49er</div><div className="nc">9 competitions</div></div>
-          </div>
+          <div className="seclabel">Our mission</div>
+          <p className="mtext">At AthLink, our mission is to become the <span className="em">ultimate data centre</span> for global sport: verifying every result, empowering every athlete, and giving sponsors the trusted foundation they need to back the next generation of champions.</p>
+        </div>
+      </section>
+
+      {/* VISION + LIVE STATS */}
+      <section style={{ paddingTop: 0 }}>
+        <div className="wrap vision-wrap">
+          <div className="seclabel center">Our vision</div>
+          <div className="vision-tag"><span className="grad">LinkedIn</span> for athletes and sponsors</div>
+          <p className="mtext">Revolutionizing sports sponsorship by <span className="em">connecting athletes with brands through AI-driven matchmaking</span>, empowering athletes to reach their potential and enabling companies to find authentic ambassadors.</p>
           <div className="stats">
-            <div className="stat"><div className="n">47</div><div className="l">Competitions parsed</div></div>
-            <div className="stat"><div className="n">1,775</div><div className="l">Athlete profiles built</div></div>
+            <div className="stat"><div className="n">{stats.hosts.toLocaleString()}</div><div className="l">Hosts &amp; associations</div></div>
+            <div className="stat"><div className="n">{stats.events.toLocaleString()}</div><div className="l">Competitions on the platform</div></div>
+            <div className="stat"><div className="n">{stats.athletes.toLocaleString()}</div><div className="l">Athlete profiles built</div></div>
           </div>
         </div>
       </section>
 
       {/* CONTACT */}
-      <section id="contact">
-        <div className="wrap contactw">
-          <div className="seclabel center">Get in touch</div>
-          <h2 className="sec-h center">Put your results on AthLink</h2>
-          <p className="sec-lead center">Run a class, a club, or a federation? Get your competitions into the database and your athletes into the network.</p>
-          <div className="portals" style={{ marginTop: 34 }}>
-            <button className="btn cta" onClick={openContact}>Contact us</button>
-            <button className="btn ghost" onClick={goSailing}>Enter a portal</button>
+      <section id="contact" style={{ paddingTop: 24 }}>
+        <div className="wrap">
+          <div className="quotes">
+            <div className="quote">
+              <p>"This has saved me so many hours of organising files."</p>
+              <div className="who"><Landmark size={14} />Hong Kong Sailing Federation</div>
+            </div>
+            <div className="quote">
+              <p>"This is so crucial. I've never had a platform that housed all of my results for me."</p>
+              <div className="who"><User size={14} />Competing athlete</div>
+            </div>
+          </div>
+          <div className="contactw">
+            <h2 className="sec-h center">Put your results on AthLink</h2>
+            <p className="sec-lead center">Run a class, club, or federation? Get your competitions into the database and your athletes into the network — let us help you.</p>
+            <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 34, flexWrap: "wrap" }}>
+              <button className="btn cta" onClick={openContact}>Contact us</button>
+              <button className="btn ghost" onClick={() => goPath("/sailing?signup=1")}>Create a profile</button>
+            </div>
           </div>
         </div>
       </section>
@@ -433,12 +627,12 @@ export default function Landing({ sports = [] }) {
           <div className="foot">
             <div>
               <div className="brand"><img className="foot-mark" src="/brand/icon-app.png" alt="" aria-hidden="true" />AthLink</div>
-              <p className="tag">The ultimate datacentre for sports results. LinkedIn for athletes and sponsors.</p>
+              <p className="tag">The ultimate data centre for sports results. LinkedIn for athletes and sponsors.</p>
             </div>
             <div className="foot-links">
-              <div className="foot-col"><h5>Portals</h5><a onClick={goSailing}>Sailing</a><a>Golf</a></div>
-              <div className="foot-col"><h5>Platform</h5><a href="#ecosystem">Who it's for</a><a href="#classes">Classes</a></div>
-              <div className="foot-col"><h5>Company</h5><a>About</a><a onClick={openContact}>Contact</a></div>
+              <div className="foot-col"><h5>Portals</h5><a onClick={goSailing}>Sailing</a><span className="dead">Golf — coming soon</span></div>
+              <div className="foot-col"><h5>Platform</h5><a href="#trusted">Trusted by</a><a href="#ecosystem">Who it's for</a></div>
+              <div className="foot-col"><h5>Company</h5><a href="#mission">Mission</a><a onClick={openContact}>Contact</a></div>
             </div>
           </div>
           <div className="foot-base"><span>© 2026 AthLink</span><span>athlink.win</span></div>
