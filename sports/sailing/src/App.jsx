@@ -204,6 +204,18 @@ function formatDate(str){
   if(m){const d=parseInt(m[1]),mo=parseInt(m[2])-1,y=m[3];if(mo>=0&&mo<=11) return `${d} ${MON[mo]} ${y}`;}
   return str;
 }
+// Sortable YYYYMMDD key from a dd/mm/yyyy-ish date string. Zero-pads 1-digit
+// day/month (naive split-reverse-join mis-sorts "5/6/2024" vs "20/11/2024") and
+// tolerates ranges like "12-15/06/2024" (uses the last complete d/m/yyyy found).
+// Returns "" for missing/unparseable dates — callers must treat "" as "no date",
+// NOT as "most recent" (the old code let the "—" placeholder outrank all digits).
+function dateKey(str){
+  const s=String(str||"");
+  const re=/(\d{1,2})\/(\d{1,2})\/(\d{4})/g;
+  let m,last=null;
+  while((m=re.exec(s))) last=m;
+  return last?last[3]+last[2].padStart(2,"0")+last[1].padStart(2,"0"):"";
+}
 
 /* ── static data ──────────────────────────────────────────────────────── */
 const META={
@@ -362,11 +374,13 @@ const stateToPath=(portal,view)=>{
   if(v.name==="profile") return "/"+usernameForName(v.id||"");
   if(v.name==="event")   return "/competition/"+encodeURIComponent(v.id||"");
   if(v.name==="competitions") return v.cls?"/class/"+encodeURIComponent(v.cls):"/competitions";
+  if(v.name==="hosts")   return "/hosts";
   if(v.name==="ranking") return "/rankings";
   const isClassPortal=portal&&String(portal).startsWith("class:");
   if(v.name==="athletes"){
     if(portal&&!isClassPortal) return "/"+hostSlug(portal)+"/athletes";
     if(isClassPortal) return "/class/"+encodeURIComponent(String(portal).slice(6))+"/athletes";
+    if(v.cls) return "/class/"+encodeURIComponent(v.cls)+"/athletes";
     return "/athletes";
   }
   // events / portals home
@@ -380,13 +394,16 @@ const pathToState=(pathname,athleteNames)=>{
   const s0=(seg[0]||"").toLowerCase();
   if(seg.length===0||s0==="sailing") return {portal:null,view:{name:"portals"}};
   if(s0==="athletes") return {portal:null,view:{name:"athletes"}};
+  if(s0==="hosts")    return {portal:null,view:{name:"hosts"}};
   if(s0==="competitions") return {portal:null,view:{name:"competitions"}};
   if(s0==="ranking"||s0==="rankings")  return {portal:null,view:{name:"ranking"}};
   // "/competition/<id>" is canonical; "/event/<id>" kept as an alias so old shared links never break.
   if(s0==="event"||s0==="competition") return {portal:null,view:{name:"event",id:seg[1]}};
   if(s0==="class"){
-    // Class is a filter, not a door: /class/<id> = Competitions filtered to that class.
-    return {portal:null,view:{name:"competitions",cls:seg[1]||""}};
+    // Class is a filter, not a door: /class/<id> = Competitions filtered to that
+    // class; /class/<id>/athletes = the global Athletes page under the same lens.
+    const isAth=(seg[2]||"").toLowerCase()==="athletes";
+    return {portal:null,view:{name:isAth?"athletes":"competitions",cls:seg[1]||""}};
   }
   const host=hostBySlug(seg[0]);
   if(host){
@@ -956,8 +973,7 @@ function aggregate(name,evList){
   }
   // Sort newest-first via a robust YYYYMMDD key (dates are DD/MM/YYYY; new Date()
   // misreads that, which previously left history[0] = wrong "most recent").
-  const _dk=ev=>(ev.date||"").split("/").reverse().join("");
-  history.sort((a,b)=>_dk(b.ev).localeCompare(_dk(a.ev)));
+  history.sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date)));
   return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
 }
 
@@ -973,7 +989,7 @@ function buildAthleteAttrs(evList){
   const m=new Map();
   for(const ev of (evList||[])){
     if(ev.status==="Draft") continue;
-    const dk=(ev.date||"").split("/").reverse().join("");
+    const dk=dateKey(ev.date); // "" = undated; never allowed to claim recency
     for(const e of (ev.entries||[])){
       const gc=genderCatOf(e); // resolves real fields + legacy div
       // helm + crew, each with their own stated gender where derivable
@@ -985,7 +1001,9 @@ function buildAthleteAttrs(evList){
         let o=m.get(k); if(!o){o={gender:{},birthYear:{},recentDK:"",recentCls:null,recentSub:null};m.set(k,o);}
         if(g&&g!=="Mix") o.gender[g]=(o.gender[g]||0)+1;
         if(by) o.birthYear[by]=(o.birthYear[by]||0)+1;
-        if(dk>=o.recentDK){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
+        // Undated events may seed recentCls (better than nothing) but any DATED
+        // event beats them; among dated events the latest date wins.
+        if(dk?dk>=o.recentDK:!o.recentDK&&!o.recentCls){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
       }
     }
   }
@@ -1302,13 +1320,37 @@ async function uploadAthleteMedia(file,name,tok){
 }
 
 /* ── Custom boat classes (custom_classes) ─────────────────────────────────────
-   Persisted mirror of the in-memory CUSTOM_CLASSES registry. Read is public;
-   insert is gated to verified hosts or admins (see migrations/0002). */
+   Persisted mirror of the in-memory CUSTOM_CLASSES registry. Read is public
+   (anon SELECT allowed by RLS) so logged-out viewers still get labels/colours;
+   insert is gated to verified hosts or admins (see migrations/0002).
+   hostRest returns null on ANY failure (RLS, network) without throwing, so
+   callers MUST check for null — a .catch alone never fires. Writes that fail
+   (or happen while signed out, e.g. dev-mode imports) are queued in
+   localStorage and re-tried on the next signed-in load, so a class can no
+   longer be silently lost between sessions. */
 const fetchCustomClasses=(tok)=>hostRest("custom_classes?select=*",{},tok);
 async function insertCustomClass(cc,userId,tok){
   return hostRest("custom_classes",{method:"POST",
     headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
     body:JSON.stringify({id:cc.id,canonical:cc.canonical,short:cc.short,full:cc.full,color:cc.color,created_by:userId})},tok);
+}
+// Write-behind queue for custom classes that couldn't be persisted yet.
+const PENDING_CC_KEY="athlink_pending_custom_classes";
+function readPendingCustomClasses(){
+  try{const a=JSON.parse(localStorage.getItem(PENDING_CC_KEY)||"[]");return Array.isArray(a)?a:[];}catch{return[];}
+}
+function queuePendingCustomClass(cc){
+  try{
+    const q=readPendingCustomClasses().filter(p=>p.canonical!==cc.canonical);
+    q.push({id:cc.id,canonical:cc.canonical,short:cc.short,full:cc.full,color:cc.color});
+    localStorage.setItem(PENDING_CC_KEY,JSON.stringify(q));
+  }catch(e){console.error("queuePendingCustomClass",e);}
+}
+function dropPendingCustomClass(canonical){
+  try{
+    const q=readPendingCustomClasses().filter(p=>p.canonical!==canonical);
+    localStorage.setItem(PENDING_CC_KEY,JSON.stringify(q));
+  }catch(e){console.error("dropPendingCustomClass",e);}
 }
 
 /* ── Event claims (event_claims) ──────────────────────────────────────────────
@@ -1976,12 +2018,18 @@ function WebIcon({size=12}){
 }
 
 /* === AthleteWeb: force-directed "web" of co-competitors ======================
-   Each node is an athlete the focal athlete has raced against. Node size scales
-   with how many competitions they have SHARED with the focal athlete (sqrt
-   scale, the way Obsidian sizes nodes by reference count). Edges connect any two
-   athletes who appeared in the same event (weight = times together). Limited to
-   the top 100 co-competitors. Drag nodes; hover to spotlight a node and its
-   connections; click to pin; double-click to open that athlete's profile.
+   Each node is an athlete the focal athlete has raced against. Rivals are
+   ranked and sized by a Jaccard correlation on a 0–1 scale:
+       corr = shared / (focalTotal + rivalTotal − shared)
+   i.e. shared competitions over the union of both athletes' competition sets.
+   Jaccard (over shared/min) damps one-event wonders — a newcomer whose only 2
+   comps were with the focal isn't a "perfect 1.0" — and damps mega-active
+   athletes who co-appear with everyone by sheer volume. Raw shared count stays
+   on the node for human-readable display. Edges connect any two shown athletes
+   who appeared in the same event (weight = times together). Limited to the
+   top 15 co-competitors. Drag nodes; hover to spotlight a node and its
+   connections; click to pin (sidebar shows shared comps + connections);
+   double-click to open that athlete's profile.
    Self-contained 2D canvas (matches SailingGlobe) + d3-force physics. */
 function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,onSelectionChange,deselectKey=0,enlarged=false}){
   const canvasRef=React.useRef(null);
@@ -1999,6 +2047,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     const focal=canonName(name);
     const disp=new Map();                 // canon -> display name
     const shared=new Map();               // canon -> # events shared with focal
+    const totals=new Map();               // canon -> total events appeared in (for Jaccard union)
     const focalEvents=[];                 // [Set(canon)] events the focal sailed
     const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
     const natCount=new Map();             // canon -> Map(nat -> count)
@@ -2009,16 +2058,22 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
       if(ev.status==="Draft")return;
       const present=new Set();
       (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
+      present.forEach(k=>totals.set(k,(totals.get(k)||0)+1));
       if(!present.has(focal))return;
       focalEvents.push(present);
       present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
     });
-    const top=[...shared.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15);
+    // Jaccard correlation (0–1): shared / union of the two competition sets.
+    const focalTotal=focalEvents.length;
+    const corrOf=(k,sh)=>{const u=focalTotal+(totals.get(k)||sh)-sh;return u>0?sh/u:0;};
+    const top=[...shared.entries()].map(([k,sh])=>[k,sh,corrOf(k,sh)])
+      .sort((a,b)=>b[2]-a[2]||b[1]-a[1]).slice(0,15);   // rank by corr, tie-break raw shared
     const keep=new Set(top.map(([k])=>k)); keep.add(focal);
-    const maxShared=top.length?top[0][1]:1;
+    const maxShared=top.length?Math.max(...top.map(t=>t[1])):1;
+    const maxCorr=top.length?top[0][2]:1;
     // node class = the boat class they shared MOST competitions with the focal in (drives node colour)
-    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOf(natCount.get(focal)),shared:maxShared,focal:true}];
-    top.forEach(([k,c])=>nodes.push({id:k,name:disp.get(k)||k,cls:modeOf(clsCount.get(k)),nat:modeOf(natCount.get(k)),shared:c,focal:false}));
+    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOf(natCount.get(focal)),shared:maxShared,corr:maxCorr||1,focal:true}];
+    top.forEach(([k,c,q])=>nodes.push({id:k,name:disp.get(k)||k,cls:modeOf(clsCount.get(k)),nat:modeOf(natCount.get(k)),shared:c,corr:q,focal:false}));
     const ew=new Map();
     focalEvents.forEach(present=>{
       const arr=[...present].filter(k=>keep.has(k));
@@ -2028,7 +2083,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
       }
     });
     const links=[...ew.entries()].map(([key,w])=>{const p=key.split("|");return{source:p[0],target:p[1],w};});
-    return{nodes,links,maxShared,focal,count:top.length};
+    return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:top.length};
   },[name,events]);
 
   // selected node (lifted to React state so the enlarged sidebar can render it)
@@ -2036,6 +2091,22 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   React.useEffect(()=>{onSelChangeRef.current&&onSelChangeRef.current(selNode);},[selNode]);
   // external "Deselect" (from the popup header) clears the current selection
   React.useEffect(()=>{const st=stateRef.current;st.sel=null;setSelNode(null);st.draw&&st.draw();},[deselectKey]);
+  // select a node programmatically (sidebar "connections" chips)
+  const selectById=(id)=>{
+    const st=stateRef.current;const n=st.byId?.get(id);if(!n)return;
+    st.sel=n;setSelNode({id:n.id,name:n.name,shared:n.shared,cls:n.cls,nat:n.nat});
+    st.draw&&st.draw();
+  };
+  // who the selected athlete is connected to in the visible web (edge weight desc)
+  const selConnections=React.useMemo(()=>{
+    if(!selNode)return [];
+    const byId=new Map(graph.nodes.map(n=>[n.id,n]));
+    return graph.links
+      .filter(l=>l.source===selNode.id||l.target===selNode.id)
+      .map(l=>({n:byId.get(l.source===selNode.id?l.target:l.source),w:l.w}))
+      .filter(x=>x.n)
+      .sort((a,b)=>b.w-a.w);
+  },[selNode,graph]);
   // the competitions the focal + selected athlete both sailed
   const sharedComps=React.useMemo(()=>{
     if(!selNode)return [];
@@ -2063,25 +2134,25 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     const nodes=graph.nodes.map(n=>({...n}));
     const byId=new Map(nodes.map(n=>[n.id,n]));
     const links=graph.links.map(l=>({...l}));
-    st.nodes=nodes;st.links=links;st.byId=byId;st.maxShared=graph.maxShared;st.hover=null;st.sel=null;st.scale=1;st.ox=0;st.oy=0;st.pan=null;
+    st.nodes=nodes;st.links=links;st.byId=byId;st.maxShared=graph.maxShared;st.maxCorr=graph.maxCorr;st.hover=null;st.sel=null;st.scale=1;st.ox=0;st.oy=0;st.pan=null;
     setSelNode(null);
     const focalNode=byId.get(graph.focal);
     if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}
-    // scatter rivals radially: bigger (more-shared) start nearer the focal,
+    // scatter rivals radially: bigger (more-correlated) start nearer the focal,
     // smaller start further out, with random jitter so the layout looks organic.
-    nodes.forEach(n=>{if(n.focal)return;const ratio=(n.shared||1)/(graph.maxShared||1);
+    nodes.forEach(n=>{if(n.focal)return;const ratio=(n.corr||0)/(graph.maxCorr||1);
       const ang=Math.random()*Math.PI*2,dist=(enlarged?144:55)+(1-ratio)*(enlarged?414:104)+(Math.random()-.5)*(enlarged?90:26);
       n.x=st.w/2+Math.cos(ang)*dist;n.y=st.h/2+Math.sin(ang)*dist;});
-    // Sizing is relative to the focal node: the rival with the most shared
-    // competitions is 60% of the focal's size, and everyone else scales linearly
-    // by their shared count vs. that top rival. No rival is ever bigger than focal.
+    // Sizing is relative to the focal node: the MOST-CORRELATED rival (Jaccard)
+    // is 80% of the focal's size, everyone else scales linearly by their
+    // correlation vs. that top rival. No rival is ever bigger than focal.
     const F=enlarged?12.6:7.65;               // focal radius (50% smaller, +20%, then +50%)
     const rad=d=>{if(d.focal)return F;
-      const ratio=(d.shared||1)/(st.maxShared||1);
+      const ratio=(d.corr||0)/(st.maxCorr||1);
       return Math.max(enlarged?3.3:1.95,F*0.8*ratio);};   // top rival = 80% of focal
     st.rad=rad;
     const lerpText=(n,strong,sx,sy)=>{
-      ctx.font=(strong?"700 ":"600 ")+(strong?12:10.5)+"px 'DM Sans',system-ui,sans-serif";
+      ctx.font=(strong?"700 ":"600 ")+(strong?12:10.5)+"px -apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif";
       const t=n.name,tw=ctx.measureText(t).width,x=sx,y=sy-rad(n)*st.scale-6;
       ctx.fillStyle="rgba(8,24,45,.82)";
       const px=6,h=15,bx=x-tw/2-px,by=y-h+3,bw=tw+px*2;
@@ -2136,12 +2207,12 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     st.draw=draw;
     const sim=forceSimulation(nodes)
       .velocityDecay(enlarged?.62:.58)        // higher damping = relaxed, fluid motion (less bounce)
-      // link distance is driven by node size: bigger (more-shared) nodes sit
-      // closer to the focal, smaller ones further out. Focal links hold the
-      // radial structure; rival-rival links stay weak so they don't clump.
+      // link distance is driven by correlation: more-correlated nodes sit
+      // closer to the focal, less-correlated ones further out. Focal links hold
+      // the radial structure; rival-rival links stay weak so they don't clump.
       .force("link",forceLink(links).id(d=>d.id)
         .distance(l=>{const a=l.source,b=l.target,other=a.focal?b:(b.focal?a:null);
-          if(other){const ratio=(other.shared||1)/(st.maxShared||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
+          if(other){const ratio=(other.corr||0)/(st.maxCorr||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
           return enlarged?270:91;})
         .strength(l=>(l.source.focal||l.target.focal)?(enlarged?.5:.45):.04))
       .force("charge",forceManyBody().strength(enlarged?-270:-60).distanceMax(enlarged?1100:390))
@@ -2237,6 +2308,23 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
             {selNode.cls&&(()=>{const ng=nuggetFor(selNode.cls);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
             <span style={{color:"#9fc4ec",fontWeight:800,fontSize:13,fontVariantNumeric:"tabular-nums"}}>{sharedComps.length} shared competition{sharedComps.length===1?"":"s"}</span>
           </div>
+          {selConnections.length>0&&(
+            <div style={{marginTop:11}}>
+              <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:6}}>Connected to</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {selConnections.map(({n,w})=>(
+                  <button key={n.id} onClick={()=>selectById(n.id)} title={`${w} competition${w===1?"":"s"} together — view`}
+                    style={{display:"inline-flex",alignItems:"center",gap:6,border:"1px solid rgba(120,160,210,.3)",
+                      background:"rgba(120,160,210,.12)",color:"#dcecf8",borderRadius:980,padding:"3px 10px",
+                      fontFamily:"inherit",fontSize:11.5,fontWeight:700,cursor:"pointer",lineHeight:1.4}}>
+                    <span style={{width:7,height:7,borderRadius:"50%",flex:"none",
+                      background:n.focal?"#ffcf2e":classColor(n.cls),boxShadow:"0 0 0 1px rgba(255,255,255,.35)"}}/>
+                    {n.name}<span style={{color:"#9fc4ec",fontWeight:800}}>{w}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         {sharedGroups.map(g=>(
           <div key={g.cname}>
@@ -2336,6 +2424,11 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
       if(cur&&cur.length>1)out.push(cur);return out;};
 
     const draw=()=>{
+      // Wrapper may have 0 width on first paint (hidden tab / pre-layout) —
+      // size() bails without setting W/H/baseR/cx/cy, and NaN maths here would
+      // throw in createRadialGradient and take down the whole profile via the
+      // ErrorBoundary. Retry sizing until layout settles instead of crashing.
+      if(!Number.isFinite(baseR)||!(W>0)){size();if(!Number.isFinite(baseR)||!(W>0)){raf=requestAnimationFrame(draw);return;}}
       const D2=drawRef.current;
       const data=D2.data,tinyEntries=D2.tinyEntries,hostIso=D2.hostIso,dark=D2.dark,shadeFor=D2.shadeFor;
       const ocean=dark?'#081a33':'#0e2c50';
@@ -4509,9 +4602,22 @@ export default function AthLinkMVP(){
   // ── Custom boat classes (global, in-memory) ──
   // State mirrors the module-level CUSTOM_CLASSES registry so the UI re-renders.
   const[customClasses,setCustomClasses]=useState(CUSTOM_CLASSES);
+  const[classNote,setClassNote]=useState(null); // {name} — toast when a custom class couldn't be persisted
+  // Persist a custom class to the DB, verifying the write actually landed.
+  // hostRest resolves null on failure (never rejects), so the result must be
+  // checked — the old fire-and-forget .catch silently lost classes. Failures
+  // (and signed-out adds, e.g. dev mode) go to the localStorage queue and are
+  // re-tried on the next signed-in load.
+  const persistCustomClass=async(cc)=>{
+    if(!(auth?.user?.id&&auth?.token)){queuePendingCustomClass(cc);return;}
+    const res=await insertCustomClass(cc,auth.user.id,auth.token); // [] = duplicate (fine), null = failed
+    if(res===null){queuePendingCustomClass(cc);setClassNote({name:cc.short});}
+    else dropPendingCustomClass(cc.canonical);
+  };
   // Add (or reuse) a custom class by name. Dedups on canonical key; returns the
-  // class id so the caller can select it. Persists to custom_classes when the
-  // creator is signed in, so it survives reloads and appears for everyone.
+  // class id so the caller can select it. Persists to custom_classes so it
+  // survives reloads and appears for everyone (queued + retried if it can't be
+  // written right now).
   const addCustomClass=(name)=>{
     const nm=String(name||"").trim();
     if(!nm) return null;
@@ -4523,7 +4629,7 @@ export default function AthLinkMVP(){
     const cc={id:`custom:${canonical}`,short:nm,full:nm,color,canonical};
     CUSTOM_CLASSES=[...CUSTOM_CLASSES,cc];
     setCustomClasses(CUSTOM_CLASSES);
-    if(auth?.user?.id&&auth?.token) insertCustomClass(cc,auth.user.id,auth.token).catch(e=>console.error("persist custom class",e));
+    persistCustomClass(cc);
     return cc.id;
   };
   const[auth,setAuth]=useState(null);
@@ -4769,15 +4875,43 @@ export default function AthLinkMVP(){
   useEffect(()=>{ reloadAthleteProfiles(); },[reloadAthleteProfiles]);
 
   // ── Load persisted custom boat classes (public read; merge into the registry) ──
+  // DB rows are authoritative for their canonical key (they replace any locally
+  // synthesized entry so everyone sees the creator's exact label/colour). Runs
+  // for anon viewers too — custom_classes has public SELECT — so logged-out
+  // pages never show grey nuggets. When signed in, any queued writes that
+  // previously failed (or were made while signed out) are re-tried here.
   useEffect(()=>{
     (async()=>{
       const rows=await fetchCustomClasses(auth?.token);
-      if(!Array.isArray(rows)||!rows.length) return;
-      const have=new Set(CUSTOM_CLASSES.map(c=>c.canonical));
-      const add=rows.filter(r=>r.canonical&&!have.has(r.canonical)).map(r=>({id:r.id,short:r.short,full:r.full||r.short,color:r.color,canonical:r.canonical}));
-      if(add.length){ CUSTOM_CLASSES=[...CUSTOM_CLASSES,...add]; setCustomClasses(CUSTOM_CLASSES); }
+      if(Array.isArray(rows)&&rows.length){
+        const db=new Map(rows.filter(r=>r.canonical).map(r=>[r.canonical,{id:r.id,short:r.short,full:r.full||r.short,color:r.color,canonical:r.canonical}]));
+        CUSTOM_CLASSES=[...db.values(),...CUSTOM_CLASSES.filter(c=>!db.has(c.canonical))];
+        setCustomClasses(CUSTOM_CLASSES);
+        rows.forEach(r=>dropPendingCustomClass(r.canonical)); // already in DB — no retry needed
+      }
+      if(auth?.user?.id&&auth?.token){
+        for(const cc of readPendingCustomClasses()) await persistCustomClass(cc);
+      }
     })();
   },[auth]);
+  // ── Safety net: never show a grey "unrecognized" nugget ──
+  // Any event that references a custom:<slug> id with no registry entry (legacy
+  // rows whose insert was lost before the write-behind queue existed) gets a
+  // synthesized entry — prettified label + palette colour. In-memory only: the
+  // DB write path stays with the real creator flow above.
+  useEffect(()=>{
+    const missing=new Map();
+    events.forEach(ev=>{
+      const id=ev.cls;
+      if(typeof id!=="string"||!id.startsWith("custom:")) return;
+      const canonical=id.slice(7);
+      if(!canonical||missing.has(canonical)||CUSTOM_CLASSES.some(c=>c.canonical===canonical)) return;
+      const color=CUSTOM_CLASS_PALETTE[(CUSTOM_CLASSES.length+missing.size)%CUSTOM_CLASS_PALETTE.length];
+      const nm=prettifyClassSlug(canonical);
+      missing.set(canonical,{id,short:nm,full:nm,color,canonical});
+    });
+    if(missing.size){ CUSTOM_CLASSES=[...CUSTOM_CLASSES,...missing.values()]; setCustomClasses(CUSTOM_CLASSES); }
+  },[events,customClasses]);
   // Extras row for a profile name (or null).
   const athleteProfileOf=(nm)=>athleteProfiles[profileNameKey(nm)]||null;
   // Can the signed-in user edit this profile's extras? Verified owner, or dev.
@@ -4986,6 +5120,7 @@ export default function AthLinkMVP(){
   const[athleteSmart,setAthleteSmart]=useState(null); // {label, fn} parsed NL athlete filter
   const[athleteSmartLoading,setAthleteSmartLoading]=useState(false);
   const[compQ,setCompQ]=useState(""); // filter on the global Competitions page
+  const[hostQ,setHostQ]=useState(""); // filter on the global Hosts page
   const[note,setNote]=useState(null);
   const[open,setOpen]=useState(false);
   const[tab,setTab]=useState("ai");  // "ai" | "manual"
@@ -5055,6 +5190,7 @@ export default function AthLinkMVP(){
   // Ranking page
   const[rankCls,setRankCls]=useState("29er");
   const[rankMode,setRankMode]=useState("cumulative"); // "cumulative" (every race) | "position" (regatta placings)
+  const[rankCountry,setRankCountry]=useState(""); // country lens on the Rankings page ("" = all)
   const[rankDiscards,setRankDiscards]=useState(0);    // configurable; default 0
   const[rankSourceOpen,setRankSourceOpen]=useState(null);   // collapsed by default
   const[rankSelected,setRankSelected]=useState(()=>{
@@ -5274,7 +5410,7 @@ export default function AthLinkMVP(){
     const sc=(()=>{try{return scoreEvent(ev);}catch{return null;}})();
     return {ev:{...ev,class:nuggetFor(ev.cls,ev.subclass).label},row:{rank:0},fleet:sc?sc.fleet:(ev.entries?.length||0),
       countries:new Set(ev.entries.flatMap(e=>[e.nat]).filter(Boolean)).size};
-  }).sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return db.localeCompare(da);}),[classEvents]);
+  }).sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date))),[classEvents]);
 
   // ── Duplicate detection (review pile) ───────────────────────
   // Exact canonical matches (word order / case / accents / hyphens / punctuation)
@@ -5354,7 +5490,7 @@ export default function AthLinkMVP(){
   const portalName=host?host.name:(isClassPortal?`All ${classLabel(portalCls)} Results`:"");
   const isGlobal=!portal;
   const currentPeople=isGlobal?allPeople:people;
-  const athleteTitle=isGlobal?"All Athletes":(cls?`${cls.short} Athletes`:`${portalName} Athletes`);
+  const athleteTitle=isGlobal?(view.name==="athletes"&&view.cls?`${classLabel(view.cls)} Athletes`:"All Athletes"):(cls?`${cls.short} Athletes`:`${portalName} Athletes`);
   // Precompute every athlete's card stats in ONE pass (events count, best rank,
   // nationality, most-recent class/subclass). Avoids calling aggregate()/athleteNat()
   // — each O(events) — once per card, which was making All Athletes very slow.
@@ -5364,7 +5500,7 @@ export default function AthLinkMVP(){
     for(const ev of statScope){
       if(ev.status==="Draft") continue;
       const s=scoreEvent(ev);
-      const dk=(ev.date||"").split("/").reverse().join("");
+      const dk=dateKey(ev.date); // "" = undated; never allowed to claim recency
       for(const row of s.rows){
         [row.helm,row.crew].forEach(nm=>{
           if(!nm) return;const k=canonName(nm);if(!k) return;
@@ -5372,7 +5508,7 @@ export default function AthLinkMVP(){
           const sig=`${eventKey(ev)}|${row.sail||""}|${row.rank}|${row.net}|${(row.races||[]).join(",")}`;
           if(!o.evset.has(sig)){o.evset.add(sig);if(row.rank&&row.rank<o.best)o.best=row.rank;}
           if(row.nat)o.nat[row.nat]=(o.nat[row.nat]||0)+1;
-          if(dk>=o.recentDK){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
+          if(dk?dk>=o.recentDK:!o.recentDK&&!o.recentCls){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
         });
       }
     }
@@ -5384,6 +5520,18 @@ export default function AthLinkMVP(){
     return out;
   },[statScope]);
   const statOf=nm=>cardStats.get(canonName(nm))||{events:0,best:null,nat:"",recentCls:null,recentSub:null};
+  // Global Athletes lenses — class + country carried in the view (class deep-links via /class/<id>/athletes)
+  const athCls=(isGlobal&&view.name==="athletes")?(view.cls||null):null;
+  const athCountry=(isGlobal&&view.name==="athletes")?(view.country||null):null;
+  const athClsSet=useMemo(()=>{
+    if(!athCls) return null;
+    const s2=new Set();
+    events.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
+    return s2;
+  },[events,athCls]);
+  const lensPeople=(athClsSet||athCountry)
+    ?currentPeople.filter(p=>(!athClsSet||athClsSet.has(canonName(p.name)))&&(!athCountry||statOf(p.name).nat===athCountry))
+    :currentPeople;
   // Progressive reveal so the page paints immediately and fills in as you scroll.
   const[athLimit,setAthLimit]=useState(120);
   const athSentinelRef=React.useRef(null);
@@ -5405,11 +5553,28 @@ export default function AthLinkMVP(){
   const enterPortal=id=>{pushNav();setPortal(id);setView({name:"events"});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   // Top-bar primary nav: always leaves any portal scope — the 3 doors are global.
   const goTop=(name,extra)=>{pushNav();setPortal(null);setView({name,...(extra||{})});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
-  // Which of the 3 nav doors the current page lives behind (drives the .on state).
+  // Which of the 4 nav doors the current page lives behind (drives the .on state).
   const navOn=view.name==="ranking"?"ranking"
     :(view.name==="competitions"||view.name==="event")?"competitions"
+    :(view.name==="hosts"||(portal&&!String(portal).startsWith("class:")))?"hosts"
     :((view.name==="athletes"&&!portal)||view.name==="profile")?"athletes"
     :null;
+  // Jump straight to a host's athletes (nav "Athletes › by host" submenu).
+  const enterPortalAthletes=id=>{pushNav();setPortal(id);setView({name:"athletes"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  // Jump to the ranking page with a class preselected (nav "Rankings › by class").
+  const goRankingClass=id=>{pushNav();setPortal(null);setRankCls(id);setRankSourceOpen(null);setRankExpanded(new Set());setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);};
+  // Hosts + competition counts + home country — feeds the nav mega-menus and the Hosts page.
+  const navHosts=(()=>{
+    const pub=events.filter(ev=>ev.status!=="Draft");
+    return [
+      ...FEDERATIONS.map(h=>({...h,htype:"federation"})),
+      ...CLUBS.map(h=>({...h,htype:"club"})),
+      ...ASSOCIATIONS.map(h=>({...h,htype:"association"})),
+    ].map(h=>({...h,n:pub.filter(ev=>eventAssocs(ev).includes(h.id)).length,loc:hostLocation(h.id,events)||""}))
+     .sort((a,b)=>b.n-a.n);
+  })();
+  const hostCountries=[...new Set(navHosts.map(h=>h.loc).filter(Boolean))]
+    .sort((a,b)=>(GLOBE_NAMES[IOC_ISO[a]]||a).localeCompare(GLOBE_NAMES[IOC_ISO[b]]||b));
   // Floating top bar: hide on scroll-down, reveal on scroll-up. Reset to shown on page change.
   useEffect(()=>{
     let lastY=window.scrollY;
@@ -5433,7 +5598,7 @@ export default function AthLinkMVP(){
     const path=window.location.pathname;
     const seg=decodeURIComponent(path).split("/").filter(Boolean);
     const s0=(seg[0]||"").toLowerCase();
-    const RESERVED=["","sailing","athletes","ranking","rankings","event","competition","competitions","class"];
+    const RESERVED=["","sailing","athletes","ranking","rankings","event","competition","competitions","hosts","class"];
     // Athlete slugs can only be resolved after events (hence names) have loaded.
     const needsAthlete=seg.length>0&&!RESERVED.includes(s0)&&!hostBySlug(seg[0]);
     if(needsAthlete&&events.length===0) return; // wait for events, effect re-runs on load
@@ -5476,7 +5641,8 @@ export default function AthLinkMVP(){
     else if(v.name==="event"){  const ev=events.find(e=>e.id===v.id); t=ev?ev.name:"Competition"; }
     else if(v.name==="ranking") t="Rankings";
     else if(v.name==="competitions") t=v.cls?`${classLabel(v.cls)} — Competitions`:"Competitions";
-    else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:"Athletes";
+    else if(v.name==="hosts") t="Hosts";
+    else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:(v.cls?`${classLabel(v.cls)} — Athletes`:"Athletes");
     else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else sailing home
     else                        t="AthLink"; // portals home
     document.title=t||"AthLink";
@@ -5494,6 +5660,7 @@ export default function AthLinkMVP(){
     const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`All ${classLabel(id.slice(6))} Results`;return null;};
     if(v.name==="portals") return "Sailing";
     if(v.name==="competitions") return "Competitions";
+    if(v.name==="hosts") return "Hosts";
     if(v.name==="ranking") return "Rankings";
     if(v.name==="athletes") return snap.portal?`${pName(snap.portal)||""} Athletes`:"All Athletes";
     if(v.name==="events") return pName(snap.portal)||"Competitions";
@@ -5794,14 +5961,14 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
       const best=ag.best?"#"+ag.best:"unknown";
       const evs=ag.events;const pods=ag.podiums;const wins=ag.wins;
       // First & most-recent event years (for "started together" / trajectory context).
-      const sorted=ag.history.slice().sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return da.localeCompare(db);});
+      const sorted=ag.history.slice().sort((a,b)=>dateKey(a.ev.date).localeCompare(dateKey(b.ev.date)));
       const firstYr=sorted[0]?.ev.date?.split('/')?.[2]||"";
       let prompt;
       if(crew){
         const agCrew=aggregate(crew,events);
         // Events both sailed together (shared regattas with this partner).
         const together=ag.history.filter(h=>h.partner&&canonName(h.partner)===canonName(crew));
-        const firstTog=together.slice().sort((a,b)=>{const da=a.ev.date?.split('/').reverse().join('')||'';const db=b.ev.date?.split('/').reverse().join('')||'';return da.localeCompare(db);})[0];
+        const firstTog=together.slice().sort((a,b)=>dateKey(a.ev.date).localeCompare(dateKey(b.ev.date)))[0];
         const togLine=together.length?`Sailed together in ${together.length} regatta(s) since ${firstTog?.ev.date?.split('/')?.[2]||"?"}; best together #${Math.min(...together.map(h=>h.row.rank))}.`:"First/few events as a pair.";
         prompt=`Write a SHORT scouting blurb for a sailing PAIR (helm+crew): 2 sentences, MAX 38 words. Cover (a) when they started sailing together and how they've performed as a pair, (b) any standout milestone by either sailor, and (c) how they stack up against similar-calibre competition. Factual, no markdown, no heading. Always refer to each sailor by their FULL name exactly as "${name}" and "${crew}" (first and last together) — never just a first name or just a last name.
 Helm: ${name} (${evs} regattas since ${firstYr||"?"}, best ${best}, ${pods} podiums, ${wins} race wins).
@@ -6848,6 +7015,28 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .lens-chip.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .lens-chip .dot{width:8px;height:8px;border-radius:50%;flex:none;}
     .lens-chip .cnt{font-weight:600;font-size:11.5px;color:var(--mut);}
+    /* Nav mega-menus — hover panels under the 4 doors */
+    .np-item{position:relative;}
+    .np-drop{position:absolute;top:calc(100% + 10px);left:50%;transform:translateX(-50%) translateY(-6px);min-width:232px;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:12px;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:70;}
+    .np-drop::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px;}
+    .np-item:hover .np-drop,.np-item:focus-within .np-drop{opacity:1;pointer-events:auto;transform:translateX(-50%);}
+    .nd-label{margin:2px 4px 8px;font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);}
+    .nd-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 2px 10px;}
+    .nd-chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;font-weight:700;color:var(--navy);border:0;background:rgba(255,255,255,.6);border-radius:980px;padding:6px 12px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),0 1px 2px rgba(0,0,0,.06);transition:.14s;}
+    .nd-chip:hover{background:#fff;transform:translateY(-1px);}
+    .nd-chip .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+    .nd-row{display:flex;align-items:center;gap:8px;width:100%;font:inherit;font-size:13px;font-weight:600;color:var(--ink);border:0;background:none;border-radius:10px;padding:8px 10px;cursor:pointer;text-align:left;transition:background .12s;white-space:nowrap;}
+    .nd-row:hover{background:rgba(255,255,255,.78);}
+    .nd-cnt{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--mut);padding-left:10px;}
+    .nd-subwrap{position:relative;}
+    .nd-sub{position:absolute;left:calc(100% + 6px);top:-8px;min-width:256px;max-height:330px;overflow:auto;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;opacity:0;pointer-events:none;transition:opacity .16s ease;z-index:71;}
+    .nd-sub::before{content:"";position:absolute;left:-8px;top:0;bottom:0;width:8px;}
+    .nd-subwrap:hover .nd-sub{opacity:1;pointer-events:auto;}
+    /* Glass select — the country/host dropdowns on list pages */
+    .lens-selwrap{position:relative;display:inline-flex;align-items:center;}
+    .lens-select{font:inherit;font-size:12.5px;font-weight:700;color:var(--navy);border:0;background:rgba(255,255,255,.6);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);border-radius:980px;padding:7px 30px 7px 14px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.7),0 1px 2px rgba(0,0,0,.08);-webkit-appearance:none;appearance:none;outline:none;max-width:230px;text-overflow:ellipsis;}
+    .lens-select:hover{background:rgba(255,255,255,.85);}
+    .lens-selchev{position:absolute;right:11px;pointer-events:none;color:var(--mut);transform:rotate(90deg);}
     .strip-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:12px;margin-bottom:32px;}
     .strip-card{background:var(--mat-reg);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border-radius:16px;padding:16px;cursor:pointer;transition:.18s;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);animation:rise .5s both;}
     .strip-card:hover{transform:translateY(-4px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 20px 40px -18px rgba(0,0,0,.28);}
@@ -7111,9 +7300,88 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
           : <div className="np-bar">
-              <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
-              <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
-              <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
+              {/* Athletes — by class / by country / by host */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
+                <div className="np-drop">
+                  <p className="nd-label">By class</p>
+                  <div className="nd-chips">
+                    {CLASSES.map(c=>(
+                      <button key={c.id} className="nd-chip" onClick={()=>goTop("athletes",{cls:c.id})}>
+                        <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="nd-row" onClick={()=>goTop("athletes")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
+                  <div className="nd-subwrap">
+                    <button className="nd-row" onClick={()=>goTop("hosts")}><Waves size={14} style={{flex:"none",color:"var(--navy2)"}}/>By host<ChevronRight size={13} style={{marginLeft:"auto",opacity:.6}}/></button>
+                    <div className="nd-sub">
+                      {navHosts.map(h=>(
+                        <button key={h.id} className="nd-row" onClick={()=>enterPortalAthletes(h.id)}>{h.name}<span className="nd-cnt">{h.n}</span></button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Competitions — by class / by country / by host */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
+                <div className="np-drop">
+                  <p className="nd-label">By class</p>
+                  <div className="nd-chips">
+                    {CLASSES.map(c=>(
+                      <button key={c.id} className="nd-chip" onClick={()=>goTop("competitions",{cls:c.id})}>
+                        <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="nd-row" onClick={()=>goTop("competitions")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
+                  <div className="nd-subwrap">
+                    <button className="nd-row" onClick={()=>goTop("hosts")}><Waves size={14} style={{flex:"none",color:"var(--navy2)"}}/>By host<ChevronRight size={13} style={{marginLeft:"auto",opacity:.6}}/></button>
+                    <div className="nd-sub">
+                      {navHosts.map(h=>(
+                        <button key={h.id} className="nd-row" onClick={()=>enterPortal(h.id)}>{h.name}<span className="nd-cnt">{h.n}</span></button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Hosts — by type / by country */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="hosts"?" on":""}`} onClick={()=>goTop("hosts")}>Hosts</button>
+                <div className="np-drop">
+                  <p className="nd-label">By type</p>
+                  {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
+                    <button key={t} className="nd-row" onClick={()=>goTop("hosts",{type:t})}>{label}<span className="nd-cnt">{navHosts.filter(h=>h.htype===t).length}</span></button>
+                  ))}
+                  <div className="nd-subwrap">
+                    <button className="nd-row" onClick={()=>goTop("hosts")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country<ChevronRight size={13} style={{marginLeft:"auto",opacity:.6}}/></button>
+                    <div className="nd-sub">
+                      {hostCountries.map(cc=>(
+                        <button key={cc} className="nd-row" onClick={()=>goTop("hosts",{country:cc})}>
+                          <span style={{fontSize:15,flex:"none"}}>{iocFlag(cc)}</span>{GLOBE_NAMES[IOC_ISO[cc]]||cc}
+                          <span className="nd-cnt">{navHosts.filter(h=>h.loc===cc).length}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Rankings — by class / by country */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
+                <div className="np-drop">
+                  <p className="nd-label">By class</p>
+                  <div className="nd-chips">
+                    {CLASSES.map(c=>(
+                      <button key={c.id} className="nd-chip" onClick={()=>goRankingClass(c.id)}>
+                        <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="nd-row" onClick={()=>goTop("ranking")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
+                </div>
+              </div>
               <button className="np-srchbtn" title="Search" onClick={()=>setNavSearchOpen(true)}><Search size={16}/></button>
             </div>}
         {navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
@@ -7257,6 +7525,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <button className="x" style={{marginLeft:8}} onClick={()=>setClaimNote(null)}><X size={15}/></button>
     </div>
   )}
+  {classNote&&(
+    <div className="notice"><div className="ico"><AlertCircle size={18}/></div>
+      <div><b>Class not saved yet</b>
+      <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>"<b>{classNote.name}</b>" couldn't be written to the database — it will be retried automatically next time you load AthLink signed in.</div></div>
+      <button className="x" style={{marginLeft:8}} onClick={()=>setClassNote(null)}><X size={15}/></button>
+    </div>
+  )}
   {showClaimModal&&(()=>{
     const myName=auth?.profile?.athlete_name||`${auth?.profile?.first_name||""} ${auth?.profile?.last_name||""}`.trim()||auth?.profile?.display_name||"";
     const mine=auth?.user?.id?allClaims.find(c=>c.user_id===auth.user.id&&c.status!=="denied"):null;
@@ -7356,6 +7631,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const crumbs=[];
     if(view.name==="competitions"&&view.cls){
       crumbs.push({label:"Competitions",go:()=>goTop("competitions")},{label:classLabel(view.cls)});
+    }else if(view.name==="athletes"&&!portal&&view.cls){
+      crumbs.push({label:"Athletes",go:()=>goTop("athletes")},{label:classLabel(view.cls)});
     }else if(view.name==="event"){
       const ev=events.find(e=>e.id===view.id);
       crumbs.push({label:"Competitions",go:()=>goTop("competitions")},{label:ev?ev.name:"Competition"});
@@ -7368,7 +7645,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       else crumbs.push({label:cls});
     }else if(portal){
       const h=hostById(portal);
-      crumbs.push({label:"Clubs"});
+      crumbs.push({label:"Hosts",go:()=>goTop("hosts")});
       if(view.name==="athletes") crumbs.push({label:h?.name||"Club",go:()=>{pushNav();setView({name:"events"});window.scrollTo(0,0);}},{label:"Athletes"});
       else crumbs.push({label:h?.name||"Club"});
     }
@@ -7486,10 +7763,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const q=compQ.trim().toLowerCase();
     const published=events.filter(ev=>ev.status!=="Draft");
     const lens=view.cls||null; // class filter — carried in the view so /class/<id> deep-links
+    const cLens=view.country||null; // country filter (competition's host country)
     // Chip row: the 4 main classes plus any custom classes that actually have competitions
     const customIds=[...new Set(published.map(e=>e.cls).filter(Boolean))].filter(id=>!CLASSES.some(c=>c.id===id));
     const chipDefs=[...CLASSES.map(c=>({id:c.id,label:c.short})),...customIds.map(id=>({id,label:classLabel(id)}))];
-    const inLens=published.filter(ev=>!lens||ev.cls===lens);
+    const compCountries=[...new Set(published.map(ev=>eventCountryCode(ev)).filter(Boolean))]
+      .sort((x,y)=>(GLOBE_NAMES[IOC_ISO[x]]||x).localeCompare(GLOBE_NAMES[IOC_ISO[y]]||y));
+    const inLens=published.filter(ev=>(!lens||ev.cls===lens)&&(!cLens||eventCountryCode(ev)===cLens));
     const list=inLens
       .filter(ev=>!q
         ||(ev.name||"").toLowerCase().includes(q)
@@ -7511,7 +7791,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className="page-head" style={{display:"flex",alignItems:"flex-end",gap:14,flexWrap:"wrap"}}>
         <div style={{flex:"1 1 auto",minWidth:0}}>
           <h1 className="page-title">{lens?`${classLabel(lens)} competitions`:"Competitions"}</h1>
-          <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{lens?"":" across all clubs and classes"}</p>
+          <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{(lens||cLens)?"":" across all clubs and classes"}</p>
         </div>
         <button className="btn ghost" style={{fontSize:13,padding:"8px 14px",flex:"none"}} onClick={()=>openCalendar(null)}><Calendar size={15}/>Calendar</button>
       </div>
@@ -7522,16 +7802,30 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         </div>
       </div>
       <div className="strip-chips" style={{margin:"0 0 14px"}}>
-        <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({name:"competitions"}))}>All</button>
+        <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:undefined}))}>All</button>
         {chipDefs.map(c=>{
           const n=published.filter(e=>e.cls===c.id).length;
           if(!n) return null;
           return(
-            <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
+            <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
               <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
             </button>
           );
         })}
+        <span className="lens-selwrap">
+          <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
+            <option value="">All countries</option>
+            {compCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+          </select>
+          <ChevronRight size={13} className="lens-selchev"/>
+        </span>
+        <span className="lens-selwrap">
+          <select className="lens-select" value="" onChange={e=>{if(e.target.value)enterPortal(e.target.value);}}>
+            <option value="">By host…</option>
+            {navHosts.map(h=>(<option key={h.id} value={h.id}>{h.name}</option>))}
+          </select>
+          <ChevronRight size={13} className="lens-selchev"/>
+        </span>
       </div>
       {evItems.map(item=>{
         if(item.type==='divider') return(
@@ -7586,6 +7880,66 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
         </>);
       })()}
+    </div>
+    );
+  })()}
+
+  {/* ── HOSTS: global directory — federations, clubs and associations ── */}
+  {!portal&&view.name==="hosts"&&(()=>{
+    const q=hostQ.trim().toLowerCase();
+    const tLens=view.type||null, cLens=view.country||null;
+    const list=navHosts
+      .filter(h=>!tLens||h.htype===tLens)
+      .filter(h=>!cLens||h.loc===cLens)
+      .filter(h=>!q||h.name.toLowerCase().includes(q));
+    const published=events.filter(ev=>ev.status!=="Draft");
+    return(
+    <div className="wrap sec">
+      <div className="page-head">
+        <h1 className="page-title">Hosts</h1>
+        <p className="page-sub">{navHosts.length} federations, clubs and associations on AthLink</p>
+      </div>
+      <div className="toolbar" style={{marginBottom:12,display:"flex",gap:10,alignItems:"center"}}>
+        <div className="srch" style={{flex:1}}>
+          <Search size={16} color="#9fb2c8"/>
+          <input placeholder="Search hosts…" value={hostQ} onChange={e=>setHostQ(e.target.value)}/>
+        </div>
+      </div>
+      <div className="strip-chips" style={{margin:"0 0 16px"}}>
+        <button className={`lens-chip${!tLens?" on":""}`} onClick={()=>setView(v=>({...v,type:undefined}))}>All</button>
+        {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
+          <button key={t} className={`lens-chip${tLens===t?" on":""}`} onClick={()=>setView(v=>({...v,type:v.type===t?undefined:t}))}>{label}<span className="cnt">{navHosts.filter(h=>h.htype===t).length}</span></button>
+        ))}
+        <span className="lens-selwrap">
+          <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
+            <option value="">All countries</option>
+            {hostCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+          </select>
+          <ChevronRight size={13} className="lens-selchev"/>
+        </span>
+      </div>
+      <div className="classes-grid">
+        {list.map((h,i)=>{
+          const typeLabel=h.htype==="federation"?"Federation":h.htype==="club"?"Club":"Association";
+          const pub=published.filter(ev=>eventAssocs(ev).includes(h.id));
+          const ppl=new Set();pub.forEach(ev=>ev.entries.forEach(e=>{if(e.helm)ppl.add(canonName(e.helm));if(e.crew)ppl.add(canonName(e.crew));}));
+          const ids=Array.from(new Set(pub.map(e=>e.cls).filter(Boolean)));
+          const main=CLASSES.filter(c=>ids.includes(c.id)).map(c=>c.id);
+          const clsIds=[...main,...ids.filter(id=>!main.includes(id))];
+          return(
+          <div className="class-card" key={h.id} style={{animationDelay:`${Math.min(i,10)*60}ms`}} onClick={()=>enterPortal(h.id)}>
+            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
+              <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flex:"1 1 0",minWidth:0}}>
+                <HostClassPills classIds={clsIds}/>
+              </div>
+            </div>
+            <p className="class-name">{h.loc?<span style={{marginRight:6}}>{iocFlag(h.loc)}</span>:null}{h.name}</p>
+            <div className="class-stats" style={{marginBottom:0}}><div><b>{h.n}</b>competitions</div><div><b>{ppl.size}</b>athletes</div></div>
+          </div>);
+        })}
+      </div>
+      {list.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No hosts match. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setHostQ("");setView({name:"hosts"});}}>Clear</button></p>}
     </div>
     );
   })()}
@@ -7678,6 +8032,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     });
     // Lowest total wins; tiebreak = best result in the most recent regatta, then name.
     rows.sort((a,b)=>a.total-b.total||a.lastRes-b.lastRes||(a.name||a.helm||"").localeCompare(b.name||b.helm||""));
+    // Country lens (helm nationality) — re-ranked within the filtered view.
+    const natOfRow=r=>{const k=canonName(dh?(r.helm||""):(r.name||""));return (cardStats.get(k)||{}).nat||"";};
+    const rankCountries=[...new Set(rows.map(natOfRow).filter(Boolean))]
+      .sort((x,y)=>(GLOBE_NAMES[IOC_ISO[x]]||x).localeCompare(GLOBE_NAMES[IOC_ISO[y]]||y));
+    if(rankCountry) rows=rows.filter(r=>natOfRow(r)===rankCountry);
     rows.forEach((r,i)=>r.rankNum=i+1);
     const podium=n=>n===1?"#e3b341":n===2?"#9aa6b2":n===3?"#c08457":"var(--navy)";
     const clsShort=classLabel(rankCls);
@@ -7693,29 +8052,25 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const Nug=({children,color})=><span style={{display:"inline-block",fontSize:10,fontWeight:700,color:"#fff",background:color||"var(--mut)",borderRadius:5,padding:"2px 6px",marginRight:4}}>{children}</span>;
     return(
       <div className="wrap sec" style={{paddingTop:16}}>
-        <div className="page-head" style={{paddingLeft:22}}>
+        <div className="page-head">
           <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
-          <h1 className="page-title">Ranking</h1>
-          {/* Stats row directly under the title (mirrors the class-portal layout) */}
-          <div className="pillbar" style={{marginTop:12}}>
-            <div className="pill"><Trophy size={16}/><b>{comps.length}</b> competition{comps.length!==1?"s":""}</div>
-            <div className="pill"><Users size={16}/><b>{rankAthleteCount}</b> athlete{rankAthleteCount!==1?"s":""}</div>
-          </div>
+          <h1 className="page-title">Rankings</h1>
+          <p className="page-sub">{comps.length} competition{comps.length!==1?"s":""} · {rankAthleteCount} athlete{rankAthleteCount!==1?"s":""} in the {clsShort} series</p>
         </div>
-        {/* Class tabs */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
-          {CLASSES.map(c=>{
-            const on=rankCls===c.id;const solid=classColor(c.id);
-            return(<button key={c.id} onClick={()=>{setRankCls(c.id);setRankSourceOpen(null);setRankExpanded(new Set());}}
-              style={{border:`1px solid ${on?solid:classColorA(c.id,.5)}`,borderRadius:16,background:on?solid:`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`,color:on?"#fff":solid,cursor:"pointer",
-                backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",boxShadow:"inset 0 1px 0 rgba(255,255,255,.6)",
-                padding:"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Barlow',sans-serif",transition:".15s"}}
-              onMouseEnter={e=>{if(on)return;e.currentTarget.style.background=solid;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=solid;}}
-              onMouseLeave={e=>{if(on)return;e.currentTarget.style.background=`linear-gradient(${classColorA(c.id,.34)},${classColorA(c.id,.34)}),rgba(255,255,255,0.56)`;e.currentTarget.style.color=solid;e.currentTarget.style.borderColor=classColorA(c.id,.5);}}>
-              <span style={{fontWeight:800,fontSize:16}}>{c.short}</span>
-              <span style={{fontSize:11,opacity:.85,fontWeight:600}}>Ranking</span>
-            </button>);
-          })}
+        {/* Lenses — class chips + country select, same idiom as every other list page */}
+        <div className="strip-chips" style={{margin:"0 0 14px"}}>
+          {CLASSES.map(c=>(
+            <button key={c.id} className={`lens-chip${rankCls===c.id?" on":""}`} onClick={()=>{setRankCls(c.id);setRankSourceOpen(null);setRankExpanded(new Set());}}>
+              <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
+            </button>
+          ))}
+          <span className="lens-selwrap">
+            <select className="lens-select" value={rankCountry} onChange={e=>setRankCountry(e.target.value)}>
+              <option value="">All countries</option>
+              {rankCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+            </select>
+            <ChevronRight size={13} className="lens-selchev"/>
+          </span>
         </div>
         {/* Source nuggets */}
         <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
@@ -7782,51 +8137,51 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             <span style={{fontSize:11.5,color:"var(--mut)"}}>{rankMode==="cumulative"?"Combined series · every race counts · DNC = entries+1":"Sum of competition placings · DNC = entries+1"}</span>
           </div>
-          <div style={{overflowX:"auto",background:"rgba(255,255,255,0.85)",backdropFilter:"blur(34px) saturate(195%)",WebkitBackdropFilter:"blur(34px) saturate(195%)",borderRadius:16,boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06)"}}>
-            <table style={{borderCollapse:"collapse",width:"100%",fontSize:13,minWidth:640}}>
+          <div className="panel" style={{overflowX:"auto"}}>
+            <table>
               <thead>
-                <tr style={{background:"linear-gradient(180deg,rgba(31,78,128,.92),rgba(19,49,78,.94))",color:"#fff",textAlign:"left"}}>
-                  <th style={{padding:"10px 12px"}}>#</th>
-                  <th style={{padding:"10px 10px",textAlign:"center"}}>Div</th>
-                  <th style={{padding:"10px 12px"}}>{dh?"Team":"Name"}</th>
-                  {comps.map((c,i)=><th key={c.id} title={c.name} style={{padding:"10px 10px",textAlign:"center",maxWidth:130}}><div style={{maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div></th>)}
-                  <th style={{padding:"10px 12px",textAlign:"center"}}>Total</th>
+                <tr>
+                  <th style={{width:48}}>Rank</th>
+                  <th className="l">{dh?"Team":"Athlete"}</th>
+                  {comps.map((c,i)=><th key={c.id} title={c.name} style={{maxWidth:130}}><div style={{maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",margin:"0 auto"}}>{c.name}</div></th>)}
+                  <th>Total</th>
+                  <th>Div</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(r=>{
                   const expanded=comps.filter(c=>rankExpanded.has(`${r.key}|${c.id}`)&&r.perComp[c.id]);
                   return(<React.Fragment key={r.key}>
-                    <tr style={{borderTop:"1px solid var(--line)"}}>
-                      <td style={{padding:"9px 12px",fontWeight:800,color:podium(r.rankNum),fontSize:r.rankNum<=3?15:13}}>{r.rankNum}</td>
-                      <td style={{padding:"9px 10px",textAlign:"center",whiteSpace:"nowrap"}}>
-                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
-                        {r.division&&<Nug>{r.division}</Nug>}
-                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
-                      </td>
-                      <td style={{padding:"9px 12px",fontWeight:600,whiteSpace:"nowrap"}}>
+                    <tr>
+                      <td className={"rk"+(r.rankNum===1?" p1":r.rankNum===2?" p2":r.rankNum===3?" p3":"")}>{r.rankNum}</td>
+                      <td className="l" style={{whiteSpace:"nowrap"}}>
                         {dh
                           ?<div style={{lineHeight:1.35}}>
-                            <div style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>r.helm&&go({name:"profile",id:r.helm})}>{r.helm||"—"} <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>HELM</span></div>
-                            {r.crew&&<div style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>go({name:"profile",id:r.crew})}>{r.crew} <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>CREW</span></div>}
+                            <div><span className="namelink" onClick={()=>r.helm&&go({name:"profile",id:r.helm})}>{r.helm||"—"}</span> <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>HELM</span></div>
+                            {r.crew&&<div><span className="namelink" onClick={()=>go({name:"profile",id:r.crew})}>{r.crew}</span> <span style={{fontSize:10,color:"var(--mut)",fontWeight:700}}>CREW</span></div>}
                           </div>
-                          :<span style={{cursor:"pointer",color:"var(--navy)"}} onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
+                          :<span className="namelink" onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
                       </td>
                       {comps.map(c=>{
                         const pc=r.perComp[c.id];const pcell=r.per[c.id];
                         const shown=rankMode==="position"?(pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–")):pcell.contrib;
                         const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
-                        return <td key={c.id} style={{padding:"9px 10px",textAlign:"center"}}>
+                        return <td key={c.id}>
                           <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this competition (entries+1)":"Tap for race detail"}
                             style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:pcell.dnc?"var(--mut)":"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:pc?"pointer":"default",fontSize:13,fontStyle:pcell.dnc?"italic":"normal"}}>{shown}{pcell.dnc?" DNC":""}</button>
                         </td>;
                       })}
-                      <td style={{padding:"9px 12px",textAlign:"center",fontWeight:800}}>{r.total}</td>
+                      <td style={{fontWeight:800}}>{r.total}</td>
+                      <td style={{whiteSpace:"nowrap"}}>
+                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
+                        {r.division&&<Nug>{r.division}</Nug>}
+                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
+                      </td>
                     </tr>
                     {expanded.map(c=>{
                       const pc=r.perComp[c.id];
                       return(<tr key={r.key+c.id} style={{background:"#f3f8fd"}}>
-                        <td/><td/><td colSpan={2+comps.length} style={{padding:"8px 14px"}}>
+                        <td/><td colSpan={3+comps.length} style={{padding:"8px 14px",textAlign:"left"}}>
                           <div style={{fontSize:12.5,color:"var(--navy)"}}>
                             <strong>{c.name}</strong> — finished #{pc.rank??"–"} {pc.sail&&pc.sail!=="—"?`(${pc.sail})`:""}
                             <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:6}}>
@@ -8239,7 +8594,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className="page-head">
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
         <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",width:"100%"}}>
-          <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{currentPeople.length}</span></h1>
+          <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{lensPeople.length}</span></h1>
           {portal&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
             <Users size={14} style={{flex:"none"}}/>All Athletes</button>}
         </div>
@@ -8265,7 +8620,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
               <span style={{display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15}}>
                 <span>{f[0].toUpperCase()+f.slice(1)}</span>
-                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:currentPeople.length}</span>
+                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:lensPeople.length}</span>
               </span>
             </button>
           ));
@@ -8281,6 +8636,41 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </button>
         )}
       </div>
+      {/* Lenses — class chips + country + host (mirrors the Athletes nav menu) */}
+      {isGlobal&&(()=>{
+        const clsSets={};
+        events.forEach(ev=>{if(ev.status==="Draft"||!ev.cls)return;const s2=clsSets[ev.cls]||(clsSets[ev.cls]=new Set());(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
+        const customIds=Object.keys(clsSets).filter(id=>!CLASSES.some(c=>c.id===id));
+        const chipDefs=[...CLASSES.map(c=>({id:c.id,label:c.short})),...customIds.map(id=>({id,label:classLabel(id)}))];
+        const natSet=new Set();cardStats.forEach(v=>{if(v.nat)natSet.add(v.nat);});
+        const natList=[...natSet].sort((x,y)=>(GLOBE_NAMES[IOC_ISO[x]]||x).localeCompare(GLOBE_NAMES[IOC_ISO[y]]||y));
+        return(
+        <div className="strip-chips" style={{margin:"0 0 14px"}}>
+          <button className={`lens-chip${!athCls?" on":""}`} onClick={()=>setView(v=>({...v,cls:undefined}))}>All</button>
+          {chipDefs.map(c=>{
+            const n=clsSets[c.id]?clsSets[c.id].size:0;
+            if(!n) return null;
+            return(
+            <button key={c.id} className={`lens-chip${athCls===c.id?" on":""}`} onClick={()=>setView(v=>({...v,cls:v.cls===c.id?undefined:c.id}))}>
+              <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
+            </button>);
+          })}
+          <span className="lens-selwrap">
+            <select className="lens-select" value={athCountry||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
+              <option value="">All countries</option>
+              {natList.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+            </select>
+            <ChevronRight size={13} className="lens-selchev"/>
+          </span>
+          <span className="lens-selwrap">
+            <select className="lens-select" value="" onChange={e=>{if(e.target.value)enterPortalAthletes(e.target.value);}}>
+              <option value="">By host…</option>
+              {navHosts.map(h=>(<option key={h.id} value={h.id}>{h.name}</option>))}
+            </select>
+            <ChevronRight size={13} className="lens-selchev"/>
+          </span>
+        </div>);
+      })()}
       {athleteSmart&&(
         <div className="filter-chip" style={{marginBottom:14}}>
           <Sparkles size={11}/>{athleteSmart.label}
@@ -8355,7 +8745,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       {filter!=="duplicates"&&(()=>{
         const evScope=isGlobal?events:classEvents;
         const qlc=q.trim().toLowerCase();
-        const shown=currentPeople
+        const shown=lensPeople
           .filter(p=>true)
           .filter(p=>{
             if(athleteSmart){
