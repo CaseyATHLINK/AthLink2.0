@@ -6,6 +6,9 @@
   "functions": {
     "api/parse_pdf.py": {
       "maxDuration": 60
+    },
+    "api/enrich.py": {
+      "maxDuration": 60
     }
   },
   "rewrites": [

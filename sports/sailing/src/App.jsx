@@ -5300,6 +5300,11 @@ export default function AthLinkMVP(){
   const[pending,setPending]=useState([]);
   const[activePending,setActivePending]=useState(0);
   const[previewEditVal,setPreviewEditVal]=useState("");
+  // Web-lookup enrichment suggestions, keyed by pending-item id →
+  //   {date,country,source,dismissed}. Populated best-effort by the enrichment
+  //   effect when a parsed preview still lacks a date/country. UI-only, never
+  //   auto-applied — the user clicks Apply per value.
+  const[enrichSug,setEnrichSug]=useState({});
   const[editCell,setEditCell]=useState(null);
   const[editVal,setEditVal]=useState("");
   const[editEvMeta,setEditEvMeta]=useState(null);
@@ -6749,17 +6754,58 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     setPending(prev=>prev.map(p=>p.fleetGroupId===gid?{...p,collabs:v}:p));
   };
   // Resolve the host driving the preview: the self-organizing importer, else
-  // the manually attributed AthLink host. Auto-fill Host Country from it, but
-  // only when venue is empty — never overwrite a country the user picked.
+  // the manually attributed AthLink host (detected, or picked in the organiser
+  // controls). Re-derives whenever _orgMode/_orgHost change, so a later manual
+  // organiser pick flows through the same auto-fill effect below.
   const _pvImporterHost=(portal&&!isClassPortal)?portal:null;
   const _pvResolvedHost=previewEv
     ?((((previewEv._orgMode||"self")!=="external")&&_pvImporterHost)?_pvImporterHost:(previewEv._orgHost||null))
     :null;
+  // Inheritance rule: a competition inherits the organiser host's home country
+  // as the DEFAULT Host Country when the document printed none — always
+  // overridable in the preview. Only fill when both the field (venue) AND any
+  // document-parsed country are empty, so we never clobber a value the user
+  // typed or one the parser read off the document.
   useEffect(()=>{
-    if(!_pvResolvedHost||!previewEv||previewEv.venue) return;
+    if(!_pvResolvedHost||!previewEv||previewEv.venue||previewEv.country) return;
     const code=hostLocation(_pvResolvedHost,events);
     if(code) updSharedMeta("venue",code);   // keep auto-filled country synced across sibling fleets
-  },[_pvResolvedHost,previewEv?.venue]);
+  },[_pvResolvedHost,previewEv?.venue,previewEv?.country]);
+  // ── Web-lookup enrichment ──────────────────────────────────────────────
+  // After a file parse lands (pending item → ok) and the preview STILL lacks a
+  // date and/or a Host Country (AFTER the host-country inheritance above), fire
+  // ONE best-effort /api/enrich lookup for that item. Runs once per item
+  // (guarded by item._enriched), never auto-applies — it only stores a
+  // low-confidence suggestion the strip below the fields can offer.
+  useEffect(()=>{
+    const item=pending[activePending];
+    if(!item||item.status!=="ok"||!item.previewEv||item._enriched) return;
+    const pv=item.previewEv;
+    const missing=[];
+    if(!String(pv.date||"").trim())  missing.push("date");
+    if(!String(pv.venue||"").trim()) missing.push("country");   // venue = Host Country field
+    if(!missing.length) return;
+    const nm=String(pv.name||"").trim();
+    if(!nm) return;
+    // Resolve organiser name (attributed host, else free-text) + a 4-digit year
+    // from the date or the name — extra signal to pin the exact event.
+    const host=hostById(_pvResolvedHost)?.name||pv._orgName||"";
+    const ym=String(pv.date||"").match(/(\d{4})/)||nm.match(/\b(20\d{2})\b/);
+    const year=ym?ym[1]:"";
+    const cls=pv.cls?classLabel(pv.cls):"";
+    // Mark enriched immediately so re-renders can't refire the request.
+    setPending(prev=>prev.map(p=>p.id===item.id?{...p,_enriched:true}:p));
+    (async()=>{
+      try{
+        const r=await fetch("/api/enrich",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({name:nm,cls,year,host,missing})});
+        const d=await r.json();
+        if(!d||!d.ok) return;                                  // provider error → show nothing
+        if(!d.date&&!d.country) return;                        // no confident answer → show nothing
+        setEnrichSug(s=>({...s,[item.id]:{date:d.date||null,country:d.country||null,source:d.source||null,dismissed:false}}));
+      }catch{ /* enrichment is optional — never break the preview */ }
+    })();
+  },[pending,activePending,_pvResolvedHost]);
   // Build the DivisionToggle string from an entry's real gender + category.
   const divFromEntry=(e)=>{
     const g=normGender(e.gender)||parseDiv(e.div||"").gender||"";
@@ -9601,6 +9647,49 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
+            {/* ── Web-lookup suggestion strip: low-confidence date/country found
+                 online for a document that printed none. Never auto-applied —
+                 Apply writes through updSharedMeta (same setter as the manual
+                 inputs, so fleet-tab sync keeps working). Dismissible. ── */}
+            {(()=>{
+              const sug=active&&enrichSug[active.id];
+              if(!sug||sug.dismissed) return null;
+              // Only offer a value the field still lacks (and that was found).
+              const showDate=sug.date&&!String(previewEv.date||"").trim();
+              const showCty=sug.country&&!String(previewEv.venue||"").trim();
+              if(!showDate&&!showCty) return null;
+              let domain="";
+              try{domain=sug.source?new URL(sug.source).hostname.replace(/^www\./,""):"";}catch{domain="";}
+              const dismiss=()=>setEnrichSug(s=>({...s,[active.id]:{...s[active.id],dismissed:true}}));
+              return(
+                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10,fontSize:12,
+                  color:"var(--navy2)",background:"var(--sky)",backdropFilter:"blur(20px) saturate(160%)",WebkitBackdropFilter:"blur(20px) saturate(160%)",
+                  border:"0",borderRadius:12,padding:"8px 12px",boxShadow:"inset 0 1px 0 rgba(255,255,255,.5),inset 0 0 0 .5px rgba(31,78,128,.18)"}}>
+                  <Search size={13} style={{flex:"none",opacity:.75}}/>
+                  <span>Web lookup <span style={{opacity:.7}}>(unconfirmed)</span>:</span>
+                  {showDate&&(
+                    <span style={{display:"inline-flex",alignItems:"center",gap:5}}>
+                      <b style={{fontWeight:700}}>{sug.date}</b>
+                      <button type="button" onClick={()=>updSharedMeta("date",sug.date)}
+                        style={{border:"1px solid var(--navy2)",background:"transparent",color:"var(--navy2)",borderRadius:6,fontSize:11,fontWeight:600,padding:"2px 8px",cursor:"pointer"}}>Apply</button>
+                    </span>
+                  )}
+                  {showDate&&showCty&&<span style={{opacity:.5}}>·</span>}
+                  {showCty&&(
+                    <span style={{display:"inline-flex",alignItems:"center",gap:5}}>
+                      <b style={{fontWeight:700}}>{sug.country}</b>
+                      <button type="button" onClick={()=>updSharedMeta("venue",sug.country)}
+                        style={{border:"1px solid var(--navy2)",background:"transparent",color:"var(--navy2)",borderRadius:6,fontSize:11,fontWeight:600,padding:"2px 8px",cursor:"pointer"}}>Apply</button>
+                    </span>
+                  )}
+                  {domain&&<span style={{opacity:.6}}>— from {domain}</span>}
+                  <button type="button" onClick={dismiss} title="Dismiss"
+                    style={{marginLeft:"auto",flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:20,height:20,borderRadius:5,border:0,background:"transparent",color:"var(--navy2)",cursor:"pointer",opacity:.7}}>
+                    <X size={13}/>
+                  </button>
+                </div>
+              );
+            })()}
             {/* ── Two-column: boat classes (left) · organiser controls (right) ── */}
             <div style={{display:"flex",gap:20,flexWrap:"wrap",alignItems:"flex-start",marginBottom:10}}>
               {/* LEFT — per-result class selector (reshapes the table). Subclass options
