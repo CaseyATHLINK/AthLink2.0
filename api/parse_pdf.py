@@ -1868,6 +1868,495 @@ def try_overall_results(full_text):
             entries.append(e)
     return entries or None
 
+# ── aspose-bilingual-cn (Aspose.PDF Chinese notice-board results) ────────────
+# Qinhuangdao ILCA events printed by "Aspose.PDF for .NET". The results grid is
+# the SAME bilingual "Overall Results of <division>" layout that try_overall_results
+# already reads verbatim (nat+sail fused CHN200777, Group→category, wrapped names,
+# multi-token codes "(42 BFD)"/"16.6 SCP30%", WS-ID noise column dropped). So this
+# extractor delegates row parsing to that proven core and adds only the two aspose-
+# specific pieces the generic heuristics miss: the ENGLISH event line (the top of
+# each page is a CN title over an EN title) and the CJK date line
+# ("Date日期Y/M/D：2025年6月8日" → 08/06/2025).
+def _aspose_cn_date(full_text):
+    """Convert the aspose CJK date stamp '2025年6月8日' to dd/mm/yyyy. Returns ''
+    when absent."""
+    m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日', full_text)
+    if not m:
+        return ''
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if 1 <= mo <= 12 and 1 <= d <= 31:
+        return f"{d:02d}/{mo:02d}/{y}"
+    return ''
+
+def _aspose_cn_event(full_text):
+    """The event name is the first ALL-CAPS English title line near the top
+    (e.g. '2025 ILCA ASIAN OPEN CHAMPIONSHIPS'), sitting under the CN title.
+    Returns '' when not found."""
+    for l in full_text.split('\n')[:12]:
+        s = l.strip()
+        if len(s) < 6:
+            continue
+        if re.search(r'[A-Za-z]', s) and not re.search(r'[一-鿿]', s) \
+           and re.search(r'(?i)(championship|regatta|cup|open|series|trophy)', s):
+            return s[:120]
+    return ''
+
+def try_aspose_cn(full_text):
+    """aspose-bilingual-cn results. Same grid as try_overall_results; returns its
+    entries (or None). Event name / date are recovered by the cascade caller via
+    _aspose_cn_event / _aspose_cn_date."""
+    return try_overall_results(full_text)
+
+# ── bornan (Asian Games 2022 official timing, Stimulsoft) ────────────────────
+# Word-geometry parse: the flat text reading order scrambles the stacked score
+# codes (OCS/DSQ/UFD print BENEATH the numeric score in the same race cell) and,
+# for two-person skiffs, the helm/crew names + H/C Pos markers. So bucket every
+# token by its column X, learned from the race-header row.
+#   layout: <rank glued to first name token> <helm name…> [Pos=H] <NOC> r1..rN
+#           [Medal] then on the next line(s): [crew name… Pos=C] [stacked codes]
+#           <Total> <Net>. Codes on the line just below the helm row align by X to
+#           the helm's race cells → joined as 'score CODE' verbatim. NOC→nat.
+_BORNAN_CODES = {'OCS', 'DSQ', 'UFD', 'DNF', 'DNS', 'DNC', 'BFD', 'RET', 'DNE',
+                 'RDG', 'SCP', 'STP', 'DPI', 'NSC', 'ZFP', 'DGM'}
+
+def try_bornan(full_text, pdf_bytes=None):
+    """AG2022 Bornan/Stimulsoft results. Returns entries or None."""
+    if pdfplumber is None or not pdf_bytes:
+        return None
+    if 'timing and results provided by bornan' not in full_text.lower():
+        return None
+    from collections import defaultdict
+    NUM = re.compile(r'^\(?-?\d+(?:\.\d+)?\)?$')
+
+    def _is_code(t):
+        return re.sub(r'[^A-Z]', '', t.upper()) in _BORNAN_CODES
+
+    entries = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        # Event name from the English title line (bilingual CN/EN stacked titles).
+        ev = ''
+        for page in pdf.pages:
+            words = page.extract_words()
+            if not words:
+                continue
+            rows = defaultdict(list)
+            for w in words:
+                rows[round(w['top'])].append(w)
+            tops = sorted(rows)
+
+            # ── Learn the race-column centres from the header row: the run of
+            # bare ascending integers 1,2,…,N. Also learn the NOC-code column x,
+            # the Total/Net x's, and the optional Medal-race x. ──
+            race_x = []
+            hdr_top = None
+            for t in tops:
+                ln = sorted(rows[t], key=lambda x: x['x0'])
+                ints = [w for w in ln if re.match(r'^\d{1,2}$', w['text'])]
+                if len(ints) >= 5:
+                    seq = [int(w['text']) for w in ints]
+                    if seq == list(range(1, len(seq) + 1)):
+                        race_x = [w['x0'] for w in ints]
+                        hdr_top = t
+                        break
+            if not race_x:
+                continue
+            n_races = len(race_x)
+            first_race_x = race_x[0]
+
+            # Total/Net column x: from a "Pts Pts" header line, else the two
+            # right-most numeric columns. NOC column x from the 'Code' label
+            # ("NOC Code" stacked header) or the 'NOC' label. Pos column x from
+            # 'Pos.' (two-person skiffs only).
+            tot_x = net_x = None
+            medal_x = None
+            noc_x = None
+            pos_x = None
+            for t in tops:
+                ln = sorted(rows[t], key=lambda x: x['x0'])
+                pts = [w for w in ln if w['text'] == 'Pts']
+                if len(pts) >= 2:
+                    net_x = pts[-1]['x0']
+                    tot_x = pts[-2]['x0']
+                    if len(pts) >= 3:
+                        medal_x = pts[-3]['x0']
+                for w in ln:
+                    if w['text'] in ('Code', 'NOC') and noc_x is None:
+                        noc_x = w['x0']
+                    if w['text'] in ('Pos.', 'Pos') and pos_x is None:
+                        pos_x = w['x0']
+            if tot_x is None:
+                tot_x = race_x[-1] + 30
+                net_x = race_x[-1] + 55
+            if noc_x is None:
+                noc_x = first_race_x - 40
+
+            def nearest_race(x):
+                best, bd = None, 1e9
+                for ci, rx in enumerate(race_x):
+                    d = abs(x - rx)
+                    if d < bd:
+                        bd, best = d, ci
+                return best if bd <= 12 else None
+
+            # Rank lines: leftmost token is <digits glued to a name> at far left
+            # (x < noc_x). Scores may WRAP to the line above, so a rank line is NOT
+            # required to carry the score run itself.
+            rank_re = re.compile(r'^(\d{1,3})([A-Za-z].*)$')
+            rank_idxs = []
+            for i, t in enumerate(tops):
+                if t <= hdr_top:
+                    continue
+                ln = sorted(rows[t], key=lambda x: x['x0'])
+                if not ln:
+                    continue
+                m = rank_re.match(ln[0]['text'])
+                if m and ln[0]['x0'] < noc_x - 4:
+                    rank_idxs.append(i)
+
+            def _is_footer_line(ln):
+                s = ' '.join(w['text'] for w in ln).lower()
+                return ('legend' in s or 'timing and results' in s
+                        or 'report created' in s or 'excluded score' in s)
+
+            for ri, i in enumerate(rank_idxs):
+                end = rank_idxs[ri + 1] if ri + 1 < len(rank_idxs) else len(tops)
+                head = sorted(rows[tops[i]], key=lambda x: x['x0'])
+                m = rank_re.match(head[0]['text'])
+                rank = int(m.group(1))
+                first_name_frag = m.group(2)
+
+                # Helm name = tokens between the rank column and the NOC column,
+                # excluding a lone Pos marker 'H'. NOC = the 3-caps token nearest
+                # the NOC column x.
+                nat = ''
+                best_nat_d = 1e9
+                helm_toks = [first_name_frag]
+                for w in head[1:]:
+                    txt = w['text']
+                    if w['x0'] >= first_race_x - 8:
+                        break
+                    if txt in ('H', 'C'):
+                        continue
+                    if re.match(r'^[A-Z]{3}$', txt) and abs(w['x0'] - noc_x) <= 20:
+                        d = abs(w['x0'] - noc_x)
+                        if d < best_nat_d:
+                            nat, best_nat_d = txt, d
+                    elif w['x0'] < noc_x - 4:
+                        helm_toks.append(txt)
+
+                # Race cells by X: the head line's numeric scores, plus any that
+                # wrapped to the line immediately ABOVE the rank line.
+                buckets = defaultdict(lambda: {'num': None, 'code': None})
+                score_lines = [head]
+                if i - 1 >= 0 and (ri == 0 or (i - 1) != rank_idxs[ri - 1]):
+                    prev = sorted(rows[tops[i - 1]], key=lambda x: x['x0'])
+                    # Only borrow when the previous line has no rank token and
+                    # carries scores in the race band (a wrapped score row).
+                    if not _is_footer_line(prev) and prev \
+                       and not rank_re.match(prev[0]['text']) \
+                       and any(NUM.match(w['text']) and w['x0'] >= first_race_x - 8
+                               for w in prev):
+                        score_lines.append(prev)
+                for sl in score_lines:
+                    for w in sl:
+                        if w['x0'] < first_race_x - 12:
+                            continue
+                        if medal_x and abs(w['x0'] - medal_x) <= 12:
+                            continue
+                        if abs(w['x0'] - tot_x) <= 12 or abs(w['x0'] - net_x) <= 12:
+                            continue
+                        ci = nearest_race(w['x0'])
+                        if ci is not None and NUM.match(w['text']) and buckets[ci]['num'] is None:
+                            buckets[ci]['num'] = w['text']
+
+                # Continuation lines (rank line → next rank line): stacked codes
+                # aligned by X to the helm's race cells, the crew name (Pos 'C'
+                # line), and Total/Net. Stop before any Legend/footer line.
+                crew_toks = []
+                tot_tok = net_tok = None
+                for k in range(i + 1, end):
+                    ln = sorted(rows[tops[k]], key=lambda x: x['x0'])
+                    if _is_footer_line(ln):
+                        break
+                    for w in ln:
+                        txt = w['text']
+                        if abs(w['x0'] - tot_x) <= 12 and NUM.match(txt) and tot_tok is None:
+                            tot_tok = txt; continue
+                        if abs(w['x0'] - net_x) <= 12 and NUM.match(txt) and net_tok is None:
+                            net_tok = txt; continue
+                        if _is_code(txt) and w['x0'] >= first_race_x - 12:
+                            ci = nearest_race(w['x0'])
+                            if ci is not None and buckets[ci]['code'] is None:
+                                buckets[ci]['code'] = re.sub(r'[^A-Z]', '', txt.upper())
+                    # Crew name fragments: alpha tokens in the name band (left of
+                    # NOC), excluding a lone Pos 'C'/'H' and any 3-caps NOC.
+                    for w in ln:
+                        txt = w['text']
+                        if w['x0'] < noc_x - 4 and re.search(r'[A-Za-z]', txt) \
+                           and txt not in ('H', 'C') and not re.match(r'^[A-Z]{3}$', txt):
+                            crew_toks.append(txt)
+
+                for w in head:
+                    if tot_tok is None and abs(w['x0'] - tot_x) <= 12 and NUM.match(w['text']):
+                        tot_tok = w['text']
+                    elif net_tok is None and abs(w['x0'] - net_x) <= 12 and NUM.match(w['text']):
+                        net_tok = w['text']
+
+                race_toks = []
+                for ci in range(n_races):
+                    cell = buckets.get(ci)
+                    if not cell or cell['num'] is None:
+                        # A cell with only a code (rare) — keep the code alone.
+                        if cell and cell['code']:
+                            race_toks.append(cell['code'])
+                        continue
+                    num = cell['num']
+                    race_toks.append(num + (' ' + cell['code'] if cell['code'] else ''))
+
+                # Medal race value (append last, verbatim) if present on the head
+                # line at medal_x.
+                if medal_x:
+                    for w in head:
+                        if abs(w['x0'] - medal_x) <= 12 and NUM.match(w['text']):
+                            race_toks.append(w['text']); break
+
+                helm = ' '.join(helm_toks).strip()
+                crew = ' '.join(crew_toks).strip()
+                if not helm or not race_toks:
+                    continue
+                e = _text_line_entry(rank, helm, crew, '', nat, '', race_toks, net_tok)
+                # Names are printed surname-first ALL-CAPS; keep as-is (clean_name
+                # in _text_line_entry already title-cases). Preserve trailing '.'.
+                entries.append(e)
+        # end page loop
+    return entries or None
+
+# ── worldsailing-resultscentre → VISION ONLY ───────────────────────────────
+# The World Sailing "Results Centre" microsite prints (Allianz Hague 2023,
+# Youth Worlds Garda 2024) are DELIBERATELY left to vision AI (registry
+# extractor=None). A word-geometry parse reads the rows, but: the docs carry no
+# sail number (nation-only ID, so the confidence gate can never clear 0.6); the
+# MNA/nat column x-offset drifts between documents; and 3-line wrapped crew names
+# split ambiguously. Shipping a deterministic parser here would be flaky, so the
+# family routes to vision (its PDF Title still names the family as a prompt hint).
+
+# ── asiansailing-wordpress (asiansailing.org article print w/ Sailwave tables) ─
+# A WordPress news-article print. Results tables are embedded on the middle pages,
+# anchored by 'Sailed: … Scoring system: Appendix A' blocks each headed by a fleet
+# name ('Optimist Main Fleet', 'Laser Radial Fleet', '420 (Open) Fleet' …). The
+# WordPress narrow columns force heavy word-wrap, so parse by WORD GEOMETRY:
+#   header 'Pos [Sail No|SailNo] Sex [Helm ]Name [Name] R1…Rn Total [Nett]'.
+#   The 3-letter nat sits ABOVE the sail number in the same column; Sex M/F →
+#   gender; helm/crew names wrap onto the sail-number line; codes wrap too and
+#   align by X to their race cell. div = fleet heading. When Nett is absent set
+#   nett=total. Returns entries or None.
+def try_asiansailing(full_text, pdf_bytes=None):
+    if pdfplumber is None or not pdf_bytes:
+        return None
+    if 'asiansailing.org' not in full_text.lower():
+        return None
+    from collections import defaultdict
+    NUM = re.compile(r'^\(?-?\d+(?:\.\d+)?\)?$')
+    NAT3 = re.compile(r'^[A-Z]{3}$')
+    CODES_LOCAL = {'DNF', 'DNS', 'DNC', 'OCS', 'DSQ', 'BFD', 'UFD', 'RET', 'NSC',
+                   'RDG', 'SCP', 'STP', 'DPI', 'DNE', 'ZFP', 'DGM'}
+
+    def _is_code(t):
+        return re.sub(r'[^A-Z]', '', t.upper()) in CODES_LOCAL
+
+    entries = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        cur_fleet = ''
+        cols = None   # dict once a header row is seen: pos_x, natsail_x, sex_x,
+                      # name_x, crew_x(optional), race_x[], total_x, nett_x
+        for page in pdf.pages:
+            words = page.extract_words()
+            if not words:
+                continue
+            rows = defaultdict(list)
+            for w in words:
+                rows[round(w['top'])].append(w)
+            tops = sorted(rows)
+
+            for i, t in enumerate(tops):
+                ln = sorted(rows[t], key=lambda x: x['x0'])
+                txts = [w['text'] for w in ln]
+                line_str = ' '.join(txts)
+
+                # Fleet heading — a line naming a fleet ('… Fleet'). Keep verbatim.
+                fh = re.search(r'([A-Za-z0-9.\-()/ ]+?Fleet)\b', line_str)
+                if fh and 'Pos' not in txts and len(txts) <= 5:
+                    cur_fleet = re.sub(r'\s+', ' ', fh.group(1)).strip()
+                    continue
+
+                # Header row establishes the column geometry for the section.
+                if 'Pos' in txts and ('Sex' in txts or 'Name' in txts) \
+                   and any(re.match(r'^R\d+$', x) for x in txts):
+                    by = [(w['text'], w['x0']) for w in ln]
+                    race_x = [x for tx, x in by if re.match(r'^R\d+$', tx)]
+                    pos_x = next((x for tx, x in by if tx == 'Pos'), None)
+                    sex_x = next((x for tx, x in by if tx == 'Sex'), None)
+                    # Sail-number column: 'No'/'No.'/'SailNo' label; else the
+                    # column between Pos and Sex.
+                    natsail_x = next((x for tx, x in by if tx in ('No', 'No.', 'SailNo')), None)
+                    if natsail_x is None:
+                        natsail_x = next((x for tx, x in by if tx == 'Sail'), None)
+                    total_x = next((x for tx, x in by if tx in ('Total', 'Tot')), None)
+                    nett_x = next((x for tx, x in by if tx in ('Nett', 'Net')), None)
+                    # Name column(s): 'Name' labels right of Sex.
+                    name_xs = [x for tx, x in by if tx == 'Name' and (sex_x is None or x > sex_x)]
+                    name_x = name_xs[0] if name_xs else (sex_x + 18 if sex_x else None)
+                    crew_x = name_xs[1] if len(name_xs) > 1 else None
+                    if race_x and pos_x is not None and name_x is not None:
+                        cols = {'pos_x': pos_x, 'natsail_x': natsail_x, 'sex_x': sex_x,
+                                'name_x': name_x, 'crew_x': crew_x, 'race_x': race_x,
+                                'total_x': total_x, 'nett_x': nett_x,
+                                'has_sail': natsail_x is not None}
+                    continue
+
+                if cols is None:
+                    continue
+                race_x = cols['race_x']
+                first_race_x = race_x[0]
+
+                # Rank line: leftmost token a bare integer near pos_x, carrying a
+                # run of numeric race scores.
+                if not ln or not re.match(r'^\d{1,3}$', ln[0]['text']) \
+                   or abs(ln[0]['x0'] - cols['pos_x']) > 16:
+                    continue
+                nscore = sum(1 for w in ln if NUM.match(w['text'])
+                             and w['x0'] >= first_race_x - 8)
+                if nscore < 3:
+                    continue
+                rank = int(ln[0]['text'])
+
+                def nearest_race(x):
+                    best, bd = None, 1e9
+                    for ci, rxx in enumerate(race_x):
+                        d = abs(x - rxx)
+                        if d < bd:
+                            bd, best = d, ci
+                    return best if bd <= 12 else None
+
+                nat = ''
+                sail = ''
+                sex = ''
+                helm_toks = []
+                crew_toks = []
+                buckets = defaultdict(lambda: {'num': None, 'code': None})
+                total_tok = nett_tok = None
+
+                def _classify(w, is_head):
+                    nonlocal nat, sail, sex, total_tok, nett_tok
+                    txt = w['text']
+                    x = w['x0']
+                    # Total / Nett columns.
+                    if cols['total_x'] is not None and abs(x - cols['total_x']) <= 12 \
+                       and NUM.match(txt):
+                        if total_tok is None:
+                            total_tok = txt
+                        return
+                    if cols['nett_x'] is not None and abs(x - cols['nett_x']) <= 12 \
+                       and NUM.match(txt):
+                        if nett_tok is None:
+                            nett_tok = txt
+                        return
+                    # Race grid.
+                    if x >= first_race_x - 12:
+                        ci = nearest_race(x)
+                        if ci is not None:
+                            if NUM.match(txt) and buckets[ci]['num'] is None:
+                                buckets[ci]['num'] = txt
+                            elif _is_code(txt) and buckets[ci]['code'] is None:
+                                buckets[ci]['code'] = re.sub(r'[^A-Z]', '', txt.upper())
+                        return
+                    # Sail/nat column.
+                    if cols['has_sail'] and abs(x - cols['natsail_x']) <= 16:
+                        if NAT3.match(txt) and not nat:
+                            nat = txt
+                        elif re.match(r'^\d{1,6}$', txt) and not sail:
+                            sail = txt
+                        elif NAT3.match(txt):
+                            pass
+                        return
+                    # Sex column.
+                    if cols['sex_x'] is not None and abs(x - cols['sex_x']) <= 10 \
+                       and txt in ('M', 'F', 'X'):
+                        sex = txt
+                        return
+                    # Name / crew columns (alpha tokens). Skip article/site chrome
+                    # that shares the name band: the footer URL, the browser print
+                    # header and 'Asian Sailing'/'Sailing' page furniture.
+                    if re.search(r'[A-Za-z]', txt):
+                        if ('asiansailing.org' in txt.lower() or txt.lower().startswith('http')
+                                or txt.lower() in ('asian', 'sailing')):
+                            return
+                        if not cols['has_sail'] and NAT3.match(txt) and not nat \
+                           and abs(x - cols['natsail_x'] if cols['natsail_x'] else 1e9) <= 16:
+                            nat = txt
+                            return
+                        if cols['crew_x'] is not None and x >= cols['crew_x'] - 10:
+                            crew_toks.append((x, txt))
+                        else:
+                            helm_toks.append((x, txt))
+
+                # Head line + continuation lines until the next rank line. Also
+                # stop at any section boundary — a new 'Pos' header, a fleet
+                # heading ('… Fleet'), or a 'Sailed:'/'Scoring system' block line —
+                # so the next section's chrome never bleeds into this row's name.
+                nxt = None
+                for k in range(i + 1, len(tops)):
+                    lk = sorted(rows[tops[k]], key=lambda x: x['x0'])
+                    if lk and re.match(r'^\d{1,3}$', lk[0]['text']) \
+                       and abs(lk[0]['x0'] - cols['pos_x']) <= 16 \
+                       and sum(1 for w in lk if NUM.match(w['text'])
+                               and w['x0'] >= first_race_x - 8) >= 3:
+                        nxt = tops[k]; break
+                    lk_str = ' '.join(w['text'] for w in lk)
+                    if any(w['text'] == 'Pos' for w in lk) \
+                       or re.search(r'\bFleet\b', lk_str) \
+                       or 'Sailed:' in lk_str or 'Scoring' in lk_str:
+                        nxt = tops[k]; break
+
+                block_tops = [t]
+                for k in range(i + 1, len(tops)):
+                    if nxt is not None and tops[k] >= nxt:
+                        break
+                    block_tops.append(tops[k])
+
+                for bt in block_tops:
+                    is_head = (bt == t)
+                    for w in sorted(rows[bt], key=lambda x: x['x0']):
+                        if is_head and w is ln[0]:
+                            continue   # the Pos integer itself
+                        # skip the leading rank integer on the head line
+                        if is_head and w['x0'] == ln[0]['x0'] and w['text'] == ln[0]['text']:
+                            continue
+                        _classify(w, is_head)
+
+                helm = ' '.join(tx for _, tx in sorted(helm_toks))
+                crew = ' '.join(tx for _, tx in sorted(crew_toks))
+
+                race_toks = []
+                for ci in range(len(race_x)):
+                    cell = buckets.get(ci)
+                    if not cell:
+                        continue
+                    if cell['num'] is not None:
+                        race_toks.append(cell['num'] + (' ' + cell['code'] if cell['code'] else ''))
+                    elif cell['code'] is not None:
+                        race_toks.append(cell['code'])
+
+                if not helm or not race_toks:
+                    continue
+                # Nett: printed when present, else = total.
+                net_use = nett_tok if nett_tok is not None else total_tok
+                e = _text_line_entry(rank, helm, crew, sail, nat, cur_fleet,
+                                     race_toks, net_use)
+                e['gender'] = 'F' if sex == 'F' else ('M' if sex == 'M' else '')
+                entries.append(e)
+    return entries or None
+
 # ── Fleet detection ────────────────────────────────────────────────────────
 FLEET_PATTERNS = re.compile(
     r'(?i)\b(29er|49erFX|49er|Nacra\s*\d+|ILCA\s*\d?'
@@ -2674,17 +3163,17 @@ FORMAT_REGISTRY = [
     {"family": "topyacht",     "input_types": ["pdf-text"],
      "detect": _sig_topyacht,       "extractor": try_topyacht},
     {"family": "bornan",       "input_types": ["pdf-text"],
-     "detect": _sig_bornan,         "extractor": None},
+     "detect": _sig_bornan,         "extractor": try_bornan},
     {"family": "hubsail",      "input_types": ["pdf-text"],
      "detect": _sig_hubsail,        "extractor": None},
     {"family": "aspose-bilingual-cn", "input_types": ["pdf-text", "pdf-scanned"],
-     "detect": _sig_aspose,         "extractor": None},
+     "detect": _sig_aspose,         "extractor": try_aspose_cn},
     {"family": "cn-games-book", "input_types": ["pdf-text"],
      "detect": _sig_cn_games,       "extractor": None},
     {"family": "worldsailing-resultscentre", "input_types": ["pdf-text"],
      "detect": _sig_ws_resultscentre, "extractor": None},
     {"family": "asiansailing-wordpress", "input_types": ["pdf-text"],
-     "detect": _sig_asiansailing,   "extractor": None},
+     "detect": _sig_asiansailing,   "extractor": try_asiansailing},
     {"family": "excel-print-pdf", "input_types": ["pdf-text"],
      "detect": _sig_excel_print,    "extractor": try_excel_print},
     {"family": "pya-events",   "input_types": ["html"],
@@ -2898,6 +3387,81 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
                 if ev_date and re.search(
                         r'last update:\s*\d{1,2}/\d{1,2}/' + re.escape(ev_date[-4:]), sig):
                     ev_date = ''
+
+    # aspose-bilingual-cn (Aspose.PDF Chinese notice-board results): the results
+    # grid is the same bilingual "Overall Results of …" layout, so try_aspose_cn
+    # delegates rows to that core. Signature-gated on the Aspose Producer (threaded
+    # via _pdf_meta). Also recover the ENGLISH event line and the CJK date stamp
+    # ("2025年6月8日" → dd/mm/yyyy) that the generic heuristics miss.
+    if 'aspose.pdf' in _meta_get(_pdf_meta, 'Producer').lower():
+        if (not all_parsed) or len(all_parsed) < 3:
+            ac = try_aspose_cn(full_text)
+            if ac and len(ac) > len(all_parsed):
+                all_parsed = ac
+        if all_parsed:
+            _aev = _aspose_cn_event(full_text)
+            if _aev:
+                ev_name = _aev
+            _adate = _aspose_cn_date(full_text)
+            if _adate:
+                ev_date = _adate
+
+    # bornan (AG2022 Bornan/Stimulsoft timing): stacked score codes + H/C crew
+    # cells need word geometry, so parse by X-position. The Stimulsoft grid path
+    # mis-reads these cells, so this extractor wins whenever it reads at least as
+    # many rows.
+    if 'timing and results provided by bornan' in sig:
+        bn = try_bornan(full_text, pdf_bytes)
+        if bn and len(bn) >= len(all_parsed):
+            all_parsed = bn
+            # Event name = the English class/title line (bilingual CN/EN stacked,
+            # e.g. "Women's Single Dinghy - ILCA6" / "Men's Skiff - 49er").
+            for _l in full_text.split('\n')[:8]:
+                _s = _l.strip()
+                if re.search(r'[A-Za-z]', _s) and not re.search(r'[一-鿿]', _s) \
+                   and re.search(r'(?i)(single|skiff|dinghy|men|women|ilca|49er|470|420|nacra)', _s):
+                    ev_name = _s[:120]; break
+            # Date from the "As of <DOW> DD MON YYYY" stamp → dd/mm/yyyy.
+            _bd = re.search(r'As of\s+(?:[A-Z]{3}\s+)?(\d{1,2})\s+([A-Za-z]{3})\s+(20\d\d)',
+                            full_text, re.IGNORECASE)
+            if _bd:
+                _bm = _MONTHS.get(_bd.group(2)[:3].lower())
+                if _bm:
+                    ev_date = f"{int(_bd.group(1)):02d}/{_bm:02d}/{_bd.group(3)}"
+
+    # worldsailing-resultscentre (World Sailing "Results Centre" microsite print):
+    # DELIBERATELY LEFT TO VISION (extractor=None). The thin text layer parses by
+    # word geometry, but these docs carry NO sail number (nation-only ID → the
+    # confidence gate can never clear 0.6), the MNA/nat column offset drifts per
+    # document, and 3-line wrapped crew names split ambiguously. A deterministic
+    # parse here would be flaky, so the family routes to vision AI (its PDF Title
+    # still names the family as a hint). See the detection registry (extractor
+    # None) and docs/parser-formats.md.
+
+    # asiansailing-wordpress (asiansailing.org article print w/ Sailwave tables):
+    # heavy web-column word-wrap + nat-over-sail stacking → word geometry. The
+    # 'Sailed:' fleet blocks also match the generic Sailwave path, which mis-reads
+    # the wrapped web layout, so this specific extractor wins whenever it reads at
+    # least as many rows (nat stacked over sail + per-fleet div are only recovered
+    # here). Signature = the asiansailing.org URL stamp.
+    if 'asiansailing.org' in sig:
+        asn = try_asiansailing(full_text, pdf_bytes)
+        if asn and len(asn) >= len(all_parsed):
+            all_parsed = asn
+            # Event name = the '<...> Cup (2016 – 17) Series' run from the article
+            # title (PDF Title or the first in-text occurrence), truncated at the
+            # article-headline suffix ('– Esctasy…'). Date from the article's own
+            # date line; the browser print-header timestamp ('23/06/2026, 10:30')
+            # is NOT the event date.
+            _src = _meta_get(_pdf_meta, 'Title') or full_text
+            _am = re.search(r'([A-Z][A-Za-z0-9 ]*?Cup\s*\(20\d\d\s*[–\-]\s*\d{2}\)(?:\s+Series)?)', _src)
+            if _am:
+                ev_name = re.sub(r'\s+', ' ', _am.group(1)).replace('–', '-').strip()
+            _adm = re.search(r'\b([A-Za-z]+)\s+(\d{1,2}),\s*(20\d\d)\b', full_text)
+            if _adm:
+                _mo = _MONTHS.get(_adm.group(1)[:3].lower())
+                if _mo:
+                    ev_date = f"{int(_adm.group(2)):02d}/{_mo:02d}/{_adm.group(3)}"
 
     # "Overall Results of <division>" books (bilingual, no ruled table) — parse
     # from text and tag div per section so divisions stay separate.

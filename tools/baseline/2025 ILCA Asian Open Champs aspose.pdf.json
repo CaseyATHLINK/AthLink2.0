@@ -1,0 +1,65 @@
+{
+  "event": "2025 ILCA ASIAN OPEN CHAMPIONSHIPS",
+  "date": "08/06/2025",
+  "detected_class": "ilca",
+  "detected_host": null,
+  "discards": null,
+  "n_entries": 351,
+  "confidence": 0.8,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "309 ranks missing from 1..351"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "200777",
+      "helm": "Yigeng Chen",
+      "crew": "",
+      "nat": "CHN",
+      "div": "ILCA4 Youth Boys U18 Open",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "221062",
+      "helm": "Austin Jia Yu Yeo",
+      "crew": "",
+      "nat": "SGP",
+      "div": "ILCA4 Youth Boys U18 Open",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "222713",
+      "helm": "Ian Goh",
+      "crew": "",
+      "nat": "SGP",
+      "div": "ILCA4 Youth Boys U18 Open",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "214737",
+      "helm": "Aurick You Hun Leow",
+      "crew": "",
+      "nat": "SGP",
+      "div": "ILCA4 Youth Boys U18 Open",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "223205",
+      "helm": "Jiun Choi",
+      "crew": "",
+      "nat": "KOR",
+      "div": "ILCA4 Youth Boys U18 Open",
+      "gender": "M",
+      "category": "U16"
+    }
+  ]
+}

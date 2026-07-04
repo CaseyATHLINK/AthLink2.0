@@ -84,7 +84,15 @@ def score_parse(result: dict) -> dict:
     have_sail = sum(1 for e in entries
                     if str(e.get("sail") or "").strip().lower() not in _SAIL_PLACEHOLDER)
     sail_cov = have_sail / n
-    if sail_cov < 0.3:
+    # Some official formats genuinely have NO sail-number column (e.g. Asian
+    # Games "bornan" reports identify boats by NOC only). When not a single row
+    # has a sail but nationality coverage is strong, that's the format — not a
+    # column-detection failure — so dock lightly instead of failing the gate.
+    have_nat = sum(1 for e in entries if str(e.get("nat") or "").strip())
+    if have_sail == 0 and n >= 3 and have_nat / n >= 0.8:
+        conf -= 0.1
+        reasons.append("format has no sail-number column (nat-identified rows)")
+    elif sail_cov < 0.3:
         # Near-total loss → almost certainly a column-detection failure, not a
         # format that genuinely omits sails. Dock hard so it falls back to AI.
         conf -= 0.5

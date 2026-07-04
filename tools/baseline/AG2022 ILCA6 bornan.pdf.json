@@ -1,0 +1,65 @@
+{
+  "event": "Women's Single Dinghy - ILCA6",
+  "date": "26/09/2023",
+  "detected_class": "",
+  "detected_host": null,
+  "discards": 1,
+  "n_entries": 9,
+  "confidence": 0.9,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "format has no sail-number column (nat-identified rows)"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "—",
+      "helm": "Binti Mohamad LAT.",
+      "crew": "",
+      "nat": "MAS",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "—",
+      "helm": "Norton Sl",
+      "crew": "",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "—",
+      "helm": "Chan Jhv",
+      "crew": "",
+      "nat": "SGP",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "—",
+      "helm": "Kumanan N",
+      "crew": "",
+      "nat": "IND",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "—",
+      "helm": "Gu M",
+      "crew": "",
+      "nat": "CHN",
+      "div": "",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

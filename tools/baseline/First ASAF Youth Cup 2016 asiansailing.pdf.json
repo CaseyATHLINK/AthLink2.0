@@ -1,0 +1,65 @@
+{
+  "event": "First ASAF Youth Sailing Cup (2016 - 17) Series",
+  "date": "19/12/2016",
+  "detected_class": "optimist",
+  "detected_host": null,
+  "discards": null,
+  "n_entries": 135,
+  "confidence": 0.8,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "69 ranks missing from 1..135"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "2615",
+      "helm": "Ramadhan Tito",
+      "crew": "",
+      "nat": "INA",
+      "div": "Optimist Main Fleet",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "77",
+      "helm": "Poonpat Saranwong",
+      "crew": "",
+      "nat": "THA",
+      "div": "Optimist Main Fleet",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "244",
+      "helm": "Boonnak Panwa",
+      "crew": "",
+      "nat": "THA",
+      "div": "Optimist Main Fleet",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "168",
+      "helm": "Jedtavee Yongyuennarn",
+      "crew": "",
+      "nat": "THA",
+      "div": "Optimist Main Fleet",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "4693",
+      "helm": "Granzin Rasmus",
+      "crew": "",
+      "nat": "SWE",
+      "div": "Optimist Main Fleet",
+      "gender": "M",
+      "category": ""
+    }
+  ]
+}
