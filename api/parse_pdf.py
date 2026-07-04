@@ -186,8 +186,9 @@ def is_race_hdr(cell):
         re.match(r'^\d{1,2}[PEQF]$', s) or     # Sailti: 1P (qualifying), 8E (final)
         re.match(r'^(RACE\s*\d{1,2})$', s) or
         re.match(r'^\d{1,2}$', s) or
+        re.match(r'^ER\d{1,2}$', s) or         # ER1/ER2 = extra race (pya-events)
         re.match(r'^M\d{1,2}$', s) or          # M10 = medal race 10
-        s == 'MR'                               # MR  = medal race
+        s in ('M', 'MR')                        # M / MR = medal race (Sailwave native)
     )
 
 
@@ -318,6 +319,14 @@ def split_combined_names(cell_value):
             # has at least one token that is an ALL-CAPS surname (2+ letters)
             return any(len(t) >= 2 and re.match(r'^[A-ZÀ-ÖØ-Þ\-]+$', t) for t in s.split())
         if all(looks_like_full_name(l) for l in lines):
+            return clean_name(lines[0]), clean_name(lines[1])
+        # Two <br>-stacked Title-case names (Sailwave-native "Team" cell:
+        # "Ming Xu" / "Yahan Tu"): each line is a plausible full name (2+ word
+        # tokens, ≥1 with a lower-case run so it isn't a stray label). Split them.
+        def looks_like_title_name(s):
+            toks = [t for t in s.split() if re.search(r'[A-Za-zÀ-ÿ]', t)]
+            return len(toks) >= 2 and any(re.search(r'[a-zà-ÿ]', t) for t in toks)
+        if all(looks_like_title_name(l) for l in lines):
             return clean_name(lines[0]), clean_name(lines[1])
 
     # Case 4: no comma, no birth year, single line (or unclear) → wrapped single name
@@ -564,7 +573,8 @@ def detect_cols(header_rows):
             cols.setdefault('helm', i)
         elif h in ('crewname','crew','crewsname','mate'):
             cols['crew'] = i
-        elif h in ('sailors','name','helmcrew','name(s)','helmandsailors'):
+        elif h in ('sailors','name','helmcrew','name(s)','helmandsailors','team'):
+            # Sailwave-native "Team" holds the stacked helm/crew names.
             cols.setdefault('sailors', i)
         elif h in ('sailno','sail','sailnum','sailnumber','no','boatno','number'):
             cols.setdefault('sail', i)
@@ -593,7 +603,9 @@ def detect_cols(header_rows):
             cols.setdefault('club', i)
         elif h in ('total','totalpts','totalpoints','pts','points','totalpts.'):
             cols['total'] = i
-        elif h in ('nett','net','netpts','netpoints','nettpts','nettpoints','nett.','netpts.'):
+        elif h in ('nett','net','netpts','netpoints','nettpts','nettpoints','nett.',
+                   'netpts.','netpoints','score'):
+            # pya-events uses a single "Score" column for the net total.
             cols['net'] = i
         elif h in ('yob','yearofbirth','birthyear','born','dob','helmyob'):
             cols.setdefault('yob', i)
@@ -3078,7 +3090,23 @@ def _sig_sailti(fb, low, meta):
     return 'sailti scoring soft' in low
 
 
+def _sig_sailwave_html_native(fb, low, meta):
+    """Sailwave's own 'publish to HTML' (NOT the ourclubadmin re-host): the title
+    starts 'Sailwave results for …', headers are tablesorter <th> divs, and there
+    is no ourclubadmin stamp."""
+    if 'ourclubadmin' in low:
+        return False
+    has_title = (_meta_get(meta, 'Title').lower().startswith('sailwave results for')
+                 or 'sailwave results for' in low)
+    return has_title and 'tablesorter-header-inner' in low
+
+
 def _sig_sailti_web(fb, low, meta):
+    # Live sailti.com / SailingGrandSlam / Somvela page: either the classic
+    # 'Last update:' + colour-fleet stamp, or the hidden 'punt_<Fleet>' sort spans
+    # / SailingGrandSlam / Somvela markers in the saved HTML.
+    if 'punt_' in low or 'sailinggrandslam' in low or 'somvela' in low:
+        return True
     return bool(re.search(r'last update:\s*\d', low)) and bool(
         re.search(r'\b(gold|silver|bronze|emerald|sapphire|yellow|blue|red|green|white)\b', low))
 
@@ -3146,6 +3174,14 @@ def _sig_ourclubadmin(fb, low, meta):
 # `detect(file_bytes, full_text_lower, pdf_meta) -> bool`; `extractor` points at
 # the EXISTING rule function for families with a rule path today, else None.
 FORMAT_REGISTRY = [
+    # Domain/markup-specific HTML families first — the pya-events and native
+    # Sailwave pages also carry generic Sailwave stamps ('sailwave scoring
+    # software', 'Sailed:/Entries:'), so their precise signatures must win over
+    # the generic `sailwave` family below.
+    {"family": "sailwave-html-native", "input_types": ["html"],
+     "detect": _sig_sailwave_html_native, "extractor": None},
+    {"family": "pya-events",   "input_types": ["html"],
+     "detect": _sig_pya,            "extractor": None},
     {"family": "sailwave",     "input_types": ["pdf-text", "pdf-scanned", "html"],
      "detect": _sig_sailwave,       "extractor": try_sailwave_text},
     {"family": "manage2sail",  "input_types": ["pdf-text"],
@@ -3176,8 +3212,6 @@ FORMAT_REGISTRY = [
      "detect": _sig_asiansailing,   "extractor": try_asiansailing},
     {"family": "excel-print-pdf", "input_types": ["pdf-text"],
      "detect": _sig_excel_print,    "extractor": try_excel_print},
-    {"family": "pya-events",   "input_types": ["html"],
-     "detect": _sig_pya,            "extractor": None},
     {"family": "ourclubadmin", "input_types": ["html", "pdf-text"],
      "detect": _sig_ourclubadmin,   "extractor": None},
 ]
@@ -3932,9 +3966,22 @@ class _TableHarvester(_HTMLParser):
         self._table_anchor_text = []   # text seen just before each table (fleet label)
         self._recent_text = []
         self._last_heading = ''        # most recent heading (best fleet/class anchor)
+        self._hidden_depth = 0         # >0 while inside a display:none element
+        self._hidden_stack = []        # tag names that opened a hidden region
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        # Drop content of visually-hidden elements. Sailti-web (Grand Slam)
+        # prefixes every race cell with a `<span style="display:none;">punt_Blue
+        # _0000003</span>` sort key BEFORE the visible score — harvesting it would
+        # corrupt the score. Track hidden container tags on a stack (void tags
+        # like img/br carry no text so they never open a region).
+        if tag not in ('br', 'img', 'hr', 'input', 'meta', 'link', 'wbr'):
+            style = (a.get('style') or '').replace(' ', '').lower()
+            hide = 'display:none' in style or 'visibility:hidden' in style
+            self._hidden_stack.append(tag if hide else None)
+            if hide:
+                self._hidden_depth += 1
         if tag == 'table':
             self._tbl = []
             # The closest preceding heading (e.g. "Klasa: 49erFX") is the most
@@ -3962,6 +4009,10 @@ class _TableHarvester(_HTMLParser):
             self._heading_buf = []
 
     def handle_endtag(self, tag):
+        if tag not in ('br', 'img', 'hr', 'input', 'meta', 'link', 'wbr') \
+                and self._hidden_stack:
+            if self._hidden_stack.pop() is not None:
+                self._hidden_depth = max(0, self._hidden_depth - 1)
         if tag in ('td', 'th') and self._cell is not None:
             # collapse runs of spaces/tabs but KEEP newlines (they mark stacked
             # helm/crew names or score+code), then trim each line.
@@ -3987,6 +4038,8 @@ class _TableHarvester(_HTMLParser):
             self._heading_tag = None
 
     def handle_data(self, data):
+        if self._hidden_depth > 0:
+            return                      # inside a display:none region — drop it
         if self._cell is not None:
             self._cell.append(data)
         elif self._heading_tag is not None:
@@ -4018,6 +4071,12 @@ def _parse_html_string(html_text: str) -> dict:
     plain = re.sub(r'<[^>]+>', ' ', html_text)
     plain = re.sub(r'\s+', ' ', _unescape(plain))
     ev_date = extract_date(plain)
+    # A page's date often lives in an h3 "Results as of …" heading that sits past
+    # extract_date's leading window (a big inline <style> block pushes it out).
+    # Headings are short and reliable, so fall back to them when the body scan
+    # came up empty (Sailwave-native / pya h5). Pure text, no global pattern change.
+    if not ev_date:
+        ev_date = extract_date(' '.join(t for (_tag, t) in hv.headings))
     discards = extract_discards(plain)
     detected_fleets = detect_fleets_in_text(plain)
 
@@ -4056,8 +4115,19 @@ def _parse_html_string(html_text: str) -> dict:
     headings_text = ' '.join(t for (_tag, t) in hv.headings) + ' ' + ' '.join(detected_fleets)
     detected_class = detect_class(all_parsed, ev_name, headings_text)
     detected_host  = detect_host(' '.join(t for (_tag, t) in hv.headings) + ' ' + plain[:2000])
-    return _finalize(all_parsed, ev_name, ev_date, discards, base_notes,
-                     detected_class=detected_class, detected_host=detected_host)
+    result = _finalize(all_parsed, ev_name, ev_date, discards, base_notes,
+                       detected_class=detected_class, detected_host=detected_host)
+    # Stamp a format verdict on HTML results too (matching the PDF path). The
+    # detector is pure text/meta, so feed it the lower-cased page source.
+    try:
+        _fam, _itype, _conf = detect_format(html_text.encode('utf-8', 'ignore'),
+                                            html_text.lower(), {})
+        if isinstance(result, dict):
+            result["detected_format"] = {"family": _fam, "input_type": "html",
+                                         "confidence": _conf}
+    except Exception:
+        pass
+    return result
 
 
 _ALLOWED_FETCH_SCHEMES = ('http://', 'https://')

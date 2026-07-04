@@ -1,0 +1,3480 @@
+<!DOCTYPE html>
+<!-- saved from url=(0056)https://jpvm.org/results/2023/asian_sailing/results.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+<meta name="description" content="sailwave results">
+<meta name="viewport" content="width=device-width">
+
+<title>Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023</title>
+
+<style type="text/css">
+body {font: 72% arial, helvetica, sans-serif; text-align: center;}
+.hardleft  {text-align: left; float: left;  margin: 15px 0 15px 25px;}
+.hardright {text-align: right; float: right; margin: 15px 25px 15px 0;}
+table {text-align: left; margin: 0px auto 30px auto; font-size: 1em; border-collapse: collapse; border: 1px #fff solid;}
+td, th {padding: 4px; border: 2px #fff solid; vertical-align: top;}
+.caption {padding: 5px; text-align: center; border: 0; font-weight: bold;}
+h1 {font-size: 1.6em;}
+h2 {font-size: 1.4em;}
+h3 {font-size: 1.2em;}
+p {text-align: center;}
+th {background-color: #aaf;}
+.contents {text-align: left; margin-left: 20%;}
+.even {background-color: #bbf;}
+.odd {background-color: #ddf;}
+.natflag {border: 1px #999 solid;}
+.nattext {font-size: 0.8em;}
+.place1 {font-weight: bold; background-color: #ffffaa;}
+.place2 {font-weight: bold; background-color: #aaaaff;}
+.place3 {font-weight: bold; background-color: #ffaaaa;}
+.placen {}
+</style>
+
+<script type="text/javascript">
+</script>
+<script src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/jquery.min.js.download"></script>
+<script>
+
+function swGetURLArgs() {
+
+  var url = location.href;
+  var qs  = url.substring(url.indexOf('?') + 1).split('&');
+
+  for(var i = 0, result = {}; i < qs.length; i++) {
+    qs[i]            = qs[i].split('=');
+    result[qs[i][0]] = decodeURIComponent(qs[i][1]);
+  }
+
+  return result;
+}
+
+//
+//  name=HighlightWins3
+//  dependencies=jQuery
+//  description=Highlight winning scores in summary tables.
+//  author=Jon Eskdale based on an idea by Colin Jenkins
+//  date=2015-08-18
+//  version=1.6 2018-11-15
+//  url=http://sailwave.com
+//  email=jon@sailwave.com
+//  twitter=eskdale
+//  comments=Edit colours to colours of your choice
+//
+
+$(document).ready(function() {
+var winsSelector = '.summaryrace';
+var winsText     = /\b1\.0/;
+var twoText              = /\b2\.0/;
+var threeText    = /\b3\.0/;
+
+// Edit these colours to change the highlight colours for 1st, 2nd and 3rd
+var winsColour   = '#ffd700';
+var twoColour    = '#6a91c5';
+var threeColour  = '#da6841';
+//var twoColour  = '#ffe768';
+//var threeColour  = '#fff0a1';
+
+// create array of race column numbers for first table (summarytable)
+var ths = document.getElementsByTagName('col');
+var column =[];
+for (var i=0; i<ths.length; i++) {
+        if (ths[i].classList[0] === "race") {
+                column.push(i);
+        } else {
+                if (column.length !=0) {
+                        break;
+                }
+        }
+}
+//console.log(column);
+
+//  Set a class of summaryrace for all race cells in summary table body
+//
+for (var i=0; i<column.length; i++) {
+        $(".summarytable tbody tr td:nth-child(" + (column[i]+1) +")").addClass("summaryrace");
+}
+
+// Change the background color for cells with class of summaryrace and that match regular expression text
+$(function () {
+
+  $(winsSelector).filter(function() {
+    return winsText.test($(this).text());
+  }).css("background", winsColour);
+  $(winsSelector).filter(function() {
+        return twoText.test($(this).text());
+  }).css("background", twoColour);
+  $(winsSelector).filter(function() {
+        return threeText.test($(this).text());
+  }).css("background", threeColour);
+
+});
+});
+//
+//  name=Scroller.js
+//  dependencies=
+//  description=Scroll the page up and down.
+//  usage=http://www.sailwave.com/scroller
+//  author=Colin Jenkins
+
+//
+//
+// Modified by Peter van Muyden 2019-09-29
+//    scroller and refresh is enabled when "?refresh=0" is appended to the URL
+//  refresh=0 will reload the file after every loop refresh =1 or greater will loop around before reloading
+//  The default scroll speed is 70 the smaller the speed number, the faster it will scroll
+//  the default step is 2, the greater the step number, the greater the step will be
+//  speed and timeout can be changed
+//  ?top will force the display to jump to the top without scrolling
+//  ?wait=x  will wait x number of seconds at the top and bottom
+// if the refersh parameter is not defined all other parameters are ignored
+// C:/Users/Peter%20van%20Muyden/Dropbox/Peter's/Regattas/2019/Founders/pass_parameter.html?refresh=2&step=4&speed=10
+//
+//   setTimeout(() => alert('Hello'), 1000);
+
+var args = swGetURLArgs();
+
+if (args.step)
+  var stepY = parseInt(args.step);
+else
+  var stepY = 2;
+
+if (args.speed)
+  var timeout = parseInt(args.speed);
+else
+  var timeout = 70;
+
+if (args.refresh) {
+    loop_request= parseInt(args.refresh);
+
+if (args.wait_top)
+  var wait_top_sec = parseInt(args.wait_top) * 1000;
+else
+  var wait_top_sec = 0;
+
+if (args.wait_bottom)
+  var wait_bottom_sec = parseInt(args.wait_bottom) * 1000;
+else
+  var wait_bottom_sec = 0;
+
+function sleep(milliseconds) {
+  var start = new Date().getTime();
+  for (var i = 0; i < 1e7; i++) {
+    if ((new Date().getTime() - start) > milliseconds){
+      break;
+    }
+  }
+}
+
+
+function getDocHeight() {
+    var D = document;
+    return Math.max(
+        Math.max(D.body.scrollHeight, D.documentElement.scrollHeight),
+        Math.max(D.body.offsetHeight, D.documentElement.offsetHeight),
+        Math.max(D.body.clientHeight, D.documentElement.clientHeight)
+    );
+}
+
+var startY = 0;
+var stopY  = 0;
+var dir    = 0;
+var currY  = 0;
+var loop = 0;
+
+function bump() {
+  scrollTo(0,currY);
+  scroller();
+}
+
+function scroller() {
+
+  if (stopY == 0) {
+    stopY = getDocHeight();
+    stopY = stopY - stopY/8;
+    if (stopY <= 100)
+      var abort = true;
+    else
+      var abort = false;
+  }
+
+  if (dir == 0) {
+    currY += stepY;
+    //sleep(wait_bottom_sec);
+    //setTimeout(() => alert('Hello if (dir == 0) {'), 1000);
+  }
+  else
+        if (args.top) {
+            currY =-1;
+            //sleep(wait_bottom_sec);
+        }
+        else
+            currY -= stepY;
+
+  if (currY > stopY) {
+    dir = 1;
+    currY = stopY;
+    //sleep(wait_bottom_sec);
+    //setTimeout(() => alert('Hello if (currY > stopY)'), 1);
+  }
+
+  if (currY < 0) {
+    dir = 0;
+    currY = 0;
+
+        loop +=1;
+        if (loop > loop_request) {
+        window.location.reload(1);
+        loop =0;
+    // above line provides the auto refresh
+        }
+    //sleep(wait_top_sec);
+    //setTimeout(() => alert('Hello if (currY < 0) {'), 1);
+  }
+
+  if (!abort)
+    if (dir == 0)
+      setTimeout(bump,timeout);
+    else
+      setTimeout(bump,timeout/100);
+
+}
+
+window.onload=scroller;
+
+}
+
+//
+//  name=TableSorter
+//  dependencies=jQuery (autoloads if not specified)
+//  description=Click on heading to sort table
+//  author=Jon Eskdale
+//  date=2015-08-13 / 2018-04-16
+//  version=1.2
+//  url=https://sailwave.com
+//  email=jon@sailwave.com
+//  twitter=@eskdale
+//
+
+</script>
+<link rel="stylesheet" href="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/sorter.css">
+<script src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/jquery.tablesorter.combined.js.download"></script>
+<script>
+
+$(document).ready(function()
+    {
+        // create array of race column numbers for first table (summarytable)
+        var ths = document.getElementsByTagName('col');
+        var column =[];
+        for (var i=0; i<ths.length; i++) {
+                if (ths[i].classList[0] === "race") {
+                        column.push(i);
+                } else {
+                        if (column.length !=0) {
+                                break;
+                        }
+                }
+        }
+        var patt = /\d+\.\d+/;
+        $.tablesorter.addParser({
+                id: 'race',
+                is: function(s, table, cell, $cell) {
+                        return false;
+                },
+                format: function(s, table, cell, cellIndex) {
+                        return patt.exec(s);
+                },
+                // set type, either numeric or text
+                type: 'numeric'
+        });
+
+        //  Set a class of race for all headers with race results in column for summarytable
+        //  "{sorter: 'numeric'}"
+        for (var i=0; i<column.length; i++) {
+                $(".summarytable thead tr th:nth-child(" + (column[i]+1) +")").addClass("sorter-race");
+        }
+
+
+        $(".summarytable").tablesorter({
+         theme : 'blue',
+         sortMultiSortKey: 'ctrlKey',
+         sortResetKey: 'altKey',
+         });
+}
+);
+
+
+//
+//  name=CentreBurgee
+//  dependencies=jQuery
+//  description=Centre the Event Burgee
+//  author=Jon Eskdale
+//  date=2021-06-22
+//  version=1.0
+//  url=http://sailwave.com
+//  email=jon@sailwave.com
+//  twitter=@eskdale
+//
+
+var sText       = 'Texel';
+var sSelector   = '.summarytable th';
+
+$(function () {
+    $('img').removeClass('hardleft');
+    $('img').removeClass('hardright');
+});
+
+//
+//  name=SocialShare.js
+//  dependencies=
+//  description=Add facebook and twitter sharing links.
+//  author=Colin Jenkins
+//  edited=Jon Eskdale
+//  version=1.1
+//  date=2020-09-19
+//  url=http://op12no2.me
+//  email=op12no2@gmail.com
+//  twitter=@op12no2
+//
+
+$(function() {
+
+  var fbimage = 'https://www.sailwave.com/media/facebook.png';
+  var fbshare = 'https://www.facebook.com/sharer/sharer.php?u=' + window.location;
+  var fblink  = '<a title="share on facebook" href="' + fbshare + '"><img src="' + fbimage + '"></a>'
+
+  var twimage = 'https://www.sailwave.com/media/twitter.png';
+  var twshare = 'https://twitter.com/intent/tweet?text=' + '%23' + encodeURIComponent($('title').text()) + '&url=' + window.location;
+  var twlink  = '<a title="share on twitter" href="' + twshare + '"><img src="' + twimage + '"></a>'
+
+  $('body').prepend(fblink + ' ' + twlink);
+
+});
+//
+//  name=HighlightWins.js
+//  dependencies=
+//  description=Highlight winning scores in summary tables.
+//  author=Colin Jenkins
+//  version=1.0
+//  date=2015-07-27
+//  url=http://op12no2.me
+//  email=op12no2@gmail.com
+//  twitter=@op12no2
+//
+
+var winsText     = '1.0';
+var winsColour   = '#ffd700';
+var winsSelector = '.summarytable td';
+
+$(function () {
+  $(winsSelector).filter(function() {
+    return $(this).text() === winsText;
+  }).css("background", winsColour);
+});
+
+</script>
+
+<style>body.tablesorter-disableSelection { -ms-user-select: none; -moz-user-select: -moz-none;-khtml-user-select: none; -webkit-user-select: none; user-select: none; }.tablesorter-resizable-container { position: relative; height: 1px; }.tablesorter-resizable-handle { position: absolute; display: inline-block; width: 8px;top: 1px; cursor: ew-resize; z-index: 3; user-select: none; -moz-user-select: none; }</style></head>
+
+<body><a title="share on facebook" href="https://www.facebook.com/sharer/sharer.php?u=https://jpvm.org/results/2023/asian_sailing/results.html"><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/facebook.png"></a> <a title="share on twitter" href="https://twitter.com/intent/tweet?text=%23Sailwave%20results%20for%20Asian%20Sailing%20Championships%20%26%20Asian%20Continental%20Olympic%20Qualifier%20for%202024%20Paris%20Olympics%20at%20ROYAL%20VARUNA%20YACHT%20CLUB%202023&amp;url=https://jpvm.org/results/2023/asian_sailing/results.html"><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/twitter.png"></a>
+
+<header>
+</header>
+
+<div id="wrap">
+
+<img class="" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/all.png" width="800&quot;&quot;" alt="event burgee">
+
+<h1>Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics</h1>
+<h2>ROYAL VARUNA YACHT CLUB</h2>
+
+<div style="clear:both;"></div>
+
+<style>
+div.applicant-break {page-break-after:always;}
+</style>
+<h3 class="seriestitle">Results as of 13:33 on December 19, 2023</h3>
+<h3 class="summarytitle" id="summary_470">470 Class</h3>
+<div class="caption summarycaption">Sailed: 11, Discards: 1, To count: 10, Entries: 16, Scoring system: Appendix A</div>
+<table class="summarytable tablesorter tablesorter-blue tablesorter9271737720a86" cellspacing="0" cellpadding="0" border="0" role="grid">
+<colgroup span="18">
+<col class="rank">
+<col class="sailno">
+<col class="boat">
+<col class="nat">
+<col class="notes">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="total">
+<col class="nett">
+</colgroup>
+<thead>
+<tr class="titlerow tablesorter-headerRow" role="row">
+<th data-column="0" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Rank: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Rank</div></th>
+<th data-column="1" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="SailNo: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">SailNo</div></th>
+<th data-column="2" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Team: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Team</div></th>
+<th data-column="3" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Nat: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Nat</div></th>
+<th data-column="4" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label=": No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">&nbsp;</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="5" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R1: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R1</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="6" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R2: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R2</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="7" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R3: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R3</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="8" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R4: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R4</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="9" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R5: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R5</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="10" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R6: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R6</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="11" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R7: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R7</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="12" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R8: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R8</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="13" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R9: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R9</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="14" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R10: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R10</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="15" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="M: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">M</div></th>
+<th data-column="16" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Total: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Total</div></th>
+<th data-column="17" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Net: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Net</div></th>
+</tr>
+</thead>
+<tbody aria-live="polite" aria-relevant="all">
+<tr class="odd summaryrow" role="row">
+<td>1st</td>
+<td>CHN171</td>
+<td>Ming Xu<br>Yahan Tu</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">(7.0)</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">10.0</td>
+<td>33.0</td>
+<td>26.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>2nd</td>
+<td>CHN311</td>
+<td>Zangjun Xu<br>Yani Xu</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">(5.0)</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">4.0</td>
+<td>33.0</td>
+<td>28.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>3rd</td>
+<td>CHN1</td>
+<td>Wenju Dong<br>Jingsa Wang</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">11.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">(12.0)</td>
+<td class="summaryrace">8.0</td>
+<td>60.0</td>
+<td>48.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>4th</td>
+<td>KOR1</td>
+<td>Chang Ju Kim<br>Jihee Lee</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(17.0 UFD)</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">7.0 PEN</td>
+<td>68.0</td>
+<td>51.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>5th</td>
+<td>MAS11</td>
+<td>Muhammad Fauzi Bin Kaman Shah<br>Juni Karimah Binti Noor Jamali</td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">(9.0)</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">18.0</td>
+<td>69.0</td>
+<td>60.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>6th</td>
+<td>CHN7</td>
+<td>Qian Fu<br>Chuanliang Wei</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">(17.0 UFD)</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">14.0</td>
+<td>82.0</td>
+<td>65.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>7th</td>
+<td>THA117</td>
+<td>Navee Thamsoontorn<br>Nichapa Waiwai</td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(12.0)</td>
+<td class="summaryrace">5.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">11.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">13.0 PEN</td>
+<td>82.0</td>
+<td>70.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>8th</td>
+<td>KOR82</td>
+<td>Ji Hoon Kim<br>Na Kyung Lee</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(13.0)</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">9.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace" style="background: rgb(218, 104, 65);">3.0 PEN</td>
+<td>89.0</td>
+<td>76.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>9th</td>
+<td>IND14</td>
+<td>Shraddha Verma<br>Ravindra Kumar Sharma</td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">(13.0)</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">17.0 PEN</td>
+<td>101.0</td>
+<td>88.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>10th</td>
+<td>KOR44</td>
+<td>Jang Nam Kim<br>Ji Seon Moon</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">(14.0)</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">21.0 PEN</td>
+<td>112.0</td>
+<td>98.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>11th</td>
+<td>KOR711</td>
+<td>Sang Min Lee<br>Eunhye Yoo</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">(11.0)</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">10.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td>89.0</td>
+<td>78.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>12th</td>
+<td>THA11</td>
+<td>Chalisa Krittanai<br>Nut Butmarasri</td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(14.0)</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">14.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td>110.0</td>
+<td>96.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>13th</td>
+<td>KOR11</td>
+<td>Dajeong Kim<br>Haeseong Kim</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(16.0)</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">7.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td>118.0</td>
+<td>102.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>14th</td>
+<td>THA18</td>
+<td>Patteera Meeyousamsen<br>Anusorn Ngamrit</td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">(15.0)</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">13.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td>132.0</td>
+<td>117.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>15th</td>
+<td>MAS5</td>
+<td>Muhammad Aiman Adam Bin Mohd Firdaus<br>Nur Ku Zarith Binti Jaafar</td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">(16.0)</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">16.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td>148.0</td>
+<td>132.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>16th</td>
+<td>MAS3</td>
+<td>Mohamad Shahieran Bin Raiman<br>Angeline Pei Wright</td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">(16.0)</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">15.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td>152.0</td>
+<td>136.0</td>
+</tr>
+</tbody>
+</table>
+<h3 class="summarytitle" id="summary_49er">49er Class</h3>
+<div class="caption summarycaption">Sailed: 13, Discards: 1, To count: 12, Entries: 21, Scoring system: Appendix A</div>
+<table class="summarytable tablesorter tablesorter-blue tablesorterd21e5cd897cfd" cellspacing="0" cellpadding="0" border="0" role="grid">
+<colgroup span="20">
+<col class="rank">
+<col class="sailno">
+<col class="boat">
+<col class="nat">
+<col class="notes">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="total">
+<col class="nett">
+</colgroup>
+<thead>
+<tr class="titlerow tablesorter-headerRow" role="row">
+<th data-column="0" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Rank: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Rank</div></th>
+<th data-column="1" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="SailNo: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">SailNo</div></th>
+<th data-column="2" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Team: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Team</div></th>
+<th data-column="3" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Nat: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Nat</div></th>
+<th data-column="4" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label=": No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">&nbsp;</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="5" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R1: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R1</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="6" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R2: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R2</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="7" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R3: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R3</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="8" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R4: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R4</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="9" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R5: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R5</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="10" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R6: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R6</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="11" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R7: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R7</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="12" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R8: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R8</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="13" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R9: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R9</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="14" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R10: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R10</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="15" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R11: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R11</div></th>
+<th data-column="16" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R12: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R12</div></th>
+<th data-column="17" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="M: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">M</div></th>
+<th data-column="18" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Total: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Total</div></th>
+<th data-column="19" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Net: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Net</div></th>
+</tr>
+</thead>
+<tbody aria-live="polite" aria-relevant="all">
+<tr class="odd summaryrow" role="row">
+<td>1st</td>
+<td>33</td>
+<td>Zaiding Wen<br>Tian Liu</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">(10.0)</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">9.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank2">2.0</td>
+<td>2.0</td>
+<td>47.0</td>
+<td>37.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>2nd</td>
+<td>167</td>
+<td>Mingliang Ding<br>Wenwei Zhang</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">8.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(19.0)</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">5.0</td>
+<td>4.0</td>
+<td>8.0</td>
+<td>85.0</td>
+<td>66.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>3rd</td>
+<td>301</td>
+<td>Prince Noble<br>Manu Francis</td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(13.0)</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">9.0</td>
+<td>11.0</td>
+<td>11.0 PEN</td>
+<td>81.0</td>
+<td>68.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>4th</td>
+<td>616</td>
+<td>Xin Wang<br>Tianyu Qi</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">5.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">(16.0)</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td>7.0</td>
+<td>4.0</td>
+<td>94.0</td>
+<td>78.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>5th</td>
+<td>279</td>
+<td>Don Whitcraft<br>Dylan Whitcraft</td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">14.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">7.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">(22.0 DSQ)</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">12.0</td>
+<td class="rank1" style="background: rgb(255, 215, 0);">1.0</td>
+<td>14.0</td>
+<td>108.0</td>
+<td>86.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>6th</td>
+<td>55</td>
+<td>Musab Al Hadi<br>Waleed Al-kindi</td>
+<td><img class="natflag" title="OMA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/OMA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">4.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">(16.0)</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">12.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">7.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">8.0</td>
+<td>15.0</td>
+<td>22.0 NSCm</td>
+<td>117.0</td>
+<td>101.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>7th</td>
+<td>177</td>
+<td>Weirui Sun<br>Yifan Wang</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">(16.0)</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">7.0</td>
+<td>8.0</td>
+<td>12.0</td>
+<td>131.0</td>
+<td>115.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>8th</td>
+<td>81</td>
+<td>K C Ganapathy<br>Varun Ashok</td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">9.3 RDGm</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(18.0)</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">16.0</td>
+<td>12.0</td>
+<td>7.0 PEN</td>
+<td>134.3</td>
+<td>116.3</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>9th</td>
+<td>200</td>
+<td>Bong Jin Chae<br>Sang Min Shin</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">13.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">(17.0)</td>
+<td>6.0</td>
+<td>22.0 NSCm</td>
+<td>139.0</td>
+<td>122.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>10th</td>
+<td>80</td>
+<td>Akira Luke Sakai<br>Russell Aylsworth</td>
+<td><img class="natflag" title="HKG" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/HKG.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(19.0)</td>
+<td>14.0</td>
+<td>17.0 PEN</td>
+<td>147.0</td>
+<td>128.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>11th</td>
+<td>847</td>
+<td>Shingen Furuya<br>Akira Takayanagi</td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">(20.0)</td>
+<td class="summaryrace">4.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">10.0</td>
+<td>13.0</td>
+<td class="rank1">&nbsp;</td>
+<td>134.0</td>
+<td>114.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>12th</td>
+<td>173</td>
+<td>Ahmed Al-hasani<br>Abdulrahman Al Maashari</td>
+<td><img class="natflag" title="OMA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/OMA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">(22.0 RET)</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">9.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td>5.0</td>
+<td class="rank1">&nbsp;</td>
+<td>153.0</td>
+<td>131.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>13th</td>
+<td>202</td>
+<td>Kyoungduk Kim<br>Sang Woo Bae</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">13.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">(20.0)</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">6.0</td>
+<td>9.0</td>
+<td class="rank1">&nbsp;</td>
+<td>154.0</td>
+<td>134.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>14th</td>
+<td>780</td>
+<td>Aanand Thakur<br>Satyam Rangad</td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(22.0 UFD)</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">22.0 UFD</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">4.0</td>
+<td>17.0</td>
+<td class="rank1">&nbsp;</td>
+<td>158.0</td>
+<td>136.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>15th</td>
+<td>883</td>
+<td>Jun Seong An<br>Ju Hyeon Park</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">(21.0)</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">14.0</td>
+<td>16.0</td>
+<td class="rank1">&nbsp;</td>
+<td>161.0</td>
+<td>140.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>16th</td>
+<td>168</td>
+<td>Dongyue Shang<br>Liye Zhai</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">17.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">(22.0 UFD)</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">11.0</td>
+<td class="rank3">3.0</td>
+<td class="rank1">&nbsp;</td>
+<td>164.0</td>
+<td>142.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>17th</td>
+<td>117</td>
+<td>Keun Soo Kim<br>Sun Jin An</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(20.0)</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">13.0</td>
+<td>20.0</td>
+<td class="rank1">&nbsp;</td>
+<td>168.0</td>
+<td>148.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>18th</td>
+<td>251</td>
+<td>Wei Hong<br>Liuhan Wang</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">11.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">(22.0 DSQ)</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">22.0 RET</td>
+<td class="summaryrace">22.0 RET</td>
+<td class="summaryrace">22.0 RET</td>
+<td>22.0 RET</td>
+<td class="rank1">&nbsp;</td>
+<td>171.0</td>
+<td>149.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>19th</td>
+<td>324</td>
+<td>Won Bin Choi<br>Kang Taek Oh</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">(20.0)</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">20.0</td>
+<td>10.0</td>
+<td class="rank1">&nbsp;</td>
+<td>172.0</td>
+<td>152.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>20th</td>
+<td>477</td>
+<td>Joon Oh Jin<br>Min Gyu Jeong</td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">(21.0)</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">15.0</td>
+<td>19.0</td>
+<td class="rank1">&nbsp;</td>
+<td>178.0</td>
+<td>157.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>21st</td>
+<td>426</td>
+<td>Suthon Yampinid<br>Kan Kachachuen</td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">(20.0)</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">18.0</td>
+<td>18.0</td>
+<td class="rank1">&nbsp;</td>
+<td>200.0</td>
+<td>180.0</td>
+</tr>
+</tbody>
+</table>
+<h3 class="summarytitle" id="summary_49erfx">49erFX Class</h3>
+<div class="caption summarycaption">Sailed: 13, Discards: 1, To count: 12, Entries: 8, Scoring system: Appendix A</div>
+<table class="summarytable tablesorter tablesorter-blue tablesorterc140ff3792fa5" cellspacing="0" cellpadding="0" border="0" role="grid">
+<colgroup span="20">
+<col class="rank">
+<col class="sailno">
+<col class="boat">
+<col class="nat">
+<col class="notes">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="total">
+<col class="nett">
+</colgroup>
+<thead>
+<tr class="titlerow tablesorter-headerRow" role="row">
+<th data-column="0" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Rank: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Rank</div></th>
+<th data-column="1" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="SailNo: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">SailNo</div></th>
+<th data-column="2" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Team: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Team</div></th>
+<th data-column="3" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Nat: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Nat</div></th>
+<th data-column="4" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label=": No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">&nbsp;</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="5" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R1: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R1</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="6" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R2: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R2</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="7" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R3: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R3</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="8" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R4: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R4</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="9" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R5: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R5</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="10" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R6: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R6</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="11" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R7: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R7</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="12" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R8: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R8</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="13" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R9: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R9</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="14" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R10: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R10</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="15" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R11: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R11</div></th>
+<th data-column="16" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R12: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R12</div></th>
+<th data-column="17" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="M: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">M</div></th>
+<th data-column="18" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Total: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Total</div></th>
+<th data-column="19" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Net: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Net</div></th>
+</tr>
+</thead>
+<tbody aria-live="polite" aria-relevant="all">
+<tr class="odd summaryrow" role="row">
+<td>1st</td>
+<td>121</td>
+<td>Xiaoyu Hu<br>Mengyuan Shan</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">(5.0)</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1">2.0</td>
+<td>30.0</td>
+<td>25.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>2nd</td>
+<td>586</td>
+<td>Misaki Tanaka<br>Sera Nagamatsu</td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">4.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">7.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">7.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">(8.0)</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank3">3.0</td>
+<td class="rank2">4.0</td>
+<td>50.0</td>
+<td>42.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>3rd</td>
+<td>27</td>
+<td>Kimberly Lim<br>Cecilia Low</td>
+<td><img class="natflag" title="SGP" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/SGP.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(9.0 BFD)</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td>4.0</td>
+<td>8.0</td>
+<td>56.0</td>
+<td>47.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>4th</td>
+<td>39</td>
+<td>Anna Yamazaki<br>Sena Takano</td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">(8.0)</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td>5.0</td>
+<td>10.0</td>
+<td>59.0</td>
+<td>51.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>5th</td>
+<td>310</td>
+<td>Yingqian Wang<br>Xiaoya Su</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">(7.0)</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">7.0</td>
+<td>6.0</td>
+<td class="rank3">6.0</td>
+<td>66.0</td>
+<td>59.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>6th</td>
+<td>88</td>
+<td>Wing Chi Sandy Choi<br>Maddalena Di Salvo</td>
+<td><img class="natflag" title="HKG" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/HKG.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(9.0 BFD)</td>
+<td class="summaryrace">7.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">7.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">5.0</td>
+<td>8.0</td>
+<td>17.0 PEN</td>
+<td>80.0</td>
+<td>71.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>7th</td>
+<td>37</td>
+<td>Shasha Chen<br>Mengting Wang</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(9.0 BFD)</td>
+<td class="summaryrace">5.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank2">2.0</td>
+<td>14.0</td>
+<td>84.0</td>
+<td>75.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>8th</td>
+<td>808</td>
+<td>Saki Matsunae<br>Eri Hatayama</td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">(8.0)</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">8.0</td>
+<td>7.0</td>
+<td>13.0 PEN</td>
+<td>87.0</td>
+<td>79.0</td>
+</tr>
+</tbody>
+</table>
+<h3 class="summarytitle" id="summaryilca_7">ILCA 7 Class</h3>
+<div class="caption summarycaption">Sailed: 10, Discards: 1, To count: 9, Entries: 46, Scoring system: Appendix A</div>
+<table class="summarytable tablesorter tablesorter-blue tablesorterf087d885ff1d5" cellspacing="0" cellpadding="0" border="0" role="grid">
+<colgroup span="17">
+<col class="rank">
+<col class="sailno">
+<col class="boat">
+<col class="nat">
+<col class="notes">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="total">
+<col class="nett">
+</colgroup>
+<thead>
+<tr class="titlerow tablesorter-headerRow" role="row">
+<th data-column="0" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Rank: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Rank</div></th>
+<th data-column="1" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="SailNo: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">SailNo</div></th>
+<th data-column="2" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Team: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Team</div></th>
+<th data-column="3" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Nat: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Nat</div></th>
+<th data-column="4" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label=": No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">&nbsp;</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="5" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R1: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R1</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="6" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R2: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R2</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="7" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R3: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R3</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="8" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R4: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R4</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="9" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R5: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R5</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="10" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R6: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R6</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="11" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R7: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R7</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="12" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R8: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R8</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="13" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R9: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R9</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="14" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="M: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">M</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="15" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Total: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Total</div></th>
+<th data-column="16" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Net: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Net</div></th>
+</tr>
+</thead>
+<tbody aria-live="polite" aria-relevant="all">
+<tr class="odd summaryrow" role="row">
+<td>1st</td>
+<td>171979</td>
+<td>Nicholas Halliday<br></td>
+<td><img class="natflag" title="HKG" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/HKG.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">(11.0)</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">45.0</td>
+<td>34.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>2nd</td>
+<td>213137</td>
+<td>Arthit Mikhail Romanyk<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">4.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">(6.0)</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">43.0</td>
+<td>37.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>3rd</td>
+<td>214989</td>
+<td>Khairulnizam Mohd Afendy<br></td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(19.0)</td>
+<td class="summaryrace">10.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">61.0</td>
+<td>42.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>4th</td>
+<td>218191</td>
+<td>Vishnu Saravanan<br></td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">(16.0)</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">4.0 PEN</td>
+<td class="summaryrace">60.0</td>
+<td>44.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>5th</td>
+<td>211313</td>
+<td>Yulong Qiu<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">(16.0)</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">71.0</td>
+<td>55.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>6th</td>
+<td>211027</td>
+<td>Chusitt Punjamala<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">(12.0)</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">68.0</td>
+<td>56.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>7th</td>
+<td>216228</td>
+<td>Kazumasa Segawa<br></td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">5.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">(18.0)</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">80.0</td>
+<td>62.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>8th</td>
+<td>215068</td>
+<td>Bowonnan Chanram<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">(19.0)</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">15.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">112.0</td>
+<td>93.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>9th</td>
+<td>204996</td>
+<td>Yoshihiro Suzuki<br></td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">(13.0)</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">22.0 DNCm</td>
+<td class="summaryrace">118.0</td>
+<td>105.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>10th</td>
+<td>223204</td>
+<td>Bo Jeong<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">14.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">(19.0)</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">9.0 PEN</td>
+<td class="summaryrace">125.0</td>
+<td>106.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>11th</td>
+<td>211127</td>
+<td>Zili Wang<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">9.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">(24.0)</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">15.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">122.0</td>
+<td>98.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>12th</td>
+<td>212161</td>
+<td>Mohit Saini<br></td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">(20.0)</td>
+<td class="summaryrace">13.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">118.0</td>
+<td>98.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>13th</td>
+<td>127127</td>
+<td>Yinsheng Cui<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(27.0)</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">17.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">128.0</td>
+<td>101.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>14th</td>
+<td>220005</td>
+<td>Hyeon Su Yoon<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">(21.0)</td>
+<td class="summaryrace">8.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">130.0</td>
+<td>109.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>15th</td>
+<td>212489</td>
+<td>Abdulla Aqeel Janahi<br></td>
+<td><img class="natflag" title="BRN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/BRN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">(47.0 DNF)</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">7.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">158.0</td>
+<td>111.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>16th</td>
+<td>211513</td>
+<td>Ning Zhao<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">(47.0 DSQ)</td>
+<td class="summaryrace">47.0 UFD</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">14.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">170.0</td>
+<td>123.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>17th</td>
+<td>217704</td>
+<td>Haruto Kuroda<br></td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(25.0)</td>
+<td class="summaryrace">24.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">154.0</td>
+<td>129.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>18th</td>
+<td>218143</td>
+<td>Sungbin Son<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">(28.0)</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">16.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">161.0</td>
+<td>133.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>19th</td>
+<td>212286</td>
+<td>Deepak Saini<br></td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">(28.0)</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">19.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">171.0</td>
+<td>143.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>20th</td>
+<td>203013</td>
+<td>Nikola Banjac<br></td>
+<td><img class="natflag" title="SRB" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/SRB.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/N.png" width="14"></td>
+<td class="summaryrace">(24.0)</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">9.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">169.0</td>
+<td>145.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>21st</td>
+<td>209889</td>
+<td>Muhammad Faizal Bin Ahmad Asri<br></td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">35.0</td>
+<td class="summaryrace">(37.0)</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">190.0</td>
+<td>153.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>22nd</td>
+<td>221231</td>
+<td>Jindong Kong<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">(29.0)</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">47.0 DNE</td>
+<td class="summaryrace">21.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">183.0</td>
+<td>154.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>23rd</td>
+<td>219717</td>
+<td>Minje Lee<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">(31.0)</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">20.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">201.0</td>
+<td>170.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>24th</td>
+<td>218533</td>
+<td>Christopher Marsh<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">(39.0)</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">31.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">211.0</td>
+<td>172.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>25th</td>
+<td>221406</td>
+<td>Kwang Yeon Lee<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">(35.0)</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">29.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">228.0</td>
+<td>193.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>26th</td>
+<td>209964</td>
+<td>Yang Huang<br></td>
+<td><img class="natflag" title="TPE" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/TPE.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">(39.0)</td>
+<td class="summaryrace">26.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">247.0</td>
+<td>208.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>27th</td>
+<td>221653</td>
+<td>Lucas Collin<br></td>
+<td><img class="natflag" title="FRA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/FRA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/N.png" width="14"></td>
+<td class="summaryrace">(35.0)</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">32.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">246.0</td>
+<td>211.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>28th</td>
+<td>211431</td>
+<td>Dawood Abdulla Sadiq<br></td>
+<td><img class="natflag" title="BRN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/BRN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">(47.0 UFD)</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">25.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">259.0</td>
+<td>212.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>29th</td>
+<td>209888</td>
+<td>Asyraaf Bin Mokhtar<br></td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">(34.0)</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">22.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">261.0</td>
+<td>227.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>30th</td>
+<td>200153</td>
+<td>Hamza Al Ali<br></td>
+<td><img class="natflag" title="UAE" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/UAE.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">(36.0)</td>
+<td class="summaryrace">28.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">269.0</td>
+<td>233.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>31st</td>
+<td>209961</td>
+<td>Hsiu Chu Huang<br></td>
+<td><img class="natflag" title="TPE" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/TPE.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(36.0)</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">34.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">269.0</td>
+<td>233.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>32nd</td>
+<td>180000</td>
+<td>Adil Khalid<br></td>
+<td><img class="natflag" title="UAE" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/UAE.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">(41.0)</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">37.0</td>
+<td class="summaryrace">34.0</td>
+<td class="summaryrace">23.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">276.0</td>
+<td>235.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>33rd</td>
+<td>217058</td>
+<td>Shusuke Takeuchi<br></td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">39.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">34.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">(47.0 DSQ)</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">41.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">35.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">294.0</td>
+<td>247.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>34th</td>
+<td>217664</td>
+<td>Wonjeong Lee<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">34.0</td>
+<td class="summaryrace">(37.0)</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">35.0</td>
+<td class="summaryrace">34.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">30.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">284.0</td>
+<td>247.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>35th</td>
+<td>163105</td>
+<td>Chia Che Chang<br></td>
+<td><img class="natflag" title="TPE" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/TPE.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">(39.0)</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">34.0</td>
+<td class="summaryrace">39.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">37.0</td>
+<td class="summaryrace">27.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">293.0</td>
+<td>254.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>36th</td>
+<td>221402</td>
+<td>In Kwon Jeong<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">37.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">35.0</td>
+<td class="summaryrace">35.0</td>
+<td class="summaryrace">(41.0)</td>
+<td class="summaryrace">34.0</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">41.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">306.0</td>
+<td>265.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>37th</td>
+<td>213003</td>
+<td>Vladimir Chshankin<br></td>
+<td><img class="natflag" title="KAZ" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KAZ.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">36.0</td>
+<td class="summaryrace">36.0</td>
+<td class="summaryrace">(38.0)</td>
+<td class="summaryrace">35.0</td>
+<td class="summaryrace">36.0</td>
+<td class="summaryrace">35.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">36.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">310.0</td>
+<td>272.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>38th</td>
+<td>220199</td>
+<td>Hyeon Woo Jeon<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(40.0)</td>
+<td class="summaryrace">40.0</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">36.0</td>
+<td class="summaryrace">40.0</td>
+<td class="summaryrace">40.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">38.0</td>
+<td class="summaryrace">33.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">322.0</td>
+<td>282.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>39th</td>
+<td>211727</td>
+<td>Chan Nhov<br></td>
+<td><img class="natflag" title="CAM" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CAM.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">38.0</td>
+<td class="summaryrace">34.0</td>
+<td class="summaryrace">41.0</td>
+<td class="summaryrace">39.0</td>
+<td class="summaryrace">(42.0)</td>
+<td class="summaryrace">37.0</td>
+<td class="summaryrace">40.0</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">42.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">346.0</td>
+<td>304.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>40th</td>
+<td>216733</td>
+<td>Anton Gaas<br></td>
+<td><img class="natflag" title="KAZ" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KAZ.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">(43.0)</td>
+<td class="summaryrace">38.0</td>
+<td class="summaryrace">41.0</td>
+<td class="summaryrace">36.0</td>
+<td class="summaryrace">41.0</td>
+<td class="summaryrace">36.0</td>
+<td class="summaryrace">43.0</td>
+<td class="summaryrace">39.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">349.0</td>
+<td>306.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>41st</td>
+<td>216245</td>
+<td>Bakdaulet Shakizada<br></td>
+<td><img class="natflag" title="KAZ" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KAZ.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(47.0 DNC)</td>
+<td class="summaryrace">38.0</td>
+<td class="summaryrace">37.0</td>
+<td class="summaryrace">37.0</td>
+<td class="summaryrace">39.0</td>
+<td class="summaryrace">38.0</td>
+<td class="summaryrace">38.0</td>
+<td class="summaryrace">42.0</td>
+<td class="summaryrace">38.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">354.0</td>
+<td>307.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>42nd</td>
+<td>189512</td>
+<td>Salem Qali<br></td>
+<td><img class="natflag" title="KUW" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KUW.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">43.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">40.0</td>
+<td class="summaryrace">40.0</td>
+<td class="summaryrace">37.0</td>
+<td class="summaryrace">43.0</td>
+<td class="summaryrace">42.0</td>
+<td class="summaryrace">40.0</td>
+<td class="summaryrace">(47.0 DNF)</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">359.0</td>
+<td>312.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>43rd</td>
+<td>213134</td>
+<td>Vladimir Chevrychkin<br></td>
+<td><img class="natflag" title="KAZ" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KAZ.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">41.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">42.0</td>
+<td class="summaryrace">43.0</td>
+<td class="summaryrace">38.0</td>
+<td class="summaryrace">(44.0)</td>
+<td class="summaryrace">43.0</td>
+<td class="summaryrace">41.0</td>
+<td class="summaryrace">40.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">362.0</td>
+<td>318.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>44th</td>
+<td>208807</td>
+<td>Kethaka Weerasuriya<br></td>
+<td><img class="natflag" title="SRI" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/SRI.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">42.0</td>
+<td class="summaryrace">(47.0 RET)</td>
+<td class="summaryrace">43.0</td>
+<td class="summaryrace">42.0</td>
+<td class="summaryrace">43.0</td>
+<td class="summaryrace">42.0</td>
+<td class="summaryrace">39.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">43.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">371.0</td>
+<td>324.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>45th</td>
+<td>222225</td>
+<td>Teetos Taksinapan<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(45.0)</td>
+<td class="summaryrace">42.0</td>
+<td class="summaryrace">44.0</td>
+<td class="summaryrace">44.0</td>
+<td class="summaryrace">44.0</td>
+<td class="summaryrace">45.0</td>
+<td class="summaryrace">45.0</td>
+<td class="summaryrace">44.0</td>
+<td class="summaryrace">44.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">397.0</td>
+<td>352.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>46th</td>
+<td>220122</td>
+<td>Ivan Gorbatov<br></td>
+<td><img class="natflag" title="KAZ" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KAZ.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">44.0</td>
+<td class="summaryrace">44.0</td>
+<td class="summaryrace">45.0</td>
+<td class="summaryrace">45.0</td>
+<td class="summaryrace">45.0</td>
+<td class="summaryrace">(46.0)</td>
+<td class="summaryrace">44.0</td>
+<td class="summaryrace">45.0</td>
+<td class="summaryrace">45.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">403.0</td>
+<td>357.0</td>
+</tr>
+</tbody>
+</table>
+<h3 class="summarytitle" id="summaryilca_6">ILCA 6 Class</h3>
+<div class="caption summarycaption">Sailed: 10, Discards: 1, To count: 9, Entries: 33, Scoring system: Appendix A</div>
+<table class="summarytable tablesorter tablesorter-blue tablesortere7d8cf08343a3" cellspacing="0" cellpadding="0" border="0" role="grid">
+<colgroup span="17">
+<col class="rank">
+<col class="sailno">
+<col class="boat">
+<col class="nat">
+<col class="notes">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="total">
+<col class="nett">
+</colgroup>
+<thead>
+<tr class="titlerow tablesorter-headerRow" role="row">
+<th data-column="0" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Rank: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Rank</div></th>
+<th data-column="1" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="SailNo: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">SailNo</div></th>
+<th data-column="2" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Team: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Team</div></th>
+<th data-column="3" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Nat: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Nat</div></th>
+<th data-column="4" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label=": No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">&nbsp;</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="5" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R1: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R1</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="6" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R2: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R2</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="7" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R3: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R3</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="8" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R4: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R4</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="9" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R5: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R5</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="10" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R6: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R6</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="11" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R7: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R7</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="12" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R8: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R8</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="13" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R9: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R9</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="14" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="M: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">M</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="15" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Total: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Total</div></th>
+<th data-column="16" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Net: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Net</div></th>
+</tr>
+</thead>
+<tbody aria-live="polite" aria-relevant="all">
+<tr class="odd summaryrow" role="row">
+<td>1st</td>
+<td>211471</td>
+<td>Min Gu<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">6.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">(13.0)</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">49.0</td>
+<td>36.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>2nd</td>
+<td>201213</td>
+<td>Dongshuang Zhang<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">5.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">(12.0)</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">56.0</td>
+<td>44.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>3rd</td>
+<td>211239</td>
+<td>Hui Li<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">7.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">(16.0)</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">67.0</td>
+<td>51.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>4th</td>
+<td>210250</td>
+<td>Sophia Montgomery<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">(14.0)</td>
+<td class="summaryrace">9.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">74.0</td>
+<td>60.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>5th</td>
+<td>222660</td>
+<td>Marion Grace Montgomery<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">11.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">11.0</td>
+<td class="rank2 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">(14.0)</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">9.0 PEN</td>
+<td class="summaryrace">86.0</td>
+<td>72.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>6th</td>
+<td>212237</td>
+<td>Weiyi Lu<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">(20.0)</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">93.0</td>
+<td>73.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>7th</td>
+<td>222138</td>
+<td>Nethra Kumanan<br></td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">(13.0)</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">87.0</td>
+<td>74.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>8th</td>
+<td>191713</td>
+<td>Stephanie Norton<br></td>
+<td><img class="natflag" title="HKG" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/HKG.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(15.0)</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">91.0</td>
+<td>76.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>9th</td>
+<td>211717</td>
+<td>Nancy Highfield<br></td>
+<td><img class="natflag" title="HKG" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/HKG.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(21.0)</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">108.0</td>
+<td>87.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>10th</td>
+<td>224011</td>
+<td>Nur Shazrin Mohamad Latif<br></td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/N.png" width="14"></td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">(20.0)</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">17.0 PEN</td>
+<td class="summaryrace">111.0</td>
+<td>91.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>11th</td>
+<td>222727</td>
+<td>Jania Ang<br></td>
+<td><img class="natflag" title="SGP" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/SGP.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">(15.0)</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">7.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">15.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">92.0</td>
+<td>77.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>12th</td>
+<td>202611</td>
+<td>Yumiko Tombe<br></td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">(17.0)</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">16.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">98.0</td>
+<td>81.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>13th</td>
+<td>201722</td>
+<td>Yixin Li<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">12.0</td>
+<td class="rank1 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">(21.0)</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">104.0</td>
+<td>83.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>14th</td>
+<td>220236</td>
+<td>Thorfun Boonnak<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">8.0 SCP</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">(24.0)</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">116.0</td>
+<td>92.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>15th</td>
+<td>220240</td>
+<td>Noppassorn Khunboonjan<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">(23.0)</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">128.0</td>
+<td>105.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>16th</td>
+<td>211211</td>
+<td>Tong Zhu<br></td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">(31.0)</td>
+<td class="summaryrace">14.0</td>
+<td class="summaryrace">21.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">148.0</td>
+<td>117.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>17th</td>
+<td>182111</td>
+<td>Cristina Castellanos<br></td>
+<td><img class="natflag" title="GUA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/GUA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/N.png" width="14"></td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">(25.0)</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">16.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">149.0</td>
+<td>124.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>18th</td>
+<td>209878</td>
+<td>Nur Alia Amera Mohamad Latif<br></td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/N.png" width="14"></td>
+<td class="summaryrace">(24.0)</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">15.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">19.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">162.0</td>
+<td>138.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>19th</td>
+<td>222960</td>
+<td>Hyewon Jung<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">(29.0)</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">9.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">180.0</td>
+<td>151.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>20th</td>
+<td>196480</td>
+<td>Honoka Miura<br></td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">(33.0)</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">22.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">196.0</td>
+<td>163.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>21st</td>
+<td>204489</td>
+<td>Yuri Yamamoto<br></td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">(27.0)</td>
+<td class="summaryrace">25.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">192.0</td>
+<td>165.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>22nd</td>
+<td>204628</td>
+<td>Nurul Rahma Iedha<br></td>
+<td><img class="natflag" title="INA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/INA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">(29.0)</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">14.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">201.0</td>
+<td>172.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>23rd</td>
+<td>217445</td>
+<td>Puttaraksa Imraksa<br></td>
+<td><img class="natflag" title="THA" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/THA.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">(30.0)</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">18.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">204.0</td>
+<td>174.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>24th</td>
+<td>220510</td>
+<td>Karina Jangazova<br></td>
+<td><img class="natflag" title="KAZ" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KAZ.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">25.0</td>
+<td class="rank3 summaryrace">4.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">(29.0)</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">204.0</td>
+<td>175.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>25th</td>
+<td>215618</td>
+<td>Seung Hyeon Kang<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">(32.0)</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">20.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">210.0</td>
+<td>178.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>26th</td>
+<td>209879</td>
+<td>Nur Adlina Nasreen Mohd Nasri<br></td>
+<td><img class="natflag" title="MAS" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/MAS.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/N.png" width="14"></td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">17.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">23.0</td>
+<td class="summaryrace">18.0</td>
+<td class="summaryrace">(31.0)</td>
+<td class="summaryrace">27.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">217.0</td>
+<td>186.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>27th</td>
+<td>221066</td>
+<td>Mai Kakimoto<br></td>
+<td><img class="natflag" title="JPN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/JPN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">16.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">21.0</td>
+<td class="summaryrace">(32.0)</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">17.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">220.0</td>
+<td>188.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>28th</td>
+<td>211718</td>
+<td>He Hsi Huang<br></td>
+<td><img class="natflag" title="TPE" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/TPE.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">20.0</td>
+<td class="summaryrace">(29.0)</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">13.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">28.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">221.0</td>
+<td>192.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>29th</td>
+<td>188560</td>
+<td>Ameena Shah<br></td>
+<td><img class="natflag" title="KUW" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KUW.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">25.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">(33.0)</td>
+<td class="summaryrace">26.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">229.0</td>
+<td>196.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>30th</td>
+<td>219617</td>
+<td>Yana Belozerova<br></td>
+<td><img class="natflag" title="KAZ" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KAZ.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(32.0)</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">26.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">27.0</td>
+<td class="summaryrace">19.0</td>
+<td class="summaryrace">30.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">248.0</td>
+<td>216.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>31st</td>
+<td>206912</td>
+<td>Jae Hyeon Seol<br></td>
+<td><img class="natflag" title="KOR" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KOR.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(33.0)</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">22.0</td>
+<td class="summaryrace">24.0</td>
+<td class="summaryrace">31.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">263.0</td>
+<td>230.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>32nd</td>
+<td>201811</td>
+<td>Dhuha Albeshr<br></td>
+<td><img class="natflag" title="UAE" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/UAE.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">29.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">(33.0)</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">31.0</td>
+<td class="summaryrace">28.0</td>
+<td class="summaryrace">33.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">280.0</td>
+<td>247.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>33rd</td>
+<td>219690</td>
+<td>Milana Mamedova<br></td>
+<td><img class="natflag" title="KAZ" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/KAZ.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">(33.0)</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">33.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">30.0</td>
+<td class="summaryrace">32.0</td>
+<td class="summaryrace">32.0</td>
+<td class="rank1 summaryrace">&nbsp;</td>
+<td class="summaryrace">284.0</td>
+<td>251.0</td>
+</tr>
+</tbody>
+</table>
+<h3 class="summarytitle" id="summarynacra_17">Nacra 17 Class</h3>
+<div class="caption summarycaption">Sailed: 13, Discards: 1, To count: 12, Entries: 12, Scoring system: Appendix A</div>
+<table class="summarytable tablesorter tablesorter-blue tablesorterf575919a7172b" cellspacing="0" cellpadding="0" border="0" role="grid">
+<colgroup span="20">
+<col class="rank">
+<col class="sailno">
+<col class="boat">
+<col class="nat">
+<col class="notes">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="race">
+<col class="total">
+<col class="nett">
+</colgroup>
+<thead>
+<tr class="titlerow tablesorter-headerRow" role="row">
+<th data-column="0" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Rank: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Rank</div></th>
+<th data-column="1" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="SailNo: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">SailNo</div></th>
+<th data-column="2" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Team: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Team</div></th>
+<th data-column="3" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Nat: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Nat</div></th>
+<th data-column="4" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label=": No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">&nbsp;</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="5" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R1: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R1</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="6" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R2: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R2</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="7" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R3: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R3</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="8" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R4: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R4</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="9" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R5: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R5</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="10" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R6: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R6</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="11" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R7: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R7</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="12" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R8: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R8</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="13" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R9: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R9</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="14" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R10: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R10</div></th>
+<th class="sorter-race tablesorter-header tablesorter-headerUnSorted" data-column="15" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R11: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R11</div></th>
+<th data-column="16" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="R12: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">R12</div></th>
+<th data-column="17" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="M: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">M</div></th>
+<th data-column="18" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Total: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Total</div></th>
+<th data-column="19" class="tablesorter-header tablesorter-headerUnSorted" tabindex="0" scope="col" role="columnheader" aria-disabled="false" unselectable="on" aria-sort="none" aria-label="Net: No sort applied, activate to apply an ascending sort" style="user-select: none;"><div class="tablesorter-header-inner">Net</div></th>
+</tr>
+</thead>
+<tbody aria-live="polite" aria-relevant="all">
+<tr class="odd summaryrow" role="row">
+<td>1st</td>
+<td>661</td>
+<td>Huicong Mai<br>Linlin Chen</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">(6.0)</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank2">2.0</td>
+<td class="rank3">2.0</td>
+<td>38.0</td>
+<td>32.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>2nd</td>
+<td>46</td>
+<td>Xuezhe Yang<br>Xiaoxiao Hu</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">(8.0)</td>
+<td class="summaryrace">4.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank3">3.0</td>
+<td>4.0</td>
+<td>47.0</td>
+<td>39.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>3rd</td>
+<td>17</td>
+<td>Huancheng Zhao<br>Ting Yu</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">5.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">(6.0)</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank1" style="background: rgb(255, 215, 0);">1.0</td>
+<td>22.0 NSCm</td>
+<td>52.0</td>
+<td>46.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>4th</td>
+<td>127</td>
+<td>Mingcheng Ding<br>Qianqian Zhou</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(10.0)</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td>9.0</td>
+<td>10.0</td>
+<td>65.0</td>
+<td>55.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>5th</td>
+<td>52</td>
+<td>Justin Liu<br>Denise Lim</td>
+<td><img class="natflag" title="SGP" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/SGP.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">4.0</td>
+<td class="rank3 summaryrace" style="background: rgb(218, 104, 65);">3.0</td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">6.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">(13.0 UFD)</td>
+<td class="summaryrace">4.0</td>
+<td>7.0</td>
+<td>6.0</td>
+<td>80.0</td>
+<td>67.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>6th</td>
+<td>611</td>
+<td>Changhang Fan<br>Huamei Xu</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">4.0</td>
+<td class="summaryrace">(13.0 DSQ)</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">8.0</td>
+<td>6.0</td>
+<td>16.0</td>
+<td>92.0</td>
+<td>79.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>7th</td>
+<td>551</td>
+<td>Yu Chen<br>Su Sha</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">(11.0)</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">6.0</td>
+<td>4.0</td>
+<td>12.0</td>
+<td>95.0</td>
+<td>84.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>8th</td>
+<td>587</td>
+<td>Jingcheng Lan<br>Saibo Wang</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">(10.0)</td>
+<td class="summaryrace">9.0</td>
+<td class="rank1 summaryrace" style="background: rgb(255, 215, 0);">1.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">7.0</td>
+<td>8.0</td>
+<td>8.0</td>
+<td>104.0</td>
+<td>94.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>9th</td>
+<td>11</td>
+<td>Lutong Zhang<br>Jinjin Huang</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">(11.0)</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">9.0</td>
+<td>5.0</td>
+<td>14.0</td>
+<td>111.0</td>
+<td>100.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>10th</td>
+<td>372</td>
+<td>Jinhuan Yu<br>Jialu Xu</td>
+<td><img class="natflag" title="CHN" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/CHN.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">8.0</td>
+<td class="rank2 summaryrace" style="background: rgb(106, 145, 197);">2.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">9.0</td>
+<td class="summaryrace">(13.0 RET)</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">7.0</td>
+<td class="summaryrace">6.0</td>
+<td class="summaryrace">10.0</td>
+<td>11.0</td>
+<td>22.0 NSCm</td>
+<td>117.0</td>
+<td>104.0</td>
+</tr>
+<tr class="odd summaryrow" role="row">
+<td>11th</td>
+<td>533</td>
+<td>Diophode Siddeshwar<br>Ramya Saravanan</td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">8.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">5.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">(13.0 UFD)</td>
+<td class="summaryrace">11.0</td>
+<td>10.0</td>
+<td class="rank1">&nbsp;</td>
+<td>116.0</td>
+<td>103.0</td>
+</tr>
+<tr class="even summaryrow" role="row">
+<td>12th</td>
+<td>579</td>
+<td>Aman Mohan Vyas<br>Aastha Senapati</td>
+<td><img class="natflag" title="IND" src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/IND.jpg"></td>
+<td><img src="./Sailwave results for Asian Sailing Championships &amp; Asian Continental Olympic Qualifier for 2024 Paris Olympics at ROYAL VARUNA YACHT CLUB 2023_files/Y.png" width="14"></td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">11.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">12.0</td>
+<td class="summaryrace">10.0</td>
+<td class="summaryrace">(13.0 DNF)</td>
+<td>12.0</td>
+<td class="rank1">&nbsp;</td>
+<td>141.0</td>
+<td>128.0</td>
+</tr>
+</tbody>
+</table>
+<h3 class="codestitle">Scoring codes used</h3>
+<table class="codestable" cellspacing="0" cellpadding="0" border="0">
+<colgroup span="3"><col class="code"><col class="description">
+<col class="points">
+</colgroup>
+<tbody><tr class="titlerow"><th>Code</th><th>Description</th>
+<th>Points</th>
+</tr>
+<tr class="odd coderow"><td>&nbsp;</td><td>&nbsp;</td>
+<td>0</td>
+</tr>
+<tr class="even coderow"><td>BFD</td><td>Black flag disqualification under rule 30.4</td>
+<td>9</td>
+</tr>
+<tr class="odd coderow"><td>DNC</td><td>Did not come to the starting area</td>
+<td>47</td>
+</tr>
+<tr class="even coderow"><td>DNCm</td><td>Medal race - Did not come to the starting area</td>
+<td>22</td>
+</tr>
+<tr class="odd coderow"><td>DNE</td><td>Disqualification (other then DGM) not excludable under rule 90.3(b)</td>
+<td>47</td>
+</tr>
+<tr class="even coderow"><td>DNF</td><td>Started but did not finish</td>
+<td>Varies</td>
+</tr>
+<tr class="odd coderow"><td>DSQ</td><td>Disqualification</td>
+<td>Varies</td>
+</tr>
+<tr class="even coderow"><td>NSCm</td><td>Medal race - Did not sail the course</td>
+<td>22</td>
+</tr>
+<tr class="odd coderow"><td>PEN</td><td>Medal race penalty</td>
+<td>Varies</td>
+</tr>
+<tr class="even coderow"><td>RDGm</td><td>Redress - average points for all races except the race in question and the medal race</td>
+<td>9.3</td>
+</tr>
+<tr class="odd coderow"><td>RET</td><td>Retired</td>
+<td>Varies</td>
+</tr>
+<tr class="even coderow"><td>SCP</td><td>20% Scoring penalty under rule 44.3</td>
+<td>8</td>
+</tr>
+<tr class="odd coderow"><td>UFD</td><td>U flag disqualification under rule 30.3</td>
+<td>Varies</td>
+</tr>
+</tbody></table>
+
+<p class="hardleft"><a href="http://www.varuna.org/">www.varuna.org</a><br><a href="mailto:events@varuna.org">events@varuna.org</a></p>
+<p class="hardright"><a href="http://www.pattaya-olympic-qualifier.com/">www.pattaya-olympic-qualifier.com</a><br><a href="mailto:admin@pattaya-olympic-qualifier.com">admin@pattaya-olympic-qualifier.com</a></p>
+<p>Sailwave Scoring Software 2.30.02<br><a href="https://www.sailwave.com/">www.sailwave.com</a></p>
+
+</div>
+
+<footer>
+</footer>
+
+<div id="scrollbottom"></div>
+
+
+
+
+
+</body></html>

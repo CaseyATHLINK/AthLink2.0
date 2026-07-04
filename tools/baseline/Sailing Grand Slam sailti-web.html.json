@@ -1,0 +1,65 @@
+{
+  "event": "55 Trofeo SAR Princesa Sofía",
+  "date": "04/04/2026",
+  "detected_class": "",
+  "detected_host": null,
+  "discards": 0,
+  "n_entries": 101,
+  "confidence": 1.0,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "looks clean"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "11",
+      "helm": "Richard Schultheis",
+      "crew": "Fabian Rieger",
+      "nat": "GER",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "31",
+      "helm": "Nevin Snow",
+      "crew": "Ian Macdiarmid",
+      "nat": "USA",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "616",
+      "helm": "Xin Wang",
+      "crew": "Tianyu Qi",
+      "nat": "CHN",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "25",
+      "helm": "Harry Price",
+      "crew": "Max Paul",
+      "nat": "AUS",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "14",
+      "helm": "Hernán Umpierre",
+      "crew": "Fernando Diz",
+      "nat": "URU",
+      "div": "",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

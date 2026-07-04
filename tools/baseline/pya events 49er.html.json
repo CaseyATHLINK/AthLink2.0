@@ -1,0 +1,65 @@
+{
+  "event": "49er, 49erFX, Nacra 17 Open Polish Championships",
+  "date": "18/07/2025",
+  "detected_class": "49er",
+  "detected_host": null,
+  "discards": null,
+  "n_entries": 52,
+  "confidence": 0.8,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "26 ranks missing from 1..52"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "19",
+      "helm": "Dominik Buksak",
+      "crew": "Adam Głogowski",
+      "nat": "POL",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "5",
+      "helm": "Mikołaj Staniul",
+      "crew": "Jakub Sztorch",
+      "nat": "POL",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "707",
+      "helm": "Antonio Torrado Martinez",
+      "crew": "Conrad Konitzer",
+      "nat": "ESP",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "775",
+      "helm": "Martin Wizner",
+      "crew": "Jaime Wizner",
+      "nat": "ESP",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "272",
+      "helm": "Maor Abu",
+      "crew": "Tal Sade",
+      "nat": "ISR",
+      "div": "49er",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

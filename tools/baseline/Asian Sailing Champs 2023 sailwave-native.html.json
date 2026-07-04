@@ -1,0 +1,65 @@
+{
+  "event": "Asian Sailing Championships & Asian Continental Olympic Qualifier for 2024 Paris Olympics",
+  "date": "19/12/2023",
+  "detected_class": "49er",
+  "detected_host": null,
+  "discards": null,
+  "n_entries": 136,
+  "confidence": 0.8,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "90 ranks missing from 1..136"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "171",
+      "helm": "Ming Xu",
+      "crew": "Yahan Tu",
+      "nat": "CHN",
+      "div": "470",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "311",
+      "helm": "Zangjun Xu",
+      "crew": "Yani Xu",
+      "nat": "CHN",
+      "div": "470",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "1",
+      "helm": "Wenju Dong",
+      "crew": "Jingsa Wang",
+      "nat": "CHN",
+      "div": "470",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "1",
+      "helm": "Chang Ju Kim",
+      "crew": "Jihee Lee",
+      "nat": "KOR",
+      "div": "470",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "11",
+      "helm": "Muhammad Fauzi Bin Kaman Shah",
+      "crew": "Juni Karimah Binti Noor Jamali",
+      "nat": "MAS",
+      "div": "470",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}
