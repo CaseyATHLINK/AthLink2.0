@@ -2539,7 +2539,7 @@ _KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 _GEMINI_PROMPT = """Parse this sailing regatta results file. Return ONLY a JSON object, no markdown/explanation.
 
 Structure:
-{"name":"event name","division":"section heading or empty","date":"dd/mm/yyyy or empty","discards":1,"entries":[{"helm":"First Last","crew":"First Last or empty","sail":"88 or NZL 7","nat":"3-letter IOC or empty","div":"fleet/division or empty","gender":"M/F/Mix or empty","category":"U17/U19/U23/Jr or empty","pdf_rank":1,"pdf_net":67.0,"birth_year":2005,"crew_birth_year":2004,"races":[5,12,4,"DNF",7],"race_codes":[null,null,null,null,null]}]}
+{"name":"event name","division":"section heading or empty","date":"dd/mm/yyyy or empty","discards":1,"entries":[{"helm":"First Last","crew":"First Last or empty","sail":"88 or NZL 7","nat":"3-letter IOC or empty","div":"fleet/division or empty","gender":"M/F/Mix or empty","category":"U17/U19/U23/Jr or empty","pdf_rank":1,"pdf_net":67.0,"birth_year":2005,"crew_birth_year":2004,"races":[5,12,50,"DNF",7],"race_codes":[null,null,"BFD",null,null]}]}
 
 RULES:
 - division: the results TABLE's own section heading if it has one, e.g. "Overall Results of ILCA4 Youth Girls U18" -> "ILCA4 Youth Girls U18", or "Gold Fleet". This is the specific fleet/division/class this table ranks, NOT the overall event name. Empty if the table has no heading of its own (e.g. a continuation page).
@@ -2552,7 +2552,7 @@ RULES:
 - category: age group only - "U17"/"U19"/"U23"/"Jr". Normalise "Under 17"/"U-17"->"U17", "Junior"->"Jr". Never put fleet colours (Gold/Silver/Bronze) or "Open" here.
 - birth_year/crew_birth_year: 4-digit YOB if shown; if only AGE shown compute (event year - age); else null.
 - races: ONLY per-race scores in order, as numbers or string codes (DNF,DNC,DNS,UFD,BFD,DSQ,OCS,RET,NSC,SCP,STP,RDG). Discards as plain numbers (no parentheses). Do NOT include carry-forward (CF), points-series (PS), TOTAL or NET columns in races.
-- race_codes: null for plain scores; the code string when a numeric score has a code annotation.
+- race_codes: null for plain scores; the code string when a numeric score has a code annotation. Codes often print on a SEPARATE line below/beside the score (e.g. "(50.0)" with "BFD" under it) — you MUST attach that code at the same index in race_codes; never drop it.
 - pdf_rank: finishing position integer (1=winner). pdf_net: net score (the NET column, after discards) — usually the LAST numeric column; TOTAL is the second-to-last. discards: integer (usually 1).
 """
 
@@ -2650,7 +2650,26 @@ def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 
     parts = [{"inline_data": {"mime_type": mime_type,
                               "data": base64.b64encode(file_bytes).decode()}},
              {"text": prompt}]
-    resp = call_gemini(key, _vision_model(), parts, max_tokens=8192, timeout=timeout)
+    # Model ladder: the free tier caps each model PER DAY, so a busy import day
+    # can exhaust the primary. Quota 429s fail in <1s, so stepping down the
+    # ladder costs nothing; real errors/timeouts still raise immediately.
+    ladder = [_vision_model()]
+    for m in ("gemini-3-flash-preview", "gemini-2.5-flash"):
+        if m not in ladder:
+            ladder.append(m)
+    resp = None
+    for i, model in enumerate(ladder):
+        try:
+            # 16k output: a dense 60-row page overflows 8k and used to
+            # hard-fail with "too much data".
+            resp = call_gemini(key, model, parts, max_tokens=16384, timeout=timeout)
+            break
+        except Exception as exc:
+            s = str(exc)
+            quota = "429" in s or "quota" in s.lower() or "RESOURCE_EXHAUSTED" in s
+            if quota and i < len(ladder) - 1:
+                continue
+            raise
     raw = (gemini_text(resp) or "").strip()
     try:
         fr = resp["candidates"][0].get("finishReason", "")
@@ -2686,37 +2705,81 @@ def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str):
     Timeouts are bounded so a primary-then-fallback retry still fits the 60s
     Vercel ceiling; the Anthropic-only path (no primary key) keeps the full 50s."""
     if mime_type.startswith("image/"):
-        # Image branch: Gemini first (native image ingest), then Kimi, then
-        # Anthropic — mirrors the PDF branch's Gemini→Anthropic order. Each stage
-        # uses a bounded timeout so a primary+fallback retry still fits 60s.
+        # Image branch: Gemini first (native image ingest; bake-off 2026-07-04:
+        # 30s vs Kimi's 48s on the same screenshot, equal accuracy — and only
+        # Gemini can also take PDFs). A full-table read needs ~30s, so the old
+        # 25s budget made Gemini time out and silently degrade to fallbacks;
+        # give it 38s. Kimi (~48s) can never fit as a mid-chain fallback inside
+        # the 50s self-timeout, so it is only the primary when Gemini has no key.
         gkey = os.environ.get("GEMINI_API_KEY", "")
         kkey = os.environ.get("KIMI_API_KEY", "")
         if gkey and call_gemini is not None:
             try:
-                return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=25,
+                return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=38,
                                           mime_type=mime_type)
             except Exception:
                 pass
-            if kkey and call_openai_compat is not None:
-                try:
-                    return _kimi_vision_raw(file_bytes, mime_type, prompt, kkey, timeout=20)
-                except Exception:
-                    pass
-            return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=20)
+            return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=12)
         if kkey and call_openai_compat is not None:
             try:
-                return _kimi_vision_raw(file_bytes, mime_type, prompt, kkey, timeout=30)
+                return _kimi_vision_raw(file_bytes, mime_type, prompt, kkey, timeout=40)
             except Exception:
-                return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=25)
+                return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=10)
         return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
-    # application/pdf (and any non-image) → Gemini, else Anthropic.
+    # application/pdf (and any non-image) → Gemini, else Anthropic. Whole-file
+    # calls only happen for small PDFs; big ones arrive page-chunked (?page=N).
     gkey = os.environ.get("GEMINI_API_KEY", "")
     if gkey and call_gemini is not None:
         try:
-            return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=30)
+            return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=35)
         except Exception:
-            return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=25)
+            return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=14)
     return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
+
+
+def _image_band_boxes(file_bytes: bytes):
+    """For a very tall page-capture image (a full-page web screenshot, e.g. a
+    157-row results page at 1742x6431), return the crop boxes [(top, bottom)]
+    that slice it into overlapping horizontal bands. Returns None for normal
+    images (parse in one shot). Bands are served like PDF pages through
+    ?count=1 / ?page=N — measured 2026-07-04: a dense band costs ~1.4s/row of
+    Gemini output + ~13s overhead, so anything much beyond ~15 rows per
+    request cannot finish inside the 60s Vercel ceiling. band_h 800px keeps a
+    dense table around that size; 100px overlap keeps every row whole in at
+    least one band (the client dedupes by sail|helm|crew)."""
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(file_bytes))
+        w, h = img.size
+    except Exception:
+        return None
+    if h <= 2400 or h <= 1.8 * w:
+        return None
+    import math
+    band_h, overlap = 800, 100
+    n = min(12, max(2, math.ceil(h / band_h)))
+    step = math.ceil((h - overlap) / n)
+    return [(i * step, min(h, i * step + step + overlap)) for i in range(n)]
+
+
+def _image_band_count(file_bytes: bytes) -> int:
+    boxes = _image_band_boxes(file_bytes)
+    return len(boxes) if boxes else 1
+
+
+def _extract_image_band(file_bytes: bytes, page_index: int):
+    """Crop band page_index of a tall image as JPEG bytes, or None when the
+    image isn't tall / the index is out of range (caller parses whole image)."""
+    boxes = _image_band_boxes(file_bytes)
+    if not boxes or not (0 <= page_index < len(boxes)):
+        return None
+    from PIL import Image
+    img = Image.open(io.BytesIO(file_bytes))
+    top, bottom = boxes[page_index]
+    crop = img.crop((0, top, img.size[0], bottom))
+    buf = io.BytesIO()
+    crop.convert("RGB").save(buf, "JPEG", quality=85)
+    return buf.getvalue()
 
 
 def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_hint: str = "") -> dict:
@@ -2724,6 +2787,9 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
         raise ValueError("urllib not available.")
 
     # Downscale large images before sending (PDFs pass through untouched).
+    # NOTE: very tall screenshots never reach this whole-file path from the
+    # import flow — ?count=1 reports their band count and the client fetches
+    # bands via ?page=N (see _image_band_boxes), exactly like PDF pages.
     if mime_type.startswith("image/"):
         file_bytes, mime_type = _downscale_image(file_bytes, mime_type)
 
@@ -4511,8 +4577,15 @@ def parse_pdf_page(file_bytes: bytes, page_index: int) -> dict:
     (Hobby plan). Returns just that page's entries (no scoring, no dedupe).
     """
     mime = _detect_mime(file_bytes)
+    if mime.startswith("image/"):
+        # Tall page-capture screenshots page through their horizontal bands
+        # (?count=1 reported the band count); normal images parse whole.
+        band = _extract_image_band(file_bytes, page_index)
+        if band is not None:
+            return _gemini_parse(band, "image/jpeg")
+        return _gemini_parse(file_bytes, mime)
     if mime != "application/pdf":
-        # Images / single files: no paging — parse whole thing.
+        # Other single files: no paging — parse whole thing.
         return _gemini_parse(file_bytes, mime)
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
@@ -4701,6 +4774,10 @@ class handler(BaseHTTPRequestHandler):
         try:
             # ?count=1 → just return the PDF page count (instant; no parsing)
             if want_count and 'application/json' not in ctype:
+                # Images: tall page-capture screenshots report their band
+                # count so the client pages through them like PDF pages.
+                if _detect_mime(body).startswith("image/"):
+                    return self._respond(200, {'ok':True, 'page_count': _image_band_count(body)})
                 return self._respond(200, {'ok':True, 'page_count': _pdf_page_count(body)})
             # ?nat=1 → read flag-image nationalities with a small AI call → {sail: IOC}
             if want_nat and 'application/json' not in ctype:

@@ -6465,7 +6465,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           if(d&&d.ok&&Array.isArray(d.entries)) break;
           err=(d&&d.error)||"page failed"; d=null;
         }catch(e){ err="network/timeout"; d=null; }
-        if(attempt===0) await new Promise(r=>setTimeout(r,1200)); // brief backoff before retry
+        if(attempt===0) await new Promise(r=>setTimeout(r,8000)); // backoff long enough for a provider rate-limit window to clear
       }
       if(d) pageResults[pi]={entries:d.entries,name:d.name,date:d.date,discards:d.discards,division:d.division||""};
       else pageErrors.push({page:pi+1,error:err});

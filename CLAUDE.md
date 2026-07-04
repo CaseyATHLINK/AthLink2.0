@@ -268,7 +268,17 @@ Table: athlete_claims.
   out of scope), cn-games-book, ioda-word-notice, all zero-text scans.
 - AI routing (api/llm.py): vision/photos → Gemini (gemini-3.5-flash,
   GEMINI_VISION_MODEL override); text fallback → Kimi; Anthropic Haiku 4.5 is
-  the universal fallback. Images now go Gemini-first.
+  the universal fallback. Images now go Gemini-first — bake-off 2026-07-04:
+  Gemini 30s vs Kimi 48s at equal accuracy, and Kimi silently truncates long
+  tables + can't ingest PDFs. Gemini calls walk a model LADDER
+  (3.5-flash → 3-flash-preview → 2.5-flash) on quota-429s because the free
+  tier caps each model per day; consider paid billing on the Gemini key.
+- Tall screenshots (h>2400 and h>1.8w, e.g. full-page web captures) are parsed
+  in ~800px horizontal bands served through the SAME ?count=1 / ?page=N
+  chunking the client already uses for PDFs (a dense band ≈ 1.4s/row of vision
+  output + ~13s overhead — one 60s request can't fit more than ~15-20 rows).
+  Client dedupes band overlap by sail|helm|crew and retries a failed page
+  after an 8s backoff.
 - norm_category truncates at 14 chars — use RAW cell value for fleet names
 - Fleet-label routing runs AFTER _looks_like_class demotion block
 - Discard count = mode of bracketed-cell counts; returns 0 if no evidence
