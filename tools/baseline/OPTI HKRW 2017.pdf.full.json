@@ -4173,5 +4173,10 @@
   "nat_from_flags": false,
   "detected_class": "optimist",
   "detected_host": "Royal Hong Kong Yacht Club",
-  "_text_lines": 204
+  "_text_lines": 204,
+  "detected_format": {
+    "family": "sailwave",
+    "input_type": "pdf-text",
+    "confidence": 0.9
+  }
 }

@@ -47,7 +47,12 @@ ROUTES = {
     "hover":    {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
                  "key_env": "KIMI_API_KEY", "model": "kimi-k2.5"},
     "nat":      {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
-                 "key_env": "GEMINI_API_KEY",   "model": "gemini-2.5-flash"},
+                 "key_env": "GEMINI_API_KEY",   "model": "gemini-3.5-flash",
+                 "model_env": "GEMINI_NAT_MODEL"},
+    # vision parse (PDF/image) route — Gemini 3.5 Flash, overridable via env.
+    "vision":   {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
+                 "key_env": "GEMINI_API_KEY",   "model": "gemini-3.5-flash",
+                 "model_env": "GEMINI_VISION_MODEL"},
 }
 
 ANTHROPIC_ROUTE = {"provider": "anthropic", "base_url": ANTHROPIC_URL,
@@ -67,7 +72,15 @@ def route(task):
         return dict(ANTHROPIC_ROUTE)
     if not os.environ.get(cfg["key_env"], ""):
         return dict(ANTHROPIC_ROUTE)
-    return dict(cfg)
+    cfg = dict(cfg)
+    # An env override (model_env) lets ops pin/downgrade the model without a code
+    # change (e.g. GEMINI_VISION_MODEL=gemini-2.5-flash). Non-empty value wins.
+    menv = cfg.get("model_env")
+    if menv:
+        override = os.environ.get(menv, "").strip()
+        if override:
+            cfg["model"] = override
+    return cfg
 
 
 # ── low-level callers ────────────────────────────────────────────────────────

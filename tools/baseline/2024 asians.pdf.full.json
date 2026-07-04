@@ -843,5 +843,10 @@
   "nat_from_flags": true,
   "detected_class": "29er",
   "detected_host": null,
-  "_text_lines": 66
+  "_text_lines": 66,
+  "detected_format": {
+    "family": "sailwave",
+    "input_type": "pdf-text",
+    "confidence": 0.9
+  }
 }

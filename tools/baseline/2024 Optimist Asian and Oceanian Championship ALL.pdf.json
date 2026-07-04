@@ -1,0 +1,65 @@
+{
+  "event": "2024 Optimist Asian & Oceanian Championship",
+  "date": "",
+  "detected_class": "optimist",
+  "detected_host": null,
+  "discards": 1,
+  "n_entries": 133,
+  "confidence": 1.0,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "looks clean"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "121",
+      "helm": "Ethan Chia",
+      "crew": "",
+      "nat": "SGP",
+      "div": "",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "142",
+      "helm": "Sean Kum",
+      "crew": "",
+      "nat": "SGP",
+      "div": "",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "183",
+      "helm": "Margaux Nguyen-Minh",
+      "crew": "",
+      "nat": "HKG",
+      "div": "",
+      "gender": "F",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "111",
+      "helm": "Nigel Tan",
+      "crew": "",
+      "nat": "SGP",
+      "div": "",
+      "gender": "M",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "175",
+      "helm": "Ashlea Tham",
+      "crew": "",
+      "nat": "SGP",
+      "div": "",
+      "gender": "F",
+      "category": ""
+    }
+  ]
+}

@@ -445,5 +445,10 @@
   "nat_from_flags": false,
   "detected_class": "",
   "detected_host": null,
-  "_text_lines": 27
+  "_text_lines": 27,
+  "detected_format": {
+    "family": "sailingresults",
+    "input_type": "pdf-text",
+    "confidence": 0.9
+  }
 }

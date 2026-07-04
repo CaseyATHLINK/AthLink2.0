@@ -1,0 +1,65 @@
+{
+  "event": "29er National Championships 2019",
+  "date": "",
+  "detected_class": "29er",
+  "detected_host": "Royal Hong Kong Yacht Club",
+  "discards": 0,
+  "n_entries": 8,
+  "confidence": 1.0,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "looks clean"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "2655",
+      "helm": "Malo Kennish",
+      "crew": "Anatole Martin",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "2524",
+      "helm": "Karrie Clark",
+      "crew": "Penelope Martin",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "2245",
+      "helm": "Lewis Clark",
+      "crew": "Dylan Richards",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "2613",
+      "helm": "Pei Yip",
+      "crew": "Pasu chu",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "2165",
+      "helm": "Ulysse Ha Thuc",
+      "crew": "Maddalena Di Salvo",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

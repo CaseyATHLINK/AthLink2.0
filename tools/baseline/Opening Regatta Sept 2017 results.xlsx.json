@@ -1,0 +1,65 @@
+{
+  "event": "Aberdeen Boat Club Dinghy Opening Regatta 9 & 10 September 2017",
+  "date": "10/09/2017",
+  "detected_class": "optimist",
+  "detected_host": "Aberdeen Boat Club",
+  "discards": null,
+  "n_entries": 74,
+  "confidence": 0.8,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "26 ranks missing from 1..74"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "54858",
+      "helm": "Pak Kan Chow",
+      "crew": "Tsz Lok Keung",
+      "nat": "HKG",
+      "div": "Div A",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "54935",
+      "helm": "Tang Hoi Ching",
+      "crew": "Yau Suet Nga",
+      "nat": "HKG",
+      "div": "Div A",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "54945",
+      "helm": "Ho Chun Ho",
+      "crew": "Lee Ka Ho",
+      "nat": "HKG",
+      "div": "Div A",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "50868",
+      "helm": "Li Yi Kiu",
+      "crew": "Lam Jaime Yin Man",
+      "nat": "HKG",
+      "div": "Div A",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "5485",
+      "helm": "Cheng Cheuk Yin",
+      "crew": "Seto Ming Kit",
+      "nat": "HKG",
+      "div": "Div A",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

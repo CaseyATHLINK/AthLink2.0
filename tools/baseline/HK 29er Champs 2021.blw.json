@@ -1,0 +1,65 @@
+{
+  "event": "Hong Kong 29er Championships 27 & 28 Nov 2021",
+  "date": "",
+  "detected_class": "29er",
+  "detected_host": "Aberdeen Boat Club",
+  "discards": 2,
+  "n_entries": 13,
+  "confidence": 1.0,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "looks clean"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "2876",
+      "helm": "Casey Law",
+      "crew": "Jack Dingemans",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "2457",
+      "helm": "Juliette Clot",
+      "crew": "Maddalena Di Salvo",
+      "nat": "HKG",
+      "div": "",
+      "gender": "F",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "2412",
+      "helm": "Ethan Kong",
+      "crew": "Axel Pantzare",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "1",
+      "helm": "Julia Jacobsen",
+      "crew": "Augustin Clot",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "2751",
+      "helm": "Cameron Law",
+      "crew": "Pasu Chu",
+      "nat": "HKG",
+      "div": "",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

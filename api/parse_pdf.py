@@ -51,7 +51,7 @@ except Exception:
     score_parse = None
 try:
     from llm import (call_gemini, gemini_text, call_openai_compat, openai_text,
-                     LLMError, ROUTES as _LLM_ROUTES)
+                     LLMError, ROUTES as _LLM_ROUTES, route as _llm_route)
 except Exception:
     call_gemini = None
     gemini_text = None
@@ -59,11 +59,14 @@ except Exception:
     openai_text = None
     LLMError = Exception
     _LLM_ROUTES = {}
+    _llm_route = None
 
 # ── penalty codes ──────────────────────────────────────────────────────────
 CODES = {
     'DNF','DNC','DNS','OCS','DSQ','BFD','UFD','RET','RDG','DGM','DNE',
     'SCP','NSC','PRP','TAL','ZFP','STP','DPI','TP5','TPP','TPN',
+    # TopYacht legend codes (single-letter suffixes translated to these):
+    'ARB','MED','ESP','ENP','LATE','DUT','EXC','TLE','UFP','AVG','PRO',
 }
 
 def fix_doubled(s):
@@ -510,6 +513,27 @@ def extract_date(text):
             continue
     return ''
 
+_MONTHS = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+           'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+
+def _textual_date(text):
+    """Parse a textual 'D [& D] Month YYYY' (e.g. '9 & 10 September 2017') into
+    dd/mm/yyyy, taking the LAST day of a range. Deliberately NOT part of
+    extract_date's global pattern list (it would re-date other formats' baselines
+    off stray in-text dates); callers opt in via a date_hint."""
+    m = re.search(r'\b(\d{1,2})(?:\s*[&\-–to]+\s*(\d{1,2}))?\s+'
+                  r'([A-Za-z]{3,9})\s+(\d{4})\b', text or '', re.IGNORECASE)
+    if not m:
+        return ''
+    day = m.group(2) or m.group(1)
+    mo = _MONTHS.get(m.group(3)[:3].lower())
+    if not mo:
+        return ''
+    try:
+        return f"{int(day):02d}/{mo:02d}/{m.group(4)}"
+    except ValueError:
+        return ''
+
 # ── column mapping ─────────────────────────────────────────────────────────
 def detect_cols(header_rows):
     """Accept one or two header rows (manage2sail has a split header)."""
@@ -857,6 +881,119 @@ def parse_table(tbl, fleet_hint=''):
         entries.append(e)
 
     return {'entries': entries} if entries else None
+
+# ── excel-print-pdf (Excel sheets printed to PDF) ───────────────────────────
+# Header-cell text seen in these club sheets → the canonical label detect_cols
+# already understands. A pre-processing shim, NOT a new line parser: we clean the
+# header row and drop merged-title rows, then hand the table to parse_table.
+_EXCEL_HDR_MAP = {
+    'no': 'Rank', 'no.': 'Rank', 'pos': 'Rank', 'place': 'Rank', 'rank': 'Rank',
+    'skipper': 'Helm', 'skippername': 'Helm', "skipper'sname": 'Helm',
+    'helm': 'Helm', 'helmname': 'Helm', "helm'sname": 'Helm',
+    'crew': 'Crew', 'crewname': 'Crew', "crew'sname": 'Crew',
+    'sailnumber': 'Sail', 'sailno': 'Sail', 'sailno.': 'Sail', 'sail': 'Sail',
+    'club': 'Club', 'boatclub': 'Club',
+    'nettotal': 'Nett', 'nett': 'Nett', 'net': 'Nett', 'net total': 'Nett',
+    'total': 'Total', 'totalpts': 'Total',
+    'dinghy': 'Class', 'class': 'Class',
+}
+# Header keys that identify a real (non-title) header row.
+_EXCEL_HDR_KEYS = {'no', 'no.', 'rank', 'pos', 'place', 'skipper', 'skippername',
+                   'helm', 'helmname', 'crew', 'crewname', 'sail', 'sailno',
+                   'sailnumber', 'club', 'class', 'dinghy', 'total', 'nett',
+                   'net', 'nettotal'}
+
+def _excel_is_titleish(row):
+    """A merged-title row: ≤2 non-empty cells AND none of them is a header key or
+    a race header (so a genuine header row is never mistaken for a title)."""
+    non_empty = [str(c).strip() for c in row if str(c or '').strip()]
+    if len(non_empty) > 2:
+        return False
+    for c in non_empty:
+        if hdr_key(c) in _EXCEL_HDR_KEYS or is_race_hdr(c):
+            return False
+    return True
+
+def _excel_normalise_header(header):
+    """Rewrite header cells to canonical labels parse_table's detect_cols reads.
+    'Discard'/'1 Discard' and 'Place' (when a rank col exists) are cleared so
+    they don't get mistaken for a race/rank column — the discard info already
+    lives in the race cells' brackets."""
+    out = []
+    has_rank = any(hdr_key(c) in ('no', 'no.', 'rank', 'pos') for c in header)
+    for c in header:
+        k = hdr_key(c)
+        if re.search(r'discard', str(c or ''), re.IGNORECASE):
+            out.append('')                         # drop the discarded-score column
+        elif k == 'place' and has_rank:
+            out.append('')                         # redundant with the rank column
+        elif k in _EXCEL_HDR_MAP:
+            out.append(_EXCEL_HDR_MAP[k])
+        else:
+            out.append(c if c is not None else '')
+    return out
+
+def try_excel_print(all_tables, full_text, pdf_meta):
+    """Pre-processing shim for Excel-printed-to-PDF club result sheets (ABC/HKSF
+    office: GPL Ghostscript + PScript5; federation sheets: Microsoft Excel). The
+    generic table path fails or mis-parses these because row 1 is a merged 2-line
+    title cell, the rank header may be blank, and columns use labels detect_cols
+    doesn't know ('Skipper Name', 'Net total', '1 Discard', 'Place'). We strip
+    the title rows, normalise the header, then feed the cleaned tables straight
+    through the existing parse_table. Returns (entries, event_name) or (None,'')."""
+    prod  = _meta_get(pdf_meta, 'Producer').lower()
+    title = _meta_get(pdf_meta, 'Title').lower()
+    is_family = ('gpl ghostscript' in prod or 'pscript5' in prod
+                 or 'microsoft® excel®' in prod or 'microsoft(r) excel' in prod
+                 or title.endswith('.xls') or title.endswith('.xlsx'))
+    if not is_family or not all_tables:
+        return None, ''
+
+    ev_name = ''
+    all_ents = []
+    last_header = None                     # carried forward to header-less pages
+    for tbl in all_tables:
+        if not tbl or len(tbl) < 1:
+            continue
+        # Strip leading merged-title rows; remember the first as the event name.
+        rows = list(tbl)
+        while rows and _excel_is_titleish(rows[0]):
+            cell = next((str(c).strip() for c in rows[0] if str(c or '').strip()), '')
+            if cell and not ev_name:
+                # A merged title cell often stacks 'Event\nSub-result' — take the
+                # first line as the event name.
+                ev_name = re.sub(r'\s+', ' ', cell.split('\n')[0]).strip()
+            rows = rows[1:]
+        if not rows:
+            continue
+        # Find the header row (first row carrying ≥2 header keys) and normalise it.
+        hidx = None
+        for i, r in enumerate(rows[:3]):
+            if sum(1 for c in r if hdr_key(c) in _EXCEL_HDR_KEYS) >= 2:
+                hidx = i; break
+        if hidx is None:
+            # A continuation table on a later page has no header — reuse the last
+            # one when the widths line up; otherwise skip (legend/notes tables).
+            if last_header is None or len(rows[0]) != len(last_header):
+                continue
+            header = last_header
+            data = rows
+        else:
+            header = _excel_normalise_header(rows[hidx])
+            last_header = header
+            data = rows[hidx + 1:]
+        # Drop legend rows (e.g. 'OCS DNS DNF RET' spelling out penalty codes) —
+        # no rank and every cell is a bare code.
+        body = []
+        for r in data:
+            vals = [str(c).strip() for c in r if str(c or '').strip()]
+            if vals and all(re.sub(r'[^A-Z]', '', v.upper()) in CODES for v in vals):
+                continue
+            body.append(r)
+        parsed = parse_table([header] + body, '')
+        if parsed and parsed['entries']:
+            all_ents.extend(parsed['entries'])
+    return (all_ents or None), ev_name
 
 # ── Clubspot ───────────────────────────────────────────────────────────────
 def try_clubspot(full_text):
@@ -1245,6 +1382,389 @@ def try_sailti(full_text):
         entries.append(e)
     return entries or None
 
+# ── sailti-web (scoring.sailti.com / SailOptimist browser prints) ───────────
+_SAILTI_WEB_COLOURS = ('gold', 'silver', 'bronze', 'emerald', 'sapphire',
+                       'yellow', 'blue', 'red', 'green', 'white')
+
+def try_sailti_web(full_text, pdf_bytes=None):
+    """scoring.sailti.com / SailOptimist live-results browser prints. The flat
+    text reading order is jumbled — NAT sits over the sail number in the SAIL#
+    cell, wrapped names interleave, and penalty codes (STP/BFD/UFD/DPI) and
+    discarded scores stack on lines above/below the row. So parse by WORD
+    X-POSITION: learn each column's x from the header (SAIL#, CREW=name, CAT,
+    NET, TOTAL, and race headers 1Q…nF), then for each competitor block (rank
+    line → next rank line) bucket every word into its column and read the race
+    cells from all block lines. Category-filtered docs keep non-contiguous
+    overall ranks (never renumbered). Returns entries or None."""
+    if pdfplumber is None or not pdf_bytes:
+        return None
+    low = full_text.lower()
+    if not re.search(r'last update:\s*\d', low):
+        return None
+    from collections import defaultdict
+    RANK  = re.compile(r'^(\d{1,3})([A-Z]{3})?$')     # '9' or glued '122KOR'
+    NAT3  = re.compile(r'^[A-Z]{3}$')
+    SCORE = re.compile(r'^\(?-?\d+(?:\.\d+)?\)?$')
+    CATOK = {'M', 'W', 'F', 'X'}
+    entries = []
+
+    def _is_code(txt):
+        return re.sub(r'[^A-Z]', '', txt.upper()) in CODES
+
+    # Left-rail / footer navigation chrome that can share the name column x.
+    NAV = {'HOME', 'ENTRY', 'LIST', 'RESULTS', 'LIVE', 'ONB', 'NEWS',
+           'GALLERY', 'NEW', 'FACEBOOK', 'INSTAGRAM', 'TWITTER', 'PRINT',
+           'PDF', 'OUTPUT'}
+
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words()
+            if not words:
+                continue
+            rows = defaultdict(list)
+            for w in words:
+                rows[round(w['top'])].append(w)
+            tops = sorted(rows)
+            n = len(tops)
+
+            # ── Learn stable per-page anchors: how many race columns, and the
+            # name/sail column x. Header labels DON'T align with the data grid on
+            # these responsive web prints (columns reflow per page), so we key on
+            # the header only for the race COUNT and the name/sail x, and derive
+            # the race-column CENTRES from the data rows themselves. ──
+            n_races = 0
+            name_x = sail_x = None
+            for t in tops:
+                line = sorted(rows[t], key=lambda x: x['x0'])
+                by_txt = {w['text']: w['x0'] for w in line}
+                rc = sum(1 for w in line if is_race_hdr(w['text']))
+                if rc:
+                    n_races = max(n_races, rc)
+                if 'CREW' in by_txt:
+                    name_x = by_txt['CREW']
+                if 'SAIL' in by_txt:
+                    sail_x = by_txt['SAIL']
+            if not n_races or name_x is None:
+                continue
+            if sail_x is None:
+                sail_x = name_x - 40
+
+            # ── Detect rank lines and split each into (rank, nat, head-tokens).
+            # A rank line's leftmost token is a rank (bare int or int glued to a
+            # NAT) sitting left of the name column, followed by a trailing run of
+            # ≥3 score-shaped tokens (NET + TOTAL + races on the line). ──
+            def trailing_scores(line):
+                run = []
+                for w in reversed(line):
+                    if SCORE.match(w['text']) or _is_code(w['text']):
+                        run.append(w)
+                    else:
+                        break
+                run.reverse()
+                return run
+
+            def is_rankline(idx):
+                ln = sorted(rows[tops[idx]], key=lambda x: x['x0'])
+                if not ln or not RANK.match(ln[0]['text']) or ln[0]['x0'] >= name_x - 8:
+                    return False
+                return len(trailing_scores(ln)) >= 3
+
+            block_starts = [idx for idx in range(n) if is_rankline(idx)]
+            if not block_starts:
+                continue
+
+            # ── Learn race-column CENTRES from the data: cluster the x-positions
+            # of every rank line's race tokens (the trailing run minus NET+TOTAL).
+            # A row with all races present pins all n_races centres. ──
+            xs = []
+            for sidx in block_starts:
+                ln = sorted(rows[tops[sidx]], key=lambda x: x['x0'])
+                run = trailing_scores(ln)
+                races = run[2:] if len(run) >= 2 else []   # drop NET, TOTAL
+                xs.extend(w['x0'] for w in races)
+            race_x = []
+            if xs:
+                xs.sort()
+                clusters = [[xs[0]]]
+                for x in xs[1:]:
+                    if x - clusters[-1][-1] <= 12:
+                        clusters[-1].append(x)
+                    else:
+                        clusters.append([x])
+                clusters.sort(key=len, reverse=True)
+                centres = sorted(sum(c) / len(c) for c in clusters[:n_races])
+                race_x = centres
+            if not race_x:
+                continue
+            first_race_x = race_x[0]
+
+            def nearest_race(x):
+                best, bd = None, 1e9
+                for ci, rx in enumerate(race_x):
+                    d = abs(x - rx)
+                    if d < bd:
+                        bd, best = d, ci
+                return best if bd <= 16 else None
+
+            # A long name wraps so its FIRST line prints ABOVE the rank line (which
+            # then carries no name token). Pull one such preceding orphan line into
+            # the block; cap each block's range at the next block's true start so a
+            # wrapped-above line is never double-counted.
+            def has_name(line):
+                return any(sail_x + 20 <= w['x0'] < first_race_x - 20
+                           and re.search(r'[A-Za-z]', w['text'])
+                           and w['text'] not in CATOK
+                           and w['text'].upper() not in NAV
+                           and not _is_code(w['text'])
+                           for w in line)
+
+            pre = []
+            for sidx in block_starts:
+                pi = sidx
+                head_line = sorted(rows[tops[sidx]], key=lambda x: x['x0'])
+                if not has_name(head_line):
+                    k = sidx - 1
+                    if k >= 0 and not is_rankline(k):
+                        ln = sorted(rows[tops[k]], key=lambda x: x['x0'])
+                        if has_name(ln) and len(trailing_scores(ln)) < 3:
+                            pi = k
+                pre.append(pi)
+
+            for bi, sidx in enumerate(block_starts):
+                pre_idx = pre[bi]
+                end_idx = pre[bi + 1] if bi + 1 < len(block_starts) else n
+                head = sorted(rows[tops[sidx]], key=lambda x: x['x0'])
+                head_top = tops[sidx]
+                m = RANK.match(head[0]['text'])
+                rank = int(m.group(1))
+                nat = m.group(2) or ''
+
+                # Split the head line into the trailing score run and the left
+                # part (rank, nat/sail, name tokens, CAT letter).
+                run = trailing_scores(head)
+                left = head[:len(head) - len(run)]
+                net_tok = run[0]['text'] if run else None
+
+                # NAT + sail from the left part (or from block lines below).
+                sail = ''
+                name_words = []
+                for w in left[1:]:               # skip the rank token itself
+                    txt = w['text']
+                    if NAT3.match(txt) and not nat and w['x0'] < first_race_x - 40:
+                        nat = txt
+                    elif re.match(r'^\d{2,7}$', txt) and not sail \
+                            and w['x0'] < name_x - 4:
+                        sail = txt
+                    elif txt in CATOK:
+                        pass                     # CAT letter — captured below
+                    elif txt.upper() in NAV:
+                        pass
+                    elif re.search(r'[A-Za-z]', txt):
+                        name_words.append(txt)
+
+                # CAT (gender): the lone M/W/F/X letter in the left part, right of
+                # the name.
+                cat = ''
+                for w in left:
+                    if w['text'] in CATOK and w['x0'] > name_x:
+                        cat = w['text']; break
+
+                # Pull wrapped-name fragments from adjacent block lines (≤26px from
+                # the head), name column only, skipping nav/footer chrome.
+                name_parts = [' '.join(name_words)] if name_words else []
+                for kk in range(pre_idx, end_idx):
+                    if kk == sidx:
+                        continue
+                    if abs(tops[kk] - head_top) > 26:
+                        continue
+                    ln = sorted(rows[tops[kk]], key=lambda x: x['x0'])
+                    seg = [w['text'] for w in ln
+                           if sail_x + 20 <= w['x0'] < first_race_x - 20
+                           and re.search(r'[A-Za-z]', w['text'])
+                           and w['text'] not in CATOK
+                           and w['text'].upper() not in NAV
+                           and not _is_code(w['text'])
+                           and not NAT3.match(w['text'])]
+                    if seg:
+                        if tops[kk] < head_top:
+                            name_parts.insert(0, ' '.join(seg))   # wrapped-above
+                        else:
+                            name_parts.append(' '.join(seg))
+                    # NAT/sail may sit on a line below the rank line.
+                    for w in ln:
+                        if sail_x - 14 <= w['x0'] < name_x - 4:
+                            if NAT3.match(w['text']) and not nat:
+                                nat = w['text']
+                            elif re.match(r'^\d{2,7}$', w['text']) and not sail:
+                                sail = w['text']
+                name = ' '.join(p for p in name_parts if p).strip()
+                name = re.sub(r'-\s+', '-', name)   # rejoin "NGUYEN-" + "MINH"
+
+                # Race cells: bucket every score/code token right of the first race
+                # column across ALL block lines by nearest race centre.
+                buckets = defaultdict(list)
+                for kk in range(pre_idx, end_idx):
+                    for w in sorted(rows[tops[kk]], key=lambda x: x['x0']):
+                        if w['x0'] < first_race_x - 16:
+                            continue
+                        txt = w['text']
+                        if SCORE.match(txt) or _is_code(txt):
+                            ci = nearest_race(w['x0'])
+                            if ci is not None:
+                                buckets[ci].append(txt)
+                race_toks = []
+                for ci in range(len(race_x)):
+                    cell = buckets.get(ci)
+                    if not cell:
+                        continue
+                    nums = [c for c in cell if SCORE.match(c)]
+                    codes = [c for c in cell if _is_code(c)]
+                    if nums:
+                        race_toks.append(nums[0] + (' ' + codes[0] if codes else ''))
+                    elif codes:
+                        race_toks.append(codes[0])
+
+                if not name or not race_toks:
+                    continue
+                e = _text_line_entry(rank, name, '', sail, nat, '', race_toks,
+                                     net_tok)
+                e['gender'] = 'F' if cat in ('W', 'F') else ('M' if cat == 'M' else '')
+                entries.append(e)
+
+    return entries or None
+
+# ── TopYacht (Australian club scoring) ──────────────────────────────────────
+# Default TopYacht legend letter → full code. The doc's own legend line ("Penalties:
+# A=ARB/MED B=BFD C=DNC …") is parsed per-document when present and overrides this.
+_TOPYACHT_CODES = {
+    'A': 'ARB', 'B': 'BFD', 'C': 'DNC', 'D': 'DNE', 'E': 'ESP', 'F': 'DNF',
+    'G': 'RDG', 'H': 'NSC', 'I': 'DPI', 'L': 'LATE', 'M': 'DGM', 'N': 'ENP',
+    'O': 'OCS', 'P': 'PRO', 'Q': 'DSQ', 'R': 'RET', 'S': 'DNS', 'T': 'TLE',
+    'U': 'UFP', 'V': 'AVG', 'W': 'DUT', 'X': 'EXC', 'Y': 'SCP', 'Z': 'ZFP',
+}
+
+def _topyacht_legend(full_text):
+    """Read the per-document 'Penalties: A=ARB/MED B=BFD …' legend into a
+    {letter: CODE} map; fall back to _TOPYACHT_CODES for any letter not printed."""
+    m = re.search(r'Penalties:\s*(.+?)\)', full_text, re.DOTALL | re.IGNORECASE)
+    mapping = dict(_TOPYACHT_CODES)
+    if m:
+        for lm in re.finditer(r'\b([A-Z#])\s*=\s*([A-Za-z/ ]+?)(?=\s+[A-Z#]\s*=|\s*$)',
+                              m.group(1)):
+            letter, val = lm.group(1), lm.group(2).strip()
+            # Take the first token of a multi-word value (ARB/MED → ARB;
+            # "Late Entrant" → LATE) and upper-case it into a compact code.
+            first = re.split(r'[/\s]', val)[0].upper()
+            if letter != '#':
+                mapping[letter] = first
+    return mapping
+
+def _topyacht_cell(raw, legend):
+    """Normalise a TopYacht score cell into a form clean_score_with_code reads:
+      '11.0'      → '11'
+      '[4.0]'     → '(4)'          (discard: parens, so _disc counts it)
+      '19.0C'     → '19 DNC'       (suffixed letter → legend code)
+      '[19.0O]'   → '(19 OCS)'     (discarded + coded)
+    Returns None for empty cells."""
+    s = str(raw or '').strip()
+    if not s:
+        return None
+    disc = s.startswith('[') and s.endswith(']')
+    inner = s[1:-1] if disc else s
+    m = re.match(r'^(-?\d+(?:\.\d+)?)\s*([A-Za-z#])?$', inner)
+    if not m:
+        return None
+    num = m.group(1)
+    if num.endswith('.0'):
+        num = num[:-2]
+    code = ''
+    letter = m.group(2)
+    if letter and letter != '#':
+        code = legend.get(letter.upper(), '')
+    cell = num + (' ' + code if code else '')
+    return '(' + cell + ')' if disc else cell
+
+def try_topyacht(full_text):
+    """TopYacht results. Per-class sections headed
+        'Series Results [<class>] up to Race N (Drops = D)'
+    then a header 'Place Ties Sail No Boat Name Skipper Sers Score Race N … Race 1'
+    with the RACE COLUMNS IN REVERSE ORDER (Race N first). Rows are single lines:
+        <place> [ties] <sail> <BOAT NAME…> <Skipper Name…> <Sers> <r_N> … <r_1>
+    Sers Score is the total (no separate nett). Discards are '[x.y]'; penalty
+    codes are single letters suffixed to the score ('[19.0O]') mapped via the
+    legend line. div = the class from the section heading; races reordered to
+    ascending (R1 first) because downstream assumes races[0]=R1."""
+    low = full_text.lower()
+    if 'results by : topyacht' not in low and 'results by: topyacht' not in low \
+       and 'results by :topyacht' not in low:
+        if not ('series results [' in low and 'updated:' in low):
+            return None
+    legend = _topyacht_legend(full_text)
+    lines = full_text.split('\n')
+    entries = []
+    cur_class = ''
+    n_races = 0
+    _SCORE = re.compile(r'^\[?-?\d+(?:\.\d+)?[A-Za-z#]?\]?$')
+    for l in lines:
+        sh = re.search(r'Series Results\s*\[([^\]]+)\]', l)
+        if sh:
+            cur_class = re.sub(r'\s+', ' ', sh.group(1)).strip()
+            rc = re.search(r'up to Race\s*(\d+)', l, re.IGNORECASE)
+            n_races = int(rc.group(1)) if rc else 0
+            continue
+        toks = l.split()
+        if len(toks) < 4 or not toks[0].isdigit():
+            continue
+        # The trailing run is: [Sers Score] + n_races score cells. Count the
+        # trailing score-shaped tokens; the last (n_races+1) are Sers + races.
+        run = 0
+        for t in reversed(toks):
+            if _SCORE.match(t):
+                run += 1
+            else:
+                break
+        want = (n_races + 1) if n_races else run
+        if run < want or want < 2:
+            continue
+        tail = toks[len(toks) - want:]
+        sers, race_cells = tail[0], tail[1:]
+        head = toks[:len(toks) - want]           # place [ties] sail boat… skipper…
+        place = int(head[0])
+        idx = 1
+        # Optional Ties column: a lone letter/number token before the sail. Sail No
+        # is the next token that is a bare number or nat-prefixed number.
+        sail = ''
+        sidx = None
+        for k in range(idx, len(head)):
+            if re.match(r'^[A-Z]{0,3}\d{2,7}$', head[k]):
+                sail, sidx = head[k], k; break
+        if sidx is None:
+            continue
+        rest = head[sidx + 1:]                    # BOAT NAME… then Skipper Name…
+        # Skipper (helm) = trailing Titlecase name run; boat name = the ALL-CAPS
+        # run before it. Skipper cell may stack two names (303 Double) — join them.
+        sk = []
+        for t in reversed(rest):
+            if re.match(r"^[A-Z][a-z][A-Za-z'’.\-]*$", t) or re.match(r"^[A-Z]\.?$", t):
+                sk.insert(0, t)
+            else:
+                break
+        skipper = ' '.join(sk)
+        # Reverse the race cells to ascending (doc prints Race N … Race 1).
+        race_cells = list(reversed(race_cells))
+        race_toks = [_topyacht_cell(c, legend) for c in race_cells]
+        race_toks = [c for c in race_toks if c is not None]
+        e = _text_line_entry(place, skipper, '', sail, '', cur_class, race_toks,
+                             net_token=None)
+        # Sers Score is the total; set total from it, nett equal to it (no recompute).
+        try:
+            sv = float(sers.strip('[]'))
+            e['pdf_net'] = int(sv) if sv == int(sv) else sv
+        except (ValueError, TypeError):
+            pass
+        entries.append(e)
+    return entries or None
+
 # ── "Overall Results of <division>" championship books ──────────────────────
 # Bilingual multi-division layout (e.g. the ILCA Asian Championships): one PDF,
 # many divisions, each headed "Overall Results of …". pdfplumber finds no ruled
@@ -1608,12 +2128,28 @@ def _anthropic_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeou
     return raw, stop
 
 
-def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 30):
-    """PDF parse via Gemini 3 (native PDF ingest, no rasterisation)."""
-    parts = [{"inline_data": {"mime_type": "application/pdf",
+def _vision_model():
+    """Resolve the vision-parse model via llm's route('vision') (honours the
+    GEMINI_VISION_MODEL env override), falling back to the module default if the
+    llm helper isn't importable in this environment."""
+    if _llm_route is not None:
+        try:
+            cfg = _llm_route("vision")
+            m = (cfg or {}).get("model")
+            if m:
+                return m
+        except Exception:
+            pass
+    return _PARSE_GEMINI_MODEL
+
+
+def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 30,
+                       mime_type: str = "application/pdf"):
+    """Vision parse via Gemini (native PDF/image ingest, no rasterisation)."""
+    parts = [{"inline_data": {"mime_type": mime_type,
                               "data": base64.b64encode(file_bytes).decode()}},
              {"text": prompt}]
-    resp = call_gemini(key, _PARSE_GEMINI_MODEL, parts, max_tokens=8192, timeout=timeout)
+    resp = call_gemini(key, _vision_model(), parts, max_tokens=8192, timeout=timeout)
     raw = (gemini_text(resp) or "").strip()
     try:
         fr = resp["candidates"][0].get("finishReason", "")
@@ -1649,14 +2185,30 @@ def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str):
     Timeouts are bounded so a primary-then-fallback retry still fits the 60s
     Vercel ceiling; the Anthropic-only path (no primary key) keeps the full 50s."""
     if mime_type.startswith("image/"):
+        # Image branch: Gemini first (native image ingest), then Kimi, then
+        # Anthropic — mirrors the PDF branch's Gemini→Anthropic order. Each stage
+        # uses a bounded timeout so a primary+fallback retry still fits 60s.
+        gkey = os.environ.get("GEMINI_API_KEY", "")
         kkey = os.environ.get("KIMI_API_KEY", "")
+        if gkey and call_gemini is not None:
+            try:
+                return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=25,
+                                          mime_type=mime_type)
+            except Exception:
+                pass
+            if kkey and call_openai_compat is not None:
+                try:
+                    return _kimi_vision_raw(file_bytes, mime_type, prompt, kkey, timeout=20)
+                except Exception:
+                    pass
+            return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=20)
         if kkey and call_openai_compat is not None:
             try:
                 return _kimi_vision_raw(file_bytes, mime_type, prompt, kkey, timeout=30)
             except Exception:
                 return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=25)
         return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
-    # application/pdf (and any non-image) → Gemini 3, else Anthropic.
+    # application/pdf (and any non-image) → Gemini, else Anthropic.
     gkey = os.environ.get("GEMINI_API_KEY", "")
     if gkey and call_gemini is not None:
         try:
@@ -1996,8 +2548,210 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
             'nat_from_flags':nat_from_flags,'detected_class':detected_class,'detected_host':detected_host}
 
 
+# ── Format registry (detection layer) ──────────────────────────────────────
+# An explicit, ordered map from a format FAMILY to the signatures that identify
+# it and the existing extractor (if any) that handles it. This is a *detection*
+# layer only — it re-labels what the cascade in _rule_based_parse already does,
+# so a `detected_format` verdict can ride along on every result for diagnostics
+# and future routing WITHOUT changing any parse semantics. Signatures come from
+# docs/parser-formats.md.
+
+def _meta_get(pdf_meta, key):
+    """Case-tolerant lookup into a pdfplumber metadata dict (keys are usually
+    title-cased: Title/Producer/Creator, but be defensive)."""
+    if not isinstance(pdf_meta, dict):
+        return ''
+    v = pdf_meta.get(key)
+    if v is None:
+        for k, vv in pdf_meta.items():
+            if str(k).lower() == key.lower():
+                v = vv
+                break
+    return str(v or '')
+
+
+def _sig_sailwave(fb, low, meta):
+    if 'sailwave scoring software' in low:
+        return True
+    if _meta_get(meta, 'Title').lower().startswith('sailwave results for'):
+        return True
+    if 'sailwave results for' in low:
+        return True
+    return bool(re.search(r'sailed:\s*\d+.*entries:\s*\d+', low))
+
+
+def _sig_manage2sail(fb, low, meta):
+    return ('powered by www.manage2sail.com' in low
+            or 'manage2sail report' in _meta_get(meta, 'Title').lower())
+
+
+def _sig_sailti(fb, low, meta):
+    return 'sailti scoring soft' in low
+
+
+def _sig_sailti_web(fb, low, meta):
+    return bool(re.search(r'last update:\s*\d', low)) and bool(
+        re.search(r'\b(gold|silver|bronze|emerald|sapphire|yellow|blue|red|green|white)\b', low))
+
+
+def _sig_sailingresults(fb, low, meta):
+    return 'results by sailingresults.net' in low or 'sailingresults.net' in low
+
+
+def _sig_clubspot(fb, low, meta):
+    return 'theclubspot.com' in low
+
+
+def _sig_overall_results(fb, low, meta):
+    return 'overall results of' in low
+
+
+def _sig_topyacht(fb, low, meta):
+    if re.search(r'results by\s*:\s*topyacht', low):
+        return True
+    return 'series results [' in low and 'updated:' in low
+
+
+def _sig_bornan(fb, low, meta):
+    return 'timing and results provided by bornan' in low
+
+
+def _sig_hubsail(fb, low, meta):
+    return 'hubsail' in _meta_get(meta, 'Title').lower()
+
+
+def _sig_aspose(fb, low, meta):
+    return 'aspose.pdf' in _meta_get(meta, 'Producer').lower()
+
+
+def _sig_cn_games(fb, low, meta):
+    return 'pdftools sdk' in _meta_get(meta, 'Producer').lower()
+
+
+def _sig_ws_resultscentre(fb, low, meta):
+    return ('results centre' in _meta_get(meta, 'Title').lower()
+            or 'results centre' in low)
+
+
+def _sig_asiansailing(fb, low, meta):
+    return 'asiansailing.org' in low
+
+
+def _sig_excel_print(fb, low, meta):
+    prod = _meta_get(meta, 'Producer').lower()
+    title = _meta_get(meta, 'Title').lower()
+    if 'gpl ghostscript' in prod or 'microsoft® excel®' in prod or 'microsoft(r) excel' in prod:
+        return True
+    return title.endswith('.xls') or title.endswith('.xlsx')
+
+
+def _sig_pya(fb, low, meta):
+    return 'events.pya.org.pl' in low
+
+
+def _sig_ourclubadmin(fb, low, meta):
+    return 'ourclubadmin' in low
+
+
+# Ordered registry. `input_types` is the set of input kinds a family is seen in;
+# `detect(file_bytes, full_text_lower, pdf_meta) -> bool`; `extractor` points at
+# the EXISTING rule function for families with a rule path today, else None.
+FORMAT_REGISTRY = [
+    {"family": "sailwave",     "input_types": ["pdf-text", "pdf-scanned", "html"],
+     "detect": _sig_sailwave,       "extractor": try_sailwave_text},
+    {"family": "manage2sail",  "input_types": ["pdf-text"],
+     "detect": _sig_manage2sail,    "extractor": None},
+    {"family": "sailti",       "input_types": ["pdf-text"],
+     "detect": _sig_sailti,         "extractor": try_sailti},
+    {"family": "sailti-web",   "input_types": ["html", "pdf-text", "pdf-scanned"],
+     "detect": _sig_sailti_web,     "extractor": try_sailti_web},
+    {"family": "sailingresults", "input_types": ["pdf-text"],
+     "detect": _sig_sailingresults, "extractor": try_sailingresults},
+    {"family": "clubspot",     "input_types": ["pdf-text"],
+     "detect": _sig_clubspot,       "extractor": try_clubspot},
+    {"family": "overall-results", "input_types": ["pdf-text"],
+     "detect": _sig_overall_results, "extractor": try_overall_results},
+    {"family": "topyacht",     "input_types": ["pdf-text"],
+     "detect": _sig_topyacht,       "extractor": try_topyacht},
+    {"family": "bornan",       "input_types": ["pdf-text"],
+     "detect": _sig_bornan,         "extractor": None},
+    {"family": "hubsail",      "input_types": ["pdf-text"],
+     "detect": _sig_hubsail,        "extractor": None},
+    {"family": "aspose-bilingual-cn", "input_types": ["pdf-text", "pdf-scanned"],
+     "detect": _sig_aspose,         "extractor": None},
+    {"family": "cn-games-book", "input_types": ["pdf-text"],
+     "detect": _sig_cn_games,       "extractor": None},
+    {"family": "worldsailing-resultscentre", "input_types": ["pdf-text"],
+     "detect": _sig_ws_resultscentre, "extractor": None},
+    {"family": "asiansailing-wordpress", "input_types": ["pdf-text"],
+     "detect": _sig_asiansailing,   "extractor": None},
+    {"family": "excel-print-pdf", "input_types": ["pdf-text"],
+     "detect": _sig_excel_print,    "extractor": try_excel_print},
+    {"family": "pya-events",   "input_types": ["html"],
+     "detect": _sig_pya,            "extractor": None},
+    {"family": "ourclubadmin", "input_types": ["html", "pdf-text"],
+     "detect": _sig_ourclubadmin,   "extractor": None},
+]
+
+
+def detect_format(file_bytes, full_text_lower, pdf_meta):
+    """Classify a document into (family, input_type, confidence).
+
+    input_type ∈ 'pdf-text'|'pdf-scanned'|'image'|'html'|'xlsx'|'csv'|'blw'.
+    Detection is cheap and pure: it only reads the (already-extracted) lower-cased
+    text and the PDF metadata dict. `confidence` is a coarse signal: 0.9 for a
+    matched family, 0.3 for 'unknown'. Never raises."""
+    low = full_text_lower or ''
+    meta = pdf_meta if isinstance(pdf_meta, dict) else {}
+
+    # ── input_type ──
+    fb = file_bytes or b''
+    if fb[:4] == b'%PDF' or (not fb and (low or meta)):
+        # PDF (or a caller that only handed us extracted text) → text vs scanned.
+        input_type = 'pdf-text'
+        # pdf-scanned = near-zero extractable text. Approximate the per-page
+        # average from the metadata page count when available, else fall back to
+        # a small absolute threshold.
+        try:
+            npages = int(meta.get('_page_count') or 0)
+        except (TypeError, ValueError):
+            npages = 0
+        nchars = len((full_text_lower or '').strip())
+        if npages > 0:
+            if nchars / max(1, npages) < 40:
+                input_type = 'pdf-scanned'
+        elif nchars < 40:
+            input_type = 'pdf-scanned'
+    elif fb[:8] == b'\x89PNG\r\n\x1a\n' or fb[:3] == b'\xff\xd8\xff' \
+            or (fb[:4] == b'RIFF' and fb[8:12] == b'WEBP') or fb[:6] in (b'GIF87a', b'GIF89a'):
+        input_type = 'image'
+    elif fb[:4] == b'PK\x03\x04':
+        input_type = 'xlsx'
+    elif fb[:4] == b'\xd0\xcf\x11\xe0':
+        input_type = 'xlsx'
+    elif fb[:4] == b'"ser':
+        input_type = 'blw'
+    else:
+        head = fb[:512].lstrip().lower()
+        if head[:5] == b'<html' or head[:9] == b'<!doctype' or b'<table' in fb[:4000].lower():
+            input_type = 'html'
+        else:
+            input_type = 'pdf-text'
+
+    # ── family ──
+    for spec in FORMAT_REGISTRY:
+        try:
+            if spec["detect"](fb, low, meta):
+                return spec["family"], input_type, 0.9
+        except Exception:
+            continue
+    return 'unknown', input_type, 0.3
+
+
 def _rule_based_parse(pdf_bytes: bytes) -> dict:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        _pdf_meta = dict(pdf.metadata or {})
+        _npages = len(pdf.pages)
         full_text = '\n'.join(p.extract_text() or '' for p in pdf.pages)
         all_tables = []
         for page in pdf.pages:
@@ -2013,6 +2767,11 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
     discards = extract_discards(full_text)
     ev_date  = extract_date(full_text)
     results  = []
+
+    # Classify the document once (detection layer only — does not alter parsing).
+    _meta_for_detect = dict(_pdf_meta); _meta_for_detect['_page_count'] = _npages
+    _fam, _itype, _conf = detect_format(pdf_bytes, full_text.lower(), _meta_for_detect)
+    _detected_format = {"family": _fam, "input_type": _itype, "confidence": _conf}
 
     # ── pdfplumber table extraction ───────────────────────────────
     all_parsed = []
@@ -2046,6 +2805,28 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
             parsed = parse_table(tbl, current_fleet)
             if parsed and parsed['entries']:
                 all_parsed.extend(parsed['entries'])
+
+    # ── excel-print-pdf shim ──────────────────────────────────────
+    # Excel sheets printed to PDF (GPL Ghostscript/PScript5, or a .xls(x) Title)
+    # carry a merged 2-line title row and a blank/odd-labelled header that the
+    # generic table path mis-parses. Clean the tables and re-run parse_table;
+    # prefer the result whenever it reads at least as many rows. The merged
+    # title row also yields a better event name than the generic heuristic.
+    _excel_prod  = _meta_get(_pdf_meta, 'Producer').lower()
+    _excel_title = _meta_get(_pdf_meta, 'Title').lower()
+    if ('gpl ghostscript' in _excel_prod or 'pscript5' in _excel_prod
+            or 'microsoft® excel®' in _excel_prod or 'microsoft(r) excel' in _excel_prod
+            or _excel_title.endswith('.xls') or _excel_title.endswith('.xlsx')):
+        _ex_ents, _ex_name = try_excel_print(all_tables, full_text, _pdf_meta)
+        if _ex_ents and len(_ex_ents) >= len(all_parsed):
+            all_parsed = _ex_ents
+            if _ex_name:
+                ev_name = _ex_name
+            # The dropped 'Discard' column bleeds into extract_discards' header
+            # match (no colon after the word), giving a bogus count. The bracket
+            # count in the race cells is authoritative here; when no cell is
+            # bracketed we simply don't know, so fall back to 0 rather than noise.
+            discards = 0
 
     # ── Clubspot fallback ─────────────────────────────────────────
     if not all_parsed:
@@ -2085,6 +2866,38 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
             st = try_sailti(full_text)
             if st and len(st) > len(all_parsed):
                 all_parsed = st
+
+    # TopYacht (Australian club scoring): pdfplumber DOES find a grid, but it
+    # mis-parses this family — race columns print in REVERSE (Race N…Race 1),
+    # penalty codes are single-letter suffixes ('[19.0O]'), and the per-class
+    # section heading (div) and Sers Score (total) are lost. So the signature-
+    # gated text parse is authoritative here: prefer it whenever it reads at
+    # least as many rows as the grid did.
+    if re.search(r'results by\s*:\s*topyacht', sig) or ('series results [' in sig and 'updated:' in sig):
+        ty = try_topyacht(full_text)
+        if ty and len(ty) >= len(all_parsed):
+            all_parsed = ty
+            ev_date = ''      # only the 'Updated:' stamp is printed — not an event date
+
+    # sailti-web (scoring.sailti.com / SailOptimist browser prints): text reading
+    # order is jumbled (NAT stacked over sail, wrapped names, penalty codes on
+    # neighbouring lines), so parse by word geometry when the table path is thin.
+    if re.search(r'last update:\s*\d', sig) and re.search(
+            r'\b(gold|silver|bronze|emerald|sapphire|yellow|blue|red|green|white)\b', sig):
+        if (not all_parsed) or len(all_parsed) < 5:
+            sw = try_sailti_web(full_text, pdf_bytes)
+            if sw and len(sw) > len(all_parsed):
+                all_parsed = sw
+                # Event name = PDF Title metadata / big heading (better than the
+                # generic heuristic here). Date: the only stamp in these prints is
+                # 'Last update' which is NOT the event date — leave it empty unless
+                # a real date range was printed AND it isn't the update stamp.
+                _title = _meta_get(_pdf_meta, 'Title').strip()
+                if _title:
+                    ev_name = _title
+                if ev_date and re.search(
+                        r'last update:\s*\d{1,2}/\d{1,2}/' + re.escape(ev_date[-4:]), sig):
+                    ev_date = ''
 
     # "Overall Results of <division>" books (bilingual, no ruled table) — parse
     # from text and tag div per section so divisions stay separate.
@@ -2150,6 +2963,7 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
     # (a big PDF that produced almost no entries).
     if isinstance(res, dict):
         res["_text_lines"] = len(full_text.splitlines())
+        res["detected_format"] = _detected_format
     return res
 
 
@@ -2165,10 +2979,369 @@ def _detect_mime(data: bytes) -> str:
         return "image/webp"
     if data[:6] in (b"GIF87a", b"GIF89a"):
         return "image/gif"
+    # ── ZIP container (PK) — xlsx is a zip; peek the namelist for 'xl/' parts.
+    # Checked BEFORE the HTML sniff so an .xlsx never falls through to pdfplumber.
+    if data[:4] == b"PK\x03\x04":
+        try:
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                if any(n.startswith('xl/') for n in zf.namelist()):
+                    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        except Exception:
+            pass
+        return "application/zip"
+    # ── OLE2 compound file (legacy .xls) ──
+    if data[:4] == b"\xd0\xcf\x11\xe0":
+        return "application/vnd.ms-excel"
+    # ── Sailwave project export (.blw): first line begins "ser… ──
+    if data[:4] == b'"ser':
+        return "application/x-sailwave-blw"
     head = data[:512].lstrip().lower()
     if head[:5] == b"<html" or head[:9] == b"<!doctype" or b"<table" in data[:4000].lower():
         return "text/html"
+    # ── CSV: ≥2 commas or semicolons on ≥3 of the first 5 non-empty lines, no tags.
+    try:
+        sample = data[:8000].decode('utf-8', errors='replace')
+    except Exception:
+        sample = ''
+    if '<' not in sample:
+        lines = [l for l in sample.splitlines() if l.strip()][:5]
+        delim_hits = sum(1 for l in lines
+                         if l.count(',') >= 2 or l.count(';') >= 2)
+        if len(lines) >= 3 and delim_hits >= 3:
+            return "text/csv"
     return "application/pdf"  # default — let pdfplumber try
+
+
+# ── xlsx / csv / blw ingestion ──────────────────────────────────────────────
+def _finalize_flow(all_parsed, title_text, full_text, source_notes, source_label,
+                   date_hint=None):
+    """Shared tail for the xlsx/csv/blw parsers: resolve ages → birth years,
+    detect class/host, and run the standard grouping/_finalize. Mirrors the flow
+    at the end of _rule_based_parse so these formats produce identical result
+    dicts. `date_hint` is a caller-supplied fallback date (e.g. a textual
+    '9 & 10 September 2017' from an xlsx A1 title) used only when the standard
+    numeric extractor finds nothing."""
+    ev_name = extract_event_name(title_text) if title_text.strip() else 'Imported Regatta'
+    ev_date = extract_date(full_text) or extract_date(title_text) or (date_hint or '')
+    discards = extract_discards(full_text)
+    ym = re.search(r'\b(20[0-2]\d|19[5-9]\d)\b',
+                   (ev_date or '') + ' ' + (ev_name or '') + ' ' + (full_text or '')[:400])
+    ev_year = int(ym.group(0)) if ym else None
+    _resolve_birth_years(all_parsed, ev_year)
+    headings_text = title_text + ' ' + (full_text or '')[:1500]
+    detected_class = detect_class(all_parsed, ev_name, headings_text)
+    detected_host  = detect_host(title_text + ' ' + (full_text or '')[:2000])
+    return _finalize(all_parsed, ev_name, ev_date, discards, source_notes,
+                     source_label=source_label,
+                     detected_class=detected_class, detected_host=detected_host)
+
+
+def _xlsx_split_blocks(grid):
+    """Split a sheet (list-of-lists of strings) into blocks at rows that are
+    empty or single-cell (merged title rows). Returns a list of
+    (title, rows) where title is the raw text of the nearest preceding
+    single-cell row and rows is the list of data/header rows in that block."""
+    blocks = []
+    cur_title = ''
+    cur_rows = []
+    def flush():
+        if cur_rows:
+            blocks.append((cur_title, list(cur_rows)))
+    for row in grid:
+        nonempty = [c for c in row if c.strip()]
+        if not nonempty:
+            flush(); cur_rows = []                 # blank row → block boundary
+            continue
+        if len(nonempty) == 1:
+            # single-cell row = merged title. Boundary; adopt as the new title.
+            flush(); cur_rows = []
+            cur_title = nonempty[0].strip()
+            continue
+        cur_rows.append(row)
+    flush()
+    return blocks
+
+
+def _xlsx_division_label(title, sheet_name):
+    """The fleet label for an overall block. Prefer the sheet name (club
+    workbooks name each sheet by fleet: 'Div A', 'Div B', 'OP'); fall back to a
+    division name pulled from the block title 'Overall Result (Division A)'."""
+    sn = (sheet_name or '').strip()
+    if sn:
+        return sn
+    m = re.search(r'\(([^)]+)\)', title or '')
+    if m:
+        return re.sub(r'\s+', ' ', m.group(1)).strip()
+    return re.sub(r'\s+', ' ', (title or '')).strip()
+
+
+_XLSX_RACE_HDR = re.compile(r'^\s*(race|r)\s*\d+\s*$', re.IGNORECASE)
+_XLSX_TIME_HDR = {'starttime', 'finishtime', 'elapsedtime', 'correctedtime',
+                  'start', 'finish', 'elapsed', 'corrected'}
+
+
+def _parse_xlsx_bytes(file_bytes: bytes) -> dict:
+    """Parse a club workbook (.xlsx/.xls). Each sheet may carry merged title
+    rows and stacked 'Race N (Division X)' blocks; the header row is NOT
+    necessarily row 1. Strategy: split each sheet into blocks at empty/single-
+    cell rows, detect a header per block, and PREFER an overall/series block
+    (Total/Nett + race columns) over per-race time blocks."""
+    try:
+        import openpyxl
+    except ImportError:
+        raise ValueError("Excel parsing requires openpyxl — not installed on this deployment.")
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    except Exception as exc:
+        raise ValueError(f"Couldn't read the Excel workbook: {exc}")
+
+    all_parsed = []
+    title_bits = []
+    top_titles = []                 # sheet A1 merged titles (workbook-level name)
+    for ws in wb.worksheets:
+        grid = []
+        for row in ws.iter_rows(values_only=True):
+            grid.append(['' if c is None else str(c).strip() for c in row])
+        # The workbook-level title is the FIRST single-cell (merged) row at the
+        # very top of the sheet, above the per-block 'Race N (Division X)' rows.
+        # Prefer it over block titles for the event name.
+        for row in grid[:4]:
+            ne = [c for c in row if c.strip()]
+            if not ne:
+                continue
+            if len(ne) == 1:
+                t = re.sub(r'\s+', ' ', ne[0]).strip()
+                if t and not re.match(r'(?i)^race\s*\d', t) and t not in top_titles:
+                    top_titles.append(t)
+            break
+        blocks = _xlsx_split_blocks(grid)
+        if not blocks:
+            continue
+
+        # Classify each block by its header, tracking whether it's an overall
+        # (series) block (Total/Nett/Net/Points + race columns) or a per-race
+        # time block (Start/Finish/Elapsed/Corrected) which is noise when an
+        # overall exists.
+        overall_blocks, race_only_blocks = [], []
+        for title, rows in blocks:
+            # header is one of the first two rows; find it via detect_cols.
+            hdr_idx = None
+            for hi in range(min(2, len(rows))):
+                if detect_cols([rows[hi]]):
+                    cols = detect_cols([rows[hi]])
+                    if 'rank' in cols or 'sail' in cols or 'helm' in cols or 'sailors' in cols:
+                        hdr_idx = hi; break
+            if hdr_idx is None:
+                continue
+            header = rows[hdr_idx]
+            keys = [hdr_key(c) for c in header]
+            has_total = any(k in ('total', 'totalpts', 'totalpoints', 'nett', 'net',
+                                  'netpts', 'netpoints', 'points', 'pts') for k in keys)
+            has_race  = any(_XLSX_RACE_HDR.match(c) or is_race_hdr(c) for c in header)
+            has_time  = any(k in _XLSX_TIME_HDR for k in keys)
+            data_rows = rows[hdr_idx + 1:]
+            block_rec = (title, header, data_rows)
+            if has_total and has_race:
+                overall_blocks.append(block_rec)
+            elif has_time and not (has_total and has_race):
+                race_only_blocks.append(block_rec)          # per-race time noise
+            else:
+                # a per-race Points block with no overall — keep as a fallback
+                race_only_blocks.append(block_rec)
+
+        # Prefer overall/series blocks. Only fall back to per-race blocks when a
+        # sheet has NO overall block at all — but never fabricate a series from
+        # scattered per-race blocks: skip the sheet in that case.
+        chosen = overall_blocks
+        if not chosen:
+            continue
+
+        for title, header, data_rows in chosen:
+            if not data_rows:
+                continue
+            fleet_hint = title  # nearest preceding single-cell title (raw value)
+            tbl = [header] + data_rows
+            parsed = parse_table(tbl, fleet_hint)
+            if not (parsed and parsed['entries']):
+                continue
+            # An overall block is ONE scoring fleet (the sheet's division), even
+            # though it mixes boat classes (420 + Laser 2000, etc.). Force every
+            # row's fleet to the block's division label and demote the per-row
+            # boat class to row_class (a tag) so the mixed classes don't split the
+            # division into per-class sub-fleets.
+            fleet_label = _xlsx_division_label(title, ws.title)
+            for e in parsed['entries']:
+                if (e.get('div') or '').strip() and not e.get('row_class'):
+                    e['row_class'] = e['div']
+                e['div'] = fleet_label
+            all_parsed.extend(parsed['entries'])
+        # Remember title rows for event-name extraction.
+        for title, _rows in blocks:
+            if title and title not in title_bits:
+                title_bits.append(title)
+
+    if not all_parsed:
+        raise ValueError("No overall-results table found in this workbook.")
+
+    # Prefer the workbook-level A1 title (event name) over block titles; the
+    # block titles still follow it so date/division heuristics can read them.
+    title_text = '\n'.join(top_titles + title_bits)
+    base_notes = [
+        "Read a club results workbook (Excel).",
+        f"Read {len(all_parsed)} competitor rows.",
+    ]
+    # A club A1 title often carries a textual date range ('9 & 10 September 2017').
+    date_hint = _textual_date('\n'.join(top_titles))
+    return _finalize_flow(all_parsed, title_text, title_text, base_notes,
+                          "the built-in Excel reader", date_hint=date_hint)
+
+
+def _parse_csv_bytes(file_bytes: bytes) -> dict:
+    """Parse a plain CSV of results as a single table."""
+    import csv as _csv
+    try:
+        text = file_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        text = file_bytes.decode('latin-1', errors='replace')
+    rows = list(_csv.reader(io.StringIO(text)))
+    tbl = [['' if c is None else str(c).strip() for c in r] for r in rows if any(str(c or '').strip() for c in r)]
+    parsed = parse_table(tbl)
+    all_parsed = list(parsed['entries']) if parsed and parsed['entries'] else []
+    if not all_parsed:
+        raise ValueError("No results table found in this CSV.")
+    base_notes = [
+        "Read a CSV results file.",
+        f"Read {len(all_parsed)} competitor rows.",
+    ]
+    return _finalize_flow(all_parsed, text[:400], text, base_notes,
+                          "the built-in CSV reader")
+
+
+def _parse_blw_bytes(file_bytes: bytes) -> dict:
+    """Parse a raw Sailwave project file (.blw): CRLF lines of quoted 4-field
+    CSV records "field","value","compid","raceid". Reconstructs competitors
+    (comp* fields) and per-race scores (r* records) into the parser's entry
+    shape. The uploaded file is ground truth — scores/codes are preserved
+    verbatim, nothing is re-ranked."""
+    import csv as _csv
+    try:
+        text = file_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        text = file_bytes.decode('latin-1', errors='replace')
+    lines = re.split(r'\r\n|\r|\n', text)
+
+    ser = {}                    # serevent, servenue, ...
+    comp = {}                   # compid -> {field: value}
+    comp_order = []             # first-seen order of compids
+    rrec = {}                   # (compid, raceid) -> {field: value}
+    seen_keys = set()           # (field, compid, raceid) dedupe — keep FIRST
+
+    for l in lines:
+        if not l.strip():
+            continue
+        try:
+            rec = next(_csv.reader([l]))
+        except Exception:
+            continue
+        if not rec:
+            continue
+        field = rec[0]
+        value = rec[1] if len(rec) > 1 else ''
+        compid = rec[2] if len(rec) > 2 else ''
+        raceid = rec[3] if len(rec) > 3 else ''
+        dk = (field, compid, raceid)
+        if dk in seen_keys:
+            continue            # dedupe duplicate records, keep first
+        seen_keys.add(dk)
+
+        if field.startswith('ser'):
+            ser.setdefault(field, value)
+        elif field.startswith('comp') and compid:
+            if compid not in comp:
+                comp[compid] = {}; comp_order.append(compid)
+            comp[compid].setdefault(field, value)
+        elif field in ('rpts', 'rdisc', 'rrestyp', 'rcod', 'rpos') and compid and raceid:
+            rrec.setdefault((compid, raceid), {}).setdefault(field, value)
+
+    if not comp:
+        raise ValueError("No competitors found in this Sailwave (.blw) file.")
+
+    # Race id ordering: numeric ascending.
+    race_ids = sorted({rid for (_cid, rid) in rrec}, key=lambda x: (int(x) if x.isdigit() else 9999, x))
+
+    def _num(v):
+        try:
+            n = float(v)
+            return int(n) if n == int(n) else round(n, 2)
+        except (TypeError, ValueError):
+            return None
+
+    entries = []
+    for cid in comp_order:
+        c = comp[cid]
+        helm = clean_name(c.get('comphelmname', ''))
+        crew = clean_name(c.get('compcrewname', ''))
+        sail_raw = c.get('compsailno', '')
+        nat_raw = c.get('compnat', '')
+        div_raw = c.get('compdivision', '')
+        ex_nat, clean_sail = parse_sail_country(sail_raw)
+        if not nat_raw and ex_nat:
+            nat_raw = ex_nat
+        try:
+            rank = int(c.get('comprank', '') or 0) or None
+        except (ValueError, TypeError):
+            rank = None
+        total = _num(c.get('comptotal'))
+        nett = _num(c.get('compnett'))
+
+        races, race_codes, disc = [], [], 0
+        for rid in race_ids:
+            r = rrec.get((cid, rid))
+            if not r or 'rpts' not in r:
+                continue
+            pts = _num(r.get('rpts'))
+            if pts is None:
+                continue
+            code = (r.get('rcod') or '').strip() or None   # verbatim penalty code
+            races.append(pts)
+            race_codes.append(code)
+            if (r.get('rdisc') or '') == '1':
+                disc += 1
+
+        if not helm or not races:
+            continue
+        # compdivision in a single-class Sailwave project is a demographic overlay
+        # ("Open", "Open and Female"), NOT a scoring fleet — comprank already ranks
+        # all competitors together. Only keep it as a fleet when it names a real
+        # boat class; a gender word derives boat gender instead.
+        div = div_raw if _looks_like_class(div_raw) else ''
+        gender = combine_boat_gender(gender_from_text(div_raw), '') or gender_from_text(div_raw)
+        entries.append({
+            'helm': helm, 'crew': crew,
+            'sail': clean_sail or '—', 'nat': flag_from_ioc(nat_raw),
+            'div': div,
+            'row_class': '', 'gender': gender, 'category': '',
+            'races': races, 'race_codes': race_codes, '_disc': disc,
+            'pdf_rank': rank, 'pdf_net': nett,
+            'birth_year': None, 'crew_birth_year': None, '_age': None, '_crew_age': None,
+        })
+
+    if not entries:
+        raise ValueError("No scored competitors found in this Sailwave (.blw) file.")
+
+    # Sort by comprank (ascending; None last).
+    entries.sort(key=lambda e: (e.get('pdf_rank') if e.get('pdf_rank') is not None else 9999))
+
+    ev_name_raw = ser.get('serevent', '') or ser.get('sernoticetitle', '')
+    venue = ser.get('servenue', '')
+    title_text = ev_name_raw + '\n' + venue
+    base_notes = [
+        "Read a Sailwave project file (.blw).",
+        f"Read {len(entries)} competitor rows.",
+    ]
+    return _finalize_flow(entries, title_text, title_text, base_notes,
+                          "the built-in Sailwave (.blw) reader")
 
 
 # ── HTML parsing (server-side, stdlib only) ─────────────────────────────────
@@ -2732,9 +3905,29 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     """
     mime = _detect_mime(file_bytes)
 
+    def _stamp(res, family, input_type, conf=0.9):
+        """Attach a detected_format verdict when the extractor didn't set one."""
+        if isinstance(res, dict) and "detected_format" not in res:
+            res["detected_format"] = {"family": family, "input_type": input_type,
+                                      "confidence": conf}
+        return res
+
     # ── HTML upload (rare; usually parsed client-side, but supported here too) ──
     if mime == "text/html":
-        return _parse_html_string(_decode_html_bytes(file_bytes))
+        return _stamp(_parse_html_string(_decode_html_bytes(file_bytes)), 'unknown', 'html', 0.3)
+
+    # ── Excel workbook (.xlsx/.xls) ──
+    if mime in ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel"):
+        return _stamp(_parse_xlsx_bytes(file_bytes), 'club-custom-xlsx', 'xlsx')
+
+    # ── Sailwave project (.blw) ──
+    if mime == "application/x-sailwave-blw":
+        return _stamp(_parse_blw_bytes(file_bytes), 'sailwave-blw', 'blw')
+
+    # ── CSV ──
+    if mime == "text/csv":
+        return _stamp(_parse_csv_bytes(file_bytes), 'unknown', 'csv', 0.3)
 
     # ── Image upload → Gemini only (no rule-based parser exists for images) ──
     if mime.startswith("image/"):
@@ -2748,7 +3941,7 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
             raise ValueError(
                 "Image results require AI parsing, but ANTHROPIC_API_KEY is not configured."
             )
-        return _gemini_parse(file_bytes, mime)
+        return _stamp(_gemini_parse(file_bytes, mime), 'unknown', 'image', 0.3)
 
     # ── PDF → rule-based first ──
     if mode == 'rule':
@@ -2818,12 +4011,21 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
             except Exception as nat_err:
                 print("nat-only fast path failed; falling back to agent:", nat_err)
 
+    # Carry the rule parser's format verdict onto the AI paths when we have one
+    # (the agent's finalized dict won't set it itself).
+    _fmt = rule_result.get("detected_format") if isinstance(rule_result, dict) else None
+
     # Rules failed, scored low-confidence, or the nat fast path errored →
     # hand off to the agent loop (rule + vision + nationality merge).
     try:
         res = _agent_parse(file_bytes)
         if isinstance(res, dict):
             res.setdefault("ai_parsed", True)
+            if _fmt:
+                res.setdefault("detected_format", _fmt)
+            else:
+                res.setdefault("detected_format",
+                               {"family": "unknown", "input_type": "pdf-text", "confidence": 0.3})
         return res
     except Exception as agent_err:
         # If the agent fails but the rule parser produced something usable,

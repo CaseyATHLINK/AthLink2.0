@@ -2359,5 +2359,10 @@
   "nat_from_flags": false,
   "detected_class": "49er",
   "detected_host": null,
-  "_text_lines": 154
+  "_text_lines": 154,
+  "detected_format": {
+    "family": "manage2sail",
+    "input_type": "pdf-text",
+    "confidence": 0.9
+  }
 }

@@ -1,0 +1,65 @@
+{
+  "event": "International Hansa Class Asia Pacific Championships 2024 - Sing",
+  "date": "",
+  "detected_class": "",
+  "detected_host": "Sing Hosted By Southport Yacht Club",
+  "discards": 1,
+  "n_entries": 18,
+  "confidence": 1.0,
+  "gate": "PASS (use rules)",
+  "confidence_reasons": [
+    "looks clean"
+  ],
+  "sample_rows": [
+    {
+      "pdf_rank": 1,
+      "sail": "2736",
+      "helm": "Foo Yuen Wai",
+      "crew": "",
+      "nat": "HKG",
+      "div": "Hansa Liberty",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 2,
+      "sail": "2763",
+      "helm": "Charles Weatherly",
+      "crew": "",
+      "nat": "",
+      "div": "Hansa Liberty",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 3,
+      "sail": "3459",
+      "helm": "Peter Coleman",
+      "crew": "",
+      "nat": "",
+      "div": "Hansa Liberty",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "1702",
+      "helm": "John Buchanan",
+      "crew": "",
+      "nat": "NZL",
+      "div": "Hansa Liberty",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "0021",
+      "helm": "Michael Lung",
+      "crew": "",
+      "nat": "USA",
+      "div": "Hansa Liberty",
+      "gender": "",
+      "category": ""
+    }
+  ]
+}

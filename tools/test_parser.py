@@ -34,6 +34,14 @@ spec.loader.exec_module(pp)
 def summarize(result: dict) -> dict:
     """Compact, diff-friendly view of a parse result."""
     entries = result.get("entries") or result.get("competitors") or []
+    # Multi-fleet results carry their rows under fleets[] rather than a top-level
+    # entries[]; flatten them so n_entries / sample_rows are meaningful. (Existing
+    # single-result PDF fixtures have a top-level entries[], so this never fires
+    # for them — their summaries are unchanged.)
+    fleets = result.get("fleets") or []
+    if not entries and fleets:
+        for f in fleets:
+            entries.extend(f.get("entries") or [])
     verdict = pp.score_parse(result) if getattr(pp, "score_parse", None) else None
     return {
         "event":          result.get("event") or result.get("event_name") or result.get("name"),
@@ -58,13 +66,25 @@ def summarize(result: dict) -> dict:
 def run_one(path: str) -> dict:
     with open(path, "rb") as f:
         data = f.read()
-    return pp._rule_based_parse(data)
+    # PDFs go straight through the rule parser (fast, deterministic, no network).
+    # Non-PDF fixtures (xlsx/blw/csv/html) have no _rule_based_parse entry point,
+    # so route them through parse_pdf_bytes in mode='rule' (built-in only, no AI).
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".pdf":
+        return pp._rule_based_parse(data)
+    return pp.parse_pdf_bytes(data, mode="rule")
 
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
-    paths = args or sorted(glob.glob(os.path.join(FIXTURES, "*.pdf")))
+    if args:
+        paths = args
+    else:
+        paths = []
+        for pat in ("*.pdf", "*.xlsx", "*.blw", "*.html"):
+            paths.extend(glob.glob(os.path.join(FIXTURES, pat)))
+        paths = sorted(paths)
     if not paths:
         print("No PDFs found. Put samples in tools/fixtures/ or pass a path.")
         sys.exit(1)
