@@ -234,7 +234,14 @@ const CLASSES=[
 // ── Custom boat classes (runtime registry, mirrors the host pattern) ──
 // Beyond the four main CLASSES above. Each: {id, short, full, color, canonical}.
 // In-memory only for now — seeded empty; DB persistence comes later.
+// Accepted upload types for the import pop-up (file input `accept` + drop zone).
+const IMPORT_ACCEPT=".pdf,.png,.jpg,.jpeg,.webp,.heic,.xlsx,.xls,.csv,.html,.htm,.blw";
 let CUSTOM_CLASSES=[];
+// In-memory (session-scoped) snapshot of an unfinished import batch. Restored when
+// the import pop-up is reopened within the same page session; cleared on successful
+// publish/save-draft and when a fresh import batch starts. NOT persisted — page
+// reload clears it by design (CLAUDE.md forbids dev-view localStorage/sessionStorage).
+let IMPORT_DRAFT=null;
 const customClassById=id=>CUSTOM_CLASSES.find(c=>c.id===id)||null;
 // Normalise a class name → canonical key for dedup (lowercase, strip non-alphanumerics).
 const canonClass=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]/g,"");
@@ -504,18 +511,140 @@ const classColorA=(cls,a)=>{
 };
 
 // Sub-class picker (ILCA 4/6/7, Optimist fleets) — only shown for ILCA/Optimist events.
-function SubclassPicker({cls,value,onChange}){
+// Hover-reveal: renders the parent class button; when the class has SUBCLASSES and is
+// selected (or hovered/focused), a pill row of subclass options is revealed inline just
+// below the button. Picking one selects it and collapses the reveal; mouse-out closes
+// after ~200ms (cancelled on re-enter) so users can travel into the popover. Keeps the
+// same onChange contract as the old SubclassPicker (writes mf.subclass) so publish is
+// untouched. `classBtn` is the already-styled parent-class button element.
+function SubclassHover({cls,value,onChange,classBtn,active}){
   const opts=SUBCLASSES[cls];
-  if(!opts) return null;
-  return <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
-    {opts.map(s=>{
-      const on=value===s.id;
-      return <button key={s.id} type="button" onClick={()=>onChange(on?null:s.id)}
-        style={{border:"1px solid "+(on?s.color:"var(--line)"),background:on?s.color:"transparent",
-          color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
-          padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{s.label}</button>;
-    })}
-  </div>;
+  const[hover,setHover]=React.useState(false);
+  const timer=React.useRef(null);
+  if(!opts) return classBtn;   // no subclasses → just the plain class button
+  const open=active&&(hover||!!value);   // reveal only for the active class row
+  const enter=()=>{if(timer.current){clearTimeout(timer.current);timer.current=null;}setHover(true);};
+  const leave=()=>{if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setHover(false),200);};
+  return(
+    <div style={{position:"relative",display:"inline-block"}}
+      onMouseEnter={enter} onMouseLeave={leave} onFocusCapture={enter} onBlurCapture={leave}>
+      {classBtn}
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 5px)",left:0,zIndex:95,display:"inline-flex",gap:6,flexWrap:"wrap",
+          background:"var(--card)",border:"1px solid var(--line)",borderRadius:9,padding:"7px 8px",
+          boxShadow:"0 12px 30px -10px rgba(0,0,0,.22)",whiteSpace:"nowrap"}}>
+          {opts.map(s=>{
+            const on=value===s.id;
+            return <button key={s.id} type="button"
+              onClick={()=>{onChange(on?null:s.id);if(timer.current)clearTimeout(timer.current);setHover(false);}}
+              style={{border:"1px solid "+(on?s.color:"var(--line)"),background:on?s.color:"transparent",
+                color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
+                padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{s.label}</button>;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Date field with a persistent DD/MM/YYYY mask hint + a mini-calendar popover.
+//  • value/onChange: a "DD/MM/YYYY" string (same contract as the plain input it replaces).
+//  • markedDays: { "d/m/yyyy": [competitionName,…] } for the importing host — days that
+//    already have competitions are dotted (dotColor) and carry a title tooltip. Reference
+//    only; picking a marked day is allowed.
+//  • className: forwarded to the <input> so ".pmissing" styling still works.
+function DateField({value,onChange,markedDays={},dotColor="var(--navy2)",className=""}){
+  const[open,setOpen]=React.useState(false);
+  const ref=React.useRef();
+  const parsed=React.useMemo(()=>{
+    const m=(value||"").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    return m?{d:+m[1],mo:+m[2]-1,y:+m[3]}:null;
+  },[value]);
+  const now=new Date();
+  const[vMonth,setVMonth]=React.useState(parsed?parsed.mo:now.getMonth());
+  const[vYear,setVYear]=React.useState(parsed?parsed.y:now.getFullYear());
+  React.useEffect(()=>{
+    if(!open) return;
+    if(parsed){setVMonth(parsed.mo);setVYear(parsed.y);}
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[open]); // eslint-disable-line
+  // Mon-first grid: JS getDay() is Sun=0 → shift so Monday is column 0.
+  const firstDow=(new Date(vYear,vMonth,1).getDay()+6)%7;
+  const daysInMonth=new Date(vYear,vMonth+1,0).getDate();
+  const cells=[];
+  for(let i=0;i<firstDow;i++) cells.push(null);
+  for(let d=1;d<=daysInMonth;d++) cells.push(d);
+  const prevMonth=()=>{if(vMonth===0){setVMonth(11);setVYear(y=>y-1);}else setVMonth(m=>m-1);};
+  const nextMonth=()=>{if(vMonth===11){setVMonth(0);setVYear(y=>y+1);}else setVMonth(m=>m+1);};
+  const pick=(d)=>{onChange(`${d}/${vMonth+1}/${vYear}`);setOpen(false);};
+  return(
+    <div style={{position:"relative"}} ref={ref}>
+      <div style={{position:"relative",display:"flex",alignItems:"center"}}>
+        <input value={value||""} onChange={e=>onChange(e.target.value)} className={className}
+          placeholder="dd/mm/yyyy" maxLength={10} style={{paddingRight:74}}/>
+        <span aria-hidden style={{position:"absolute",right:34,pointerEvents:"none",fontSize:10.5,fontWeight:700,
+          letterSpacing:".03em",color:"var(--mut)",opacity:.7}}>DD/MM/YYYY</span>
+        <button type="button" title="Pick a date" onClick={()=>setOpen(o=>!o)}
+          style={{position:"absolute",right:5,display:"inline-flex",alignItems:"center",justifyContent:"center",
+            width:26,height:26,border:0,borderRadius:7,background:open?"var(--accent)":"transparent",
+            color:open?"#fff":"var(--mut)",cursor:"pointer",transition:".12s"}}>
+          <Calendar size={15}/>
+        </button>
+      </div>
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,zIndex:130,width:252,background:"var(--card)",
+          border:"1px solid var(--line)",borderRadius:12,boxShadow:"0 18px 44px -14px rgba(0,0,0,.32)",padding:"10px 12px 12px"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+            {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d=>(
+              <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:"var(--mut)",padding:"2px 0"}}>{d}</div>
+            ))}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+            {cells.map((d,i)=>{
+              if(d==null) return <div key={i}/>;
+              const key=`${d}/${vMonth+1}/${vYear}`;
+              const comps=markedDays[key]||null;
+              const sel=parsed&&parsed.d===d&&parsed.mo===vMonth&&parsed.y===vYear;
+              return(
+                <button key={i} type="button" onClick={()=>pick(d)}
+                  title={comps?comps.join(", "):undefined}
+                  style={{position:"relative",height:30,border:"1px solid "+(sel?"var(--accent)":"transparent"),
+                    background:sel?"var(--accent)":"transparent",color:sel?"#fff":"var(--ink)",borderRadius:7,
+                    fontSize:12.5,fontWeight:sel?700:500,cursor:"pointer",transition:".1s"}}
+                  onMouseEnter={e=>{if(!sel)e.currentTarget.style.background="var(--sky)";}}
+                  onMouseLeave={e=>{if(!sel)e.currentTarget.style.background="transparent";}}>
+                  {d}
+                  {comps&&<span style={{position:"absolute",bottom:3,left:"50%",transform:"translateX(-50%)",
+                    width:5,height:5,borderRadius:"50%",background:sel?"#fff":dotColor}}/>}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginTop:9,paddingTop:9,borderTop:"1px solid var(--line)"}}>
+            <button type="button" onClick={prevMonth} title="Previous month"
+              style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:26,height:26,border:"1px solid var(--line)",background:"var(--card)",borderRadius:7,cursor:"pointer",color:"var(--mut)"}}>
+              <ChevronRight size={14} style={{transform:"rotate(180deg)"}}/>
+            </button>
+            <div style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:12.5,fontWeight:700,color:"var(--ink)"}}>
+              <span>{MON[vMonth]}</span>
+              <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+                <button type="button" onClick={()=>setVYear(y=>y-1)} title="Previous year"
+                  style={{border:0,background:"none",color:"var(--mut)",cursor:"pointer",fontWeight:700,fontSize:13,padding:"0 2px"}}>‹</button>
+                {vYear}
+                <button type="button" onClick={()=>setVYear(y=>y+1)} title="Next year"
+                  style={{border:0,background:"none",color:"var(--mut)",cursor:"pointer",fontWeight:700,fontSize:13,padding:"0 2px"}}>›</button>
+              </span>
+            </div>
+            <button type="button" onClick={nextMonth} title="Next month"
+              style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:26,height:26,border:"1px solid var(--line)",background:"var(--card)",borderRadius:7,cursor:"pointer",color:"var(--mut)"}}>
+              <ChevronRight size={14}/>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Custom-class dropdown — sits beside the four main class buttons. Lists every
@@ -5158,6 +5287,10 @@ export default function AthLinkMVP(){
   const[parseLog,setParseLog]=useState([]);             // [{name,status,notes:[]}] thinking stream
   const[parseProgress,setParseProgress]=useState({done:0,total:0});
   const[importStep,setImportStep]=useState("upload");
+  // Drag-and-drop upload state. dragDepth is a counter: dragenter/dragleave fire on
+  // child elements too, so a bare boolean flickers — count nested enters/leaves and
+  // treat depth>0 as "dragging over the zone".
+  const[dragDepth,setDragDepth]=useState(0);
   const[fleetChoices,setFleetChoices]=useState([]);
   const[pdfMeta,setPdfMeta]=useState(null);
   const[previewEv,setPreviewEv]=useState(null);
@@ -6131,7 +6264,37 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     setPending([]);setActivePending(0);
     setLiveUrl("");setParseLog([]);setParseProgress({done:0,total:0});
   };
-  const closeImport=()=>{setOpen(false);resetImport();setTab("ai");};
+  // ── Import-draft persistence (in-memory, session-scoped) ──
+  // The import pop-up is inline JSX gated on `open` (not a separately-mounted
+  // component), so there's no modal-mount lifecycle for lazy useState initializers.
+  // Instead we snapshot the live batch into the module-scope IMPORT_DRAFT holder on
+  // close and restore it synchronously in the same click that reopens (before the
+  // modal renders → no flicker). Cleared on successful publish/save-draft and when a
+  // fresh batch starts. NOT persisted to storage — a page reload clears it by design.
+  const clearImportDraft=()=>{IMPORT_DRAFT=null;};
+  const snapshotImportDraft=()=>{
+    // Nothing meaningful to keep? (no parsed batch / no preview) → drop any old draft.
+    if(editResultsEv||(!pending.length&&!previewEv)){IMPORT_DRAFT=null;return;}
+    // Fold the active editor (previewEv + subclass/collabs live in mf) into its slot.
+    const snapPending=pending.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
+    IMPORT_DRAFT={pending:snapPending,activePending,previewEv,mf,importStep,tab,fleetChoices,pdfMeta};
+  };
+  const restoreImportDraft=()=>{
+    const d=IMPORT_DRAFT;if(!d) return false;
+    setPending(d.pending||[]);setActivePending(d.activePending||0);
+    setPreviewEv(d.previewEv||null);setMf(d.mf||emptyForm());
+    setImportStep(d.importStep||"upload");setTab(d.tab||"ai");
+    setFleetChoices(d.fleetChoices||[]);setPdfMeta(d.pdfMeta||null);
+    return true;
+  };
+  // Open the import pop-up for a NEW import; restore an in-progress batch if one was
+  // stashed on the previous close.
+  const openImport=()=>{
+    setEditResultsEv(null);
+    if(!restoreImportDraft()){resetImport();setTab("ai");}
+    setOpen(true);
+  };
+  const closeImport=()=>{setOpen(false);snapshotImportDraft();resetImport();setTab("ai");};
 
   // Snapshot current editor (previewEv + class/subclass/collab) into the active pending slot.
   const syncActivePending=()=>{
@@ -6433,6 +6596,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   };
 
   // ── MULTI-FILE: parse all chosen files into the pending list ──
+  // Drag-and-drop: same code path as the file input's onChange (handleFiles). Depth
+  // counter guards against dragleave firing when the pointer crosses child elements.
+  const onDragEnter=e=>{e.preventDefault();e.stopPropagation();if(!pdfLoading)setDragDepth(d=>d+1);};
+  const onDragOver=e=>{e.preventDefault();e.stopPropagation();};
+  const onDragLeave=e=>{e.preventDefault();e.stopPropagation();setDragDepth(d=>Math.max(0,d-1));};
+  const onDropFiles=(e,mode)=>{
+    e.preventDefault();e.stopPropagation();setDragDepth(0);
+    if(pdfLoading) return;
+    const files=e.dataTransfer?.files;
+    if(files&&files.length) handleFiles(files,mode);
+  };
   const handleFiles=async(fileList,mode="ai")=>{
     const files=[...(fileList||[])];
     if(!files.length) return;
@@ -6672,6 +6846,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       if(selfOrganized&&dup.owner_confirmed===false){patch.owner=importerHost;patch.owner_confirmed=true;patch.imported_by=dup.imported_by||importerHost;}
       setEvents(p=>p.map(x=>x.id===dup.id?{...x,...patch}:x));
       const who=hostById(importerHost)?.name||"your contribution";
+      clearImportDraft();   // this result is filed — drop it from any stashed draft
       setNote({name:dup.name,matched:0,created:0,msg:`Already on AthLink — linked ${who} as an additional source (no duplicate created).`});
       setTimeout(()=>setNote(null),7000);
       if(pending.length){
@@ -6694,6 +6869,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
     // Optimistic: drop the event into the list and close the popup immediately
     setEvents(p=>[ev,...p.filter(x=>x.id!==ev.id)]);
+    clearImportDraft();   // this result is filed — drop it from any stashed draft
     setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":null});
     setTimeout(()=>setNote(null),7000);
     // Multi-file: remove this published tab; advance to the next pending one, or close.
@@ -6790,7 +6966,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
     await saveEventToDb(ev);setEvents(p=>[ev,...p]);
-    setNote({name:ev.name,matched,created});setOpen(false);setMf(emptyForm());
+    clearImportDraft();setNote({name:ev.name,matched,created});setOpen(false);setMf(emptyForm());
     setTimeout(()=>setNote(null),6500);
   };
 
@@ -7169,6 +7345,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .prev.ok{background:#d8f0e3;color:#0a6b41;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .prev.err{background:#fbe7e4;color:#a8362a;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .mfoot{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;}
+    /* Floating save/publish bar — pinned to the bottom of the modal's scroll
+       container (.mbody) so it stays visible while the preview scrolls. Liquid-glass
+       material consistent with .draft-banner. */
+    .import-actionbar{position:sticky;bottom:0;left:0;right:0;z-index:40;display:flex;gap:10px;justify-content:flex-end;align-items:center;
+      margin:16px -28px -28px;padding:14px 28px;border-top:1px solid var(--line);
+      background:rgba(252,253,255,0.72);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.5);}
+    /* Reclaim space beneath the sticky bar so the last table rows aren't hidden. */
+    .mbody.has-actionbar{padding-bottom:0;}
     .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
     .meta-grid.three{grid-template-columns:1fr 1fr 1fr;}
     .meta-grid label{font-size:12px;color:var(--mut);display:block;margin-bottom:3px;font-weight:600;}
@@ -8353,7 +8538,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </>)}
           </div>
-          {canEdit&&<button className="btn cta liquidGlass-wrapper" style={{whiteSpace:"nowrap",flex:"none"}} onClick={()=>setOpen(true)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>Import a competition</div></button>}
+          {canEdit&&<button className="btn cta liquidGlass-wrapper" style={{whiteSpace:"nowrap",flex:"none"}} onClick={openImport}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>Import a competition</div></button>}
         </div>
         {(()=>{
           const allFiltered=(evFilterChips.length
@@ -9115,21 +9300,36 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI parser</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
           </div>
-          <div className="mbody">
+          {(()=>{const dropMode=tab==="rule"?"rule":"ai";const dropActive=tab!=="manual"&&dragDepth>0&&!pdfLoading;return(
+          <div className="mbody" style={{position:"relative"}}
+            onDragEnter={tab!=="manual"?onDragEnter:undefined}
+            onDragOver={tab!=="manual"?onDragOver:undefined}
+            onDragLeave={tab!=="manual"?onDragLeave:undefined}
+            onDrop={tab!=="manual"?(e=>onDropFiles(e,dropMode)):undefined}>
+            {dropActive&&(
+              <div style={{position:"absolute",inset:10,zIndex:60,borderRadius:14,border:"2px dashed var(--accent)",
+                background:"var(--sky)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                gap:10,color:"var(--navy)",pointerEvents:"none"}}>
+                <Upload size={28} color="var(--accent)"/>
+                <span style={{fontSize:15,fontWeight:700,fontFamily:"'Barlow',sans-serif"}}>Drop files to {dropMode==="rule"?"parse":"import"}</span>
+              </div>
+            )}
             {tab==="rule"&&(<>
               <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>For known formats — <strong style={{color:"var(--ink)"}}>Sailwave</strong>, Sailwave HTML, <strong style={{color:"var(--ink)"}}>Manage2sail</strong>, SailingResults.net and Clubspot. Fast and exact, no AI. Select one or more PDF/HTML files; multi-fleet files split into a tab per fleet. If a file isn't recognised, switch to the AI parser.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose files</>}
-                <input type="file" multiple accept="application/pdf,.html,text/html,.png,.jpg,.jpeg,.webp" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"rule")}/>
+                <input type="file" multiple accept={IMPORT_ACCEPT} style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"rule")}/>
               </label>
+              <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here</span>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
             {tab==="ai"&&(<>
               <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Working…</>:<><Sparkles size={16}/>Choose files</>}
-                <input type="file" multiple accept="application/pdf,.html,text/html,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"ai")}/>
+                <input type="file" multiple accept={IMPORT_ACCEPT} style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"ai")}/>
               </label>
+              <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here</span>
               <div style={{margin:"16px 0 6px",display:"flex",alignItems:"center",gap:10}}>
                 <div style={{flex:1,height:1,background:"var(--line)"}}/>
                 <span style={{fontSize:11,fontWeight:700,letterSpacing:".06em",color:"var(--mut)",textTransform:"uppercase"}}>or paste a results link</span>
@@ -9194,7 +9394,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               {SUBCLASSES[evCls]&&<div style={{marginBottom:12}}>
                 <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Class type</label>
-                <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
+                <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
+                  {SUBCLASSES[evCls].map(s=>{
+                    const on=mf.subclass===s.id;
+                    return <button key={s.id} type="button" onClick={()=>updMeta("subclass",on?null:s.id)}
+                      style={{border:"1px solid "+(on?s.color:"var(--line)"),background:on?s.color:"transparent",
+                        color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
+                        padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{s.label}</button>;
+                  })}
+                </div>
               </div>}
               {/* Host country, date and discards on one row */}
               <div className="meta-grid three" style={{marginBottom:14}}>
@@ -9256,7 +9464,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <button className="btn cta liquidGlass-wrapper" disabled={!manualReady} onClick={doImportManual}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>Import competition</div></button>
               </div>
             </>)}
-          </div>
+          </div>);})()}
         </>)}
 
         {importStep==="picker"&&(
@@ -9303,7 +9511,26 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const classLocked=!!assoc&&!editResultsEv;
           // Detect fleet groups in pending (same fleetGroupId = same multi-fleet source file)
           const fleetGroupIds=[...new Set(pending.filter(p=>p.fleetGroupId).map(p=>p.fleetGroupId))];
-          return(<div className="mbody">
+          // Days on which the importing host already has competitions — reference/collision
+          // info for the date picker. Keyed by the event's DD/MM/YYYY date → competition names.
+          // Scope to the resolved host (self-organizing importer, else attributed host); if
+          // none is resolved yet, no dots are shown.
+          const _dpHost=_pvResolvedHost;
+          const markedDays=(()=>{
+            if(!_dpHost) return {};
+            const out={};
+            events.forEach(ev=>{
+              if(!ev.date) return;
+              const isHosts=ev.owner===_dpHost||(ev.collabs||[]).includes(_dpHost)||ev.imported_by===_dpHost;
+              if(!isHosts) return;
+              const m=String(ev.date).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+              if(!m) return;
+              const key=`${+m[1]}/${+m[2]}/${+m[3]}`;
+              (out[key]=out[key]||[]).push(ev.name||"Competition");
+            });
+            return out;
+          })();
+          return(<div className="mbody has-actionbar">
             {/* ── Pending result tabs (multi-file import) ── */}
             {pending.length>1&&(
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,borderBottom:"1px solid var(--line)",paddingBottom:10}}>
@@ -9370,58 +9597,63 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <span style={{fontSize:11,color:"#6278b5"}}>— This result was parsed by Claude AI. Review all cells before publishing.</span>
               </div>}
               <div><label>Competition name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Competition name"/></div>
-              <div><label>Date</label><input value={previewEv.date||""} onChange={e=>updSharedMeta("date",e.target.value)} className={!previewEv.date?"pmissing":""} placeholder="dd/mm/yyyy"/></div>
+              <div><label>Date</label><DateField value={previewEv.date||""} onChange={v=>updSharedMeta("date",v)} className={!previewEv.date?"pmissing":""} markedDays={markedDays} dotColor={classColor(evCls)||"var(--navy2)"}/></div>
               <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
               <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
             </div>
-            {/* ── Per-result class type selector (reshapes the table) ── */}
-            <div style={{marginBottom:10}}>
-              <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class{classLocked&&<span style={{fontWeight:500,opacity:.7}}> — fixed to {assoc.name}'s class</span>}</label>
-              <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
-                {CLASSES.map(c=>{
-                  const on=evCls===c.id;
-                  const disabled=classLocked&&c.id!==assoc.cls;
-                  return <button key={c.id} type="button" disabled={disabled}
-                    onClick={()=>{if(disabled)return;updPMeta("cls",c.id);updMeta("subclass",null);}}
-                    style={{border:"1px solid "+(on?classColor(c.id):"var(--line)"),background:on?classColor(c.id):"transparent",
-                      color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
-                      cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1}}>{c.short}</button>;
-                })}
-                <CustomClassPicker classes={customClasses} value={evCls} disabled={classLocked}
-                  onSelect={id=>{updPMeta("cls",id);updMeta("subclass",null);}}
-                  onAdd={name=>addCustomClass(name)}/>
+            {/* ── Two-column: boat classes (left) · organiser controls (right) ── */}
+            <div style={{display:"flex",gap:20,flexWrap:"wrap",alignItems:"flex-start",marginBottom:10}}>
+              {/* LEFT — per-result class selector (reshapes the table). Subclass options
+                  (ILCA/Optimist) are revealed on hover/focus of the parent class button. */}
+              <div style={{flex:"1 1 300px",minWidth:260}}>
+                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class{classLocked&&<span style={{fontWeight:500,opacity:.7}}> — fixed to {assoc.name}'s class</span>}</label>
+                <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
+                  {CLASSES.map(c=>{
+                    const on=evCls===c.id;
+                    const disabled=classLocked&&c.id!==assoc.cls;
+                    const btn=<button type="button" disabled={disabled}
+                      onClick={()=>{if(disabled)return;updPMeta("cls",c.id);updMeta("subclass",null);}}
+                      style={{border:"1px solid "+(on?classColor(c.id):"var(--line)"),background:on?classColor(c.id):"transparent",
+                        color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
+                        cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1}}>{c.short}</button>;
+                    return SUBCLASSES[c.id]
+                      ? <SubclassHover key={c.id} cls={c.id} value={mf.subclass} active={on&&!disabled}
+                          onChange={v=>updMeta("subclass",v)} classBtn={btn}/>
+                      : <React.Fragment key={c.id}>{btn}</React.Fragment>;
+                  })}
+                  <CustomClassPicker classes={customClasses} value={evCls} disabled={classLocked}
+                    onSelect={id=>{updPMeta("cls",id);updMeta("subclass",null);}}
+                    onAdd={name=>addCustomClass(name)}/>
+                </div>
               </div>
+              {/* RIGHT — organiser controls (self-organized / host picker / free-text) */}
+              {!editResultsEv&&(()=>{
+                const importerHost=(portal&&!isClassPortal)?portal:null;
+                const orgMode=previewEv._orgMode||"self";
+                const external=!importerHost||orgMode==="external";
+                const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
+                return <div style={{flex:"1 1 260px",minWidth:260}}>
+                  <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Organizer</label>
+                  {importerHost&&<div style={{display:"inline-flex",gap:6,marginBottom:external?8:0,flexWrap:"wrap"}}>
+                    {[["self",`We organized this — ${hostById(importerHost)?.name||"this host"}`],["external","Another organizer"]].map(([m,lbl])=>(
+                      <button key={m} type="button" onClick={()=>updSharedMeta("_orgMode",m)}
+                        style={{border:"1px solid "+(orgMode===m?"var(--navy)":"var(--line)"),background:orgMode===m?"var(--navy)":"transparent",
+                          color:orgMode===m?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",cursor:"pointer"}}>{lbl}</button>
+                    ))}
+                  </div>}
+                  {external&&<div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                    <HostPicker hosts={allHosts} value={previewEv._orgHost||null}
+                      onChange={id=>{updSharedMeta("_orgHost",id||null);if(id)updSharedMeta("_orgName","");}}
+                      orgName={previewEv._orgName||""} onOrgName={v=>updSharedMeta("_orgName",v)}/>
+                  </div>}
+                  <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>
+                    {external
+                      ?"This competition will be filed as externally contributed — it stays off your page and the organizer can claim it later."
+                      :"You'll be recorded as the organizer; the competition appears on your page."}
+                  </p>
+                </div>;
+              })()}
             </div>
-            {SUBCLASSES[evCls]&&<div style={{marginBottom:10}}>
-              <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Class type</label>
-              <SubclassPicker cls={evCls} value={mf.subclass} onChange={v=>updMeta("subclass",v)}/>
-            </div>}
-            {!editResultsEv&&(()=>{
-              const importerHost=(portal&&!isClassPortal)?portal:null;
-              const orgMode=previewEv._orgMode||"self";
-              const external=!importerHost||orgMode==="external";
-              const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
-              return <div style={{marginBottom:10}}>
-                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Organizer</label>
-                {importerHost&&<div style={{display:"inline-flex",gap:6,marginBottom:external?8:0}}>
-                  {[["self",`We organized this — ${hostById(importerHost)?.name||"this host"}`],["external","Another organizer"]].map(([m,lbl])=>(
-                    <button key={m} type="button" onClick={()=>updSharedMeta("_orgMode",m)}
-                      style={{border:"1px solid "+(orgMode===m?"var(--navy)":"var(--line)"),background:orgMode===m?"var(--navy)":"transparent",
-                        color:orgMode===m?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",cursor:"pointer"}}>{lbl}</button>
-                  ))}
-                </div>}
-                {external&&<div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-                  <HostPicker hosts={allHosts} value={previewEv._orgHost||null}
-                    onChange={id=>{updSharedMeta("_orgHost",id||null);if(id)updSharedMeta("_orgName","");}}
-                    orgName={previewEv._orgName||""} onOrgName={v=>updSharedMeta("_orgName",v)}/>
-                </div>}
-                <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>
-                  {external
-                    ?"This competition will be filed as externally contributed — it stays off your page and the organizer can claim it later."
-                    :"You'll be recorded as the organizer; the competition appears on your page."}
-                </p>
-              </div>;
-            })()}
             <div style={{marginBottom:10}}>
               <CollabPicker owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updSharedCollabs(v)}/>
             </div>
@@ -9499,8 +9731,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </table>
             </div>
             <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
-            <div className="mfoot" style={{marginTop:14}}>
-              <button className="btn amber" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>
+            <div className="import-actionbar">
+              <button className="btn ghost" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>
               <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</div></button>
             </div>
             </>)}
