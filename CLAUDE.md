@@ -48,17 +48,24 @@ ventures, the Obsidian vault, cross-cutting planning.
 - VITE_SUPABASE_URL — base URL only, no trailing /rest/v1/
 - VITE_SUPABASE_ANON_KEY
 - ANTHROPIC_API_KEY
+- GEMINI_API_KEY — vision + nat reads ("parser" key, Google AI Studio)
+- GEMINI_VISION_MODEL / GEMINI_NAT_MODEL — optional overrides (default gemini-3.5-flash)
+- KIMI_API_KEY — text-task router (llm.py)
 - VERCEL_OIDC_TOKEN (pulled automatically via vercel env pull)
 
 ## Validation — run after every App.jsx edit
 ```bash
-# esbuild syntax check
-./node_modules/.bin/esbuild src/App.jsx --loader:.jsx=jsx --bundle \
+# esbuild syntax check (pnpm layout: binary lives under node_modules/.pnpm)
+./node_modules/.pnpm/node_modules/.bin/esbuild sports/sailing/src/App.jsx \
+  --loader:.jsx=jsx --bundle \
   --external:react --external:react-dom --external:lucide-react \
   --external:recharts --format=esm --outfile=/dev/null
 
 # Python syntax check (after parse_pdf.py edits)
 python3 -c "import ast; ast.parse(open('api/parse_pdf.py').read())"
+# NOTE: the parser test harness needs a python3 with pdfplumber+openpyxl —
+# on Casey's machine that is /opt/anaconda3/bin/python3:
+# /opt/anaconda3/bin/python3 tools/test_parser.py --diff
 ```
 Both must pass before committing. TDZ is the primary white-screen crash
 vector — esbuild won't catch const/let used before declaration. Manual
@@ -243,7 +250,25 @@ Table: athlete_claims.
 3. Association + federation signup flows (club flow is done).
 4. Publish flow → then return to athlete side.
 
-## Parser rules (api/parse_pdf.py)
+## Parser rules (api/parse_pdf.py) — v2, July 2026
+- Pipeline: detect → route → parse → normalise. `detect_format()` +
+  `FORMAT_REGISTRY` (ordered family list; signature fn + extractor per family).
+  Every result carries a `detected_format` {family, input_type, confidence}
+  diagnostic. Format inventory + signatures: **docs/parser-formats.md** (ground
+  truth — update it when adding a family; new format = new registry entry).
+- Input types: PDF-text (pdfplumber), PDF-scanned/photos (vision AI),
+  xlsx/xls/csv (openpyxl grid, block-split, overall-blocks preferred),
+  HTML (_TableHarvester; hidden display:none regions dropped), .blw (raw
+  Sailwave source — richest fields).
+- Rule families: sailwave(-text/-geometry/-html/-html-native), manage2sail,
+  sailti, sailti-web, sailingresults, clubspot, overall-results,
+  aspose-bilingual-cn, bornan, asiansailing-wordpress, topyacht,
+  excel-print-pdf, club-custom-xlsx, pya-events. Deferred to AI/vision by
+  design: worldsailing-resultscentre, hubsail + Dragon multi-crew (big boat,
+  out of scope), cn-games-book, ioda-word-notice, all zero-text scans.
+- AI routing (api/llm.py): vision/photos → Gemini (gemini-3.5-flash,
+  GEMINI_VISION_MODEL override); text fallback → Kimi; Anthropic Haiku 4.5 is
+  the universal fallback. Images now go Gemini-first.
 - norm_category truncates at 14 chars — use RAW cell value for fleet names
 - Fleet-label routing runs AFTER _looks_like_class demotion block
 - Discard count = mode of bracketed-cell counts; returns 0 if no evidence
@@ -251,8 +276,17 @@ Table: athlete_claims.
 - parse_sail_country handles no-space sails (HKG929), HK→HKG, mixed case
 - detected_class and detected_host returned as top-level JSON fields
 - Per-row "Class" column read for mixed-handicap/PY divisions
-- Sailti/Palma format intentionally has no rule parser — falls back to AI
-- Timeout: 50s. vercel.json sets maxDuration 60.
+- validate.py: zero-sail formats with strong nat coverage (bornan) dock 0.1,
+  not gate-fail
+- api/enrich.py: POST {name, cls, year, host, missing} → web-searched
+  {date, country} suggestion, always confidence "low", never blocks the parse;
+  preview shows it as a confirm-strip, never auto-applied. Host club's home
+  country is the default event country when the document is silent (HK club ⇒
+  HKG), overridable in preview.
+- Timeout: 50s. vercel.json sets maxDuration 60 (parse_pdf + enrich).
+- Test loop: /opt/anaconda3/bin/python3 tools/test_parser.py --diff — one
+  fixture per family in tools/fixtures/ (17 fixtures incl. xlsx/blw/html);
+  regenerate baselines deliberately, never blind-accept.
 
 ## Known gotchas
 - TDZ is the primary white-screen vector — mandatory check after every edit

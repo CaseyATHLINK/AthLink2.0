@@ -100,3 +100,25 @@ excel-print-pdf; three Konica scans + OG 2024 → unknown-scanned/vision.
 7. **CJK support required** for aspose-bilingual-cn, cn-games-book, bornan
    (bilingual titles) and Chinese athlete names inside otherwise-English docs
    (abc-excel-pdf OP 2018).
+
+## Implementation status — parser v2 waves 1–2c (2026-07-04)
+
+The 🔧/🆕 markers in the registry table above describe the pre-v2 state.
+Now IMPLEMENTED as rule extractors (fixture + baseline each): sailti-web
+(`try_sailti_web`), topyacht (`try_topyacht`), excel-print-pdf
+(`try_excel_print`), club-custom-xlsx + csv (`_parse_xlsx_bytes`/`_parse_csv_bytes`),
+sailwave-blw (`_parse_blw_bytes`), aspose-bilingual-cn (`try_aspose_cn`),
+bornan (`try_bornan`), asiansailing-wordpress (`try_asiansailing`),
+sailwave-html-native + pya-events + sailti-web-HTML (extended `_TableHarvester`).
+Deliberately routed to AI/vision instead of rules: worldsailing-resultscentre
+(no sail numbers, ambiguous crew wraps), hubsail + Dragon multi-crew (big boat,
+>2 crew — out of scope per Casey 2026-07-04), cn-games-book, ioda-word-notice,
+all zero-text scans. SailSys deferred (big-boat software; no sample).
+
+**Full-corpus sweep, rule mode only** (101 files): 72 parsed OK across 15
+families; 29 fall through to AI — 19 zero-text scans (vision by design) and 10
+text docs (all verified to fail identically on the pre-v2 parser: Hebe/clubspot,
+Palma+SOF Sailti glyph-interleave, hansaworlds clipped prints, Allianz, CJK
+games book, IODA notice, SEA-Para Excel). Vision fallback = Gemini
+`gemini-3.5-flash` (verified on the configured key; 11s/page on a scanned
+table), Haiku 4.5 universal fallback.
