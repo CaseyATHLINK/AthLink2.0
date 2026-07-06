@@ -33,11 +33,11 @@ fi
 # Detect what changed (working tree: staged, unstaged, untracked).
 # ---------------------------------------------------------------------------
 FRONT=0; BACK=0
+CHANGED="$(git status --porcelain 2>/dev/null | sed 's/^...//; s/.* -> //')"
 if [ -n "${PREPUSH_FORCE:-}" ]; then
   case "$PREPUSH_FORCE" in *front*|*both*) FRONT=1;; esac
   case "$PREPUSH_FORCE" in *back*|*both*) BACK=1;; esac
 else
-  CHANGED="$(git status --porcelain 2>/dev/null | sed 's/^...//; s/.* -> //')"
   # Frontend lives in the monorepo workspaces after the migration; the legacy
   # top-level src/ is kept for backward-compat. Match any of them.
   printf '%s\n' "$CHANGED" | grep -qE '^(src|apps/[^/]+/src|sports/[^/]+/src|packages/[^/]+/src)/' && FRONT=1
@@ -66,13 +66,22 @@ if [ "$FRONT" -eq 1 ]; then
   # and is already run authoritatively by Vercel CI on push. Run it locally
   # before a merge if you want the full workspace-resolved build.
   ESB="${ESBUILD_BIN:-}"
+  # A candidate must actually run: pnpm's find-able .bin entries can be node
+  # shims pointing at the native Mach-O binary, which node can't execute.
+  esb_ok(){ "$1" --version >/dev/null 2>&1; }
   if [ -z "$ESB" ]; then
-    for c in "$REPO/node_modules/.bin/esbuild" "$REPO/apps/web/node_modules/.bin/esbuild" \
+    for c in "$REPO/node_modules/.bin/esbuild" \
+             "$REPO/node_modules/.pnpm/node_modules/.bin/esbuild" \
+             "$REPO/apps/web/node_modules/.bin/esbuild" \
              "$REPO/.ds-sync/node_modules/.bin/esbuild"; do
-      [ -x "$c" ] && ESB="$c" && break
+      [ -x "$c" ] && esb_ok "$c" && ESB="$c" && break
     done
   fi
-  [ -z "$ESB" ] && ESB="$(find "$REPO" -path '*/node_modules/.bin/esbuild' -type f 2>/dev/null | head -1)"
+  if [ -z "$ESB" ]; then
+    while IFS= read -r c; do
+      esb_ok "$c" && ESB="$c" && break
+    done < <(find "$REPO" -path '*/node_modules/.bin/esbuild' -type f 2>/dev/null)
+  fi
   [ -z "$ESB" ] && command -v esbuild >/dev/null 2>&1 && ESB="esbuild"
   [ -z "$ESB" ] && ESB="npx --yes esbuild"
 
