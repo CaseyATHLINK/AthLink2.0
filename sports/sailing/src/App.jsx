@@ -2231,15 +2231,20 @@ const MIN_SHARED=2;     // min shared events to qualify as a rival (relaxed to 1
 /* ── Rival cohort — single source of truth for "real rivals" ─────────────────
    Shared by AthleteWeb (rival web) and ProgressChart so both views measure
    against the IDENTICAL cohort: canonName keys, Draft events skipped, helm+crew
-   both counted, Jaccard corr = shared / (focalTotal + rivalTotal − shared),
-   top-N by corr with raw-shared tiebreak. */
+   both counted. Rivals rank by the combined rivalry score described above —
+   jaccard^ALPHA × proximity^BETA (co-appearance × placement closeness) — with
+   ≥MIN_SHARED shared events to qualify (relaxed when <5 qualify), top-N,
+   raw-shared then name tiebreaks. `corr` on each rival carries the rivalry
+   score. Also returns focalEvData: the per-event rank maps built ONCE here
+   (ranks READ from scoreEvent rows — PDF-truth, tie-aware) and reused by the
+   web's proximity, head-to-head and partner-split views. */
 function modeOfCountMap(m){if(!m)return null;let best=null,bc=-1;m.forEach((c,k)=>{if(c>bc){bc=c;best=k;}});return best;}
 function computeRivalCohort(name,events,N=15){
   const focal=canonName(name);
   const disp=new Map();                 // canon -> display name
   const shared=new Map();               // canon -> # events shared with focal
   const totals=new Map();               // canon -> total events appeared in (for Jaccard union)
-  const focalEvents=[];                 // [Set(canon)] events the focal sailed
+  const focalEvData=[];                 // per focal event: {ev, present, rankOf, N(fleet), focalRank, partnerKey, partnerName, mates}
   const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
   const natCount=new Map();             // canon -> Map(nat -> count)
   const bump=(map,k,v)=>{if(!v)return;let m=map.get(k);if(!m){m=new Map();map.set(k,m);}m.set(v,(m.get(v)||0)+1);};
@@ -2250,15 +2255,61 @@ function computeRivalCohort(name,events,N=15){
     (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
     present.forEach(k=>totals.set(k,(totals.get(k)||0)+1));
     if(!present.has(focal))return;
-    focalEvents.push(present);
+    // Rank map built ONCE per focal event — ranks READ from scoreEvent rows
+    // (PDF-truth, tie-aware), reused for proximity + head-to-head + partner split.
+    const rankOf=new Map();             // canon -> best (lowest) rank in this event
+    const mates=new Set();              // canons who shared the focal's boat here (partners, not rivals)
+    let fleetN=0,focalRank=null,partnerKey="",partnerName="";
+    try{
+      const sc=scoreEvent(ev);
+      fleetN=sc.rows.length;
+      let focalRow=null;
+      sc.rows.forEach(r=>{
+        const hk=canonName(r.helm),ck=canonName(r.crew);
+        if(hk===focal||ck===focal){
+          const other=hk===focal?ck:hk;
+          if(other&&other!==focal)mates.add(other);
+          if(r.rank!=null&&(focalRank==null||r.rank<focalRank)){focalRank=r.rank;focalRow=r;}
+        }
+        if(r.rank==null)return;
+        [hk,ck].forEach(k=>{if(!k)return;const cur=rankOf.get(k);if(cur==null||r.rank<cur)rankOf.set(k,r.rank);});
+      });
+      if(focalRow){
+        const pRaw=canonName(focalRow.helm)===focal?focalRow.crew:focalRow.helm;
+        partnerKey=canonName(pRaw)||"";partnerName=pRaw||"";
+      }
+    }catch{/* unscoreable event: still counts for co-appearance, never for closeness */}
+    focalEvData.push({ev,present,rankOf,N:fleetN,focalRank,partnerKey,partnerName,mates});
     present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
   });
+  const focalEvents=focalEvData.map(d=>d.present);   // back-compat: [Set(canon)] events the focal sailed
   // Jaccard correlation (0–1): shared / union of the two competition sets.
-  const focalTotal=focalEvents.length;
+  const focalTotal=focalEvData.length;
   const corrOf=(k,sh)=>{const u=focalTotal+(totals.get(k)||sh)-sh;return u>0?sh/u:0;};
-  const rivals=[...shared.entries()].map(([k,sh])=>({key:k,name:disp.get(k)||k,shared:sh,corr:corrOf(k,sh)}))
-    .sort((a,b)=>b.corr-a.corr||b.shared-a.shared).slice(0,N);   // rank by corr, tie-break raw shared
-  return{focal,disp,focalEvents,totals,rivals,clsCount,natCount};
+  // Placement proximity (0–1): mean of exp(-GAP_K*gap) over shared events where
+  // both have ranks and they weren't in the same boat. Missing/partner events
+  // are skipped — missing data must never read as either huge gap or closeness.
+  const proxOf=k=>{
+    let sum=0,n=0;
+    focalEvData.forEach(d=>{
+      if(!d.present.has(k)||d.mates.has(k))return;
+      const rr=d.rankOf.get(k);
+      if(d.focalRank==null||rr==null)return;
+      sum+=Math.exp(-GAP_K*Math.abs(d.focalRank-rr)/Math.max(d.N-1,1));n++;
+    });
+    return{prox:n>0?sum/n:PROX_FLOOR,ranked:n};
+  };
+  // Combined rivalry = co-appearance × placement proximity; both must matter.
+  const scored=[...shared.entries()].map(([k,sh])=>{
+    const{prox,ranked}=proxOf(k);
+    return{key:k,name:disp.get(k)||k,shared:sh,ranked,corr:Math.pow(corrOf(k,sh),ALPHA)*Math.pow(prox,BETA)};
+  });
+  let eligible=scored.filter(s=>s.shared>=MIN_SHARED);
+  if(eligible.length<5)eligible=scored;   // young profiles: relax to 1 shared so the web isn't empty
+  const rivals=eligible
+    .sort((a,b)=>b.corr-a.corr||b.shared-a.shared||a.name.localeCompare(b.name))
+    .slice(0,N);                          // rank by rivalry, tie-break raw shared, then name
+  return{focal,disp,focalEvents,totals,rivals,clsCount,natCount,focalEvData};
 }
 
 function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,onSelectionChange,deselectKey=0,enlarged=false}){
@@ -2273,90 +2324,17 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   const stateRef=React.useRef({w:260,h:height,dpr:1,nodes:[],links:[],hover:null,sel:null,drag:null,maxShared:1,down:null,scale:1,ox:0,oy:0,pan:null});
 
   // Build {nodes, links} from all events, centred on the focal athlete.
-  // Cohort comes from computeRivalCohort — the same set ProgressChart scores against.
+  // Cohort comes from computeRivalCohort — the same set ProgressChart scores
+  // against — along with focalEvData, the per-event rank maps reused by the
+  // sidebar's head-to-head + shared-competition memos below.
   const graph=React.useMemo(()=>{
-    const focal=canonName(name);
-    const disp=new Map();                 // canon -> display name
-    const shared=new Map();               // canon -> # events shared with focal
-    const totals=new Map();               // canon -> total events appeared in (for Jaccard union)
-    const focalEvData=[];                 // per focal event: {ev, present, rankOf, N, focalRank, partnerKey, partnerName, mates}
-    const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
-    const natCount=new Map();             // canon -> Map(nat -> count)
-    const bump=(map,k,v)=>{if(!v)return;let m=map.get(k);if(!m){m=new Map();map.set(k,m);}m.set(v,(m.get(v)||0)+1);};
-    const modeOf=m=>{if(!m)return null;let best=null,bc=-1;m.forEach((c,k)=>{if(c>bc){bc=c;best=k;}});return best;};
-    const remember=raw=>{const k=canonName(raw);if(!k)return null;if(!disp.has(k))disp.set(k,raw);return k;};
-    (events||[]).forEach(ev=>{
-      if(ev.status==="Draft")return;
-      const present=new Set();
-      (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
-      present.forEach(k=>totals.set(k,(totals.get(k)||0)+1));
-      if(!present.has(focal))return;
-      // Rank map built ONCE per focal event — ranks READ from scoreEvent rows
-      // (PDF-truth, tie-aware), reused for proximity + head-to-head + partner split.
-      const rankOf=new Map();             // canon -> best (lowest) rank in this event
-      const mates=new Set();              // canons who shared the focal's boat here (partners, not rivals)
-      let N=0,focalRank=null,partnerKey="",partnerName="";
-      try{
-        const sc=scoreEvent(ev);
-        N=sc.rows.length;
-        let focalRow=null;
-        sc.rows.forEach(r=>{
-          const hk=canonName(r.helm),ck=canonName(r.crew);
-          if(hk===focal||ck===focal){
-            const other=hk===focal?ck:hk;
-            if(other&&other!==focal)mates.add(other);
-            if(r.rank!=null&&(focalRank==null||r.rank<focalRank)){focalRank=r.rank;focalRow=r;}
-          }
-          if(r.rank==null)return;
-          [hk,ck].forEach(k=>{if(!k)return;const cur=rankOf.get(k);if(cur==null||r.rank<cur)rankOf.set(k,r.rank);});
-        });
-        if(focalRow){
-          const pRaw=canonName(focalRow.helm)===focal?focalRow.crew:focalRow.helm;
-          partnerKey=canonName(pRaw)||"";partnerName=pRaw||"";
-        }
-      }catch{/* unscoreable event: still counts for co-appearance, never for closeness */}
-      focalEvData.push({ev,present,rankOf,N,focalRank,partnerKey,partnerName,mates});
-      present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
-    });
-    // Jaccard correlation (0–1): shared / union of the two competition sets.
-    const focalTotal=focalEvData.length;
-    const corrOf=(k,sh)=>{const u=focalTotal+(totals.get(k)||sh)-sh;return u>0?sh/u:0;};
-    // Placement proximity (0–1): mean of exp(-GAP_K*gap) over shared events where
-    // both have ranks and they weren't in the same boat. Missing/partner events
-    // are skipped — missing data must never read as either huge gap or closeness.
-    const proxOf=k=>{
-      let sum=0,n=0;
-      focalEvData.forEach(d=>{
-        if(!d.present.has(k)||d.mates.has(k))return;
-        const rr=d.rankOf.get(k);
-        if(d.focalRank==null||rr==null)return;
-        sum+=Math.exp(-GAP_K*Math.abs(d.focalRank-rr)/Math.max(d.N-1,1));n++;
-      });
-      return{prox:n>0?sum/n:PROX_FLOOR,ranked:n};
-    };
-    // Combined rivalry = co-appearance × placement proximity; both must matter.
-    const scored=[...shared.entries()].map(([k,sh])=>{
-      const{prox,ranked}=proxOf(k);
-      return{k,sh,ranked,rivalry:Math.pow(corrOf(k,sh),ALPHA)*Math.pow(prox,BETA)};
-    });
-    let eligible=scored.filter(s=>s.sh>=MIN_SHARED);
-    if(eligible.length<5)eligible=scored;   // young profiles: relax to 1 shared so the web isn't empty
-    const top=eligible
-      .sort((a,b)=>b.rivalry-a.rivalry||b.sh-a.sh||(disp.get(a.k)||a.k).localeCompare(disp.get(b.k)||b.k))
-      .slice(0,15);                          // rank by rivalry, tie-break raw shared, then name
-    const keep=new Set(top.map(t=>t.k)); keep.add(focal);
-    const maxShared=top.length?Math.max(...top.map(t=>t.sh)):1;
-    const maxCorr=top.length?top[0].rivalry:1;
-    // node class = the boat class they shared MOST competitions with the focal in (drives node colour)
-    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOf(natCount.get(focal)),shared:maxShared,corr:maxCorr||1,focal:true}];
-    top.forEach(t=>nodes.push({id:t.k,name:disp.get(t.k)||t.k,cls:modeOf(clsCount.get(t.k)),nat:modeOf(natCount.get(t.k)),shared:t.sh,corr:t.rivalry,ranked:t.ranked,focal:false}));
-    const {focal,disp,focalEvents,rivals,clsCount,natCount}=computeRivalCohort(name,events,15);
+    const{focal,disp,rivals,clsCount,natCount,focalEvData}=computeRivalCohort(name,events,15);
     const keep=new Set(rivals.map(r=>r.key)); keep.add(focal);
     const maxShared=rivals.length?Math.max(...rivals.map(r=>r.shared)):1;
     const maxCorr=rivals.length?rivals[0].corr:1;
     // node class = the boat class they shared MOST competitions with the focal in (drives node colour)
     const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOfCountMap(natCount.get(focal)),shared:maxShared,corr:maxCorr||1,focal:true}];
-    rivals.forEach(r=>nodes.push({id:r.key,name:r.name,cls:modeOfCountMap(clsCount.get(r.key)),nat:modeOfCountMap(natCount.get(r.key)),shared:r.shared,corr:r.corr,focal:false}));
+    rivals.forEach(r=>nodes.push({id:r.key,name:r.name,cls:modeOfCountMap(clsCount.get(r.key)),nat:modeOfCountMap(natCount.get(r.key)),shared:r.shared,corr:r.corr,ranked:r.ranked,focal:false}));
     const ew=new Map();
     focalEvData.forEach(({present})=>{
       const arr=[...present].filter(k=>keep.has(k));
@@ -2366,8 +2344,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
       }
     });
     const links=[...ew.entries()].map(([key,w])=>{const p=key.split("|");return{source:p[0],target:p[1],w};});
-    return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:top.length,focalEvData};
-    return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:rivals.length};
+    return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:rivals.length,focalEvData};
   },[name,events]);
 
   // selected node (lifted to React state so the enlarged sidebar can render it)
