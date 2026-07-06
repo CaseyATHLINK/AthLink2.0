@@ -4,7 +4,8 @@ import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
-  CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram
+  CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram,
+  Award
 } from "lucide-react";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
@@ -1163,6 +1164,63 @@ function resolvedEntryGender(e,doublehanded){
   }
   // Solo (or no crew): prefer the person's remembered gender, else stated.
   return rememberedGender(e.helm)||stated||null;
+}
+
+/* ── Outstanding Achievement (division podium) ────────────────────────────────
+   A result can be excellent *within a division* yet buried by a mediocre
+   overall position (3rd overall but 1st Under-18). Derived strictly from the
+   official overall order — we only filter and count, never re-rank. */
+const MIN_DIVISION_SIZE=4; // a division needs at least this many entries to count (tunable)
+function ordinalOf(n){const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
+function divisionDisplayName(code){
+  if(!code) return "";
+  const m=String(code).match(/^U(\d{1,2})$/i); if(m) return "Under-"+m[1];
+  if(code==="Jr") return "Junior";
+  if(code==="Mst") return "Masters";
+  if(code==="F") return "Female";
+  if(code==="M") return "Male";
+  if(code==="Mix") return "Mixed";
+  return String(code); // unknown code: show as-is, never guess
+}
+// h = an ag.history row. Returns {rank, divisionLabel, label, title} | null.
+// Two independent axes: age category and gender. One badge per row — best
+// division rank wins, tie prefers category; runner-up goes in the tooltip.
+function outstandingAchievementFor(h,athleteName){
+  const ev=h?.ev, entries=ev?.entries;
+  if(!entries||entries.length<MIN_DIVISION_SIZE) return null;
+  const overall=h.row?.rank;
+  if(!(overall>=1)) return null;
+  const target=canonName(athleteName);
+  const own=entries.find(e=>canonName(e.helm)===target||canonName(e.crew)===target);
+  if(!own) return null;
+  const dh=!!ev.doublehanded;
+  const ownCat=genderCatOf(own).category;
+  const ownGen=resolvedEntryGender(own,dh);
+  const axes=[];
+  if(ownCat) axes.push({axis:"category",code:ownCat,of:e=>genderCatOf(e).category});
+  if(ownGen) axes.push({axis:"gender",code:ownGen,of:e=>resolvedEntryGender(e,dh)});
+  if(!axes.length) return null;
+  // Official overall order: scoreEvent rows are sorted by official rank (PDF
+  // ground truth first); unranked rows keep their official array order.
+  let rows;
+  try{rows=scoreEvent(ev).rows;}catch{return null;}
+  const isOwn=r=>r.helm===own.helm&&r.crew===own.crew&&r.sail===own.sail;
+  const hits=[];
+  for(const {axis,code,of} of axes){
+    const div=rows.filter(r=>of(r)===code);
+    if(div.length<MIN_DIVISION_SIZE||div.length>=rows.length) continue; // must be a strict, real subset
+    const pos=div.findIndex(isOwn)+1;
+    if(pos<1||pos>3) continue;          // division podium only
+    if(pos>=overall) continue;          // must beat the overall rank chip
+    hits.push({axis,code,rank:pos});
+  }
+  if(!hits.length) return null;
+  hits.sort((a,b)=>a.rank-b.rank||(a.axis==="category"?-1:1)); // best rank; tie → age category
+  const best=hits[0], second=hits[1];
+  const divisionLabel=`${ordinalOf(best.rank)} ${divisionDisplayName(best.code)}`;
+  const label=`Outstanding Achievement: ${divisionLabel}`;
+  const title=second?`${label} · also ${ordinalOf(second.rank)} ${divisionDisplayName(second.code)}`:label;
+  return{rank:best.rank,divisionLabel,label,title};
 }
 
 // Derive athlete's primary nationality from their result history
@@ -7215,6 +7273,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .hrk{font-family:'Barlow',sans-serif;font-weight:800;font-size:22px;width:58px;text-align:center;flex:none;color:var(--navy);}
     .hrk.p1{color:#a87d00;}.hrk.p2{color:#1f6fb2;}.hrk.p3{color:#b23a3a;}
     .hrk small{display:block;font-size:10px;color:var(--mut);font-weight:600;}
+    .oab{flex:none;display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:12px;
+      background:linear-gradient(135deg,rgba(200,146,11,.14),rgba(22,58,99,.08));
+      border:.5px solid rgba(200,146,11,.38);color:var(--gold);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 1px 2px rgba(0,0,0,.06);
+      backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+    .oab svg{flex:none;}
+    .oabtxt{display:flex;flex-direction:column;line-height:1.3;min-width:0;}
+    .oabk{font-size:8px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);opacity:.85;white-space:nowrap;}
+    .oabv{font-size:11.5px;font-weight:700;color:var(--navy);white-space:nowrap;}
+    @media(max-width:520px){.oabk{display:none;}.oab{padding:4px 9px;gap:5px;}.oabv{font-size:11px;}}
+    @media(max-width:430px){.oabtxt{display:none;}.oab{padding:5px 7px;gap:0;}}
     .rolechip{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:980px;text-transform:uppercase;font-family:'Barlow',sans-serif;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
     .rolechip.helm{color:#fff;background:var(--navy2);}.rolechip.crew{color:var(--navy2);background:var(--sky);}
     .miniraces{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;}
@@ -9312,6 +9381,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   return<div key={j} className={`rc ${cls2}`}>{isCode(rc2)?rc2.slice(0,2):rc2}</div>;
                 })}</div>
               </div>
+              {(()=>{const oa=outstandingAchievementFor(h,name);return oa?(
+                <span className="oab" title={oa.title}>
+                  <Award size={15}/>
+                  <span className="oabtxt">
+                    <span className="oabk">Outstanding Achievement</span>
+                    <span className="oabv">{oa.divisionLabel}</span>
+                  </span>
+                </span>):null;})()}
               {(()=>{const n=nuggetFor(h.ev.cls,h.ev.subclass);return n?<span className="cls" style={{background:n.color}}>{n.label}</span>:null;})()}
               <ChevronRight size={18} color="#9fb2c8"/>
             </div>);
