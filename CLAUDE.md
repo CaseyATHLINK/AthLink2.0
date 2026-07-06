@@ -198,6 +198,28 @@ athlete by the `ensure_athlete_username` trigger. This is DISTINCT from
   clashes. Same-name-different-person separation is still unsolved (needs identity
   resolution) — the numbering is a safety net, not a person-splitter.
 
+## Athlete profile — division badges + progress chart (added 2026-07-07)
+- **Outstanding Achievement badge**: gold liquid-glass chip on profile result
+  rows when the athlete podiums (top-3) within an age-category or gender
+  division AND that division rank beats the overall rank chip. Derived by
+  filtering the official overall order (scoreEvent rows) — never re-ranked.
+  Module helpers in src/App.jsx: `outstandingAchievementFor(h, athleteName)`
+  (pure, reusable), `divisionDisplayName()`, `ordinalOf()`,
+  `MIN_DIVISION_SIZE=4` (tunable). One badge per row — best division rank wins,
+  tie prefers category; runner-up axis lives in the tooltip. CSS: `.oab*`
+  classes; collapses to icon-only ≤430px (the .ev row is nowrap — a wide badge
+  crushes the middle column on mobile).
+- **Progress vs Rivals chart**: third profile tab (Globe/Web/**Progress**, same
+  260×220 dark-card swap pattern). Per-event score = share of the athlete's top
+  rivals finished ahead of (ties 0.5), 0–100%, with a rolling-mean trend
+  (`SMOOTH_WINDOW=5`) and Career/By-year toggle. The cohort comes from
+  `computeRivalCohort(name, events, N=15)` — mechanically extracted from
+  AthleteWeb's graph memo and now the SINGLE source of truth for "real rivals"
+  (AthleteWeb consumes it too; cohort verified byte-identical after the
+  extraction). Undated, Draft, and `<MIN_RIVALS_PRESENT=2` -rival events are
+  excluded; <3 scored events shows an empty state. Hand-rolled inline SVG in
+  `ProgressChart` (no recharts import — keeps the bundle lean).
+
 ## Auth architecture
 Multi-step SignInModal: credentials → role pick → details.
 Google OAuth via Supabase redirect; new users route into onboarding.
