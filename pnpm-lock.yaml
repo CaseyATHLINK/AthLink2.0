@@ -20,6 +20,9 @@ importers:
       '@athlink/design-system':
         specifier: workspace:*
         version: link:../../packages/design-system
+      '@athlink/sport-golf':
+        specifier: workspace:*
+        version: link:../../sports/golf
       '@athlink/sport-kit':
         specifier: workspace:*
         version: link:../../packages/sport-kit
@@ -61,6 +64,24 @@ importers:
   packages/sport-kit: {}
 
   sports/_template:
+    dependencies:
+      '@athlink/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@athlink/design-system':
+        specifier: workspace:*
+        version: link:../../packages/design-system
+      '@athlink/sport-kit':
+        specifier: workspace:*
+        version: link:../../packages/sport-kit
+      lucide-react:
+        specifier: ^0.400.0
+        version: 0.400.0(react@18.3.1)
+      react:
+        specifier: ^18
+        version: 18.3.1
+
+  sports/golf:
     dependencies:
       '@athlink/core':
         specifier: workspace:*

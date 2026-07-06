@@ -11,6 +11,7 @@
   "dependencies": {
     "@athlink/core": "workspace:*",
     "@athlink/design-system": "workspace:*",
+    "@athlink/sport-golf": "workspace:*",
     "@athlink/sport-kit": "workspace:*",
     "@athlink/sport-sailing": "workspace:*",
     "lucide-react": "^0.400.0",

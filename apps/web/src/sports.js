@@ -13,5 +13,13 @@ export const sports = [
       import("@athlink/sport-sailing").then((m) => ({ default: m.default.Portal }))
     ),
   },
+  {
+    id: "golf",
+    name: "Golf",
+    tagline: "Competitions & athlete profiles",
+    Portal: React.lazy(() =>
+      import("@athlink/sport-golf").then((m) => ({ default: m.default.Portal }))
+    ),
+  },
   // __SPORTS_REGISTRY__ (generator inserts new sports above this line)
 ];
