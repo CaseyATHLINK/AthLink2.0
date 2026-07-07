@@ -1268,6 +1268,77 @@ def try_sailingresults(full_text):
         entries.append(_text_line_entry(int(toks[0]), helm, crew, sail, '', div, races, net))
     return entries or None
 
+def try_sailingresults_clipped(full_text):
+    """WordPress-embedded SailingResults.net (hansaworlds.org): the wide table is
+    clipped at the right print margin, so Total/Net and most race columns are cut
+    off the page and the helm/crew names wrap onto continuation lines. Recover
+    rank + sail + country + names + whatever race columns survive, and flag the
+    clip (§3c) rather than erroring. Row model:
+        <rank> [inline names…] <sail digits> <COUNTRY> <race…>
+    with the rest of the crew on the following line(s). Gated on the WordPress
+    'Pl Name Boat … Country' header so the clean overall.aspx prints (handled by
+    try_sailingresults) are never touched."""
+    low = full_text.lower()
+    if 'sailingresults.net' not in low or not re.search(r'\bpl\s+name\s+boat', low):
+        return None
+    raw = full_text.split('\n')
+    cm = re.search(r'(?:Overall\s+)?Results?\s*[-–—]\s*([0-9A-Za-z][0-9A-Za-z ]*)', full_text)
+    div = re.sub(r'\s+', ' ', cm.group(1)).strip() if cm else ''
+    # Two-person classes (303 2P / Doubles) carry a crew; single-handers (Liberty,
+    # 2.4mR) don't — so we never fold a boat-name token into a phantom crew.
+    is_doubles = bool(re.search(r'\bdouble|2\s*p\b|two[- ]person', (div + ' ' + full_text[:400]).lower()))
+    STATE = {'VIC', 'WA', 'NSW', 'QLD', 'SA', 'TAS', 'ACT', 'NT'}  # AUS state col
+
+    def is_name_tok(t):
+        return bool(re.match(r"^[A-Za-z][A-Za-z'’.\-]*,?$", t)) and t.upper() not in CODES
+
+    def find_sail_country(rest):
+        """Locate an adjacent <sail digits> <COUNTRY> pair. The country is a 2-3
+        letter code IMMEDIATELY preceded by the sail number — this disambiguates a
+        real code (…2736 HKG) from an all-caps surname (…Wai FOO 2736)."""
+        for k in range(len(rest) - 1):
+            if re.match(r'^\d{2,6}$', rest[k]) and re.match(r'^[A-Z]{2,3}$', rest[k + 1]) \
+               and rest[k + 1] not in CODES:
+                return k, rest[k], rest[k + 1]
+        return None, '', ''
+
+    rank_idx = []
+    for i, l in enumerate(raw):
+        toks = l.split()
+        if len(toks) >= 3 and toks[0].isdigit():
+            if find_sail_country(toks[1:])[0] is not None:
+                rank_idx.append(i)
+    entries = []
+    for j, i in enumerate(rank_idx):
+        toks = raw[i].split()
+        rank = int(toks[0])
+        rest = toks[1:]
+        sidx, sail, country = find_sail_country(rest)
+        inline_names = [t for t in rest[:sidx] if is_name_tok(t)]
+        # After the country: State (AUS) then any surviving race scores.
+        race_toks = [t for t in rest[sidx + 2:] if t not in STATE]
+        # names: inline tokens + name-like tokens on the continuation lines up to
+        # the next rank line (skip chrome / footer / stray codes / boat names in
+        # ALL-CAPS like "STATUE"/"Barracuda" are kept only as trailing helm words).
+        names_flat = list(inline_names)
+        end = rank_idx[j + 1] if j + 1 < len(rank_idx) else len(raw)
+        for k in range(i + 1, end):
+            ln = raw[k].strip()
+            lk = ln.lower()
+            if not ln or 'sailingresults' in lk or 'http' in lk or lk.startswith('created'):
+                continue
+            names_flat += [t for t in ln.split() if is_name_tok(t)]
+        cleaned = [re.sub(r',$', '', t) for t in names_flat if t]
+        helm = ' '.join(cleaned[:2]).strip()
+        crew = ' '.join(cleaned[2:4]).strip() if is_doubles else ''
+        if not helm:
+            continue
+        # Surviving trailing columns are races (Total/Net were clipped off-page).
+        e = _text_line_entry(rank, helm, crew, sail, country, div, race_toks, None)
+        entries.append(e)
+    return entries or None
+
+
 def try_sailwave_text(full_text):
     """Multi-page / flighted Sailwave where the table grid shatters. Each entry
     line starts with an ordinal rank ("1st"); wrapped surnames and score codes
@@ -3586,6 +3657,12 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         sr = try_sailingresults(full_text)
         if sr and len(sr) > len(all_parsed):
             all_parsed = sr
+        # WordPress-embedded (hansaworlds.org) clipped variant: recover placings +
+        # names + surviving races when the standard parser found nothing (§3c).
+        if len(all_parsed) < 3:
+            src = try_sailingresults_clipped(full_text)
+            if src and len(src) > len(all_parsed):
+                all_parsed = src
     if 'sailwave results for' in sig or re.search(r'sailed:\s*\d+.*entries:\s*\d+', sig):
         declared = max([int(x) for x in re.findall(r'[Ee]ntries:\s*(\d+)', full_text)] or [0])
         deficient = (not all_parsed) or len(all_parsed) < 5 or (declared and len(all_parsed) < 0.5 * declared)
