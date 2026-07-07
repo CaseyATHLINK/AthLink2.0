@@ -2992,9 +2992,18 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
   }else{
     // ── Y domain: [min(r−rd), max(r+rd)] over visible pts (+ overlay r's when
     // active), padded 5%, then rounded OUTWARD to a multiple of 50.
+    // ── X window first (year gridlines + labels come from it, and the overlay
+    // is CLIPPED to it — off-window rival points are dropped, never clamped
+    // into a false pile-up at the chart edge, and never stretch the y-domain).
+    const yearsSel=sel?[...sel].sort((a,b)=>a-b):null;
+    const y0=yearsSel?yearsSel[0]:+pts[0].dk.slice(0,4);
+    const y1=yearsSel?yearsSel[yearsSel.length-1]:+pts[pts.length-1].dk.slice(0,4);
+    const t0=Date.UTC(y0,0,1), t1=Date.UTC(y1,11,31), span=Math.max(1,t1-t0);
+    const tsOf=p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8));
+    const oShow=overlayPts?overlayPts.filter(p=>{const t=tsOf(p);return t>=t0&&t<=t1;}):null;
     let lo=Infinity, hi=-Infinity;
     pts.forEach(p=>{lo=Math.min(lo,p.r-p.rd);hi=Math.max(hi,p.r+p.rd);});
-    if(overlayPts)overlayPts.forEach(p=>{lo=Math.min(lo,p.r);hi=Math.max(hi,p.r);});
+    if(oShow)oShow.forEach(p=>{lo=Math.min(lo,p.r);hi=Math.max(hi,p.r);});
     const padAmt=Math.max(10,(hi-lo)*0.05);
     lo=Math.floor((lo-padAmt)/50)*50; hi=Math.ceil((hi+padAmt)/50)*50;
     if(hi<=lo)hi=lo+50;
@@ -3006,14 +3015,7 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
     const nice=[50,100,150,200,250,500,1000];
     const step=nice.find(s=>s>=rawStep)||Math.ceil(rawStep/100)*100;
     const ticks=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+0.5; v+=step)ticks.push(v);
-    // ── X axis (unchanged): year gridlines + labels, t0/t1 from selected years
-    // or first/last point.
-    const yearsSel=sel?[...sel].sort((a,b)=>a-b):null;
-    const y0=yearsSel?yearsSel[0]:+pts[0].dk.slice(0,4);
-    const y1=yearsSel?yearsSel[yearsSel.length-1]:+pts[pts.length-1].dk.slice(0,4);
-    const t0=Date.UTC(y0,0,1), t1=Date.UTC(y1,11,31), span=Math.max(1,t1-t0);
     const xForTs=ts=>M.l+plotW*(ts-t0)/span;
-    const tsOf=p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8));
     const xOf=p=>Math.min(Math.max(xForTs(tsOf(p)),M.l),w-M.r);
     const nY=y1-y0+1, every=nY>12?3:nY>7?2:1;
     // Rating line + uncertainty band (band = actual points only, never interpolated in gaps)
@@ -3021,7 +3023,7 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
     const bandUp=pts.map(p=>`${xOf(p)},${yOf(p.r+p.rd)}`);
     const bandLo=pts.map(p=>`${xOf(p)},${yOf(p.r-p.rd)}`).reverse();
     const bandPath=`M${bandUp.join("L")}L${bandLo.join("L")}Z`;
-    const overlayLine=overlayPts&&overlayPts.length?overlayPts.map(p=>`${xOf(p)},${yOf(p.r)}`).join(" "):null;
+    const overlayLine=oShow&&oShow.length?oShow.map(p=>`${xOf(p)},${yOf(p.r)}`).join(" "):null;
     body=(
       <svg width="100%" height={CH} viewBox={`0 0 ${w} ${CH}`} style={{display:"block"}}>
         <defs>
