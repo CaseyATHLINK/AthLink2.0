@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY } from "d3-force";
+import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY, forceRadial } from "d3-force";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
@@ -2402,6 +2402,10 @@ function getAthleteRatings(events){
    pulls retired athletes out of the current orbit; a rival with no dated event
    gets a neutral 0.5. "now" is the dataset's own max dateKey, not wall-clock,
    so historical datasets decay relative to their own latest event.
+   Distance from the focal athlete truthfully encodes this score: a radial
+   force pins each rival at a target radius derived from its rank vs. the top
+   rival (closer = stronger rival), monotonic and no longer fought by the
+   focal↔rival links.
    Raw integer shared count stays on the node for human-readable display AND for
    the MIN_SHARED eligibility test (both on RAW counts, not weighted). Edges
    connect any two shown athletes who appeared in the same event (weight = times
@@ -2639,10 +2643,17 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     setSelNode(null);
     const focalNode=byId.get(graph.focal);
     if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}
-    // scatter rivals radially: bigger (more-correlated) start nearer the focal,
-    // smaller start further out, with random jitter so the layout looks organic.
-    nodes.forEach(n=>{if(n.focal)return;const ratio=(n.corr||0)/(graph.maxCorr||1);
-      const ang=Math.random()*Math.PI*2,dist=(enlarged?144:55)+(1-ratio)*(enlarged?414:104)+(Math.random()-.5)*(enlarged?90:26);
+    // truthful-orbit target radius: distance from the focal encodes the rival
+    // score (higher score ⇒ strictly closer). sqrt spreads the top cluster apart.
+    const RMIN=enlarged?140:46, RMAX=enlarged?250:104;   // truthful-orbit range (mini h=220 / enlarged h=540)
+    nodes.forEach(n=>{if(n.focal)return;
+      const ratio=(n.corr||0)/(graph.maxCorr||1);        // 1 = top rival, → 0 = weakest
+      n.targetR=RMIN+(1-Math.sqrt(ratio))*(RMAX-RMIN);   // sqrt spreads the top cluster apart
+    });
+    // scatter rivals radially at their target orbit, with random jitter so the
+    // layout looks organic.
+    nodes.forEach(n=>{if(n.focal)return;
+      const ang=Math.random()*Math.PI*2,dist=n.targetR+(Math.random()-.5)*(enlarged?60:18);
       n.x=st.w/2+Math.cos(ang)*dist;n.y=st.h/2+Math.sin(ang)*dist;});
     // Sizing is relative to the focal node: the MOST-CORRELATED rival (Jaccard)
     // is 80% of the focal's size, everyone else scales linearly by their
@@ -2709,17 +2720,23 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     const sim=forceSimulation(nodes)
       .velocityDecay(enlarged?.62:.58)        // higher damping = relaxed, fluid motion (less bounce)
       // link distance is driven by correlation: more-correlated nodes sit
-      // closer to the focal, less-correlated ones further out. Focal links hold
-      // the radial structure; rival-rival links stay weak so they don't clump.
+      // closer to the focal, less-correlated ones further out. The radial force
+      // (below) now owns the focal↔rival distance truthfully, so focal links
+      // carry ~0 strength here; rival-rival links stay weak so they don't clump.
       .force("link",forceLink(links).id(d=>d.id)
         .distance(l=>{const a=l.source,b=l.target,other=a.focal?b:(b.focal?a:null);
           if(other){const ratio=(other.corr||0)/(st.maxCorr||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
           return enlarged?270:91;})
-        .strength(l=>(l.source.focal||l.target.focal)?(enlarged?.5:.45):.04))
+        .strength(l=>(l.source.focal||l.target.focal)?0:.04))
       .force("charge",forceManyBody().strength(enlarged?-270:-60).distanceMax(enlarged?1100:390))
       .force("collide",forceCollide(d=>rad(d)+(enlarged?10:7)).strength(.6))
       .force("x",forceX(()=>st.w/2).strength(enlarged?.04:.05))
       .force("y",forceY(()=>st.h/2).strength(enlarged?.04:.05))
+      // radial: distance from the focal truthfully encodes the rival score —
+      // closer = stronger rival. Focal node is pinned at radius 0 (its fx/fy
+      // already center it); this force owns the focal↔rival distance now that
+      // the focal link strength above is 0.
+      .force("radial",forceRadial(d=>d.focal?0:d.targetR,st.w/2,st.h/2).strength(d=>d.focal?1:0.85))
       // soft walls — any node dragged/pushed outside the frame eases back in
       .force("bounds",a=>{const m=enlarged?22:12;nodes.forEach(n=>{if(n.fx!=null||n.x==null)return;
         if(n.x<m)n.vx+=(m-n.x)*a*0.6;else if(n.x>st.w-m)n.vx+=(st.w-m-n.x)*a*0.6;
@@ -2762,7 +2779,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     cv.addEventListener("dblclick",onDbl);
     cv.addEventListener("pointerleave",onLeave);
     if(enlarged)cv.addEventListener("wheel",onWheel,{passive:false});
-    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(enlarged?.05:.055)).force("y",forceY(()=>st.h/2).strength(enlarged?.05:.055));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
+    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(enlarged?.05:.055)).force("y",forceY(()=>st.h/2).strength(enlarged?.05:.055)).force("radial",forceRadial(d=>d.focal?0:d.targetR,st.w/2,st.h/2).strength(d=>d.focal?1:0.85));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
     window.addEventListener("resize",onResize);
     return()=>{sim.stop();cv.removeEventListener("pointerdown",onDown);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerup",onUp);cv.removeEventListener("dblclick",onDbl);cv.removeEventListener("pointerleave",onLeave);cv.removeEventListener("wheel",onWheel);window.removeEventListener("resize",onResize);};
   },[graph,height,enlarged]);
@@ -2788,7 +2805,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
             <span style={{width:9,height:9,borderRadius:"50%",background:l.color,flex:"none",boxShadow:"0 0 0 1px rgba(255,255,255,.4)"}}/>{l.label}
           </span>
         ))}
-        <span>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 Rivals`}</span>
+        <span>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 rivals · closer = stronger rival`}</span>
       </div>
     </div>
   );
