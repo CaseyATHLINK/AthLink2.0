@@ -3591,11 +3591,11 @@ function CourseDiagram({cfg,onInfo}){
 
 /* The two models side by side + one shared info line underneath — hover text lands here,
    at the very bottom, so nothing ever covers the diagrams. */
-function SpmDuo({cfg}){
+function SpmDuo({cfg,compact}){
   const[info,setInfo]=React.useState(null);
   return(
-    <div className="spm-duo">
-      <div className="spm-duorow">
+    <div className={`spm-duo${compact?" spm-duo--home":""}`}>
+      <div className={`spm-duorow${compact?" spm-duorow--home":""}`}>
         <EquipmentModel3D cfg={cfg.equipment} onInfo={setInfo}/>
         <CourseDiagram cfg={cfg.course} onInfo={setInfo}/>
       </div>
@@ -3608,12 +3608,12 @@ function SpmDuo({cfg}){
   );
 }
 
-function SportShowcase({clsId}){
+function SportShowcase({clsId,compact}){
   const cfg=SPORT_MODELS[clsId];
   if(!cfg)return null;
   return(
-    <div className="spm-sec">
-      <SpmDuo cfg={cfg}/>
+    <div className={`spm-sec${compact?" spm-sec--home":""}`}>
+      <SpmDuo cfg={cfg} compact={compact}/>
     </div>
   );
 }
@@ -8724,25 +8724,42 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        (up to a few wrapped lines of hover text) so it never overlaps the next
        section ("Recent competitions" on the sailing home page). */
     .spm-sec{margin:26px 0 92px}
+    /* home: tighter reserve below the models — the hover text hangs lower (see
+       .spm-duo--home .spm-info) but sits closer to the "Results…" line beneath. */
+    .spm-sec--home{margin-bottom:60px}
     /* class/competitions/portal/results pages: title/search/filters take 50%, the two
        models take 50% on the same row. align-items:end bottom-aligns the models to the
        header's last line — the reserved margin-bottom below the WHOLE GRID (not inside
        either grid item) is what keeps the hover info clear of the content beneath,
        without affecting that alignment or the row's height. */
-    .spm-classgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:end;margin-bottom:80px}
+    .spm-classgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch;margin-bottom:22px}
     .spm-classhead{min-width:0}
-    @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}}
+    /* the header column is the taller one; stretch makes .spm-duo match its height so
+       the bottom-anchored .spm-info lands on the header's bottom baseline. Zero the
+       trailing margin under the last header control so that baseline == filter/buttons. */
+    .spm-classhead>*:last-child{margin-bottom:0!important}
+    /* association/host portal header sits inside .strip (which adds its own 18px
+       padding-bottom); trim the grid's own margin there so the content below the
+       Athletes/Calendar buttons isn't pushed down twice. Global-class grid lives in
+       .wrap.sec (no .strip) and keeps the 22px above. */
+    .strip .spm-classgrid{margin-bottom:4px}
+    @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}.spm-classgrid .spm-duo{padding-bottom:46px}}
     .spm-duo{position:relative;min-width:0}
     .spm-duorow{display:flex;gap:0;justify-content:center;align-items:flex-start}
     /* pull the two boats together — their outer whitespace overlaps, closing the empty gap */
     .spm-duorow .spm-holo{flex:1 1 0;min-width:0;max-width:480px}
     .spm-duorow .spm-holo:first-child{margin-right:-6%}
     .spm-duorow .spm-holo:last-child{margin-left:-6%}
+    /* home page only: models render 30% smaller (480px → 336px); overlap % and info line stay proportional */
+    .spm-duorow--home .spm-holo{max-width:336px}
     .spm-holo{position:relative} /* frameless — the models sit directly on the page */
     /* absolutely placed OVERLAY below the row — out of flow, so it never shifts the
        models or (on the grid pages) the header; callers reserve real space for it via
        margin-bottom on their own container (.spm-classgrid above, .spm-sec below). */
-    .spm-info{position:absolute;top:100%;left:0;right:0;margin-top:6px;font-size:12.5px;line-height:1.45;color:var(--mut);text-align:left}
+    .spm-info{position:absolute;bottom:0;left:0;right:0;font-size:12.5px;line-height:1.45;color:var(--mut);text-align:left}
+    /* home isn't a grid, so there's no header to bottom-align to — hang the hover
+       text below the models with a comfortable gap, then keep it close to "Results…". */
+    .spm-duo--home .spm-info{top:100%;bottom:auto;margin-top:22px}
     .spm-info b{color:var(--ink);font-weight:700}
     .spm-info-hint{opacity:.75}
     .spm-halo{transform-box:fill-box;transform-origin:center;animation:spmPulse 2.4s ease-out infinite}
@@ -9183,7 +9200,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     }));
     return(
     <div className="wrap sec">
-      <SportShowcase clsId="49er"/>
+      <SportShowcase clsId="49er" compact/>
       <p style={{margin:"0 0 8px",color:"var(--mut)",fontSize:15}}>Results, athlete profiles and class standings for competitive sailing</p>
       <div className="hero-srch" style={{maxWidth:"none"}} onClick={e=>e.stopPropagation()}>
         <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
@@ -9732,9 +9749,16 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={isClassPortal?null:hiso}/>
             </div>);
           })();
-          // Actions moved directly BELOW the globe.
+          // Host logo — read-only display (the upload UI is paused); globe always shows when known,
+          // the logo renders alongside it only when host.logo_url is set, with no placeholder otherwise.
+          // Frameless: shown on a transparent ground, contained within a globe-sized box.
+          const logo=host?.logo_url?(
+            <div style={{width:150,height:150,flex:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <img src={host.logo_url} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",display:"block"}}/>
+            </div>
+          ):null;
           const actions=(
-            <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",width:150}}>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
                 <Users size={14} style={{flex:"none"}}/> Athletes
               </MagneticItem>
@@ -9749,8 +9773,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </MagneticItem>}
             </div>
           );
-          const titleBlock=(
-            <div style={{minWidth:0,alignSelf:"flex-start"}}>
+          // Left column mirrors the global-class-page layout: title pinned at the very top,
+          // then the globe/logo identity row (globe → logo, left to right), stat pills, and actions.
+          const head=(
+            <div style={{minWidth:0}}>
               {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
                 <div style={{marginBottom:8}}>
                   <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
@@ -9759,37 +9785,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   </span>
                 </div>
               )}
-              <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
-                <h1 className="page-title">{portalName}</h1>
-              </div>
-              <div className="pillbar" style={{marginTop:12}}>
+              <h1 className="page-title">{portalName}</h1>
+              {(globe||logo)&&<div style={{display:"flex",alignItems:"center",gap:14,marginTop:14}}>{globe}{logo}</div>}
+              <div className="pillbar" style={{marginTop:14}}>
                 <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
                 <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
               </div>
-            </div>
-          );
-          // Logo sits just to the RIGHT of the title (close to it), vertically
-          // centred and sized to optically align with the 150px globe. Original
-          // colours, background removed. hostById(portal) is null for synthetic
-          // class portals (no host row) → no logo; real associations resolve their
-          // logo_url here just like clubs/federations.
-          const headerLogo=(()=>{
-            const hl=hostById(portal)?.logo_url;
-            if(!hl) return null;
-            return <img src={hl} alt="" style={{width:128,height:128,flex:"none",objectFit:"contain",alignSelf:"center",maxWidth:"100%",background:"transparent"}}/>;
-          })();
-          // Single header row: globe LEFT · title (natural width) · logo hugging
-          // the title · action buttons pushed to the FAR RIGHT (marginLeft:auto),
-          // all vertically centred to the globe. On narrow widths the buttons wrap
-          // below — the globe/title/logo never stack.
-          const head=(
-            <div style={{minWidth:0,display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
-              {globe}
-              <div style={{flex:"0 1 auto",minWidth:0}}>{titleBlock}</div>
-              {headerLogo}
-              <div style={{display:"flex",gap:16,alignItems:"center",flex:"none",marginLeft:"auto"}}>
-                {actions}
-              </div>
+              <div style={{marginTop:14}}>{actions}</div>
             </div>
           );
           if(!modelCfg) return head;
@@ -10034,13 +10036,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
           </div>
         </div>);
-        const spmCfg=SPORT_MODELS[ev.cls];
-        if(!spmCfg) return head; // 49er (and any modelled class) gets the explainer beside the header, 50/50
-        return(
-          <div className="spm-classgrid">
-            <div className="spm-classhead">{head}</div>
-            <SpmDuo cfg={spmCfg}/>
-          </div>);
+        // Interactive models are scoped to home/association/global-class pages only — not here.
+        return head;
       })()}
       {/* Revealable, sponsor-focused competition summary */}
       <div style={{marginBottom:16}}>
