@@ -41,27 +41,41 @@ ROUTES = {
     # overview (athlete/class bio blurbs) → Gemini. Kimi was flaky here: it timed
     # out / returned empty (blank "AI summary unavailable") and drifted into
     # non-English output on foreign-named regattas (the International 49er page
-    # rendered in Spanish). Gemini (already live on Vercel via GEMINI_API_KEY) is
-    # reliable and English-first. Falls back to Anthropic if the key is missing;
+    # rendered in Spanish). Gemini (key: GEMINI_API_KEY locally /
+    # Gemini_API_Key_Universal on Vercel prod) is reliable and English-first.
+    # Falls back to Anthropic if no Gemini key is set;
     # model is overridable via env (GEMINI_OVERVIEW_MODEL), matching nat/vision.
     "overview": {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
-                 "key_env": "GEMINI_API_KEY",   "model": "gemini-3.5-flash",
+                 "key_env": ["GEMINI_API_KEY", "Gemini_API_Key_Universal"], "model": "gemini-3.5-flash",
                  "model_env": "GEMINI_OVERVIEW_MODEL"},
     # hover was Cerebras, but its public endpoint kept erroring (model churn /
     # key), so it's routed to Kimi — already live and free.
     "hover":    {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
                  "key_env": "KIMI_API_KEY", "model": "kimi-k2.5"},
     "nat":      {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
-                 "key_env": "GEMINI_API_KEY",   "model": "gemini-3.5-flash",
+                 "key_env": ["GEMINI_API_KEY", "Gemini_API_Key_Universal"], "model": "gemini-3.5-flash",
                  "model_env": "GEMINI_NAT_MODEL"},
     # vision parse (PDF/image) route — Gemini 3.5 Flash, overridable via env.
     "vision":   {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
-                 "key_env": "GEMINI_API_KEY",   "model": "gemini-3.5-flash",
+                 "key_env": ["GEMINI_API_KEY", "Gemini_API_Key_Universal"], "model": "gemini-3.5-flash",
                  "model_env": "GEMINI_VISION_MODEL"},
 }
 
 ANTHROPIC_ROUTE = {"provider": "anthropic", "base_url": ANTHROPIC_URL,
                    "key_env": "ANTHROPIC_API_KEY", "model": ANTHROPIC_MODEL}
+
+
+def _env_first(key_env):
+    """First non-empty env value among key_env, which may be a single var name
+    or a list of candidates. The Gemini key, for instance, is GEMINI_API_KEY in
+    local dev but Gemini_API_Key_Universal on Vercel prod — resolving a list lets
+    both environments work without per-env code."""
+    names = [key_env] if isinstance(key_env, str) else list(key_env)
+    for n in names:
+        v = os.environ.get(n, "")
+        if v:
+            return v
+    return ""
 
 
 def route(task):
@@ -75,7 +89,7 @@ def route(task):
     cfg = ROUTES.get(task)
     if not cfg:
         return dict(ANTHROPIC_ROUTE)
-    if not os.environ.get(cfg["key_env"], ""):
+    if not _env_first(cfg["key_env"]):
         return dict(ANTHROPIC_ROUTE)
     cfg = dict(cfg)
     # An env override (model_env) lets ops pin/downgrade the model without a code
@@ -189,7 +203,7 @@ def complete_text(task, prompt, max_tokens, timeout=20):
     string when the call fell back to Anthropic (for diagnostics — not secret).
     """
     cfg = route(task)
-    key = os.environ.get(cfg["key_env"], "")
+    key = _env_first(cfg["key_env"])
     # Force English for the prose tasks. Non-English-first models (e.g. Kimi on
     # the still-routed "hover" task) otherwise drift into the language of the
     # source data — foreign-named regattas made the International 49er page
