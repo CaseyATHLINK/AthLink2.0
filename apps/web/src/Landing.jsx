@@ -32,7 +32,7 @@ const CSS = `
 .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 14px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;cursor:pointer;transition:transform .15s;}
 .tb-brand:hover{transform:translateY(-1px);}
 .tb-mark{width:28px;height:28px;border-radius:50%;display:block;flex:none;}
-.tb-word{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.03em;padding:0 6px 0 5px;}
+.tb-word{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.04em;padding:0 6px 0 5px;}
 .tb-center{position:absolute;left:50%;transform:translateX(-50%);display:flex;pointer-events:auto;}
 .tb-nav{display:inline-flex;align-items:center;gap:2px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);}
 .tb-link{font:inherit;font-size:14px;font-weight:700;color:var(--navy);border:0;background:none;border-radius:980px;padding:9px 18px;cursor:pointer;transition:background .16s;white-space:nowrap;}

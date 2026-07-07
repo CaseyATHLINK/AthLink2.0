@@ -8507,13 +8507,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .topbar2{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 20px;pointer-events:none;transition:transform .42s cubic-bezier(.2,.85,.2,1),opacity .42s;}
     .topbar2.hidden{transform:translateY(-135%);opacity:0;}
     .topbar2>*{pointer-events:auto;}
-    .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 8px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;}
-    .tb-logo{width:32px;height:32px;border-radius:980px;overflow:hidden;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;}
+    /* Brand pill — same capsule grammar as the landing .tb-brand + .tb-word so
+       landing↔sailing reads as one component. Two click targets: icon → AthLink
+       landing, "Sailing" → sailing home (divider between). */
+    .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 14px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;}
+    .tb-logo{width:28px;height:28px;border-radius:980px;overflow:hidden;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;}
     .tb-logo img{width:100%;height:100%;display:block;border-radius:inherit;}
     .tb-logo:hover{transform:scale(1.06);box-shadow:0 4px 12px -3px rgba(22,58,99,.5);}
     .tb-divider{width:1px;height:18px;background:rgba(0,0,0,.12);flex:none;margin:0 4px 0 10px;}
-    .tb-sport{font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.01em;cursor:pointer;padding:5px 11px 5px 6px;border-radius:980px;transition:.15s;}
-    .tb-sport:hover{background:rgba(19,49,78,.10);}
+    /* SF Pro wordmark treatment matching landing .tb-word (19px/800/-.04em); no
+       Barlow, no bg-pill padding so brand height == landing brand height (40px). */
+    .tb-sport{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.04em;cursor:pointer;padding:0 6px 0 5px;transition:color .15s;}
+    .tb-sport:hover{color:var(--accent);}
     .tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
     /* Fixed 25px radius (≈ half the closed bar height, so it reads as a capsule when
        closed). Height-independent: as the panel elongates only the body grows — the
@@ -8522,12 +8527,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     /* In nav mode the pill must size to its content; the 440px cap (meant for
        the search field) squeezed the flex row so the last item — the search
        button — spilled ~5px past the pill's right edge and read as detached. */
-    .menupill.navmode{width:auto;max-width:none;}
+    .menupill.navmode{width:auto;max-width:none;border-radius:980px;}  /* full capsule in nav mode == landing .tb-nav */
     .menupill.searching{background:rgba(255,255,255,.70);}
     /* 3-item primary nav — seg-control idiom inside the glass capsule */
     .np-bar{display:flex;align-items:center;gap:2px;padding:5px;}
-    .np-link{font:inherit;font-size:14px;font-weight:700;border:0;background:none;color:var(--mut);padding:9px 18px;border-radius:980px;cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);white-space:nowrap;letter-spacing:-.01em;}
-    .np-link:hover{color:var(--navy);}
+    .np-link{font:inherit;font-size:14px;font-weight:700;border:0;background:none;color:var(--mut);padding:9px 18px;border-radius:980px;cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);white-space:nowrap;}
+    .np-link:hover{color:var(--navy);background:rgba(255,255,255,.85);}  /* hover treatment == landing .tb-link */
     .np-link.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .np-srchbtn{flex:none;width:36px;height:36px;margin-left:2px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
     .np-srchbtn:hover{background:rgba(255,255,255,.85);}
