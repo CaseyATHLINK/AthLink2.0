@@ -1518,26 +1518,37 @@ async function uploadAthleteMedia(file,name,tok){
    locked host, so its uploaded logo is its "class logo" — no separate subsystem. */
 const HOST_LOGO_BUCKET="host-logos";
 // Remove the (assumed roughly-uniform) background from a logo while KEEPING its
-// original colours. Samples the four corners to estimate the background colour,
-// makes pixels within tolerance of it transparent, and feathers the transition
-// band so edges don't alias. `src` is a square canvas (from the cropper); returns
-// a PNG Blob on transparent. Deterministic; runs client-side.
+// original colours. Samples the four corners of the DRAWN image to estimate the
+// background colour, makes pixels within tolerance of it transparent, and feathers
+// the transition band so edges don't alias. `src` is a square canvas (from the
+// cropper); with contain-fit the logo is letterboxed on transparent padding, so
+// we must sample the corners of the opaque region — NOT the canvas corners, which
+// are now transparent padding. Returns a PNG Blob on transparent. Deterministic;
+// runs client-side.
 function removeLogoBackground(src){
   const W=src.width, H=src.height;
   const ctx=src.getContext("2d");
   const id=ctx.getImageData(0,0,W,H); const d=id.data;
-  // Estimate background colour from a small patch at each corner (averaged over
-  // still-opaque source pixels).
-  const P=Math.max(2,Math.round(Math.min(W,H)*0.06));
+  // Opaque bounding box of the drawn image. Sampling the canvas corners would hit
+  // the transparent letterbox padding (alpha 0) and find no background, so the
+  // logo's own background (e.g. a white box behind a wide club logo) would survive.
+  let minX=W,minY=H,maxX=-1,maxY=-1;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){ if(d[(y*W+x)*4+3]>10){ if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; } }
+  if(maxX<minX||maxY<minY) return new Promise(res=>src.toBlob(res,"image/png")); // fully transparent
+  const bw=maxX-minX+1, bh=maxY-minY+1;
+  // Estimate background colour from a small patch inside each corner of the opaque
+  // box (averaged over still-opaque pixels there).
+  const P=Math.max(2,Math.round(Math.min(bw,bh)*0.06));
   let sr=0,sg=0,sb=0,cnt=0;
-  const acc=(x,y)=>{const i=(y*W+x)*4; if(d[i+3]>10){sr+=d[i];sg+=d[i+1];sb+=d[i+2];cnt++;}};
-  for(let y=0;y<P;y++)for(let x=0;x<P;x++){acc(x,y);acc(W-1-x,y);acc(x,H-1-y);acc(W-1-x,H-1-y);}
+  const acc=(x,y)=>{if(x<0||y<0||x>=W||y>=H)return;const i=(y*W+x)*4; if(d[i+3]>10){sr+=d[i];sg+=d[i+1];sb+=d[i+2];cnt++;}};
+  for(let y=0;y<P;y++)for(let x=0;x<P;x++){acc(minX+x,minY+y);acc(maxX-x,minY+y);acc(minX+x,maxY-y);acc(maxX-x,maxY-y);}
   if(!cnt) return new Promise(res=>src.toBlob(res,"image/png")); // already transparent
   const bgR=sr/cnt,bgG=sg/cnt,bgB=sb/cnt;
   // Euclidean RGB distance to the background: inside NEAR → fully transparent;
   // between NEAR and FAR → feather; beyond FAR → keep opaque at original colour.
   const NEAR=48, FAR=112;
   for(let p=0;p<d.length;p+=4){
+    if(d[p+3]===0) continue;                 // leave letterbox padding transparent
     const dist=Math.sqrt((d[p]-bgR)**2+(d[p+1]-bgG)**2+(d[p+2]-bgB)**2);
     if(dist<=NEAR) d[p+3]=0;
     else if(dist<FAR) d[p+3]=Math.round(d[p+3]*((dist-NEAR)/(FAR-NEAR)));
@@ -5586,15 +5597,17 @@ function LogoCropper({src,onCancel,onApply,busy}){
     i.src=src;
     return ()=>{imgRef.current=null;};
   },[src]);
-  const baseScale=nat?VP/Math.min(nat.w,nat.h):1;   // cover-fit: min dim fills viewport
+  const baseScale=nat?VP/Math.max(nat.w,nat.h):1;   // contain-fit: whole image fits, longer dim fills viewport
   const dScale=baseScale*zoom;
   const dispW=nat?nat.w*dScale:VP, dispH=nat?nat.h*dScale:VP;
-  // Clamp pan so the image always covers the viewport (no empty gaps), for a given zoom.
+  // Clamp pan for a given zoom. When a dimension is smaller than the viewport
+  // (contain-fit letterboxing), lock it centred (range 0); once zoomed past
+  // "cover" in that axis, clamp so no empty gap shows.
   const clampFor=(o,z)=>{
     if(!nat) return o;
     const ds=baseScale*z, dw=nat.w*ds, dh=nat.h*ds;
-    return {x:Math.max(-(dw-VP)/2,Math.min((dw-VP)/2,o.x)),
-            y:Math.max(-(dh-VP)/2,Math.min((dh-VP)/2,o.y))};
+    const rx=Math.max(0,(dw-VP)/2), ry=Math.max(0,(dh-VP)/2);
+    return {x:Math.max(-rx,Math.min(rx,o.x)), y:Math.max(-ry,Math.min(ry,o.y))};
   };
   const onDown=(e)=>{if(busy)return;e.preventDefault();drag.current={sx:e.clientX,sy:e.clientY,ox:off.x,oy:off.y};
     try{e.currentTarget.setPointerCapture(e.pointerId);}catch{}};
