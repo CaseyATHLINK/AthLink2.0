@@ -38,10 +38,13 @@ ANTHROPIC_MODEL = "claude-haiku-4-5"
 ROUTES = {
     "filter":   {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
                  "key_env": "KIMI_API_KEY",     "model": "kimi-k2.5"},
-    # overview was DeepSeek, but DeepSeek has no free tier (402 w/o prepaid
-    # balance), so it's routed to Kimi — already live and free.
-    "overview": {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
-                 "key_env": "KIMI_API_KEY", "model": "kimi-k2.5"},
+    # overview (athlete/class bio blurbs) → Gemini. Kimi was flaky here: it timed
+    # out / returned empty (blank "AI summary unavailable") and drifted into
+    # non-English output on foreign-named regattas (the International 49er page
+    # rendered in Spanish). Gemini (already live on Vercel via GEMINI_API_KEY) is
+    # reliable and English-first. Falls back to Anthropic if the key is missing.
+    "overview": {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
+                 "key_env": "GEMINI_API_KEY", "model": "gemini-2.5-flash"},
     # hover was Cerebras, but its public endpoint kept erroring (model churn /
     # key), so it's routed to Kimi — already live and free.
     "hover":    {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
@@ -185,6 +188,13 @@ def complete_text(task, prompt, max_tokens, timeout=20):
     """
     cfg = route(task)
     key = os.environ.get(cfg["key_env"], "")
+    # Force English for the prose tasks. Non-English-first models (e.g. Kimi on
+    # the still-routed "hover" task) otherwise drift into the language of the
+    # source data — foreign-named regattas made the International 49er page
+    # render in Spanish. Left off "filter"/"nat" (structured/JSON output).
+    if task in ("overview", "hover"):
+        prompt = ("Respond in English only, regardless of the language of any "
+                  "names, competitions, or places mentioned below.\n\n") + prompt
     messages = [{"role": "user", "content": prompt}]
 
     try:
