@@ -3374,12 +3374,6 @@ function CourseDiagram({cfg,onInfo}){
   return(
     <div ref={wrapRef} className="spm-holo" onPointerEnter={()=>report(null)} onPointerLeave={()=>{setMark(null);if(onInfo)onInfo(null);}}>
       <svg viewBox="0 0 520 430" style={{display:"block",width:"100%"}} onPointerMove={onMove}>
-        <defs>
-          <pattern id="spmGrid" width="42" height="42" patternUnits="userSpaceOnUse">
-            <path d="M42,0H0V42" fill="none" stroke="rgba(19,49,78,.12)" strokeWidth="1"/>
-          </pattern>
-        </defs>
-        <rect x="0" y="0" width="520" height="430" fill="url(#spmGrid)"/>
         <g>
           <text x={XY.wind[0]} y="16" textAnchor="middle" fill={hi("wind")?"#0a84ff":"#33425e"} fontSize="15" fontWeight="800" letterSpacing="2">WIND</text>
           <path d="M260,22 L260,50 M251,41 L260,51 L269,41" stroke={hi("wind")?"#0a84ff":"rgba(19,49,78,.75)"} strokeWidth="2.4" fill="none" strokeLinecap="round"/>
@@ -8273,15 +8267,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .liquidGlass-wrapper:active{transform:scale(0.98);}
     .liquidGlass-wrapper:disabled{opacity:0.45;cursor:not-allowed;transform:none;}
     /* ── Sport explainer (spm-): per-class equipment hologram + course diagram ── */
-    .spm-sec{margin:26px 0 30px}
-    /* class page: title/search/filters take 50%, the two models take 50% on the same row.
-       Models are BOTTOM-aligned to the header's last line; their tops may rise above the
-       title — this removes any awkward gap below the header. */
-    .spm-classgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:end;margin-bottom:44px}
+    /* bottom margin reserves room for the absolutely-positioned .spm-info overlay
+       (up to a few wrapped lines of hover text) so it never overlaps the next
+       section ("Recent competitions" on the sailing home page). */
+    .spm-sec{margin:26px 0 92px}
+    /* class/competitions/portal/results pages: title/search/filters take 50%, the two
+       models take 50% on the same row. align-items:end bottom-aligns the models to the
+       header's last line — the reserved margin-bottom below the WHOLE GRID (not inside
+       either grid item) is what keeps the hover info clear of the content beneath,
+       without affecting that alignment or the row's height. */
+    .spm-classgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:end;margin-bottom:80px}
     .spm-classhead{min-width:0}
     @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}}
-    /* the info line is absolutely placed below the row so long text bleeds DOWN and never
-       shifts the models; the grid's reserved margin keeps it clear of the content beneath. */
     .spm-duo{position:relative;min-width:0}
     .spm-duorow{display:flex;gap:0;justify-content:center;align-items:flex-start}
     /* pull the two boats together — their outer whitespace overlaps, closing the empty gap */
@@ -8289,7 +8286,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .spm-duorow .spm-holo:first-child{margin-right:-6%}
     .spm-duorow .spm-holo:last-child{margin-left:-6%}
     .spm-holo{position:relative} /* frameless — the models sit directly on the page */
-    .spm-info{position:absolute;top:100%;left:0;right:0;margin-top:4px;font-size:12.5px;line-height:1.45;color:var(--mut);text-align:left}
+    /* absolutely placed OVERLAY below the row — out of flow, so it never shifts the
+       models or (on the grid pages) the header; callers reserve real space for it via
+       margin-bottom on their own container (.spm-classgrid above, .spm-sec below). */
+    .spm-info{position:absolute;top:100%;left:0;right:0;margin-top:6px;font-size:12.5px;line-height:1.45;color:var(--mut);text-align:left}
     .spm-info b{color:var(--ink);font-weight:700}
     .spm-info-hint{opacity:.75}
     .spm-halo{transform-box:fill-box;transform-origin:center;animation:spmPulse 2.4s ease-out infinite}
@@ -8694,37 +8694,16 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <div className="home-hero">
       <div className="wrap">
         <h1 className="disp" style={{margin:0}}>Sailing</h1>
-        <p style={{marginTop:6,marginBottom:0}}>Results, athlete profiles and class standings for competitive sailing</p>
-        <div className="hero-srch" onClick={e=>e.stopPropagation()}>
-          <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
-          <input placeholder="Search athletes, competitions & clubs…" value={gSearch}
-            onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
-            onFocus={()=>setGSearchOpen(true)}
-            onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
-            onKeyDown={e=>{if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}}}/>
-          {gSearch&&<button className="mp-clear" onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={15}/></button>}
-          {!navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
-            <div className="hero-drop">
-              {gSearchResults.map((r,i)=>(
-                <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
-                  <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
-                    {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
-                  </div>
-                  <div><div className="gi-label">{r.label}</div><div className="gi-sub">{r.sub}</div></div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   )}
 
   {/* (Calendar is now a popup modal — see RACE CALENDAR MODAL below) */}
 
-  {/* ── HOME: breadth strip — class chips, recent competitions, featured athletes.
-      Quiet proof the catalog is deep; the two old grids (class buttons + HK/INT
-      host matrix) are gone — clubs are reached via search and Competitions. ── */}
+  {/* ── HOME: breadth strip — models up top, then the search + class chips +
+      recent competitions + featured athletes. Quiet proof the catalog is deep;
+      the two old grids (class buttons + HK/INT host matrix) are gone — clubs
+      are reached via search and Competitions. ── */}
   {!portal&&view.name==="portals"&&(()=>{
     const published=events.filter(ev=>ev.status!=="Draft");
     const recent=published.slice().sort((a,b)=>{
@@ -8740,7 +8719,30 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     }));
     return(
     <div className="wrap sec">
-      <div className="strip-chips">
+      <SportShowcase clsId="49er"/>
+      <p style={{margin:"0 0 8px",color:"var(--mut)",fontSize:15}}>Results, athlete profiles and class standings for competitive sailing</p>
+      <div className="hero-srch" style={{maxWidth:"none"}} onClick={e=>e.stopPropagation()}>
+        <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
+        <input placeholder="Search athletes, competitions & clubs…" value={gSearch}
+          onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
+          onFocus={()=>setGSearchOpen(true)}
+          onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
+          onKeyDown={e=>{if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}}}/>
+        {gSearch&&<button className="mp-clear" onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={15}/></button>}
+        {!navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
+          <div className="hero-drop">
+            {gSearchResults.map((r,i)=>(
+              <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
+                <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
+                  {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
+                </div>
+                <div><div className="gi-label">{r.label}</div><div className="gi-sub">{r.sub}</div></div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="strip-chips" style={{marginTop:20}}>
         {CLASSES.map(c=>{
           const n=published.filter(e=>e.cls===c.id).length;
           return(
@@ -8751,7 +8753,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         })}
         <button className="strip-chip" onClick={()=>goTop("competitions")}>All competitions<ChevronRight size={13}/></button>
       </div>
-      <SportShowcase clsId="49er"/>
       <p className="seclabel">Recent competitions</p>
       <div className="strip-cards">
         {recent.map(ev=>{
