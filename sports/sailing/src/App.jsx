@@ -458,8 +458,11 @@ const eventFingerprint=ev=>{
   const sails=[...new Set((ev.entries||[]).map(e=>norm(e.sail)).filter(Boolean))].sort();
   return [norm(ev.name),norm(ev.date),norm(ev.cls||ev.class),sails.join(",")].join("|");
 };
-// A host's display location (IOC code): its explicitly-set country, else the
-// most common country across the events it owns/co-owns. evList is all events.
+// Where a host's globe is oriented (IOC code): its explicitly-set country, else
+// the most common country across the events it owns/co-owns. Used ONLY for the
+// "where they compete" globe/footprint and overridable form prefills — NEVER for
+// a flag next to the host's name. A host with no explicit country and no events
+// has no orientation (null); we never assume one from `scope` (no default HKG).
 const hostLocation=(hostId,evList)=>{
   const h=hostById(hostId);
   if(h?.country) return String(h.country).toUpperCase();
@@ -469,8 +472,7 @@ const hostLocation=(hostId,evList)=>{
     const cc=eventCountryCode(ev); if(cc) counts[cc]=(counts[cc]||0)+1;
   });
   const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-  if(top) return top[0];
-  return SCOPE_COUNTRY[h?.scope]||null;
+  return top?top[0]:null;
 };
 
 // ── Sub-classes (per-event) for ILCA and Optimist ──
@@ -1518,26 +1520,37 @@ async function uploadAthleteMedia(file,name,tok){
    locked host, so its uploaded logo is its "class logo" — no separate subsystem. */
 const HOST_LOGO_BUCKET="host-logos";
 // Remove the (assumed roughly-uniform) background from a logo while KEEPING its
-// original colours. Samples the four corners to estimate the background colour,
-// makes pixels within tolerance of it transparent, and feathers the transition
-// band so edges don't alias. `src` is a square canvas (from the cropper); returns
-// a PNG Blob on transparent. Deterministic; runs client-side.
+// original colours. Samples the four corners of the DRAWN image to estimate the
+// background colour, makes pixels within tolerance of it transparent, and feathers
+// the transition band so edges don't alias. `src` is a square canvas (from the
+// cropper); with contain-fit the logo is letterboxed on transparent padding, so
+// we must sample the corners of the opaque region — NOT the canvas corners, which
+// are now transparent padding. Returns a PNG Blob on transparent. Deterministic;
+// runs client-side.
 function removeLogoBackground(src){
   const W=src.width, H=src.height;
   const ctx=src.getContext("2d");
   const id=ctx.getImageData(0,0,W,H); const d=id.data;
-  // Estimate background colour from a small patch at each corner (averaged over
-  // still-opaque source pixels).
-  const P=Math.max(2,Math.round(Math.min(W,H)*0.06));
+  // Opaque bounding box of the drawn image. Sampling the canvas corners would hit
+  // the transparent letterbox padding (alpha 0) and find no background, so the
+  // logo's own background (e.g. a white box behind a wide club logo) would survive.
+  let minX=W,minY=H,maxX=-1,maxY=-1;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){ if(d[(y*W+x)*4+3]>10){ if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; } }
+  if(maxX<minX||maxY<minY) return new Promise(res=>src.toBlob(res,"image/png")); // fully transparent
+  const bw=maxX-minX+1, bh=maxY-minY+1;
+  // Estimate background colour from a small patch inside each corner of the opaque
+  // box (averaged over still-opaque pixels there).
+  const P=Math.max(2,Math.round(Math.min(bw,bh)*0.06));
   let sr=0,sg=0,sb=0,cnt=0;
-  const acc=(x,y)=>{const i=(y*W+x)*4; if(d[i+3]>10){sr+=d[i];sg+=d[i+1];sb+=d[i+2];cnt++;}};
-  for(let y=0;y<P;y++)for(let x=0;x<P;x++){acc(x,y);acc(W-1-x,y);acc(x,H-1-y);acc(W-1-x,H-1-y);}
+  const acc=(x,y)=>{if(x<0||y<0||x>=W||y>=H)return;const i=(y*W+x)*4; if(d[i+3]>10){sr+=d[i];sg+=d[i+1];sb+=d[i+2];cnt++;}};
+  for(let y=0;y<P;y++)for(let x=0;x<P;x++){acc(minX+x,minY+y);acc(maxX-x,minY+y);acc(minX+x,maxY-y);acc(maxX-x,maxY-y);}
   if(!cnt) return new Promise(res=>src.toBlob(res,"image/png")); // already transparent
   const bgR=sr/cnt,bgG=sg/cnt,bgB=sb/cnt;
   // Euclidean RGB distance to the background: inside NEAR → fully transparent;
   // between NEAR and FAR → feather; beyond FAR → keep opaque at original colour.
   const NEAR=48, FAR=112;
   for(let p=0;p<d.length;p+=4){
+    if(d[p+3]===0) continue;                 // leave letterbox padding transparent
     const dist=Math.sqrt((d[p]-bgR)**2+(d[p+1]-bgG)**2+(d[p+2]-bgB)**2);
     if(dist<=NEAR) d[p+3]=0;
     else if(dist<FAR) d[p+3]=Math.round(d[p+3]*((dist-NEAR)/(FAR-NEAR)));
@@ -5586,15 +5599,17 @@ function LogoCropper({src,onCancel,onApply,busy}){
     i.src=src;
     return ()=>{imgRef.current=null;};
   },[src]);
-  const baseScale=nat?VP/Math.min(nat.w,nat.h):1;   // cover-fit: min dim fills viewport
+  const baseScale=nat?VP/Math.max(nat.w,nat.h):1;   // contain-fit: whole image fits, longer dim fills viewport
   const dScale=baseScale*zoom;
   const dispW=nat?nat.w*dScale:VP, dispH=nat?nat.h*dScale:VP;
-  // Clamp pan so the image always covers the viewport (no empty gaps), for a given zoom.
+  // Clamp pan for a given zoom. When a dimension is smaller than the viewport
+  // (contain-fit letterboxing), lock it centred (range 0); once zoomed past
+  // "cover" in that axis, clamp so no empty gap shows.
   const clampFor=(o,z)=>{
     if(!nat) return o;
     const ds=baseScale*z, dw=nat.w*ds, dh=nat.h*ds;
-    return {x:Math.max(-(dw-VP)/2,Math.min((dw-VP)/2,o.x)),
-            y:Math.max(-(dh-VP)/2,Math.min((dh-VP)/2,o.y))};
+    const rx=Math.max(0,(dw-VP)/2), ry=Math.max(0,(dh-VP)/2);
+    return {x:Math.max(-rx,Math.min(rx,o.x)), y:Math.max(-ry,Math.min(ry,o.y))};
   };
   const onDown=(e)=>{if(busy)return;e.preventDefault();drag.current={sx:e.clientX,sy:e.clientY,ox:off.x,oy:off.y};
     try{e.currentTarget.setPointerCapture(e.pointerId);}catch{}};
@@ -6833,7 +6848,10 @@ export default function AthLinkMVP(){
       ...FEDERATIONS.map(h=>({...h,htype:"federation"})),
       ...CLUBS.map(h=>({...h,htype:"club"})),
       ...ASSOCIATIONS.map(h=>({...h,htype:"association"})),
-    ].map(h=>({...h,n:pub.filter(ev=>eventAssocs(ev).includes(h.id)).length,loc:hostLocation(h.id,events)||""}))
+    ].map(h=>({...h,n:pub.filter(ev=>eventAssocs(ev).includes(h.id)).length,
+      // Flag/location next to the host name reads the EXPLICIT country only — never
+      // derived from events or scope, so a country-less host shows no flag (Fix 2).
+      loc:h.country?String(h.country).toUpperCase():""}))
      .sort((a,b)=>b.n-a.n);
   })();
   const hostCountries=[...new Set(navHosts.map(h=>h.loc).filter(Boolean))]
@@ -8419,6 +8437,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .rc.g1{background:#fbe7a6;color:#7a5600;border:1.5px solid #c79a16;}
     .rc.g2{background:#bfe0fb;color:#0d5a96;border:1.5px solid #2a86d6;}
     .rc.g3{background:#fbcaca;color:#9a2222;border:1.5px solid #d65050;}
+    /* Compact miniraces for the Rankings cumulative cells: same .rc colour classes
+       as the profile, smaller, flowing into at most 2 rows (grow horizontally). */
+    .rank-mini{display:grid;grid-auto-flow:column;grid-template-rows:repeat(2,auto);gap:3px;justify-content:start;margin-top:0;}
+    .rank-mini .rc{width:17px;height:17px;border-radius:5px;font-size:9px;}
+    .rank-mini .rc.g1,.rank-mini .rc.g2,.rank-mini .rc.g3{border-width:1px;}
     /* Home */
     .home-hero{background:none;color:var(--ink);padding:8px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:36px;font-weight:800;margin:0 0 6px;}
@@ -8432,6 +8455,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .hero-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:380px;overflow:auto;z-index:5;}
     /* Breadth strip — quiet chips + cards under the hero */
     .strip-chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 30px;}
+    /* Forces the country/host selects onto their own row below the class chips
+       (Fix 9b) — the strip-chips row gap gives a tight vertical gap between them. */
+    .strip-break{flex-basis:100%;height:0;margin:0;padding:0;}
     .strip-chip{display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:13.5px;font-weight:700;color:var(--navy);border:0;background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border-radius:980px;padding:9px 16px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.7),0 1px 2px rgba(0,0,0,.08);transition:.16s;}
     .strip-chip:hover{transform:translateY(-2px);background:rgba(255,255,255,.85);}
     .strip-chip .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
@@ -8446,7 +8472,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .np-item{position:relative;}
     .np-drop{position:absolute;top:calc(100% + 10px);left:50%;transform:translateX(-50%) translateY(-6px);min-width:232px;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:12px;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:70;}
     .np-drop::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px;}
-    .np-item:hover .np-drop,.np-item:focus-within .np-drop{opacity:1;pointer-events:auto;transform:translateX(-50%);}
+    /* Hover-only reveal. :has(:focus-visible) keeps keyboard (Tab) access without
+       pinning on mouse-click — a mouse click never triggers :focus-visible, so the
+       dropdown closes the moment the pointer leaves (no click-out needed). */
+    .np-item:hover .np-drop,.np-item:has(:focus-visible) .np-drop{opacity:1;pointer-events:auto;transform:translateX(-50%);}
     .nd-label{margin:2px 4px 8px;font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);}
     .nd-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 2px 10px;}
     .nd-chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;font-weight:700;color:var(--navy);border:0;background:rgba(255,255,255,.6);border-radius:980px;padding:6px 12px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),0 1px 2px rgba(0,0,0,.06);transition:.14s;}
@@ -8486,13 +8515,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .topbar2{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 20px;pointer-events:none;transition:transform .42s cubic-bezier(.2,.85,.2,1),opacity .42s;}
     .topbar2.hidden{transform:translateY(-135%);opacity:0;}
     .topbar2>*{pointer-events:auto;}
-    .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 8px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;}
-    .tb-logo{width:32px;height:32px;border-radius:980px;overflow:hidden;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;}
+    /* Brand pill — same capsule grammar as the landing .tb-brand + .tb-word so
+       landing↔sailing reads as one component. Two click targets: icon → AthLink
+       landing, "Sailing" → sailing home (divider between). */
+    .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 14px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;}
+    .tb-logo{width:28px;height:28px;border-radius:980px;overflow:hidden;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;}
     .tb-logo img{width:100%;height:100%;display:block;border-radius:inherit;}
     .tb-logo:hover{transform:scale(1.06);box-shadow:0 4px 12px -3px rgba(22,58,99,.5);}
     .tb-divider{width:1px;height:18px;background:rgba(0,0,0,.12);flex:none;margin:0 4px 0 10px;}
-    .tb-sport{font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.01em;cursor:pointer;padding:5px 11px 5px 6px;border-radius:980px;transition:.15s;}
-    .tb-sport:hover{background:rgba(19,49,78,.10);}
+    /* SF Pro wordmark treatment matching landing .tb-word (19px/800/-.04em); no
+       Barlow, no bg-pill padding so brand height == landing brand height (40px). */
+    .tb-sport{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.04em;cursor:pointer;padding:0 6px 0 5px;transition:color .15s;}
+    .tb-sport:hover{color:var(--accent);}
     .tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
     /* Fixed 25px radius (≈ half the closed bar height, so it reads as a capsule when
        closed). Height-independent: as the panel elongates only the body grows — the
@@ -8501,12 +8535,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     /* In nav mode the pill must size to its content; the 440px cap (meant for
        the search field) squeezed the flex row so the last item — the search
        button — spilled ~5px past the pill's right edge and read as detached. */
-    .menupill.navmode{width:auto;max-width:none;}
+    .menupill.navmode{width:auto;max-width:none;border-radius:980px;}  /* full capsule in nav mode == landing .tb-nav */
     .menupill.searching{background:rgba(255,255,255,.70);}
     /* 3-item primary nav — seg-control idiom inside the glass capsule */
     .np-bar{display:flex;align-items:center;gap:2px;padding:5px;}
-    .np-link{font:inherit;font-size:14px;font-weight:700;border:0;background:none;color:var(--mut);padding:9px 18px;border-radius:980px;cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);white-space:nowrap;letter-spacing:-.01em;}
-    .np-link:hover{color:var(--navy);}
+    .np-link{font:inherit;font-size:14px;font-weight:700;border:0;background:none;color:var(--mut);padding:9px 18px;border-radius:980px;cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);white-space:nowrap;}
+    .np-link:hover{color:var(--navy);background:rgba(255,255,255,.85);}  /* hover treatment == landing .tb-link */
     .np-link.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .np-srchbtn{flex:none;width:36px;height:36px;margin-left:2px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
     .np-srchbtn:hover{background:rgba(255,255,255,.85);}
@@ -8807,7 +8841,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <button className="np-menubtn" title="Menu" aria-label="Menu" onClick={()=>setNavMenuOpen(o=>!o)}><Menu size={18}/></button>
               {/* Athletes — by class / by country / by host */}
               <div className="np-item">
-                <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
+                <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("athletes");}}>Athletes</button>
                 <div className="np-drop">
                   <p className="nd-label">By class</p>
                   <div className="nd-chips">
@@ -8830,7 +8864,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               {/* Competitions — by class / by country / by host */}
               <div className="np-item">
-                <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
+                <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("competitions");}}>Competitions</button>
                 <div className="np-drop">
                   <p className="nd-label">By class</p>
                   <div className="nd-chips">
@@ -8853,7 +8887,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               {/* Hosts — by type / by country */}
               <div className="np-item">
-                <button className={`np-link${navOn==="hosts"?" on":""}`} onClick={()=>goTop("hosts")}>Hosts</button>
+                <button className={`np-link${navOn==="hosts"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("hosts");}}>Hosts</button>
                 <div className="np-drop">
                   <p className="nd-label">By type</p>
                   {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
@@ -8868,13 +8902,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                           <span className="nd-cnt">{navHosts.filter(h=>h.loc===cc).length}</span>
                         </button>
                       ))}
+                      {navHosts.some(h=>!h.loc)&&(
+                        <button className="nd-row" onClick={()=>goTop("hosts",{country:"__none__"})}>
+                          <span style={{fontSize:15,flex:"none",width:15,display:"inline-block"}}/>Unspecified
+                          <span className="nd-cnt">{navHosts.filter(h=>!h.loc).length}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
               {/* Rankings — by class / by country */}
               <div className="np-item">
-                <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
+                <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("ranking");}}>Rankings</button>
                 <div className="np-drop">
                   <p className="nd-label">By class</p>
                   <div className="nd-chips">
@@ -9332,6 +9372,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </button>
               );
             })}
+            <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
             <span className="lens-selwrap">
               <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
                 <option value="">All countries</option>
@@ -9418,7 +9459,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const tLens=view.type||null, cLens=view.country||null;
     const list=navHosts
       .filter(h=>!tLens||h.htype===tLens)
-      .filter(h=>!cLens||h.loc===cLens)
+      .filter(h=>!cLens||(cLens==="__none__"?!h.loc:h.loc===cLens))
       .filter(h=>!q||h.name.toLowerCase().includes(q));
     const published=events.filter(ev=>ev.status!=="Draft");
     return(
@@ -9438,10 +9479,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
           <button key={t} className={`lens-chip${tLens===t?" on":""}`} onClick={()=>setView(v=>({...v,type:v.type===t?undefined:t}))}>{label}<span className="cnt">{navHosts.filter(h=>h.htype===t).length}</span></button>
         ))}
+        <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
         <span className="lens-selwrap">
           <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
             <option value="">All countries</option>
             {hostCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+            {navHosts.some(h=>!h.loc)&&<option value="__none__">Unspecified</option>}
           </select>
           <ChevronRight size={13} className="lens-selchev"/>
         </span>
@@ -9507,7 +9550,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const fleetN=ev.entries.length||sc.rows.length||1;
       compMeta[ev.id]={fleetN,dncVal:fleetN+1,raceCount};
       sc.rows.forEach(r=>{
-        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,pts:r.pts||[]};
+        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,pts:r.pts||[],discardSet:r.discardSet};
         if(dh){
           const hk=canonName(r.helm||""),ck=canonName(r.crew||"");
           const key=[hk,ck].filter(Boolean).sort().join("|")||hk||ck;if(!key) return;
@@ -9582,7 +9625,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
       <div className="wrap sec" style={{paddingTop:16}}>
         <div className="page-head">
-          <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
           <h1 className="page-title">Rankings</h1>
           <p className="page-sub">{comps.length} competition{comps.length!==1?"s":""} · {rankAthleteCount} athlete{rankAthleteCount!==1?"s":""} in the {clsShort} series</p>
         </div>
@@ -9593,6 +9635,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
             </button>
           ))}
+          <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
           <span className="lens-selwrap">
             <select className="lens-select" value={rankCountry} onChange={e=>setRankCountry(e.target.value)}>
               <option value="">All countries</option>
@@ -9672,9 +9715,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <tr>
                   <th style={{width:48}}>Rank</th>
                   <th className="l">{dh?"Team":"Athlete"}</th>
+                  <th>Div</th>
                   {comps.map((c,i)=><th key={c.id} title={c.name} style={{maxWidth:130}}><div style={{maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",margin:"0 auto"}}>{c.name}</div></th>)}
                   <th>Total</th>
-                  <th>Div</th>
                 </tr>
               </thead>
               <tbody>
@@ -9691,21 +9734,38 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                           </div>
                           :<span className="namelink" onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
                       </td>
+                      <td style={{whiteSpace:"nowrap"}}>
+                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
+                        {r.division&&<Nug>{r.division}</Nug>}
+                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
+                      </td>
                       {comps.map(c=>{
                         const pc=r.perComp[c.id];const pcell=r.per[c.id];
-                        const shown=rankMode==="position"?(pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–")):pcell.contrib;
                         const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
+                        // Cumulative mode: show the actual per-race results inline as compact
+                        // nuggets (same .rc colour classes as the profile miniraces), flowing
+                        // into at most 2 rows. Absent athletes keep the italic "DNC".
+                        if(rankMode==="cumulative"){
+                          return <td key={c.id} style={{textAlign:"center"}}>
+                            {pcell.dnc
+                              ?<span style={{color:"var(--mut)",fontSize:12,fontStyle:"italic"}}>DNC</span>
+                              :<button onClick={()=>pc&&toggleRankCell(ek)} title="Tap for race detail"
+                                 style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",borderRadius:8,padding:3,cursor:pc?"pointer":"default"}}>
+                                 <div className="miniraces rank-mini">{(pc.races||[]).map((rc2,j)=>{
+                                   const cls2=isCode(rc2)?"c":pc.discardSet?.has(j)?"d":rc2===1?"g1":rc2===2?"g2":rc2===3?"g3":"";
+                                   return<div key={j} className={`rc ${cls2}`}>{isCode(rc2)?rc2.slice(0,2):rc2}</div>;
+                                 })}</div>
+                               </button>}
+                          </td>;
+                        }
+                        // Position mode: unchanged — the regatta placing (or DNC value).
+                        const shown=pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–");
                         return <td key={c.id}>
                           <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this competition (entries+1)":"Tap for race detail"}
                             style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:pcell.dnc?"var(--mut)":"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:pc?"pointer":"default",fontSize:13,fontStyle:pcell.dnc?"italic":"normal"}}>{shown}{pcell.dnc?" DNC":""}</button>
                         </td>;
                       })}
                       <td style={{fontWeight:800}}>{r.total}</td>
-                      <td style={{whiteSpace:"nowrap"}}>
-                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
-                        {r.division&&<Nug>{r.division}</Nug>}
-                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
-                      </td>
                     </tr>
                     {expanded.map(c=>{
                       const pc=r.perComp[c.id];
@@ -10142,7 +10202,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:16}}>
       <div className="page-head">
-        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
+        {/* Back only inside a host portal (drill-down); the global Athletes page is
+            top-level and gets no Back, matching Hosts/Competitions. */}
+        {portal&&<button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>}
         <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",width:"100%"}}>
           <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{lensPeople.length}</span></h1>
           {portal&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
@@ -10205,6 +10267,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
             </button>);
           })}
+          <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
           <span className="lens-selwrap">
             <select className="lens-select" value={athCountry||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
               <option value="">All countries</option>
@@ -10475,13 +10538,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           return next?{key:name,years:next.sort((a,b)=>a-b)}:null;
         });
         const pickAll=()=>setYearSel(null);
-        // Globe footprint — selection-filtered (all-years still counts undated country events).
+        // Globe footprint. countryCountsAll = whole career (drives the always-all-years
+        // mini globe on the profile); countryCounts = year-selection-filtered (drives the
+        // popup globe, whose YearNuggets are the ONLY year filter now — Fix 9a).
         const countryCounts={};
+        const countryCountsAll={};
         let hasFootprintAll=false;
         ag.history.forEach(h=>{
           const country=h.ev.country; if(!country)return;
           const iso=IOC_ISO[country]; if(!iso)return;
           hasFootprintAll=true;
+          countryCountsAll[iso]=(countryCountsAll[iso]||0)+1;
           if(!inWindow(h))return;
           countryCounts[iso]=(countryCounts[iso]||0)+1;
         });
@@ -10584,34 +10651,34 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="footprint"?1:0,transform:profileTab==="footprint"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="footprint"?"auto":"none"}}>
-                    <SailingGlobe countryData={countryCounts} height={220} dark bare/>
+                    <SailingGlobe countryData={countryCountsAll} height={220} dark bare/>
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                   </div>
                   <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="web"?1:0,transform:profileTab==="web"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="web"?"auto":"none"}}>
-                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})} selYears={selYears} yrKey={yrKey}/>}
+                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})} selYears={null} yrKey=""/>}
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click a node to open ⤢</div>
                   </div>
                   <div onClick={()=>setFootprintOpen(true)} title="Click to expand"
                     style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="progress"?1:0,transform:profileTab==="progress"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="progress"?"auto":"none"}}>
-                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} selYears={selYears} yrKey={yrKey} height={220} w={286}/>}
+                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} selYears={null} yrKey="" height={220} w={286}/>}
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                   </div>
                 </div>
                 {/* Caption sits below the globe (not over it) so it clears the sphere + glow. */}
                 {profileTab==="footprint"&&<div style={{textAlign:"center",fontSize:10,color:"#7fa0c0",marginTop:10}}>Competition footprint</div>}
-                {/* Shared year nuggets — sit under the frame, drive all three views */}
-                {hasYears&&<div style={{marginTop:12}}><YearNuggets years={careerYears} selYears={selYears} classByYear={classByYear} onPick={pickYear} onAll={pickAll}/></div>}
+                {/* Year nuggets live ONLY in the expanded popup now (Fix 9a); the mini
+                    displays above always show the entire career. */}
               </div>
             )}
           </div>
 
           {/* expanded footprint popup */}
           {footprintOpen&&hasFootprint&&(
-            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)} titleSuffix="Competition Footprint"
+            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>{setFootprintOpen(false);setYearSel(null);}} titleSuffix="Competition Footprint"
               initialTab={profileTab==="web"?"web":profileTab==="progress"?"progress":"footprint"}
               years={careerYears} selYears={selYears} yrKey={yrKey} classByYear={classByYear} onPickYear={pickYear} onPickAll={pickAll}
               webProps={{name,events,onPick:nm=>{setFootprintOpen(false);go({name:"profile",id:nm});},onOpenEvent:id=>{setFootprintOpen(false);go({name:"event",id});}}}/>
@@ -11467,4 +11534,4 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
    The all-sports landing (apps/web/src/Landing.jsx) reuses the interactive
    globe + athlete web as live demos, and needs the DB→app event mapper plus
    the IOC→ISO country map to feed them. Re-exported via manifest.jsx. */
-export { SailingGlobe, AthleteWeb, dbToApp, IOC_ISO };
+export { SailingGlobe, AthleteWeb, ProgressChart, aggregate, dbToApp, IOC_ISO };
