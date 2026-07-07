@@ -72,13 +72,19 @@ CJK National Games book per §3c "your call, deferrable to vision").
 
 - **`Palma 2026.pdf`, `SOF 2023.pdf`** (2-person Sailti/TCPDF) — the crew cell
   stacks two sailors whose glyphs interleave in the flat text
-  (`RRiIcEhGaErRd` = "Richard" + "RIEGER" drawn ~3px apart at the same y, or on
-  lines only ~6px apart). Some pairs separate cleanly by y-position, but others
-  alternate character-by-character at the same y and can only be told apart by
-  case pattern (ALL-CAPS surname vs Title-case forename). A de-interleaver robust
-  across every row would be fragile and risk mangling names — which violates
-  "document is ground truth". Per the spec's own caveat, left to vision.
-  Single-hander Sailti (U21 ILCA, Optimist Worlds) parses fine by rule.
+  (`RRiIcEhGaErRd` = "Richard" + "RIEGER"). A word-geometry parser was PROTOTYPED
+  (`scratch/sailti_geo.py`): clustering chars by precise `top` (0.1px) *does*
+  de-interleave the clean cases — Palma boat 1 → helm "Schultheis, Richard",
+  crew "Rieger, Fabian"; SOF is per-sailor lines and reads correctly. BUT for the
+  tightly-packed middle boats the vertical name band of 3 adjacent boats overlaps,
+  so the surname↔forename pairing contaminates across boats (boat 2 crew read as
+  "MACDIARMID, NYYC" — a club as the forename; boat 3 borrowed boat 4's helm). A
+  parser that emits WRONG crew names is worse than vision, which reads the 2-D
+  layout correctly — so per the spec's caveat these route to vision. Single-hander
+  Sailti (U21 ILCA, Optimist Worlds) parses fine by rule. The prototype is a
+  documented starting point for a future geometry pass that resolves the
+  boat-band assignment (e.g. anchoring each name line to the numeric row it is
+  vertically nearest *within the crew x-band only*).
 - **`Hebe 2021.pdf`** (clubspot) — pdfplumber's table is garbled and needs a full
   word-geometry rewrite (NET/TOTAL before the race columns; discards in `[…]`;
   an extra hull-number line). Single file; deferred to vision rather than ship a
