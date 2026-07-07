@@ -20,4 +20,4 @@ export default defineSport({
 });
 
 // Live-demo embeds for the all-sports landing page (apps/web/src/Landing.jsx).
-export { SailingGlobe, AthleteWeb, dbToApp, IOC_ISO } from "./src/App.jsx";
+export { SailingGlobe, AthleteWeb, ProgressChart, aggregate, dbToApp, IOC_ISO } from "./src/App.jsx";
