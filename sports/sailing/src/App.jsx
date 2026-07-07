@@ -304,6 +304,7 @@ function applyDbHosts(rows){
     id:r.id, type:r.type, scope:r.scope||"HK", name:r.name,
     ...(r.cls?{cls:r.cls}:{}), ...(r.country?{country:r.country}:{}),
     ...(r.slug?{slug:r.slug}:{}),
+    ...(r.logo_url?{logo_url:r.logo_url}:{}),          // recolored host/association logo (bucket url)
   }));
   // DB rows are the source of truth: defaults seed first, DB overwrites on id clash.
   // (Seeded once via hosts_seed_migration.sql; defaults remain only as an
@@ -1504,6 +1505,66 @@ async function uploadAthleteMedia(file,name,tok){
     if(!r.ok){console.error("uploadAthleteMedia",r.status,await r.text().catch(()=>""));return null;}
     return {url:`${SB_URL}/storage/v1/object/public/${ATHLETE_MEDIA_BUCKET}/${path}`,type:isVideo?"video":"image"};
   }catch(e){console.error("uploadAthleteMedia network",e);return null;}
+}
+
+/* ── Host / association portal logos (host-logos bucket) ──────────────────────
+   A host (federation, club, OR class association) can upload its own logo in the
+   Edit page. Every uploaded logo is transformed ONCE, at upload time, into a navy
+   monochrome watermark on a transparent background (--navy2 #1f4e80), then stored
+   in the public `host-logos` bucket (migrations/0011). The recolor is baked in
+   here — never at render — so the single stored asset renders consistently in the
+   directory thumbnail (bottom-right) and the portal header (far right).
+   Associations reuse this exact path: an association IS a class-locked host, so
+   its uploaded logo is its "class logo" — no separate class-logo subsystem. */
+const HOST_LOGO_BUCKET="host-logos";
+const LOGO_NAVY=[31,78,128];   // --navy2 #1f4e80, "AthLink muted blue"
+// Draw file to an offscreen canvas (cap longest edge at ~512px), then remap every
+// pixel to navy whose OPACITY = how dark/saturated the source pixel is. Near-white
+// / near-transparent source pixels become fully transparent → clean watermark on
+// transparent. Returns a Blob (image/png).
+async function recolorLogoToNavy(file){
+  const img=await new Promise((res,rej)=>{
+    const i=new Image(); i.onload=()=>res(i); i.onerror=rej;
+    i.src=URL.createObjectURL(file);
+  });
+  const MAX=512;
+  const scale=Math.min(1, MAX/Math.max(img.width,img.height));
+  const W=Math.max(1,Math.round(img.width*scale)), H=Math.max(1,Math.round(img.height*scale));
+  const c=document.createElement("canvas"); c.width=W; c.height=H;
+  const ctx=c.getContext("2d"); ctx.drawImage(img,0,0,W,H);
+  const id=ctx.getImageData(0,0,W,H); const d=id.data;
+  for(let p=0;p<d.length;p+=4){
+    const r=d[p],g=d[p+1],b=d[p+2],a=d[p+3];
+    // luminance 0..255 (Rec.601). Dark ink → high ink-opacity; white bg → 0.
+    const lum=0.299*r+0.587*g+0.114*b;
+    let ink=(255-lum)/255;                 // 0 (white) .. 1 (black)
+    ink*=(a/255);                          // respect source transparency
+    if(ink<0.06) ink=0;                    // drop near-white background noise
+    // TODO corner-detect inversion: light ink on a dark background renders nearly
+    // empty here. If reported, sample the 4 corners; if mean corner luminance is
+    // dark, use ink = lum/255 instead.
+    d[p]=LOGO_NAVY[0]; d[p+1]=LOGO_NAVY[1]; d[p+2]=LOGO_NAVY[2];
+    d[p+3]=Math.round(ink*255);
+  }
+  ctx.putImageData(id,0,0);
+  return await new Promise(res=>c.toBlob(res,"image/png"));
+}
+// Recolor `file` to navy-on-transparent, upload the PNG to `host-logos` under a
+// `<host slug>/` prefix, and return its public URL (or null on any failure —
+// never throws, mirroring the other upload helpers).
+async function uploadHostLogo(file,host,tok){
+  if(!SB_URL||!file||!tok||!host) return null;   // storage write needs a token
+  const blob=await recolorLogoToNavy(file).catch(e=>{console.error("recolorLogo",e);return null;});
+  if(!blob) return null;
+  const slug=String(host.id||"host").replace(/[^a-z0-9-]+/gi,"-").toLowerCase()||"host";
+  const path=`${slug}/${Date.now()}.png`;
+  try{
+    const r=await fetch(`${SB_URL}/storage/v1/object/${HOST_LOGO_BUCKET}/${path}`,{method:"POST",
+      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":"image/png","x-upsert":"true"},
+      body:blob});
+    if(!r.ok){console.error("uploadHostLogo",r.status,await r.text().catch(()=>""));return null;}
+    return `${SB_URL}/storage/v1/object/public/${HOST_LOGO_BUCKET}/${path}`;
+  }catch(e){console.error("uploadHostLogo network",e);return null;}
 }
 
 /* ── Custom boat classes (custom_classes) ─────────────────────────────────────
@@ -5378,20 +5439,39 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,onSaveUsername,upl
    Members (embedded member management). Owners/editors/dev use this to rename
    the host, set its location (→ globe by the title), and manage co-admins.
    ═══════════════════════════════════════════════════════════════════════ */
-function HostEditModal({host,onSave,onSaveSlug,onClose,canManage,membersProps}){
+function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,membersProps}){
   const[tab,setTab]=React.useState("details");
   const[name,setName]=React.useState(host?.name||"");
   const[country,setCountry]=React.useState(host?.country||"");
   const[slug,setSlug]=React.useState(host?.slug||pascalSlug(host?.name||""));
   const[slugErr,setSlugErr]=React.useState("");
   const[busy,setBusy]=React.useState(false);
+  // Logo: navy-recolored at upload time (uploadHostLogo). `logo` holds the pending
+  // public URL, or null when removed; compared against host.logo_url on save so we
+  // only send the key when it actually changed (avoids clobbering).
+  const[logo,setLogo]=React.useState(host?.logo_url||null);
+  const[logoBusy,setLogoBusy]=React.useState(false);
+  const[logoErr,setLogoErr]=React.useState("");
   const iso=IOC_ISO[(country||"").toUpperCase()]||"";
+  const onPickLogo=async(e)=>{
+    const file=e.target.files&&e.target.files[0]; e.target.value=""; // allow re-picking same file
+    if(!file) return;
+    if(!file.type.startsWith("image/")){setLogoErr("Please choose an image file (PNG or JPG).");return;}
+    if(file.size>5*1024*1024){setLogoErr("Image is too large — keep it under 5 MB.");return;}
+    setLogoErr(""); setLogoBusy(true);
+    const url=await onUploadLogo?.(file);   // recolors + uploads; null on any failure (never throws)
+    setLogoBusy(false);
+    if(!url){setLogoErr("Couldn't upload — sign in and try again.");return;}  // don't wipe existing logo
+    setLogo(url);
+  };
   const barStyle={width:"100%",border:"0",borderRadius:980,padding:"13px 18px",font:"inherit",fontSize:15,outline:"none",
     background:"rgba(255,255,255,.55)",backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",
     boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",transition:"box-shadow .16s"};
   const save=async()=>{
     setBusy(true); setSlugErr("");
-    await onSave({name:name.trim()||host.name,country:(country||"").toUpperCase()||null});
+    const patch={name:name.trim()||host.name,country:(country||"").toUpperCase()||null};
+    if((logo||null)!==(host?.logo_url||null)) patch.logo_url=logo||null;  // only when changed
+    await onSave(patch);
     // Public slug (URL). Saved separately so a "taken" clash can be reported.
     if(onSaveSlug&&(slug||"").trim()&&slug.trim()!==(host?.slug||pascalSlug(host?.name||""))){
       const r=await onSaveSlug(host.id,slug.trim());
@@ -5420,6 +5500,29 @@ function HostEditModal({host,onSave,onSaveSlug,onClose,canManage,membersProps}){
                 {iso
                   ? <SailingGlobe countryData={{[iso]:1}} height={200} dark mini bare hostIso={iso}/>
                   : <div style={{width:200,height:200,borderRadius:16,background:"rgba(31,78,128,.06)",border:"1px dashed rgba(31,78,128,.25)",display:"grid",placeItems:"center",color:"var(--mut)",fontSize:12,textAlign:"center",padding:16}}>Enter a location code to show a globe</div>}
+                {/* Logo uploader — recolored to navy/transparent at upload time. Managers only. */}
+                {canManage&&(
+                  <div style={{marginTop:16}}>
+                    <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Logo</label>
+                    <label style={{display:"grid",placeItems:"center",width:200,height:96,borderRadius:16,overflow:"hidden",position:"relative",transition:".16s",
+                        cursor:logoBusy?"default":"pointer",
+                        background:logo?"rgba(31,78,128,.04)":"rgba(31,78,128,.06)",
+                        border:logo?"1px solid rgba(31,78,128,.16)":"1px dashed rgba(31,78,128,.25)"}}>
+                      {logoBusy
+                        ? <Loader2 size={18} className="spin" style={{color:"var(--navy2)"}}/>
+                        : logo
+                          ? <img src={logo} alt="" style={{maxWidth:"84%",maxHeight:"78%",objectFit:"contain",background:"transparent"}}/>
+                          : <span style={{color:"var(--mut)",fontSize:12,textAlign:"center",padding:12,lineHeight:1.45}}>Add logo<br/><span style={{fontSize:11,opacity:.8}}>PNG or JPG · recolored to navy</span></span>}
+                      <input type="file" accept="image/*" disabled={logoBusy} onChange={onPickLogo}
+                        style={{position:"absolute",inset:0,opacity:0,cursor:"inherit"}}/>
+                    </label>
+                    {logo&&!logoBusy&&(
+                      <button type="button" onClick={()=>{setLogo(null);setLogoErr("");}}
+                        style={{marginTop:8,background:"none",border:0,padding:0,cursor:"pointer",color:"var(--mut)",fontSize:12,fontWeight:600}}>Remove logo</button>
+                    )}
+                    {logoErr&&<div style={{fontSize:12,color:"#c0392b",marginTop:6,fontWeight:600}}>{logoErr}</div>}
+                  </div>
+                )}
               </div>
               {/* Right column: name → location (tight) → buttons (pushed to bottom = globe bottom) */}
               <div style={{flex:1,minWidth:0,minHeight:200,display:"flex",flexDirection:"column"}}>
@@ -5619,7 +5722,8 @@ export default function AthLinkMVP(){
   const saveHost=async(hostId,patch)=>{
     // Update local registry immediately (optimistic).
     const h=hostById(hostId);
-    if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country; }
+    if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country;
+      if("logo_url"in patch){ if(patch.logo_url) h.logo_url=patch.logo_url; else delete h.logo_url; } }
     setHostsVersion(v=>v+1);
     // Persist. PATCH alone silently no-ops if the row was never inserted
     // (the 11 defaults aren't in the hosts table until seeded), so UPSERT:
@@ -5629,7 +5733,8 @@ export default function AthLinkMVP(){
       const hit=Array.isArray(patched)&&patched.length>0;
       if(!hit&&h){
         const row={id:h.id,type:h.type,scope:h.scope||"HK",name:h.name,
-          ...(h.cls?{cls:h.cls}:{}),...(h.country?{country:h.country}:{})};
+          ...(h.cls?{cls:h.cls}:{}),...(h.country?{country:h.country}:{}),
+          ...(h.logo_url?{logo_url:h.logo_url}:{})};
         await sbPost("hosts",row);
       }
     }catch(e){console.error("saveHost persist",e);}
@@ -8685,6 +8790,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
     <HostEditModal host={hostById(portal)} canManage={canManageMembers}
       onSave={(patch)=>saveHost(portal,patch)} onSaveSlug={saveHostSlug}
+      onUploadLogo={(file)=>uploadHostLogo(file,hostById(portal),auth?.token)}
       membersProps={{hostId:portal,hostName:hostById(portal).name,auth,myMembership:myPortalMembership,
         pendingClaims:pendingClaimsHere,pendingEventClaims:pendingEventClaimsHere,canVouch:devMode||(!!myPortalMembership&&myPortalMembership.verified),
         onDecideClaim:(claim,approve)=>resolveClaim(claim,approve,portal),
@@ -9050,7 +9156,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const main=CLASSES.filter(c=>ids.includes(c.id)).map(c=>c.id);
           const clsIds=[...main,...ids.filter(id=>!main.includes(id))];
           return(
-          <div className="class-card" key={h.id} style={{animationDelay:`${Math.min(i,10)*60}ms`}} onClick={()=>enterPortal(h.id)}>
+          <div className="class-card" key={h.id} style={{animationDelay:`${Math.min(i,10)*60}ms`,position:"relative"}} onClick={()=>enterPortal(h.id)}>
             <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
               <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flex:"1 1 0",minWidth:0}}>
@@ -9059,6 +9165,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             <p className="class-name">{h.loc?<span style={{marginRight:6}}>{iocFlag(h.loc)}</span>:null}{h.name}</p>
             <div className="class-stats" style={{marginBottom:0}}><div><b>{h.n}</b>competitions</div><div><b>{ppl.size}</b>athletes</div></div>
+            {h.logo_url&&<img src={h.logo_url} alt="" style={{position:"absolute",right:14,bottom:14,width:34,height:34,objectFit:"contain",opacity:.9,pointerEvents:"none",background:"transparent"}}/>}
           </div>);
         })}
       </div>
@@ -9389,12 +9496,27 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
           );
+          // Recolored logo, far right of the title row, sized to optically align
+          // with the 150px globe. hostById(portal) is null for synthetic class
+          // portals (no host row), so they simply render no logo — associations
+          // (real hosts) resolve their logo_url here just like clubs/federations.
+          const headerLogo=(()=>{
+            const hl=hostById(portal)?.logo_url;
+            if(!hl) return null;
+            return <img src={hl} alt="" style={{width:120,height:120,flex:"none",objectFit:"contain",alignSelf:"center",maxWidth:"100%",background:"transparent"}}/>;
+          })();
+          // Single header row: globe LEFT · title/meta/pills flexible MIDDLE ·
+          // [logo][buttons] together on the FAR RIGHT, vertically centered to the
+          // globe. flex:none on both side clusters + flex:1 middle keeps the row
+          // on one line on desktop; only genuinely narrow widths wrap the right
+          // cluster (logo+buttons as a unit) below — never stacked under the globe.
           const head=(
-            <div style={{minWidth:0,display:"flex",gap:18,alignItems:"flex-start",flexWrap:"wrap"}}>
-              <div style={{display:"flex",flexDirection:"column",gap:14,alignItems:"center",flex:"none"}}>
-                {globe}{actions}
+            <div style={{minWidth:0,display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+              {globe}
+              <div style={{flex:"1 1 260px",minWidth:0}}>{titleBlock}</div>
+              <div style={{display:"flex",gap:16,alignItems:"center",flex:"none"}}>
+                {headerLogo}{actions}
               </div>
-              {titleBlock}
             </div>
           );
           if(!modelCfg) return head;
@@ -9426,13 +9548,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {feAssoc.map(a=>{
                 const ce=events.filter(e=>eventAssocs(e).includes(a.id));
                 const col=classColor(a.cls);const short=classLabel(a.cls);
-                return <div className="class-card" key={a.id} style={{cursor:"pointer"}} onClick={()=>enterPortal(a.id)}>
+                return <div className="class-card" key={a.id} style={{cursor:"pointer",position:"relative"}} onClick={()=>enterPortal(a.id)}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
                     <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px"}}>Association</span>
                     <span className="cls" style={{background:col}}>{short}</span>
                   </div>
                   <p className="class-name">{a.name}</p>
                   <div className="class-stats" style={{marginBottom:0}}><div><b>{ce.length}</b>competitions</div></div>
+                  {a.logo_url&&<img src={a.logo_url} alt="" style={{position:"absolute",right:14,bottom:14,width:34,height:34,objectFit:"contain",opacity:.9,pointerEvents:"none",background:"transparent"}}/>}
                 </div>;
               })}
             </div>
