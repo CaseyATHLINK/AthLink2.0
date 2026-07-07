@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY } from "d3-force";
+import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY, forceRadial } from "d3-force";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
@@ -216,6 +216,15 @@ function dateKey(str){
   let m,last=null;
   while((m=re.exec(s))) last=m;
   return last?last[3]+last[2].padStart(2,"0")+last[1].padStart(2,"0"):"";
+}
+// Signed month difference between two dateKey strings ("yyyymmdd"): months(dkB) -
+// months(dkA), where months = year*12 + (month-1). Returns 0 if either key is
+// empty/short. Callers that want elapsed time take Math.abs (idle months, decay).
+function monthsBetween(dkA,dkB){
+  if(!dkA||!dkB||dkA.length<6||dkB.length<6) return 0;
+  const ya=+dkA.slice(0,4),ma=+dkA.slice(4,6);
+  const yb=+dkB.slice(0,4),mb=+dkB.slice(4,6);
+  return (yb*12+(mb-1))-(ya*12+(ma-1));
 }
 
 /* ── static data ──────────────────────────────────────────────────────── */
@@ -2277,57 +2286,205 @@ function WebIcon({size=12}){
   </svg>);
 }
 
+/* === Rating engine (Glicko-lite Elo) ========================================
+   ONE global rating per athlete (class is context, not modelled). Each athlete
+   has a rating R and an uncertainty RD; new athletes start at R=1200, RD=350.
+   A regatta is ONE rated contest: ratings update once per event, events in
+   chronological dateKey order (undated events are excluded — they can't be
+   ordered). Within an event it's a multiplayer Elo pass computed from a snapshot
+   of pre-event ratings (never sequentially). RD grows with idle time and on a
+   class switch, shrinks a touch each rated event. PDF is ground truth — ranks
+   are READ from scoreEvent rows (tie-aware), never re-ranked here. */
+const RATING_START=1200, RD_START=350, RD_MIN=60, RD_MAX=350; // new-athlete seed + RD bounds
+const RATING_SCALE=400;        // Elo logistic scale (spread at which a 10x expected-score edge sits)
+const K_BASE=32;               // per-event K at RD_MIN; scales UP with RD (more uncertain ⇒ bigger swing)
+const RD_DECAY_C=18;           // RD growth per idle month: sqrt(RD^2 + C^2 * monthsIdle), capped at RD_MAX
+const RD_EVENT_SHRINK=0.97;    // RD multiplier per rated event (confidence grows), floored at RD_MIN
+const CLS_SWITCH_RD_BUMP=60;   // added to RD (capped) the first time an athlete rates in a new class
+// Lazy per-events-array rating cache. Keyed by the events array reference so a
+// given dataset is computed at most once; a new array (new import/filter) recomputes.
+let RATINGS_CACHE=new WeakMap();
+// Compute one global rating history per athlete from an events array.
+// Returns Map(canon -> {r, rd, lastDk, history:[{dk,date,evId,evName,cls,subclass,rank,fleet,r,rd,delta}]}).
+function computeAthleteRatings(events){
+  const out=new Map();                    // canon -> {r, rd, lastDk, lastClsSet:Set, history:[]}
+  const list=(events||[])
+    .filter(ev=>ev&&ev.status!=="Draft"&&dateKey(ev.date))   // dated, non-Draft only
+    .map(ev=>({ev,dk:dateKey(ev.date)}))
+    .sort((a,b)=>a.dk.localeCompare(b.dk)||String(a.ev.id||"").localeCompare(String(b.ev.id||"")));
+  for(const {ev,dk} of list){
+    let rows;
+    try{ rows=scoreEvent(ev).rows; }catch{ continue; }   // unscoreable ⇒ skip for rating
+    const fleet=rows.length;
+    // participant list: canon -> best (lowest) rank; same-boat pairs tracked as mates
+    const rankOf=new Map();               // canon -> best rank this event
+    const mates=new Map();                // canon -> Set(canon) sharing a boat (never compared)
+    rows.forEach(r=>{
+      if(r.rank==null) return;
+      const hk=canonName(r.helm),ck=canonName(r.crew);
+      const keys=[hk,ck].filter(Boolean);
+      keys.forEach(k=>{const cur=rankOf.get(k);if(cur==null||r.rank<cur)rankOf.set(k,r.rank);});
+      if(hk&&ck&&hk!==ck){
+        (mates.get(hk)||mates.set(hk,new Set()).get(hk)).add(ck);
+        (mates.get(ck)||mates.set(ck,new Set()).get(ck)).add(hk);
+      }
+    });
+    const parts=[...rankOf.keys()];
+    const N=parts.length;
+    if(N<2) continue;                     // need ≥2 to compare
+    // ── pre-update: grow RD for idle time + class switch, snapshot R/RD ──
+    const cls=ev.cls||null;
+    const preR=new Array(N), preRD=new Array(N), rec=new Array(N);
+    for(let i=0;i<N;i++){
+      const k=parts[i];
+      let a=out.get(k);
+      if(!a){a={r:RATING_START,rd:RD_START,lastDk:"",lastClsSet:new Set(),history:[]};out.set(k,a);}
+      // idle-time RD growth since this athlete's last rated event
+      if(a.lastDk){
+        const idle=Math.abs(monthsBetween(a.lastDk,dk));
+        if(idle>0) a.rd=Math.min(RD_MAX,Math.sqrt(a.rd*a.rd+RD_DECAY_C*RD_DECAY_C*idle));
+      }
+      // first time rating in this class ⇒ bump RD (more uncertain in unfamiliar fleet)
+      if(cls&&!a.lastClsSet.has(cls)) a.rd=Math.min(RD_MAX,a.rd+CLS_SWITCH_RD_BUMP);
+      preR[i]=a.r; preRD[i]=a.rd; rec[i]=a;
+    }
+    // ── multiplayer Elo, all deltas from the SAME pre-event snapshot ──
+    const rankArr=parts.map(k=>rankOf.get(k));
+    const delta=new Array(N).fill(0);
+    for(let i=0;i<N;i++){
+      const Ri=preR[i], ki=parts[i], mi=mates.get(ki);
+      let acc=0, cmp=0;
+      for(let j=0;j<N;j++){
+        if(j===i) continue;
+        if(mi&&mi.has(parts[j])) continue;           // same-boat: partners never compared
+        const S = rankArr[i]<rankArr[j]?1 : (rankArr[i]===rankArr[j]?0.5:0);
+        const E = 1/(1+Math.pow(10,(preR[j]-Ri)/RATING_SCALE));
+        acc += (S-E); cmp++;
+      }
+      if(cmp>0){
+        const Ki=Math.min(K_BASE*4,Math.max(K_BASE,K_BASE*(preRD[i]/RD_MIN)));
+        delta[i]=Ki*acc/(N-1);
+      }
+    }
+    // ── apply simultaneously, shrink RD, append history ──
+    for(let i=0;i<N;i++){
+      const a=rec[i];
+      a.r=preR[i]+delta[i];
+      a.rd=Math.max(RD_MIN,preRD[i]*RD_EVENT_SHRINK);
+      a.lastDk=dk;
+      if(cls) a.lastClsSet.add(cls);
+      a.history.push({dk,date:ev.date,evId:ev.id,evName:ev.name,cls:ev.cls,subclass:ev.subclass||null,
+        rank:rankOf.get(parts[i]),fleet,r:a.r,rd:a.rd,delta:delta[i]});
+    }
+  }
+  // slim the returned shape (drop internal lastClsSet)
+  const ret=new Map();
+  out.forEach((a,k)=>ret.set(k,{r:a.r,rd:a.rd,lastDk:a.lastDk,history:a.history}));
+  return ret;
+}
+// Lazy accessor — compute once per events-array identity. Null/undefined ⇒ empty
+// Map without touching the WeakMap (which would throw on a non-object key).
+function getAthleteRatings(events){
+  if(!events) return new Map();
+  const hit=RATINGS_CACHE.get(events);
+  if(hit) return hit;
+  const dev=(typeof import.meta!=="undefined")&&import.meta.env&&import.meta.env.DEV;
+  if(dev) console.time("athlink ratings");
+  const res=computeAthleteRatings(events);
+  if(dev) console.timeEnd("athlink ratings");
+  RATINGS_CACHE.set(events,res);
+  return res;
+}
+
 /* === AthleteWeb: force-directed "web" of rivals ==============================
    Each node is an athlete the focal athlete has raced against. Rivals are
    ranked and sized by a combined rivalry score on a 0–1 scale:
-       rivalry = jaccard^ALPHA × proximity^BETA
-   jaccard = shared / (focalTotal + rivalTotal − shared) — co-appearance over
-   the union of both athletes' competition sets. Damps one-event wonders and
-   mega-active athletes who co-appear with everyone by sheer volume.
+       rivalry = decayedJaccard^ALPHA × proximity^BETA × ratingProx^GAMMA × activity
+   decayedJaccard = sharedW / (focalTotalW + rivalTotalW − sharedW) — the raw
+   Jaccard, but every shared/total event is time-weighted: a meeting's weight
+   halves every RIVAL_HALF_LIFE_M months (undated events count UNDATED_W), so
+   old rivalries fade and recent ones dominate. Co-appearance still damps
+   one-event wonders and mega-active athletes who co-appear with everyone.
    proximity = mean over shared events of exp(−GAP_K × |rankGap| / (fleet−1)) —
    how close the two actually finish. Ranks are read from scoreEvent (PDF is
    ground truth, never re-ranked). Events where either rank is missing, or
    where the two sailed the SAME boat (partners), count for co-appearance but
    never for closeness; zero ranked meetings ⇒ proximity = PROX_FLOOR.
-   Raw shared count stays on the node for human-readable display. Edges connect
-   any two shown athletes who appeared in the same event (weight = times
+   ratingProx = exp(−|R_focal − R_rival| / RATING_PROX_SIGMA) from the global
+   rating engine (getAthleteRatings) — two athletes at a similar skill level are
+   truer rivals than a champion and a back-marker who merely raced often. If
+   either has no rating (all-undated career) it's a neutral 0.5, never read as
+   closeness or distance.
+   activity = 0.5^(monthsSince(rival's last dated event)/ACTIVITY_HALF_LIFE_M) —
+   pulls retired athletes out of the current orbit; a rival with no dated event
+   gets a neutral 0.5. "now" is the dataset's own max dateKey, not wall-clock,
+   so historical datasets decay relative to their own latest event.
+   Distance from the focal athlete truthfully encodes this score: a radial
+   force pins each rival at a target radius derived from its rank vs. the top
+   rival (closer = stronger rival), monotonic and no longer fought by the
+   focal↔rival links.
+   Raw integer shared count stays on the node for human-readable display AND for
+   the MIN_SHARED eligibility test (both on RAW counts, not weighted). Edges
+   connect any two shown athletes who appeared in the same event (weight = times
    together). Limited to the top 15 rivals with ≥MIN_SHARED shared events
    (relaxed to 1 for young profiles). Drag nodes; hover to spotlight a node and
    its connections; click to pin (sidebar shows head-to-head + shared comps);
    double-click to open that athlete's profile.
    Self-contained 2D canvas (matches SailingGlobe) + d3-force physics. */
 const GAP_K=5;          // steepness of placement-gap decay: prox_e = exp(-GAP_K * gap)
-const ALPHA=1;          // exponent on the Jaccard co-appearance term
+const ALPHA=1;          // exponent on the decayed-Jaccard co-appearance term
 const BETA=1;           // exponent on the placement-proximity term
 const PROX_FLOOR=0.15;  // proximity when no shared event has both ranks (heavy damping, never fake closeness)
-const MIN_SHARED=2;     // min shared events to qualify as a rival (relaxed to 1 if <5 athletes qualify)
+const MIN_SHARED=2;     // min RAW shared events to qualify as a rival (relaxed to 1 if <5 athletes qualify)
+const RIVAL_HALF_LIFE_M=24;   // months for a shared event's co-appearance weight to halve
+const RATING_PROX_SIGMA=200;  // rating-gap scale: ratingProx = exp(-|ΔR|/SIGMA)
+const GAMMA=1;                // exponent on the rating-proximity term
+const ACTIVITY_HALF_LIFE_M=30;// rival's own recency: months since their last dated event to halve activity
+const UNDATED_W=0.25;         // weight of an undated event in decayed co-appearance counts
 /* ── Rival cohort — single source of truth for "real rivals" ─────────────────
    Shared by AthleteWeb (rival web) and ProgressChart so both views measure
    against the IDENTICAL cohort: canonName keys, Draft events skipped, helm+crew
    both counted. Rivals rank by the combined rivalry score described above —
-   jaccard^ALPHA × proximity^BETA (co-appearance × placement closeness) — with
-   ≥MIN_SHARED shared events to qualify (relaxed when <5 qualify), top-N,
-   raw-shared then name tiebreaks. `corr` on each rival carries the rivalry
-   score. Also returns focalEvData: the per-event rank maps built ONCE here
-   (ranks READ from scoreEvent rows — PDF-truth, tie-aware) and reused by the
-   web's proximity, head-to-head and partner-split views. */
+   decayedJaccard^ALPHA × proximity^BETA × ratingProx^GAMMA × activity
+   (recency-weighted co-appearance × placement closeness × rating closeness ×
+   the rival's own activity) — with ≥MIN_SHARED RAW shared events to qualify
+   (relaxed when <5 qualify), top-N, raw-shared then name tiebreaks. `corr` on
+   each rival carries the rivalry score; `shared` stays the RAW integer count for
+   display + the eligibility test. Also returns focalEvData: the per-event rank
+   maps built ONCE here (ranks READ from scoreEvent rows — PDF-truth, tie-aware)
+   and reused by the web's proximity, head-to-head and partner-split views. */
 function modeOfCountMap(m){if(!m)return null;let best=null,bc=-1;m.forEach((c,k)=>{if(c>bc){bc=c;best=k;}});return best;}
 function computeRivalCohort(name,events,N=15){
   const focal=canonName(name);
   const disp=new Map();                 // canon -> display name
-  const shared=new Map();               // canon -> # events shared with focal
-  const totals=new Map();               // canon -> total events appeared in (for Jaccard union)
+  const shared=new Map();               // canon -> RAW # events shared with focal (display + eligibility)
+  const sharedW=new Map();              // canon -> time-decayed shared count (co-appearance term)
+  const totals=new Map();               // canon -> RAW total events appeared in (unchanged, returned as-is)
+  const totalsW=new Map();              // canon -> time-decayed total events (for decayed Jaccard union)
+  const rivalLastDk=new Map();          // canon -> most recent dated event key (for activity term)
   const focalEvData=[];                 // per focal event: {ev, present, rankOf, N(fleet), focalRank, partnerKey, partnerName, mates}
   const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
   const natCount=new Map();             // canon -> Map(nat -> count)
   const bump=(map,k,v)=>{if(!v)return;let m=map.get(k);if(!m){m=new Map();map.set(k,m);}m.set(v,(m.get(v)||0)+1);};
   const remember=raw=>{const k=canonName(raw);if(!k)return null;if(!disp.has(k))disp.set(k,raw);return k;};
+  // "now" = the dataset's own latest dated event, so decay is relative to the
+  // data, not wall-clock (datasets can be fully historical).
+  let nowDk="";
+  (events||[]).forEach(ev=>{if(ev.status==="Draft")return;const dk=dateKey(ev.date);if(dk&&dk>nowDk)nowDk=dk;});
+  let focalTotalW=0;                     // time-decayed count of the focal's own events
   (events||[]).forEach(ev=>{
     if(ev.status==="Draft")return;
+    const dk=dateKey(ev.date);
+    const w=dk?Math.pow(0.5,Math.abs(monthsBetween(dk,nowDk))/RIVAL_HALF_LIFE_M):UNDATED_W;
     const present=new Set();
     (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
-    present.forEach(k=>totals.set(k,(totals.get(k)||0)+1));
+    present.forEach(k=>{
+      totals.set(k,(totals.get(k)||0)+1);
+      totalsW.set(k,(totalsW.get(k)||0)+w);
+      if(dk){const cur=rivalLastDk.get(k);if(cur==null||dk>cur)rivalLastDk.set(k,dk);}
+    });
     if(!present.has(focal))return;
+    focalTotalW+=w;
     // Rank map built ONCE per focal event — ranks READ from scoreEvent rows
     // (PDF-truth, tie-aware), reused for proximity + head-to-head + partner split.
     const rankOf=new Map();             // canon -> best (lowest) rank in this event
@@ -2353,12 +2510,29 @@ function computeRivalCohort(name,events,N=15){
       }
     }catch{/* unscoreable event: still counts for co-appearance, never for closeness */}
     focalEvData.push({ev,present,rankOf,N:fleetN,focalRank,partnerKey,partnerName,mates});
-    present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
+    present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);sharedW.set(k,(sharedW.get(k)||0)+w);bump(clsCount,k,ev.cls);}});
   });
   const focalEvents=focalEvData.map(d=>d.present);   // back-compat: [Set(canon)] events the focal sailed
-  // Jaccard correlation (0–1): shared / union of the two competition sets.
-  const focalTotal=focalEvData.length;
-  const corrOf=(k,sh)=>{const u=focalTotal+(totals.get(k)||sh)-sh;return u>0?sh/u:0;};
+  // Decayed Jaccard (0–1): time-weighted shared / time-weighted union. Fallback
+  // convention mirrors the old corrOf — use the rival's own weighted total, or
+  // the weighted shared count when it's absent.
+  const corrOf=(k,shW)=>{const u=focalTotalW+(totalsW.get(k)||shW)-shW;return u>0?shW/u:0;};
+  // Rating proximity (0–1): exp(-|ΔR|/SIGMA) from the global rating engine. A
+  // missing rating (all-undated career) reads as neutral 0.5, never closeness/distance.
+  const ratings=getAthleteRatings(events);
+  const focalRating=ratings.get(focal);
+  const ratingProxOf=k=>{
+    const rr=ratings.get(k);
+    if(!focalRating||!rr) return 0.5;
+    return Math.exp(-Math.abs(focalRating.r-rr.r)/RATING_PROX_SIGMA);
+  };
+  // Activity (0–1): 0.5^(months since the rival's last dated event / half-life).
+  // No dated event ⇒ neutral 0.5 (don't fabricate retirement or recency).
+  const activityOf=k=>{
+    const ld=rivalLastDk.get(k);
+    if(!ld||!nowDk) return 0.5;
+    return Math.pow(0.5,Math.abs(monthsBetween(ld,nowDk))/ACTIVITY_HALF_LIFE_M);
+  };
   // Placement proximity (0–1): mean of exp(-GAP_K*gap) over shared events where
   // both have ranks and they weren't in the same boat. Missing/partner events
   // are skipped — missing data must never read as either huge gap or closeness.
@@ -2372,10 +2546,15 @@ function computeRivalCohort(name,events,N=15){
     });
     return{prox:n>0?sum/n:PROX_FLOOR,ranked:n};
   };
-  // Combined rivalry = co-appearance × placement proximity; both must matter.
+  // Combined rivalry = decayed co-appearance × placement proximity × rating
+  // closeness × the rival's activity. `shared` stays the RAW integer count.
   const scored=[...shared.entries()].map(([k,sh])=>{
     const{prox,ranked}=proxOf(k);
-    return{key:k,name:disp.get(k)||k,shared:sh,ranked,corr:Math.pow(corrOf(k,sh),ALPHA)*Math.pow(prox,BETA)};
+    const corr=Math.pow(corrOf(k,sharedW.get(k)||0),ALPHA)
+              *Math.pow(prox,BETA)
+              *Math.pow(ratingProxOf(k),GAMMA)
+              *activityOf(k);
+    return{key:k,name:disp.get(k)||k,shared:sh,ranked,corr};
   });
   let eligible=scored.filter(s=>s.shared>=MIN_SHARED);
   if(eligible.length<5)eligible=scored;   // young profiles: relax to 1 shared so the web isn't empty
@@ -2481,10 +2660,17 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     setSelNode(null);
     const focalNode=byId.get(graph.focal);
     if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}
-    // scatter rivals radially: bigger (more-correlated) start nearer the focal,
-    // smaller start further out, with random jitter so the layout looks organic.
-    nodes.forEach(n=>{if(n.focal)return;const ratio=(n.corr||0)/(graph.maxCorr||1);
-      const ang=Math.random()*Math.PI*2,dist=(enlarged?144:55)+(1-ratio)*(enlarged?414:104)+(Math.random()-.5)*(enlarged?90:26);
+    // truthful-orbit target radius: distance from the focal encodes the rival
+    // score (higher score ⇒ strictly closer). sqrt spreads the top cluster apart.
+    const RMIN=enlarged?140:46, RMAX=enlarged?250:104;   // truthful-orbit range (mini h=220 / enlarged h=540)
+    nodes.forEach(n=>{if(n.focal)return;
+      const ratio=(n.corr||0)/(graph.maxCorr||1);        // 1 = top rival, → 0 = weakest
+      n.targetR=RMIN+(1-Math.sqrt(ratio))*(RMAX-RMIN);   // sqrt spreads the top cluster apart
+    });
+    // scatter rivals radially at their target orbit, with random jitter so the
+    // layout looks organic.
+    nodes.forEach(n=>{if(n.focal)return;
+      const ang=Math.random()*Math.PI*2,dist=n.targetR+(Math.random()-.5)*(enlarged?60:18);
       n.x=st.w/2+Math.cos(ang)*dist;n.y=st.h/2+Math.sin(ang)*dist;});
     // Sizing is relative to the focal node: the MOST-CORRELATED rival (Jaccard)
     // is 80% of the focal's size, everyone else scales linearly by their
@@ -2551,17 +2737,23 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     const sim=forceSimulation(nodes)
       .velocityDecay(enlarged?.62:.58)        // higher damping = relaxed, fluid motion (less bounce)
       // link distance is driven by correlation: more-correlated nodes sit
-      // closer to the focal, less-correlated ones further out. Focal links hold
-      // the radial structure; rival-rival links stay weak so they don't clump.
+      // closer to the focal, less-correlated ones further out. The radial force
+      // (below) now owns the focal↔rival distance truthfully, so focal links
+      // carry ~0 strength here; rival-rival links stay weak so they don't clump.
       .force("link",forceLink(links).id(d=>d.id)
         .distance(l=>{const a=l.source,b=l.target,other=a.focal?b:(b.focal?a:null);
           if(other){const ratio=(other.corr||0)/(st.maxCorr||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
           return enlarged?270:91;})
-        .strength(l=>(l.source.focal||l.target.focal)?(enlarged?.5:.45):.04))
+        .strength(l=>(l.source.focal||l.target.focal)?0:.04))
       .force("charge",forceManyBody().strength(enlarged?-270:-60).distanceMax(enlarged?1100:390))
       .force("collide",forceCollide(d=>rad(d)+(enlarged?10:7)).strength(.6))
       .force("x",forceX(()=>st.w/2).strength(enlarged?.04:.05))
       .force("y",forceY(()=>st.h/2).strength(enlarged?.04:.05))
+      // radial: distance from the focal truthfully encodes the rival score —
+      // closer = stronger rival. Focal node is pinned at radius 0 (its fx/fy
+      // already center it); this force owns the focal↔rival distance now that
+      // the focal link strength above is 0.
+      .force("radial",forceRadial(d=>d.focal?0:d.targetR,st.w/2,st.h/2).strength(d=>d.focal?1:0.85))
       // soft walls — any node dragged/pushed outside the frame eases back in
       .force("bounds",a=>{const m=enlarged?22:12;nodes.forEach(n=>{if(n.fx!=null||n.x==null)return;
         if(n.x<m)n.vx+=(m-n.x)*a*0.6;else if(n.x>st.w-m)n.vx+=(st.w-m-n.x)*a*0.6;
@@ -2604,7 +2796,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     cv.addEventListener("dblclick",onDbl);
     cv.addEventListener("pointerleave",onLeave);
     if(enlarged)cv.addEventListener("wheel",onWheel,{passive:false});
-    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(enlarged?.05:.055)).force("y",forceY(()=>st.h/2).strength(enlarged?.05:.055));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
+    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(enlarged?.05:.055)).force("y",forceY(()=>st.h/2).strength(enlarged?.05:.055)).force("radial",forceRadial(d=>d.focal?0:d.targetR,st.w/2,st.h/2).strength(d=>d.focal?1:0.85));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
     window.addEventListener("resize",onResize);
     return()=>{sim.stop();cv.removeEventListener("pointerdown",onDown);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerup",onUp);cv.removeEventListener("dblclick",onDbl);cv.removeEventListener("pointerleave",onLeave);cv.removeEventListener("wheel",onWheel);window.removeEventListener("resize",onResize);};
   },[graph,height,enlarged]);
@@ -2630,7 +2822,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
             <span style={{width:9,height:9,borderRadius:"50%",background:l.color,flex:"none",boxShadow:"0 0 0 1px rgba(255,255,255,.4)"}}/>{l.label}
           </span>
         ))}
-        <span>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 Rivals`}</span>
+        <span>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 rivals · closer = stronger rival`}</span>
       </div>
     </div>
   );
@@ -2762,92 +2954,125 @@ function InfoHint({text}){
   );
 }
 
-/* ── Rival-relative career progress (per boat-class era) ─────────────────────
-   Each competition is scored against the athlete's top rivals FOR THAT BOAT
-   CLASS — a distinct cohort per class-era (computeRivalCohort over all events of
-   that class), so 2017-Optimist rivals ≠ 2022-29er rivals. Score = share of that
-   era's cohort present in the event that the athlete finished ahead of (ties=½).
-   Bounded 0–1, fleet-size independent: 50% = level with your rivals. Official
-   ranks only — we filter and count, never re-rank. Year-nuggets pick which
-   competitions show; the era cohorts stay stable regardless of selection. */
-const MIN_RIVALS_PRESENT=1; // events with fewer cohort rivals present are not scored (tunable). 1 = show any competition with ≥1 era rival (partners excluded); a lone-rival event just scores 0/100%.
-const SMOOTH_WINDOW=5;      // trend = rolling mean of the last N scored events
-const PROGRESS_RIVAL_HINT="Rivals here are the athletes you race most in this boat class — a separate top group per class era, ranked by how often you meet and how close your finishes are. Your results in one class are only measured against that class's rivals.";
+/* ── Skill-rating career progress ────────────────────────────────────────────
+   Plots the focal athlete's skill rating over time — a DERIVED metric from the
+   global rating engine (getAthleteRatings), never a re-read of results. Each
+   dot is one rated competition; the line connects actual post-event ratings
+   (p.r) with NO smoothing. Ranks shown in tooltips/sidebar are always READ from
+   scoreEvent(ev).rows (PDF is ground truth); only the rating is computed.
+   The shaded band is the rating's uncertainty (r±rd). It is drawn from actual
+   points only — RD is NOT interpolated inside idle gaps, so the band visibly
+   widens across a long lay-off (RD had grown by the next event), which is the
+   honest signal, not an artefact. Year-nuggets pick which competitions show
+   (the rating history itself is global and unaffected by selection). In the
+   enlarged view a chip row overlays a rival's rating curve (dashed, no band)
+   for direct comparison; clicking a dot opens a per-competition sidebar with
+   the athlete's result and the rival cohort who sailed that same competition. */
+const PROGRESS_RIVAL_HINT="Think of this as a skill score, like a chess rating. Every athlete starts at 1200. Beat athletes rated above you and your score climbs; finish behind athletes rated below you and it drops — winning against stronger fleets counts for more. The shaded area shows how confident the score is: it's wide when someone competes rarely, and tightens the more they compete. Placings come straight from the official results and are never altered.";
+// Monotone cubic (Fritsch–Carlson) path through EXACTLY the given points — curves
+// the segments without ever overshooting a neighbouring point (the honesty
+// constraint). points=[[x,y],…] → "M…C…" string. <3 points → straight segments.
+// Declared at module scope, above ProgressChart, so it's defined before use (no TDZ).
+function monoPath(points){
+  const n=points.length;
+  if(n<2)return n?`M${points[0][0]},${points[0][1]}`:"";
+  if(n<3)return `M${points.map(p=>`${p[0]},${p[1]}`).join("L")}`;
+  const xs=points.map(p=>p[0]), ys=points.map(p=>p[1]);
+  const dx=[],dy=[],slope=[];
+  for(let i=0;i<n-1;i++){const h=xs[i+1]-xs[i];dx[i]=h;dy[i]=ys[i+1]-ys[i];slope[i]=h!==0?dy[i]/h:0;}
+  const m=new Array(n);
+  m[0]=slope[0]; m[n-1]=slope[n-2];
+  for(let i=1;i<n-1;i++){
+    if(slope[i-1]*slope[i]<=0)m[i]=0;
+    else{const w1=2*dx[i]+dx[i-1], w2=dx[i]+2*dx[i-1];m[i]=(w1+w2)/(w1/slope[i-1]+w2/slope[i]);}
+  }
+  let d=`M${xs[0]},${ys[0]}`;
+  for(let i=0;i<n-1;i++){
+    const h=dx[i];
+    const c1x=xs[i]+h/3,     c1y=ys[i]+m[i]*h/3;
+    const c2x=xs[i+1]-h/3,   c2y=ys[i+1]-m[i+1]*h/3;
+    d+=`C${c1x},${c1y} ${c2x},${c2y} ${xs[i+1]},${ys[i+1]}`;
+  }
+  return d;
+}
 function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=260,enlarged=false,onOpenEvent,onPick,onSelectionChange,deselectKey=0}){
   const [tip,setTip]=React.useState(null);       // {x,y,lines:[..]}  (inline hover)
   const [selPt,setSelPt]=React.useState(null);   // selected competition index (enlarged sidebar)
+  const [rivalKey,setRivalKey]=React.useState(null); // active overlay rival canon key (enlarged only)
   const sel=React.useMemo(()=>yrKey?new Set(selYears):null,[yrKey]);  // null = all years
+  // Focal rating history — filtered to the selected years, chronological already.
   const data=React.useMemo(()=>{
-    const focalKey=canonName(name);
-    // One rival cohort per boat class, computed over ALL that class's events
-    // (the era) — stable no matter which years are selected below.
-    const eraCache=new Map();
-    const cohortForCls=cls=>{
-      const key=cls||"__none";
-      if(eraCache.has(key))return eraCache.get(key);
-      const evsC=(events||[]).filter(ev=>(ev.cls||"__none")===key);
-      const co=computeRivalCohort(name,evsC,15);
-      const obj={keys:new Set(co.rivals.map(r=>r.key)),disp:co.disp};
-      eraCache.set(key,obj);return obj;
-    };
-    const pts=[];
-    (history||[]).forEach(h=>{
-      const ev=h?.ev; if(!ev||ev.status==="Draft")return;
-      const dk=dateKey(ev.date); if(!dk)return;              // undated → excluded
-      const y=+dk.slice(0,4); if(sel&&!sel.has(y))return;    // outside the selected years
-      const myRank=h.row?.rank; if(!(myRank>=1))return;
-      const co=cohortForCls(ev.cls); if(!co.keys.size)return;
-      let rows; try{rows=scoreEvent(ev).rows;}catch{return;}
-      const rankOf=new Map();                                // era rival canon -> best rank in this event
-      const mates=new Set();                                 // who shared the focal's boat here (partners, not rivals)
-      rows.forEach(r=>{
-        const hk=canonName(r.helm),ck=canonName(r.crew);
-        if(hk===focalKey||ck===focalKey){const other=hk===focalKey?ck:hk;if(other&&other!==focalKey)mates.add(other);}
-        if(r.rank>=1)[hk,ck].forEach(k=>{if(k&&co.keys.has(k)){const prev=rankOf.get(k);if(prev===undefined||r.rank<prev)rankOf.set(k,r.rank);}});
-      });
-      // Partners (same boat) are never scored as rivals — you can't beat your own crew.
-      let beaten=0; const trueRivals=[]; const partners=[];
-      rankOf.forEach((rk,k)=>{
-        const nm=co.disp.get(k)||k;
-        if(mates.has(k)){partners.push({key:k,name:nm,rank:rk,sameBoat:true});return;}
-        if(myRank<rk)beaten+=1;else if(myRank===rk)beaten+=0.5;
-        trueRivals.push({key:k,name:nm,rank:rk,sameBoat:false});
-      });
-      if(trueRivals.length<MIN_RIVALS_PRESENT)return;
-      trueRivals.sort((a,b)=>a.rank-b.rank);
-      pts.push({dk,date:ev.date,evId:ev.id,evName:ev.name,cls:ev.cls,subclass:ev.subclass,score:beaten/trueRivals.length,beaten,rivals:trueRivals.length,rank:myRank,fleet:h.fleet,rivalsHere:[...trueRivals,...partners]});
-    });
-    pts.sort((a,b)=>a.dk.localeCompare(b.dk));               // oldest → newest
-    pts.forEach((p,i)=>{const win=pts.slice(Math.max(0,i-SMOOTH_WINDOW+1),i+1);p.trend=win.reduce((s,x)=>s+x.score,0)/win.length;});
+    const hist=getAthleteRatings(events).get(canonName(name))?.history||[];
+    const pts=hist.filter(p=>!(sel&&!sel.has(+p.dk.slice(0,4))));
     return{pts};
-  },[name,events,history,sel]);
-  React.useEffect(()=>{setSelPt(null);},[yrKey,name]);       // clear selection when the window/athlete changes
-  React.useEffect(()=>{if(deselectKey)setSelPt(null);},[deselectKey]); // external deselect (popup header)
+  },[name,events,sel]);
+  // Top-5 rival chips + top-15 cohort for the sidebar — memoised once (NOT per dot).
+  const cohort5=React.useMemo(()=>enlarged?computeRivalCohort(name,events,5):null,[name,events,enlarged]);
+  const cohort15=React.useMemo(()=>enlarged?computeRivalCohort(name,events,15):null,[name,events,enlarged]);
+  // Active overlay rival's rating history, clipped to the same selected years.
+  const overlayPts=React.useMemo(()=>{
+    if(!rivalKey)return null;
+    const h=getAthleteRatings(events).get(rivalKey)?.history||[];
+    return h.filter(p=>!(sel&&!sel.has(+p.dk.slice(0,4))));
+  },[rivalKey,events,sel]);
+  React.useEffect(()=>{setSelPt(null);setRivalKey(null);},[yrKey,name]);  // clear selection + overlay when the window/athlete changes
+  React.useEffect(()=>{if(deselectKey)setSelPt(null);},[deselectKey]);    // external deselect (popup header)
   React.useEffect(()=>{onSelectionChange&&onSelectionChange(selPt);},[selPt]); // report selection for the deselect button
-  const S=w/260;                                             // scales the trend line / dot geometry with the chart width
+  const S=w/260;                                             // scales the line / dot geometry with the chart width
   const glowId="pgGlow"+Math.round(w), softId="pgSoft"+Math.round(w);
-  const AX=9.5, AXm=8.5;                                     // axis label sizes — fixed, matching the Trend/Competition legend
-  const titleBlock=enlarged?24:0, captionBlock=enlarged?26:0, legendBlock=enlarged?20:0;   // header/footer live in the popup only; inline is just the chart
-  const CH=Math.max(70,height-titleBlock-captionBlock-legendBlock-6);
-  const M={l:32,r:11,t:9,b:16};                              // fixed gutters — axis labels are a fixed size, so margins don't scale
+  const AX=9.5;                                              // axis label size — fixed, matching the Rating/Competition legend
+  // Title removed (popup chrome already titles the view); its old 24px allowance
+  // is folded into plot breathing room rather than being reclaimed as blank space.
+  const titleBlock=0, captionBlock=enlarged?26:0, legendBlock=enlarged?30:0, chipBlock=enlarged?30:0;
+  const CH=Math.max(70,height-titleBlock-captionBlock-legendBlock-chipBlock-6);
+  const M=enlarged?{l:52,r:20,t:16,b:28}:{l:40,r:12,t:10,b:18}; // mode-dependent gutters so nothing hugs the borders
   const plotW=w-M.l-M.r, plotH=CH-M.t-M.b;
-  const yOf=s=>M.t+plotH*(1-s);
   const showTip=(e,lines)=>{const host=e.currentTarget.ownerSVGElement.parentElement.getBoundingClientRect();const r=e.currentTarget.getBoundingClientRect();
     setTip({x:Math.min(Math.max(r.left-host.left+r.width/2,60),host.width-60),y:r.top-host.top,lines});};
+  const fmtDelta=d=>`${d>=0?"+":"−"}${Math.abs(Math.round(d))}`;   // signed, rounded: +12 / −8 / +0
   const pts=data.pts;
   let body;
   if(pts.length<3){
-    body=<div style={{height:CH,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#7fa0c0",fontSize:12,padding:"0 18px"}}>Not enough shared competitions with rivals in this period yet to chart progress.</div>;
+    body=<div style={{height:CH,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#7fa0c0",fontSize:12,padding:"0 18px"}}>Not enough rated competitions in this period yet to chart a skill rating.</div>;
   }else{
+    // ── Y domain: [min(r−rd), max(r+rd)] over visible pts (+ overlay r's when
+    // active), padded 5%, then rounded OUTWARD to a multiple of 50.
+    // ── X window first (year gridlines + labels come from it, and the overlay
+    // is CLIPPED to it — off-window rival points are dropped, never clamped
+    // into a false pile-up at the chart edge, and never stretch the y-domain).
     const yearsSel=sel?[...sel].sort((a,b)=>a-b):null;
     const y0=yearsSel?yearsSel[0]:+pts[0].dk.slice(0,4);
     const y1=yearsSel?yearsSel[yearsSel.length-1]:+pts[pts.length-1].dk.slice(0,4);
     const t0=Date.UTC(y0,0,1), t1=Date.UTC(y1,11,31), span=Math.max(1,t1-t0);
-    const xForTs=ts=>M.l+plotW*(ts-t0)/span;
     const tsOf=p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8));
+    const oShow=overlayPts?overlayPts.filter(p=>{const t=tsOf(p);return t>=t0&&t<=t1;}):null;
+    let lo=Infinity, hi=-Infinity;
+    pts.forEach(p=>{lo=Math.min(lo,p.r-p.rd);hi=Math.max(hi,p.r+p.rd);});
+    if(oShow)oShow.forEach(p=>{lo=Math.min(lo,p.r);hi=Math.max(hi,p.r);});
+    const padAmt=Math.max(10,(hi-lo)*0.05);
+    lo=Math.floor((lo-padAmt)/50)*50; hi=Math.ceil((hi+padAmt)/50)*50;
+    if(hi<=lo)hi=lo+50;
+    const ySpan=hi-lo;
+    const yOf=r=>M.t+plotH*(1-(r-lo)/ySpan);
+    // 3–4 round tick values: step ≈ span/3 snapped to 50/100/200 (…), floor to a
+    // multiple of the step so labels land on round numbers within the domain.
+    const rawStep=ySpan/4;
+    const nice=[50,100,150,200,250,500,1000];
+    const step=nice.find(s=>s>=rawStep)||Math.ceil(rawStep/100)*100;
+    const ticks=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+0.5; v+=step)ticks.push(v);
+    const xForTs=ts=>M.l+plotW*(ts-t0)/span;
     const xOf=p=>Math.min(Math.max(xForTs(tsOf(p)),M.l),w-M.r);
-    const trendPts=pts.map(p=>`${xOf(p)},${yOf(p.trend)}`).join(" ");
     const nY=y1-y0+1, every=nY>12?3:nY>7?2:1;
+    // Rating line + uncertainty band (band = actual points only, never interpolated in gaps).
+    // Monotone-cubic curves pass EXACTLY through every point — no value smoothing.
+    const lineXY=pts.map(p=>[xOf(p),yOf(p.r)]);
+    const linePath=monoPath(lineXY);
+    // Band: upper edge L→R, then lower edge R→L, one closed path. monoPath emits an
+    // "M…" prefix; strip the second one and prepend an "L" so both edges join cleanly.
+    const bandUpPath=monoPath(pts.map(p=>[xOf(p),yOf(p.r+p.rd)]));
+    const bandLoPath=monoPath(pts.map(p=>[xOf(p),yOf(p.r-p.rd)]).reverse());
+    const bandPath=`${bandUpPath}L${bandLoPath.slice(1)}Z`;
+    const overlayPath=oShow&&oShow.length?monoPath(oShow.map(p=>[xOf(p),yOf(p.r)])):null;
     body=(
       <svg width="100%" height={CH} viewBox={`0 0 ${w} ${CH}`} style={{display:"block"}}>
         <defs>
@@ -2859,13 +3084,19 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
             <feGaussianBlur stdDeviation={3.4*S}/>
           </filter>
         </defs>
-        {/* y axis: 0 / 50 / 100% of rivals beaten */}
-        <text transform={`rotate(-90 10 ${M.t+plotH/2})`} x={10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fill="#7fa0c0">Rivals beaten</text>
-        {[["100%",1],["50%",.5],["0%",0]].map(([lab,s])=>
-          <text key={lab} x={M.l-4} y={yOf(s)+3} textAnchor="end" fontSize={AX} fill="#7fa0c0">{lab}</text>)}
-        <line x1={M.l} y1={yOf(.5)} x2={w-M.r} y2={yOf(.5)} stroke="rgba(220,236,248,.3)" strokeWidth={S} strokeDasharray={`${3*S} ${3*S}`}/>
-        <text x={w-M.r} y={yOf(.5)-4} textAnchor="end" fontSize={AXm} fill="#7fa0c0">level with rivals</text>
-        <line x1={M.l} y1={yOf(0)} x2={w-M.r} y2={yOf(0)} stroke="rgba(220,236,248,.18)" strokeWidth={S}/>
+        {/* faint horizontal gridlines at each y tick, under everything */}
+        {ticks.map(v=>
+          <line key={"g"+v} x1={M.l} y1={yOf(v)} x2={w-M.r} y2={yOf(v)} stroke="rgba(220,236,248,.06)" strokeWidth={S}/>)}
+        {/* y axis: skill-rating ticks at round values */}
+        <text transform={`rotate(-90 ${enlarged?14:10} ${M.t+plotH/2})`} x={enlarged?14:10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fill="#7fa0c0">Skill rating</text>
+        {ticks.map(v=>
+          <text key={v} x={M.l-4} y={yOf(v)+3} textAnchor="end" fontSize={AX} fill="#7fa0c0">{v}</text>)}
+        <line x1={M.l} y1={M.t+plotH} x2={w-M.r} y2={M.t+plotH} stroke="rgba(220,236,248,.18)" strokeWidth={S}/>
+        {/* start·1200 anchor: dashed reference line only when 1200 sits in-domain */}
+        {1200>=lo&&1200<=hi&&(<g>
+          <line x1={M.l} y1={yOf(1200)} x2={w-M.r} y2={yOf(1200)} stroke="rgba(220,236,248,.25)" strokeWidth={S} strokeDasharray="3 3"/>
+          <text x={w-M.r} y={yOf(1200)-3} textAnchor="end" fontSize={8.5} fill="#7fa0c0">start · 1200</text>
+        </g>)}
         {/* x axis: a gridline + label per year (thinned if the window is wide) */}
         {Array.from({length:nY},(_,i)=>y0+i).map((Y,idx)=>{
           const gx=xForTs(Date.UTC(Y,0,1));
@@ -2873,31 +3104,44 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
           const show=(idx%every===0)||Y===y1;
           return(<g key={Y}>
             {Y>y0&&<line x1={gx} y1={M.t} x2={gx} y2={M.t+plotH} stroke="rgba(220,236,248,.07)" strokeWidth={S}/>}
-            {show&&<text x={cx} y={CH-4} textAnchor="middle" fontSize={AX} fill="#7fa0c0">{Y}</text>}
+            {show&&<text x={cx} y={CH-(enlarged?8:4)} textAnchor="middle" fontSize={AX} fill="#7fa0c0">{Y}</text>}
           </g>);
         })}
-        {/* the trend line: always shown, with a slow soft glow gliding left → right */}
-        <polyline points={trendPts} fill="none" stroke="#34a9e6" strokeWidth={2.1*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
-        <polyline className="pg-pulse" pathLength="1" points={trendPts} fill="none" stroke="#a9e0ff" strokeWidth={3.4*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
+        {/* uncertainty band, under everything */}
+        <path d={bandPath} fill="rgba(52,169,230,.13)" stroke="none"/>
+        {/* rival overlay: dashed muted line, no band, no dots, no glow */}
+        {overlayPath&&<path d={overlayPath} fill="none" stroke="#8fa8c4" strokeWidth={1.6*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${5*S} ${4*S}`}/>}
+        {/* the rating line: always shown, with a slow soft glow gliding left → right */}
+        <path d={linePath} fill="none" stroke="#34a9e6" strokeWidth={2.1*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
+        <path className="pg-pulse" pathLength="1" d={linePath} fill="none" stroke="#a9e0ff" strokeWidth={3.4*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
         {/* per-competition dots ringed in their boat-class colour */}
         {pts.map((p,i)=>{const on=enlarged&&selPt===i;const cc=classColor(p.cls);return(
-          <circle key={i} cx={xOf(p)} cy={yOf(p.score)} r={(on?4.6:3)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?2:1.6)*S} style={{cursor:"pointer"}}
+          <circle key={i} cx={xOf(p)} cy={yOf(p.r)} r={(on?4.6:2.4)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?2:1.4)*S} style={{cursor:"pointer"}}
             onClick={enlarged?()=>setSelPt(i===selPt?null:i):undefined}
-            onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Beat ${p.beaten%1?p.beaten.toFixed(1):p.beaten} of ${p.rivals} rivals`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
+            onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Rating ${Math.round(p.r)} (${fmtDelta(p.delta)})`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
             onMouseLeave={enlarged?undefined:()=>setTip(null)}/>);})}
       </svg>);
   }
   const chartCol=(
-    <div style={{position:"relative",display:"flex",flexDirection:"column",width:"100%",height}}>
-      {enlarged&&<div style={{flex:"none",textAlign:"center",fontSize:15.5,fontWeight:800,color:"#fff",letterSpacing:"-.01em"}}>Progress</div>}
+    <div style={{position:"relative",display:"flex",flexDirection:"column",width:"100%",height,paddingBottom:enlarged?6:0,boxSizing:"border-box"}}>
       {enlarged&&<div style={{flex:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:6,color:"#9fbdd9",fontSize:13,lineHeight:1.35,margin:"3px 12px 6px"}}>
-        <span>How {name} placed relative to their rivals over time.</span>
+        <span>How {name}'s skill rating has developed over time.</span>
         <InfoHint text={PROGRESS_RIVAL_HINT}/>
       </div>}
+      {enlarged&&cohort5&&cohort5.rivals.length>0&&(
+        <div style={{flex:"none",display:"flex",alignItems:"center",gap:8,justifyContent:"center",flexWrap:"wrap",margin:"0 12px 6px"}}>
+          <span style={{fontSize:11,fontWeight:700,color:"#7fa0c0",letterSpacing:".02em"}}>Compare with rival:</span>
+          {cohort5.rivals.map(r=>{const active=rivalKey===r.key;const cc=classColor(modeOfCountMap(cohort5.clsCount.get(r.key)));return(
+            <button key={r.key} onClick={()=>setRivalKey(active?null:r.key)} title={`Overlay ${r.name}'s rating line`}
+              style={{display:"inline-flex",alignItems:"center",gap:6,border:"1px solid "+(active?"var(--accent)":"rgba(120,160,210,.32)"),background:active?"var(--accent)":"rgba(120,160,210,.1)",
+                color:active?"#fff":"#cfe0f2",borderRadius:980,padding:"3px 11px",fontSize:11.5,fontWeight:700,cursor:"pointer",lineHeight:1.2}}>
+              <span style={{width:8,height:8,borderRadius:"50%",background:cc,flex:"none"}}/>{r.name}</button>);})}
+        </div>)}
       {body}
-      {enlarged&&<div style={{flex:"none",display:"flex",gap:16,justifyContent:"center",alignItems:"center",marginTop:6,flexWrap:"wrap"}}>
-        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Trend</span>
+      {enlarged&&<div style={{flex:"none",display:"flex",gap:16,justifyContent:"center",alignItems:"center",marginTop:10,flexWrap:"wrap"}}>
+        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Rating</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:9,height:9,borderRadius:"50%",background:"#fff",boxShadow:"0 0 0 1.5px var(--accent)"}}/>Competition</span>
+        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:9,borderRadius:3,background:"rgba(52,169,230,.25)"}}/>Uncertainty</span>
       </div>}
       {tip&&!enlarged&&(
         <div style={{position:"absolute",left:tip.x,top:Math.max(titleBlock,tip.y),transform:"translate(-50%,-100%)",pointerEvents:"none",zIndex:5,
@@ -2906,40 +3150,58 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
         </div>)}
     </div>);
   if(!enlarged)return chartCol;
-  // enlarged: chart + per-competition rival sidebar (click a dot to populate)
+  // enlarged: chart + per-competition sidebar (click a dot to populate)
   const sp=selPt!=null?pts[selPt]:null;
   const sidebar=!sp
-    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a point on the line to see who you raced in that competition — the rivals from that boat-class era and how you placed against each.</div>
-    : (<div style={{padding:"4px 0"}}>
-        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
-          <div onClick={()=>onOpenEvent&&onOpenEvent(sp.evId)} title={onOpenEvent?"Open results":undefined} style={{fontWeight:700,fontSize:15.5,color:"#eaf3fc",cursor:onOpenEvent?"pointer":"default",lineHeight:1.2}}>{sp.evName}</div>
-          <div style={{marginTop:7,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-            {sp.cls&&(()=>{const ng=nuggetFor(sp.cls,sp.subclass);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
-            <span style={{color:"#9fbdd9",fontSize:12}}>{formatDate(sp.date)}</span>
-            <span style={{color:"#9fc4ec",fontWeight:800,fontSize:12.5,fontVariantNumeric:"tabular-nums"}}>{ordinalOf(sp.rank)} of {sp.fleet}</span>
+    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a point on the line to see this competition's result — the athlete's rating after it and the rivals who sailed it.</div>
+    : (()=>{
+        // Build the rank lookup from the SELECTED event only (scoreEvent, PDF-truth,
+        // tie-aware best rank per canon). Partners (helm/crew of the focal's row)
+        // are flagged same-boat exactly as the old sidebar did.
+        const focalKey=canonName(name);
+        const ev=(events||[]).find(e=>e.id===sp.evId);
+        const rankOf=new Map();          // canon -> best (lowest) rank in this event
+        const mates=new Set();
+        if(ev){try{
+          scoreEvent(ev).rows.forEach(r=>{
+            const hk=canonName(r.helm),ck=canonName(r.crew);
+            if(hk===focalKey||ck===focalKey){const other=hk===focalKey?ck:hk;if(other&&other!==focalKey)mates.add(other);}
+            if(r.rank>=1)[hk,ck].forEach(k=>{if(k){const prev=rankOf.get(k);if(prev===undefined||r.rank<prev)rankOf.set(k,r.rank);}});
+          });
+        }catch{/* unscoreable — leave rankOf empty */}}
+        // Cohort members (top-15) who sailed THIS competition, with their placement.
+        const trues=[]; const partners=[];
+        (cohort15?cohort15.rivals:[]).forEach(r=>{
+          const rk=rankOf.get(r.key); if(rk===undefined)return;    // didn't sail this comp
+          if(mates.has(r.key))partners.push({key:r.key,name:r.name,rank:rk});
+          else trues.push({key:r.key,name:r.name,rank:rk});
+        });
+        trues.sort((a,b)=>a.rank-b.rank);
+        const idx=trues.findIndex(r=>r.rank>sp.rank);
+        const ordered=idx<0?[...trues,{focal:true}]:[...trues.slice(0,idx),{focal:true},...trues.slice(idx)];
+        const rowStyle=hl=>({margin:"4px 12px",padding:"8px 12px",borderRadius:9,display:"flex",alignItems:"center",gap:10,
+          background:hl?"rgba(13,142,207,.2)":"rgba(120,160,210,.08)",border:"1px solid "+(hl?"rgba(90,180,235,.6)":"rgba(120,160,210,.16)")});
+        const rankBadge=(n,hl)=><span style={{flex:"none",width:24,textAlign:"right",fontWeight:800,fontSize:12.5,fontVariantNumeric:"tabular-nums",color:hl?"#eaf3fc":"#9fc4ec"}}>{n}</span>;
+        const nameCell=(nm,bold)=><span style={{flex:1,minWidth:0,fontWeight:bold?800:700,fontSize:12.5,color:"#eaf3fc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</span>;
+        const rows=ordered.map(r=> r.focal
+          ? <div key="__you" style={rowStyle(true)}>{rankBadge(sp.rank,true)}{nameCell(name,true)}<span style={{fontSize:10,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"#7fd0ff",flex:"none"}}>You</span></div>
+          : <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:sp.rank<r.rank?"#ffcf2e":sp.rank===r.rank?"#9fbdd9":"#c98b8b",flex:"none"}}>{sp.rank<r.rank?"beat":sp.rank===r.rank?"tie":"lost"}</span></div>);
+        partners.forEach(r=>rows.push(
+          <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:"#9fc4ec",flex:"none"}}>same boat</span></div>));
+        return(<div style={{padding:"4px 0"}}>
+          <div style={{padding:"14px 16px 12px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
+            <div onClick={()=>onOpenEvent&&onOpenEvent(sp.evId)} title={onOpenEvent?"Open results":undefined} style={{fontWeight:700,fontSize:15.5,color:"#eaf3fc",cursor:onOpenEvent?"pointer":"default",lineHeight:1.2}}>{sp.evName}</div>
+            <div style={{marginTop:7,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              {sp.cls&&(()=>{const ng=nuggetFor(sp.cls,sp.subclass);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
+              <span style={{color:"#9fbdd9",fontSize:12}}>{formatDate(sp.date)}</span>
+            </div>
+            <div style={{marginTop:8,fontSize:12,color:"#cfe0f2"}}>Rating <b>{Math.round(sp.r)}</b> ({fmtDelta(sp.delta)})</div>
+            <div style={{marginTop:4,fontSize:12,color:"#cfe0f2"}}>Your result: <b>{ordinalOf(sp.rank)}</b> of <b>{sp.fleet}</b></div>
           </div>
-          <div style={{marginTop:8,fontSize:12,color:"#cfe0f2"}}>Beat <b>{sp.beaten%1?sp.beaten.toFixed(1):sp.beaten}</b> of <b>{sp.rivals}</b> rivals here — <b>{Math.round(sp.score*100)}%</b></div>
-        </div>
-        <div style={{padding:"11px 16px 4px",fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0"}}>Placing among rivals</div>
-        {(()=>{
-          // Leaderboard slice: rivals ranked by finish, with the focal athlete's own
-          // placement highlighted in line so you can see exactly where they landed.
-          const trues=sp.rivalsHere.filter(r=>!r.sameBoat);           // already rank-sorted
-          const mates=sp.rivalsHere.filter(r=>r.sameBoat);
-          const idx=trues.findIndex(r=>r.rank>sp.rank);
-          const ordered=idx<0?[...trues,{focal:true}]:[...trues.slice(0,idx),{focal:true},...trues.slice(idx)];
-          const rowStyle=hl=>({margin:"4px 12px",padding:"8px 12px",borderRadius:9,display:"flex",alignItems:"center",gap:10,
-            background:hl?"rgba(13,142,207,.2)":"rgba(120,160,210,.08)",border:"1px solid "+(hl?"rgba(90,180,235,.6)":"rgba(120,160,210,.16)")});
-          const rankBadge=(n,hl)=><span style={{flex:"none",width:24,textAlign:"right",fontWeight:800,fontSize:12.5,fontVariantNumeric:"tabular-nums",color:hl?"#eaf3fc":"#9fc4ec"}}>{n}</span>;
-          const nameCell=(nm,bold)=><span style={{flex:1,minWidth:0,fontWeight:bold?800:700,fontSize:12.5,color:"#eaf3fc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</span>;
-          const rows=ordered.map((r,i)=> r.focal
-            ? <div key="__you" style={rowStyle(true)}>{rankBadge(sp.rank,true)}{nameCell(name,true)}<span style={{fontSize:10,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"#7fd0ff",flex:"none"}}>You</span></div>
-            : <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:sp.rank<r.rank?"#ffcf2e":sp.rank===r.rank?"#9fbdd9":"#c98b8b",flex:"none"}}>{sp.rank<r.rank?"beat":sp.rank===r.rank?"tie":"lost"}</span></div>);
-          mates.forEach(r=>rows.push(
-            <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:"#9fc4ec",flex:"none"}}>sailed together</span></div>));
-          return rows;
-        })()}
-      </div>);
+          <div style={{padding:"11px 16px 4px",fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0"}}>Rivals here</div>
+          {rows}
+        </div>);
+      })();
   return(
     <div style={{display:"flex",width:"100%",height}}>
       <div style={{flex:"0 0 64%",height}}>{chartCol}</div>
