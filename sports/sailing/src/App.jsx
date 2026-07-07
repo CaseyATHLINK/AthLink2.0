@@ -2967,6 +2967,488 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
   );
 }
 
+/* ═══════════════ SPORT EXPLAINER (spm-) — per-class equipment hologram + course diagram ═══════════════
+   Config-driven via SPORT_MODELS: add a class entry and <SportShowcase clsId=…/> renders it with zero
+   component changes. Rendering is dependency-free pseudo-3D: [x,y,z] polys → rotate → perspective → SVG. */
+const SPM_TAU=Math.PI*2;
+const spmReducedMotion=()=>typeof window!=="undefined"&&!!window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* Shared rAF driver: one loop per component, paused when offscreen (IntersectionObserver) or tab hidden. */
+function useSpmLoop(hostRef,step,reduced){
+  const stepRef=React.useRef(step);stepRef.current=step;
+  React.useEffect(()=>{
+    if(reduced)return;
+    let raf=0,vis=true,last=performance.now();
+    const frame=now=>{raf=0;const dt=Math.min(64,now-last);last=now;stepRef.current(dt,now);sync();};
+    const sync=()=>{const should=vis&&!document.hidden;
+      if(should&&!raf)raf=requestAnimationFrame(frame);
+      else if(!should&&raf){cancelAnimationFrame(raf);raf=0;}};
+    const io=new IntersectionObserver(es=>{vis=!!(es[0]&&es[0].isIntersecting);if(vis)last=performance.now();sync();},{rootMargin:"90px"});
+    if(hostRef.current)io.observe(hostRef.current);
+    const onVis=()=>{if(!document.hidden)last=performance.now();sync();};
+    document.addEventListener("visibilitychange",onVis);
+    sync();
+    return()=>{io.disconnect();document.removeEventListener("visibilitychange",onVis);if(raf)cancelAnimationFrame(raf);};
+  },[reduced]);
+}
+
+/* 49er geometry in metres. Axes: x fore/aft (bow +), y up, z athwartships. Real class proportions:
+   hull 4.99 m, hull beam ~1.7 m flaring to 2.90 m across the wings, mast ~8.1 m, bowsprit (retracted),
+   square-top main 16.1 m² + jib 5.1 m². */
+function build49erGeometry(){
+  const polys=[];
+  const fill=(part,cls,pts)=>polys.push({part,cls,kind:"fill",pts});
+  const line=(part,cls,pts,w)=>polys.push({part,cls,kind:"line",pts,w});
+  // Smooth hull stations sampled from 49er lines: [x, halfBeamDeck, halfBeamBottom, yDeck, yBottom].
+  // Fine plumb bow, gentle sheer spring, flat run aft, slight rocker — dense stations keep curves soft.
+  const st=[
+    [ 2.50,0.02,0.01,0.55,0.40],
+    [ 2.12,0.15,0.07,0.51,0.22],
+    [ 1.62,0.32,0.17,0.48,0.11],
+    [ 1.06,0.48,0.29,0.46,0.045],
+    [ 0.46,0.62,0.41,0.445,0.015],
+    [-0.24,0.74,0.51,0.435,0.00],
+    [-0.94,0.81,0.57,0.43,0.00],
+    [-1.70,0.85,0.60,0.43,0.02],
+    [-2.49,0.84,0.56,0.44,0.06],
+  ];
+  for(let i=0;i<st.length-1;i++){
+    const[xa,da,ba,yda,yba]=st[i],[xb,db,bb,ydb,ybb]=st[i+1];
+    for(const s of[1,-1]){
+      fill("hull","hullSide",[[xa,yda,da*s],[xb,ydb,db*s],[xb,ybb,bb*s],[xa,yba,ba*s]]);
+      fill("hull","hullBottom",[[xa,yba,ba*s],[xb,ybb,bb*s],[xb,ybb,0],[xa,yba,0]]);
+      fill("hull","deck",[[xa,yda,da*s],[xb,ydb,db*s],[xb,ydb,0],[xa,yda,0]]);
+    }
+  }
+  for(const s of[1,-1]){ // gunwale + chine curves give the hull its lines
+    line("hull","edge",st.map(p=>[p[0],p[3],p[1]*s]),1.1);
+    line("hull","edge",st.map(p=>[p[0],p[4],p[2]*s]),0.7);
+  }
+  line("hull","edge",[[-2.49,0.44,0.84],[-2.49,0.06,0.56],[-2.49,0.06,-0.56],[-2.49,0.44,-0.84]],1); // open transom
+  for(const s of[1,-1]){ // wings/racks — rounded rim, long and clearly angled up outboard, trampoline hints
+    const rim=[[0.95,0.48,0.62*s],[0.58,0.56,1.17*s],[0.34,0.63,1.44*s],[0.00,0.70,1.56*s],[-1.55,0.73,1.58*s],[-2.04,0.73,1.54*s],[-2.27,0.68,1.39*s],[-2.35,0.58,1.10*s],[-2.35,0.51,0.85*s]];
+    fill("hull","wing",rim.concat([[-2.35,0.46,0.84*s],[0.95,0.46,0.62*s]]));
+    line("hull","wingEdge",rim,1.3);
+    line("hull","seam",[[0.30,0.48,0.68*s],[-0.60,0.71,1.56*s]],0.5);
+    line("hull","seam",[[-0.70,0.47,0.79*s],[-1.70,0.72,1.57*s]],0.5);
+  }
+  // daggerboard — straight parallel-edged board, raked slightly aft
+  fill("daggerboard","foil",[[0.62,0.06,0],[0.30,0.06,0],[0.16,-1.05,0],[0.48,-1.05,0]]);
+  fill("rudder","foil",[[-2.52,0.52,0],[-2.72,0.52,0],[-2.80,-0.42,0],[-2.87,-0.86,0],[-2.78,-0.97,0],[-2.66,-0.72,0],[-2.59,-0.18,0]]);
+  line("rudder","spar",[[-2.60,0.58,0],[-1.55,0.72,0]],1.5); // tiller
+  line("mast","mast",[[0.30,0.45,0],[0.26,2.20,0],[0.18,4.20,0],[0.05,6.40,0],[-0.12,8.55,0]],2.2);
+  line("mast","spar",[[0.30,0.85,0],[-1.70,0.94,0.45]],1.7); // boom, eased out to port (starboard tack)
+  for(const s of[1,-1]){ // standing rigging per the 49er owner's manual (Ovington):
+    // two spreader pairs — lower at the mast joint, upper at the hounds; CAP SHROUDS run
+    // masthead → over both spreader tips → chainplates; PRIMARY SHROUDS hounds → chainplates;
+    // D1 lowers to inner chainplates; twin trapeze wires from the hounds keyplates.
+    line("mast","spar",[[0.225,3.35,0],[0.17,3.37,0.48*s]],1.1);  // lower spreaders
+    line("mast","spar",[[0.115,5.55,0],[0.07,5.57,0.36*s]],1.1);  // upper spreaders
+    line(null,"wire",[[0.10,0.47,0.78*s],[0.17,3.37,0.48*s],[0.07,5.57,0.36*s],[-0.12,8.55,0]],0.8); // cap shroud
+    line(null,"wire",[[0.12,0.47,0.66*s],[0.16,5.60,0.02*s]],0.7);  // primary shroud
+    line(null,"wire",[[0.16,0.47,0.42*s],[0.225,3.35,0.03*s]],0.6); // D1 lower
+    line(null,"trap",[[0.16,5.60,0],[-0.60,0.71,1.56*s]],0.9);      // trapeze wire down to the wing rim
+  }
+  line(null,"spar",[[2.46,0.50,0],[3.35,0.54,0]],1.6);    // bowsprit, gennaker flying
+  line(null,"wire",[[2.42,0.52,0],[0.16,5.60,0]],0.8);    // forestay
+  // gennaker — 38 m² asymmetric kite flying entirely on the PORT side: tack on the bowsprit
+  // tip, head at the masthead, clew sheeted back beside the port shroud/chainplate.
+  const KL=[[3.35,0.55,0.00],[3.90,2.60,0.85],[3.45,5.10,1.15],[2.25,7.35,0.85],[-0.05,8.40,0.15]]; // flying luff
+  const KE=[[0.05,0.95,0.66],[0.80,3.10,0.95],[0.92,5.00,1.00],[0.55,6.90,0.62],[-0.05,8.40,0.15]]; // leech to the port clew
+  const KZ=[1.20,1.85,2.05,1.35,0.15];
+  const KM=KL.map((p,i)=>[(p[0]+KE[i][0])/2+0.30,(p[1]+KE[i][1])/2,KZ[i]]);                         // cambered middle
+  for(let i=0;i<4;i++){
+    fill("gennaker","kite",[KL[i],KL[i+1],KM[i+1],KM[i]]);
+    fill("gennaker","kite",[KM[i],KM[i+1],KE[i+1],KE[i]]);
+  }
+  line("gennaker","wire",KL,1.1);                                        // luff
+  line("gennaker","seam",KE,0.7);                                        // leech
+  for(let i=1;i<4;i++)line("gennaker","seam",[KL[i],KM[i],KE[i]],0.6);   // horizontal panel seams
+  line("gennaker","seam",[KL[0],[1.70,0.72,0.48],KE[0]],0.7);            // foot
+  // Sails are modelled as CAMBERED 3D SURFACES on STARBOARD TACK — every sail bellies out to
+  // PORT (+z). Each sail = luff/mid/leech curves at several heights, panelled into strips, so
+  // nothing is flat or mirror-symmetric about the centreline.
+  // mainsail — square top, roached leech, full-length battens
+  const ML=[[0.29,0.92,0],[0.25,2.20,0],[0.17,4.20,0],[0.05,6.40,0],[-0.10,8.45,0]];                  // luff on the mast
+  const ME=[[-1.68,0.95,0.45],[-1.85,2.30,0.56],[-1.72,4.40,0.50],[-1.40,6.50,0.34],[-0.92,8.22,0.12]]; // leech, eased to port
+  const MZ=[0.40,0.58,0.52,0.34,0.10];
+  const MM=ML.map((p,i)=>[(p[0]+ME[i][0])/2,(p[1]+ME[i][1])/2,MZ[i]]);                                 // cambered middle
+  for(let i=0;i<4;i++){
+    fill("mainsail","sail",[ML[i],ML[i+1],MM[i+1],MM[i]]);
+    fill("mainsail","sail",[MM[i],MM[i+1],ME[i+1],ME[i]]);
+  }
+  line("mainsail","seam",[ML[4],MM[4],ME[4]],1);                          // flat square head
+  line("mainsail","seam",ME,0.8);                                        // leech
+  for(let i=1;i<4;i++)line("mainsail","seam",[ML[i],MM[i],ME[i]],0.7);    // battens
+  line("mainsail","seam",[ML[0],MM[0],ME[0]],0.7);                       // foot
+  // jib — luff along the forestay, clew sheeted to port
+  const JL=[[2.30,0.62,0],[1.72,1.95,0],[1.16,3.10,0],[0.62,4.55,0]];
+  const JE=[[-0.42,0.85,0.34],[-0.25,2.00,0.30],[0.10,3.25,0.22],[0.62,4.55,0]];
+  const JZ=[0.40,0.37,0.23,0];
+  const JM=JL.map((p,i)=>[(p[0]+JE[i][0])/2,(p[1]+JE[i][1])/2,JZ[i]]);
+  for(let i=0;i<3;i++){
+    fill("jib","sail",[JL[i],JL[i+1],JM[i+1],JM[i]]);
+    fill("jib","sail",[JM[i],JM[i+1],JE[i+1],JE[i]]);
+  }
+  line("jib","seam",JE,0.7);                                             // leech
+  for(let i=1;i<3;i++)line("jib","seam",[JL[i],JM[i],JE[i]],0.6);        // seams
+  line("jib","seam",[JL[0],[0.95,0.70,0.20],JE[0]],0.6);                 // foot
+  return polys;
+}
+
+/* Rotate-Y (yaw) + rotate-X (fixed 12° camera tilt + user pitch), perspective-project, painter-sort. */
+function spmProjectAll(polys,yaw,pitchDeg){
+  const W=520,H=430,cx=W/2,cyc=H/2+4,D=17,F=15,S=48,YC=3.75,XC=0.6;
+  const pit=((12+pitchDeg)*Math.PI)/180;
+  const cyw=Math.cos(yaw),syw=Math.sin(yaw),cp=Math.cos(pit),sp=Math.sin(pit);
+  const out=[];
+  for(let i=0;i<polys.length;i++){
+    const P=polys[i],n=P.pts.length,cam=[];
+    let d="",zsum=0;
+    for(let k=0;k<n;k++){
+      const x0=P.pts[k][0]-XC,y0=P.pts[k][1]-YC,z0=P.pts[k][2];
+      const xr=x0*cyw+z0*syw,zr=-x0*syw+z0*cyw;
+      const y2=y0*cp-zr*sp,z2=y0*sp+zr*cp;
+      const f=(F/(D-z2))*S;
+      d+=(k?"L":"M")+(cx+xr*f).toFixed(1)+","+(cyc-y2*f).toFixed(1);
+      zsum+=z2;
+      if(k<3)cam.push([xr,y2,z2]);
+    }
+    if(P.kind==="fill")d+="Z";
+    let light=.5;
+    if(P.kind==="fill"&&cam.length===3){
+      const ux=cam[1][0]-cam[0][0],uy=cam[1][1]-cam[0][1],uz=cam[1][2]-cam[0][2];
+      const vx=cam[2][0]-cam[0][0],vy=cam[2][1]-cam[0][1],vz=cam[2][2]-cam[0][2];
+      const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+      light=Math.min(1,.18+.82*Math.abs(nz/(Math.hypot(nx,ny,nz)||1)));
+    }
+    out.push({i,d,part:P.part,cls:P.cls,kind:P.kind,w:P.w,depth:zsum/n,light});
+  }
+  out.sort((a,b)=>a.depth-b.depth);
+  return out;
+}
+
+const spmNavy=(t,a)=>{const m=(lo,hi)=>Math.round(lo+(hi-lo)*t);return"rgba("+m(15,74)+","+m(42,140)+","+m(74,205)+","+a+")";};
+/* Colours tuned for the app's LIGHT page background — the models render frameless. */
+function spmPaint(cls,light,hot){
+  switch(cls){
+    case"hullSide":return{fill:spmNavy(light,1),stroke:hot?"#0a84ff":"rgba(140,200,255,.4)",sw:hot?1.4:.7,fo:1};
+    case"hullBottom":return{fill:spmNavy(light*.55,1),stroke:"rgba(140,200,255,.25)",sw:.6,fo:1};
+    case"deck":return{fill:spmNavy(.25+light*.5,1),stroke:hot?"#0a84ff":"rgba(140,200,255,.3)",sw:hot?1.3:.6,fo:1};
+    case"wing":return{fill:spmNavy(light,.6),stroke:hot?"#0a84ff":"rgba(31,78,128,.6)",sw:hot?1.5:.9,fo:.5};
+    case"foil":return{fill:spmNavy(.3+light*.4,.9),stroke:hot?"#0a84ff":"rgba(31,78,128,.55)",sw:hot?1.6:.8,fo:.92};
+    // sails shade panel-by-panel with the surface normal (light) so the camber reads in 3D
+    case"sail":{const m=(lo,hi)=>Math.round(lo+(hi-lo)*light);return{fill:"rgb("+m(9,58)+","+m(38,120)+","+m(86,196)+")",stroke:hot?"#0a84ff":"rgba(13,35,60,.6)",sw:hot?1.5:.9,fo:hot?.62:.30+.22*light};}
+    case"kite":{const m=(lo,hi)=>Math.round(lo+(hi-lo)*light);return{fill:"rgb("+m(16,66)+","+m(54,132)+","+m(110,210)+")",stroke:hot?"#0a84ff":"rgba(13,35,60,.5)",sw:hot?1.4:.8,fo:hot?.55:.26+.20*light};}
+    default:return{fill:spmNavy(light,1),stroke:"rgba(140,200,255,.35)",sw:.7,fo:1};
+  }
+}
+function spmLinePaint(cls,hot){
+  if(hot)return{col:"#0a84ff",glow:"rgba(10,132,255,.35)",go:.8};
+  switch(cls){
+    case"mast":return{col:"rgba(19,49,78,.9)",glow:"rgba(10,132,255,.25)",go:.25};
+    case"spar":return{col:"rgba(19,49,78,.72)",glow:"rgba(10,132,255,.2)",go:.2};
+    case"wire":return{col:"rgba(31,78,128,.5)",glow:"rgba(10,132,255,.16)",go:.12};
+    case"trap":return{col:"rgba(10,132,255,.6)",glow:"rgba(10,132,255,.22)",go:.16};
+    case"seam":return{col:"rgba(31,78,128,.32)",glow:"rgba(10,132,255,.15)",go:0};
+    default:return{col:"rgba(150,200,245,.7)",glow:"rgba(10,132,255,.2)",go:.15};
+  }
+}
+
+/* Windward–leeward course model (520×430 viewBox) — RYA course "M": mark 1 to windward,
+   leeward gate 2s/2p, shared start/finish line at the bottom. Signal M2:
+   Start – 1 – 2s/2p – 1 – Finish. One boat sails the loop. */
+const SPM_COURSE_XY={wind:[260,26],windward:[260,64],gateL:[180,306],gateR:[340,306],sfA:[150,390],sfB:[370,390]};
+function spmSmooth(pts,iters){ // Chaikin corner-cutting — turns the waypoint polyline into a smooth track
+  let p=pts;
+  for(let n=0;n<iters;n++){
+    const q=[p[0]];
+    for(let i=0;i<p.length-1;i++){
+      const a=p[i],b=p[i+1];
+      q.push([a[0]*.75+b[0]*.25,a[1]*.75+b[1]*.25]);
+      q.push([a[0]*.25+b[0]*.75,a[1]*.25+b[1]*.75]);
+    }
+    q.push(p[p.length-1]);
+    p=q;
+  }
+  return p;
+}
+function spmResample(pts,n){
+  const d=[0];let tot=0;
+  for(let i=1;i<pts.length;i++){tot+=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);d.push(tot);}
+  const out=[];let j=0;
+  for(let k=0;k<n;k++){
+    const target=(tot*k)/(n-1);
+    while(j<pts.length-2&&d[j+1]<target)j++;
+    const seg=d[j+1]-d[j]||1,t=(target-d[j])/seg;
+    out.push([pts[j][0]+(pts[j+1][0]-pts[j][0])*t,pts[j][1]+(pts[j+1][1]-pts[j][1])*t]);
+  }
+  return out;
+}
+function spmBuildCourse(){
+  const pts=[];const push=(x,y)=>pts.push([x,y]);
+  // An efficient windward–leeward: tidy, even tacks and gybes worked up and down the
+  // middle of the course (no erratic short tacks); each mark is fully enclosed by its arc.
+  push(260,406);push(258,384);                                             // cross the start line
+  push(198,300);push(322,192);push(238,98);                                // beat 1 — two clean tacks
+  push(284,74);push(276,54);push(256,50);push(238,62);push(242,86);        // round mark 1 (mark inside the arc)
+  push(316,168);push(210,250);push(261,300);                               // run 1 — two gybes to the gate centre
+  push(236,314);push(214,330);push(182,332);push(158,314);push(166,290);push(192,282); // full loop around 2s
+  push(322,196);push(232,104);push(240,96);                                // beat 2 — two clean tacks
+  push(284,74);push(276,54);push(256,50);push(238,62);push(242,86);        // round mark 1 again
+  push(316,168);push(214,258);push(272,330);push(322,384);push(330,406);   // run 2 down the middle, across the line
+  const smooth=spmResample(spmSmooth(pts,3),320);
+  const n=smooth.length;
+  // Heading = the SMOOTH path's own tangent, averaged over a window so the boat turns
+  // gently and always points where it's actually going (nose leads, trail follows).
+  const heads=smooth.map((p,i)=>{
+    const a=smooth[Math.max(0,i-5)],b=smooth[Math.min(n-1,i+5)];
+    return Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI+90;
+  });
+  for(let i=1;i<n;i++){ // unwrap so rotation is continuous (no 360° flip at the wrap point)
+    while(heads[i]-heads[i-1]>180)heads[i]-=360;
+    while(heads[i]-heads[i-1]<-180)heads[i]+=360;
+  }
+  return{pts:smooth,heads};
+}
+function spmBoatAt(course,t){
+  const path=course.pts,n=path.length,f=Math.min(n-1.001,Math.max(0,t*(n-1)));
+  const i=Math.floor(f),fr=f-i,a=path[i],b=path[Math.min(n-1,i+1)];
+  const ang=course.heads
+    ?course.heads[i]+(course.heads[Math.min(n-1,i+1)]-course.heads[i])*fr // interpolate the smooth heading
+    :Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI+90;
+  return{x:a[0]+(b[0]-a[0])*fr,y:a[1]+(b[1]-a[1])*fr,
+    ang,idx:i,
+    op:t<.03?t/.03:t>.96?Math.max(0,(1-t)/.04):1};
+}
+
+const SPORT_MODELS={
+  "49er":{
+    equipment:{
+      name:"49er",
+      geometry:build49erGeometry,
+      parts:[
+        {id:"hull",name:"Hull",blurb:"Carries the crew and creates the platform; shaped to plane (skim) across the water at high speed."},
+        {id:"daggerboard",name:"Daggerboard",blurb:"The underwater fin that stops the boat slipping sideways and stabilises it, converting the sails' side-force into forward drive."},
+        {id:"rudder",name:"Rudder",blurb:"The steering blade at the back; small movements at 20+ knots make big course changes."},
+        {id:"mast",name:"Mast",blurb:"The 8-metre carbon spar that holds the sails up; bends to depower them in strong wind."},
+        {id:"mainsail",name:"Mainsail",blurb:"The engine. Its distinctive square top gives huge power; trimming it (via the mainsheet) controls the boat's speed and balance."},
+        {id:"jib",name:"Jib",blurb:"The front sail; drives the boat and steers airflow onto the mainsail, doubling its efficiency."},
+        {id:"gennaker",name:"Gennaker",blurb:"The 38 m² downwind sail flown from the bowsprit — it more than doubles the sail area and powers 20-knot-plus runs."},
+      ],
+    },
+    course:{
+      title:"How a race works",
+      loopSeconds:24,
+      explainer:[
+        "Course: Start – 1 – 2s/2p – 1 – Finish, tacking upwind and gybing downwind.",
+        "Average race: about 30 minutes.",
+        "Top speed: 24 knots (~44 km/h) — one of the fastest Olympic boats.",
+      ],
+      marks:[
+        {id:"wind",label:"Wind",desc:"The course is set so the first leg is straight into the wind."},
+        {id:"windward",label:"Mark 1 — windward",desc:"The top buoy. Boats beat upwind to it, round it, then turn downwind."},
+        {id:"gate",label:"Leeward gate (2s / 2p)",desc:"Two buoys at the bottom of the course — round either one, then head back upwind."},
+        {id:"startfinish",label:"Start & finish line",desc:"Races start and finish on the same line, between the committee vessels."},
+      ],
+    },
+  },
+};
+
+function EquipmentModel3D({cfg,onInfo}){
+  const geo=React.useMemo(()=>cfg.geometry(),[cfg]);
+  const[reduced]=React.useState(spmReducedMotion);
+  const stRef=React.useRef({yaw:-0.7,pitch:0,vyaw:0,drag:null,idleAt:-1e9,hover:null});
+  const[frame,setFrame]=React.useState(()=>spmProjectAll(geo,-0.7,0));
+  const[active,setActive]=React.useState(null);
+  const wrapRef=React.useRef(null);
+
+  useSpmLoop(wrapRef,(dt,now)=>{
+    const s=stRef.current;
+    if(!s.drag&&!s.hover){ // rotation pauses while a part is hovered/selected
+      if(s.vyaw){s.yaw+=s.vyaw*dt;s.vyaw*=Math.pow(0.93,dt/16.7);if(Math.abs(s.vyaw)<2e-5)s.vyaw=0;}
+      if(now-s.idleAt>3000)s.yaw+=(SPM_TAU/24000)*dt; // one revolution / 24 s
+    }
+    setFrame(spmProjectAll(geo,s.yaw,s.pitch));
+  },reduced);
+
+  const setPart=p=>{
+    stRef.current.hover=p;
+    setActive(p);
+    if(onInfo){const part=p?cfg.parts.find(x=>x.id===p):null;onInfo(part?{t:part.name,d:part.blurb}:null);}
+  };
+  const hoverAt=e=>{
+    const part=(e.target.dataset&&e.target.dataset.part)||null;
+    setPart(part);
+  };
+  const onDown=e=>{
+    stRef.current.drag={x:e.clientX,y:e.clientY,id:e.pointerId,claimed:false,moved:false,mt:performance.now()};
+  };
+  const onMove=e=>{
+    const s=stRef.current,d=s.drag;
+    if(d&&d.id===e.pointerId&&!reduced){
+      const dx=e.clientX-d.x,dy=e.clientY-d.y;
+      if(!d.claimed){
+        const ax=Math.abs(dx),ay=Math.abs(dy);
+        if(e.pointerType==="touch"){ // only claim horizontal-dominant gestures; let the page scroll otherwise
+          if(ax>8&&ax>ay*1.2){d.claimed=true;try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){/* noop */}}
+          else if(ay>12&&ay>ax){s.drag=null;return;}
+        }else if(ax>3||ay>3){
+          d.claimed=true;
+          // capture the pointer so dragging keeps working outside the model's bounds until release
+          try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){/* noop */}
+        }
+      }
+      if(d.claimed){ // full 360° freedom: yaw + unclamped pitch (trackball feel)
+        const now=performance.now(),mdt=Math.max(8,now-d.mt);d.mt=now;d.moved=true;
+        s.yaw+=dx*0.0065;s.vyaw=(dx*0.0065)/mdt;
+        s.pitch+=dy*0.32;
+        d.x=e.clientX;d.y=e.clientY;
+        setPart(null);
+        return;
+      }
+    }
+    if(e.pointerType!=="touch")hoverAt(e);
+  };
+  const onUp=e=>{
+    const s=stRef.current,d=s.drag;
+    if(d&&d.id===e.pointerId){
+      s.drag=null;s.idleAt=performance.now();
+      if(!d.moved){ // tap = select part; tap elsewhere dismisses
+        const part=(e.target.dataset&&e.target.dataset.part)||null;
+        setPart(part);
+      }
+    }
+  };
+  const onLeave=e=>{if(e.pointerType!=="touch"&&!stRef.current.drag)setPart(null);};
+
+  return(
+    <div ref={wrapRef} className="spm-holo">
+      <svg viewBox="0 0 520 430" style={{display:"block",width:"100%",cursor:reduced?"default":"grab",touchAction:"pan-y"}}
+        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={onLeave}>
+        {frame.map(p=>{
+          const hot=!!active&&p.part===active;
+          const dim=!!active&&!hot; // dim everything but the selected part so it pinpoints clearly
+          if(p.kind==="fill"){
+            const c=spmPaint(p.cls,p.light,hot);
+            return<path key={p.i} d={p.d} fill={c.fill} fillOpacity={c.fo} stroke={c.stroke} strokeWidth={c.sw}
+              strokeLinejoin="round" opacity={dim?0.16:1} data-part={p.part||undefined}/>;
+          }
+          const L=spmLinePaint(p.cls,hot);
+          return(<g key={p.i} opacity={dim?0.14:1}>
+            {(hot||L.go>0)&&<path d={p.d} fill="none" stroke={L.glow} strokeWidth={(p.w||1)*3.6} strokeLinecap="round" opacity={L.go}/>}
+            <path d={p.d} fill="none" stroke={L.col} strokeWidth={hot?(p.w||1)*1.6:(p.w||1)} strokeLinecap="round" data-part={p.part||undefined}/>
+          </g>);
+        })}
+        {frame.filter(p=>p.part&&p.kind==="line").map(p=>( // generous invisible hit paths so thin lines are hoverable
+          <path key={"h"+p.i} d={p.d} fill="none" stroke="#000" strokeOpacity="0" strokeWidth="15"
+            data-part={p.part} style={{pointerEvents:"stroke"}}/>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function CourseDiagram({cfg,onInfo}){
+  const[reduced]=React.useState(spmReducedMotion);
+  const course=React.useMemo(()=>spmBuildCourse(),[]);
+  const[clock,setClock]=React.useState(1600); // start a little into the lap so the boat is visible at once
+  const[mark,setMark]=React.useState(null);
+  const wrapRef=React.useRef(null);
+  useSpmLoop(wrapRef,dt=>setClock(c=>c+dt),reduced);
+  const T=(cfg.loopSeconds||24)*1000,XY=SPM_COURSE_XY;
+  const report=m=>{ // hover text goes to the shared bottom info line, never over the diagram
+    if(!onInfo)return;
+    if(m){const mk=(cfg.marks||[]).find(x=>x.id===m);onInfo(mk?{t:mk.label,d:mk.desc}:null);}
+    else onInfo({t:cfg.title,d:(cfg.explainer||[]).join(" ")});
+  };
+  const onMove=e=>{const m=(e.target.dataset&&e.target.dataset.mark)||null;if(m!==mark){setMark(m);report(m);}};
+  const hi=id=>mark===id;
+  const t=reduced?0.30:(clock/T)%1;
+  const s=spmBoatAt(course,t);
+  const back=Math.max(0,s.idx-72); // fading contrail over the last ~25% of track
+  const seg=(from,to)=>course.pts.slice(from,to+1).map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ");
+  const i1=back+Math.floor((s.idx-back)/3),i2=back+Math.floor(2*(s.idx-back)/3);
+  // committee vessels at both ends of the shared start/finish line
+  const rcBoat="M0,-7 C2,-4 2.6,-1 2.6,2 L2.6,6 L-2.6,6 L-2.6,2 C-2.6,-1 -2,-4 0,-7 Z";
+  return(
+    <div ref={wrapRef} className="spm-holo" onPointerEnter={()=>report(null)} onPointerLeave={()=>{setMark(null);if(onInfo)onInfo(null);}}>
+      <svg viewBox="0 0 520 430" style={{display:"block",width:"100%"}} onPointerMove={onMove}>
+        <defs>
+          <pattern id="spmGrid" width="42" height="42" patternUnits="userSpaceOnUse">
+            <path d="M42,0H0V42" fill="none" stroke="rgba(19,49,78,.12)" strokeWidth="1"/>
+          </pattern>
+        </defs>
+        <rect x="0" y="0" width="520" height="430" fill="url(#spmGrid)"/>
+        <g>
+          <text x={XY.wind[0]} y="16" textAnchor="middle" fill={hi("wind")?"#0a84ff":"#33425e"} fontSize="15" fontWeight="800" letterSpacing="2">WIND</text>
+          <path d="M260,22 L260,50 M251,41 L260,51 L269,41" stroke={hi("wind")?"#0a84ff":"rgba(19,49,78,.75)"} strokeWidth="2.4" fill="none" strokeLinecap="round"/>
+          <circle cx={XY.wind[0]} cy={XY.wind[1]+8} r="22" fill="transparent" data-mark="wind"/>
+        </g>
+        <g>
+          <line x1={XY.sfA[0]} y1={XY.sfA[1]} x2={XY.sfB[0]} y2={XY.sfB[1]}
+            stroke={hi("startfinish")?"#0a84ff":"rgba(6,99,196,.8)"} strokeWidth={hi("startfinish")?2.4:1.7} strokeDasharray="6 7"/>
+          <g transform={"translate("+XY.sfA[0]+","+XY.sfA[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
+          <g transform={"translate("+XY.sfB[0]+","+XY.sfB[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
+          <text x={(XY.sfA[0]+XY.sfB[0])/2} y={XY.sfA[1]+26} textAnchor="middle" fill={hi("startfinish")?"#0a84ff":"rgba(51,66,94,.85)"} fontSize="13.5" fontWeight="700" letterSpacing="1.5">START &amp; FINISH</text>
+          <line x1={XY.sfA[0]} y1={XY.sfA[1]} x2={XY.sfB[0]} y2={XY.sfB[1]} stroke="#000" strokeOpacity="0" strokeWidth="22" data-mark="startfinish"/>
+        </g>
+        {[["windward",XY.windward,"1",16,5],["gate",XY.gateL,"2s",-19,5],["gate",XY.gateR,"2p",19,5]].map(([id,xy,lab,dx,dy],k)=>(
+          <g key={k}>
+            <circle cx={xy[0]} cy={xy[1]} r="14" className="spm-halo" fill="rgba(10,132,255,.28)"/>
+            <circle cx={xy[0]} cy={xy[1]} r="7.5" fill={hi(id)?"#0663c4":"#0a78e8"} stroke="rgba(19,49,78,.5)" strokeWidth="1.2"/>
+            <text x={xy[0]+dx*1.5} y={xy[1]+dy+1} textAnchor="middle" fill={hi(id)?"#0a84ff":"rgba(51,66,94,.95)"} fontSize="18" fontWeight="800">{lab}</text>
+            <circle cx={xy[0]} cy={xy[1]} r="20" fill="transparent" data-mark={id}/>
+          </g>
+        ))}
+        <g opacity={s.op}>
+          {s.idx-back>4&&<g fill="none" strokeLinecap="round">
+            <polyline points={seg(back,i1)} stroke="rgba(10,132,255,.20)" strokeWidth="3"/>
+            <polyline points={seg(i1,i2)} stroke="rgba(10,132,255,.40)" strokeWidth="3"/>
+            <polyline points={seg(i2,s.idx)} stroke="rgba(10,132,255,.62)" strokeWidth="3.2"/>
+          </g>}
+          <g transform={"translate("+s.x.toFixed(1)+","+s.y.toFixed(1)+") rotate("+s.ang.toFixed(1)+") scale(1.78)"}>
+            {/* top-down 49er: fine bow, hull, wing flares */}
+            <path d="M0,-8.5 C2.4,-5.5 3.1,-2.5 3.1,0.5 L3.1,1.6 C5.3,1.9 5.3,5.6 3.1,5.9 L3.1,6.8 L-3.1,6.8 L-3.1,5.9 C-5.3,5.6 -5.3,1.9 -3.1,1.6 L-3.1,0.5 C-3.1,-2.5 -2.4,-5.5 0,-8.5 Z"
+              fill="rgba(9,111,214,.95)" stroke="rgba(13,35,60,.9)" strokeWidth=".9" strokeLinejoin="round"/>
+            <line x1="0" y1="-6.5" x2="0" y2="5.5" stroke="rgba(255,255,255,.85)" strokeWidth=".8"/>
+            <circle cx="0" cy="0.5" r="1.2" fill="rgba(255,255,255,.95)"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+/* The two models side by side + one shared info line underneath — hover text lands here,
+   at the very bottom, so nothing ever covers the diagrams. */
+function SpmDuo({cfg}){
+  const[info,setInfo]=React.useState(null);
+  return(
+    <div className="spm-duo">
+      <div className="spm-duorow">
+        <EquipmentModel3D cfg={cfg.equipment} onInfo={setInfo}/>
+        <CourseDiagram cfg={cfg.course} onInfo={setInfo}/>
+      </div>
+      <div className="spm-info">
+        {info
+          ?(<><b>{info.t}</b><span> — {info.d}</span></>)
+          :(<span className="spm-info-hint">Drag the boat to spin it · hover any part or course mark for details</span>)}
+      </div>
+    </div>
+  );
+}
+
+function SportShowcase({clsId}){
+  const cfg=SPORT_MODELS[clsId];
+  if(!cfg)return null;
+  return(
+    <div className="spm-sec">
+      <SpmDuo cfg={cfg}/>
+    </div>
+  );
+}
+
 function FootprintLegend({label="Competitions / country",showHost=false,rank=false,maxCount=0}={}){
   if(rank){
     return(<div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",fontSize:11.5,color:"#9fbdd9",padding:"10px 4px 2px"}}>
@@ -7790,6 +8272,29 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .liquidGlass-wrapper:hover{transform:scale(1.02) translateY(-1px);}
     .liquidGlass-wrapper:active{transform:scale(0.98);}
     .liquidGlass-wrapper:disabled{opacity:0.45;cursor:not-allowed;transform:none;}
+    /* ── Sport explainer (spm-): per-class equipment hologram + course diagram ── */
+    .spm-sec{margin:26px 0 30px}
+    /* class page: title/search/filters take 50%, the two models take 50% on the same row.
+       Models are BOTTOM-aligned to the header's last line; their tops may rise above the
+       title — this removes any awkward gap below the header. */
+    .spm-classgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:end;margin-bottom:44px}
+    .spm-classhead{min-width:0}
+    @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}}
+    /* the info line is absolutely placed below the row so long text bleeds DOWN and never
+       shifts the models; the grid's reserved margin keeps it clear of the content beneath. */
+    .spm-duo{position:relative;min-width:0}
+    .spm-duorow{display:flex;gap:0;justify-content:center;align-items:flex-start}
+    /* pull the two boats together — their outer whitespace overlaps, closing the empty gap */
+    .spm-duorow .spm-holo{flex:1 1 0;min-width:0;max-width:480px}
+    .spm-duorow .spm-holo:first-child{margin-right:-6%}
+    .spm-duorow .spm-holo:last-child{margin-left:-6%}
+    .spm-holo{position:relative} /* frameless — the models sit directly on the page */
+    .spm-info{position:absolute;top:100%;left:0;right:0;margin-top:4px;font-size:12.5px;line-height:1.45;color:var(--mut);text-align:left}
+    .spm-info b{color:var(--ink);font-weight:700}
+    .spm-info-hint{opacity:.75}
+    .spm-halo{transform-box:fill-box;transform-origin:center;animation:spmPulse 2.4s ease-out infinite}
+    @keyframes spmPulse{0%{transform:scale(.55);opacity:.75}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}
+    @media (prefers-reduced-motion:reduce){.spm-halo{animation:none;opacity:.35}}
   `}</style>
 
   {/* ── FLOATING TOP BAR (no frame; glass pills that hide on scroll-down) ── */}
@@ -8246,6 +8751,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         })}
         <button className="strip-chip" onClick={()=>goTop("competitions")}>All competitions<ChevronRight size={13}/></button>
       </div>
+      <SportShowcase clsId="49er"/>
       <p className="seclabel">Recent competitions</p>
       <div className="strip-cards">
         {recent.map(ev=>{
@@ -8306,45 +8812,57 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     });
     return(
     <div className="wrap sec">
-      <div className="page-head" style={{display:"flex",alignItems:"flex-end",gap:14,flexWrap:"wrap"}}>
-        <div style={{flex:"1 1 auto",minWidth:0}}>
-          <h1 className="page-title">{lens?`${classLabel(lens)} competitions`:"Competitions"}</h1>
-          <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{(lens||cLens)?"":" across all clubs and classes"}</p>
-        </div>
-        <button className="btn ghost" style={{fontSize:13,padding:"8px 14px",flex:"none"}} onClick={()=>openCalendar(null)}><Calendar size={15}/>Calendar</button>
-      </div>
-      <div className="toolbar" style={{marginBottom:12,display:"flex",gap:10,alignItems:"center"}}>
-        <div className="srch" style={{flex:1}}>
-          <Search size={16} color="#9fb2c8"/>
-          <input placeholder="Search competitions, classes & clubs…" value={compQ} onChange={e=>setCompQ(e.target.value)}/>
-        </div>
-      </div>
-      <div className="strip-chips" style={{margin:"0 0 14px"}}>
-        <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:undefined}))}>All</button>
-        {chipDefs.map(c=>{
-          const n=published.filter(e=>e.cls===c.id).length;
-          if(!n) return null;
-          return(
-            <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
-              <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
-            </button>
-          );
-        })}
-        <span className="lens-selwrap">
-          <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
-            <option value="">All countries</option>
-            {compCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
-          </select>
-          <ChevronRight size={13} className="lens-selchev"/>
-        </span>
-        <span className="lens-selwrap">
-          <select className="lens-select" value="" onChange={e=>{if(e.target.value)enterPortal(e.target.value);}}>
-            <option value="">By host…</option>
-            {navHosts.map(h=>(<option key={h.id} value={h.id}>{h.name}</option>))}
-          </select>
-          <ChevronRight size={13} className="lens-selchev"/>
-        </span>
-      </div>
+      {(()=>{
+        const head=(
+          <div className="page-head" style={{display:"flex",alignItems:"flex-end",gap:14,flexWrap:"wrap"}}>
+            <div style={{flex:"1 1 auto",minWidth:0}}>
+              <h1 className="page-title">{lens?`${classLabel(lens)} competitions`:"Competitions"}</h1>
+              <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{(lens||cLens)?"":" across all clubs and classes"}</p>
+            </div>
+            <button className="btn ghost" style={{fontSize:13,padding:"8px 14px",flex:"none"}} onClick={()=>openCalendar(null)}><Calendar size={15}/>Calendar</button>
+          </div>);
+        const search=(
+          <div className="toolbar" style={{marginBottom:12,display:"flex",gap:10,alignItems:"center"}}>
+            <div className="srch" style={{flex:1}}>
+              <Search size={16} color="#9fb2c8"/>
+              <input placeholder="Search competitions, classes & clubs…" value={compQ} onChange={e=>setCompQ(e.target.value)}/>
+            </div>
+          </div>);
+        const chips=(
+          <div className="strip-chips" style={{margin:"0 0 14px"}}>
+            <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:undefined}))}>All</button>
+            {chipDefs.map(c=>{
+              const n=published.filter(e=>e.cls===c.id).length;
+              if(!n) return null;
+              return(
+                <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
+                  <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
+                </button>
+              );
+            })}
+            <span className="lens-selwrap">
+              <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
+                <option value="">All countries</option>
+                {compCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+              </select>
+              <ChevronRight size={13} className="lens-selchev"/>
+            </span>
+            <span className="lens-selwrap">
+              <select className="lens-select" value="" onChange={e=>{if(e.target.value)enterPortal(e.target.value);}}>
+                <option value="">By host…</option>
+                {navHosts.map(h=>(<option key={h.id} value={h.id}>{h.name}</option>))}
+              </select>
+              <ChevronRight size={13} className="lens-selchev"/>
+            </span>
+          </div>);
+        const cfg=lens?SPORT_MODELS[lens]:null;
+        if(!cfg) return(<>{head}{search}{chips}</>);
+        return( // class explainer: title + search + filters left, the two diagrams packed right on the same row
+          <div className="spm-classgrid">
+            <div className="spm-classhead">{head}{search}{chips}</div>
+            <SpmDuo cfg={cfg}/>
+          </div>);
+      })()}
       {evItems.map(item=>{
         if(item.type==='divider') return(
           <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
@@ -8730,58 +9248,75 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <>
       <div className="strip"><div className="wrap">
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
-        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
-          <div style={{minWidth:0,display:"flex",gap:18,alignItems:"center"}}>
-            {(()=>{
-              // Item 7: globe for BOTH association/club/federation portals AND class portals.
-              let hiso=null;
-              if(isClassPortal){
-                const top=Object.entries(hostCountryCounts).sort((a,b)=>b[1]-a[1])[0];
-                hiso=top?top[0]:null;
-              } else {
-                const hc=hostLocation(portal,events);
-                hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
-              }
-              if(!hiso) return null;
-              return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where they compete — click to expand" onClick={()=>setHostFootprintOpen(true)}>
-                <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={isClassPortal?null:hiso}/>
-              </div>);
-            })()}
-            <div style={{minWidth:0,alignSelf:"center"}}>
-            {/* Item 4: OWNER/role badge sits ABOVE the title, left-aligned. */}
-            {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
-              <div style={{marginBottom:8}}>
-                <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
-                  color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
-                  <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
-                </span>
+        {(()=>{
+          // Models render for any portal whose class has a SPORT_MODEL (e.g. the 49er class association).
+          const modelCfg=SPORT_MODELS[isClassPortal?portalCls:(host&&host.cls)]||null;
+          // Globe for BOTH association/club/federation portals AND class portals.
+          const globe=(()=>{
+            let hiso=null;
+            if(isClassPortal){
+              const top=Object.entries(hostCountryCounts).sort((a,b)=>b[1]-a[1])[0];
+              hiso=top?top[0]:null;
+            } else {
+              const hc=hostLocation(portal,events);
+              hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+            }
+            if(!hiso) return null;
+            return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where they compete — click to expand" onClick={()=>setHostFootprintOpen(true)}>
+              <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={isClassPortal?null:hiso}/>
+            </div>);
+          })();
+          // Actions moved directly BELOW the globe.
+          const actions=(
+            <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",width:150}}>
+              <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
+                <Users size={14} style={{flex:"none"}}/> Athletes
+              </MagneticItem>
+              <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
+                <Calendar size={14} style={{flex:"none"}}/> Calendar
+              </MagneticItem>
+              {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
+                <Trophy size={14} style={{flex:"none"}}/> Rankings
+              </MagneticItem>}
+              {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
+                <Settings size={14} style={{flex:"none"}}/> Edit page
+              </MagneticItem>}
+            </div>
+          );
+          const titleBlock=(
+            <div style={{minWidth:0,alignSelf:"flex-start"}}>
+              {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
+                <div style={{marginBottom:8}}>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
+                    color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
+                    <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
+                  </span>
+                </div>
+              )}
+              <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+                <h1 className="page-title">{portalName}</h1>
               </div>
-            )}
-            <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
-              <h1 className="page-title">{portalName}</h1>
+              <div className="pillbar" style={{marginTop:12}}>
+                <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
+                <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
+              </div>
             </div>
-            <div className="pillbar" style={{marginTop:12}}>
-              <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
-              <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
+          );
+          const head=(
+            <div style={{minWidth:0,display:"flex",gap:18,alignItems:"flex-start",flexWrap:"wrap"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:14,alignItems:"center",flex:"none"}}>
+                {globe}{actions}
+              </div>
+              {titleBlock}
             </div>
-            </div>
-          </div>
-          {/* ── In-portal pill buttons — Item 6: vertically centered against the globe/title block ── */}
-          <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",alignSelf:"center"}}>
-            <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
-              <Users size={14} style={{flex:"none"}}/> Athletes
-            </MagneticItem>
-            <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
-              <Calendar size={14} style={{flex:"none"}}/> Calendar
-            </MagneticItem>
-            {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
-              <Trophy size={14} style={{flex:"none"}}/> Rankings
-            </MagneticItem>}
-            {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
-              <Settings size={14} style={{flex:"none"}}/> Edit page
-            </MagneticItem>}
-          </div>
-        </div>
+          );
+          if(!modelCfg) return head;
+          return(
+            <div className="spm-classgrid">
+              <div className="spm-classhead">{head}</div>
+              <SpmDuo cfg={modelCfg}/>
+            </div>);
+        })()}
       </div></div>
       <div className="wrap sec" style={{paddingTop:0}}>
         {isPendingHostHere&&(
@@ -8961,7 +9496,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       )}
       {(()=>{
         const hostIso=IOC_ISO[ev.country]||(ev.country&&ev.country.length===2?ev.country.toUpperCase():"");
-        return(
+        const head=(
         <div style={{display:"flex",alignItems:"stretch",gap:16,marginBottom:16}}>
           {hostIso&&(
             <div onClick={()=>setRegattaFootprint(ev)} title="Who's racing — click to expand"
@@ -9016,6 +9551,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
           </div>
         </div>);
+        const spmCfg=SPORT_MODELS[ev.cls];
+        if(!spmCfg) return head; // 49er (and any modelled class) gets the explainer beside the header, 50/50
+        return(
+          <div className="spm-classgrid">
+            <div className="spm-classhead">{head}</div>
+            <SpmDuo cfg={spmCfg}/>
+          </div>);
       })()}
       {/* Revealable, sponsor-focused competition summary */}
       <div style={{marginBottom:16}}>
