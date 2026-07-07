@@ -3011,7 +3011,7 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
     const yOf=r=>M.t+plotH*(1-(r-lo)/ySpan);
     // 3–4 round tick values: step ≈ span/3 snapped to 50/100/200 (…), floor to a
     // multiple of the step so labels land on round numbers within the domain.
-    const rawStep=ySpan/3;
+    const rawStep=ySpan/4;
     const nice=[50,100,150,200,250,500,1000];
     const step=nice.find(s=>s>=rawStep)||Math.ceil(rawStep/100)*100;
     const ticks=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+0.5; v+=step)ticks.push(v);
