@@ -42,9 +42,11 @@ ROUTES = {
     # out / returned empty (blank "AI summary unavailable") and drifted into
     # non-English output on foreign-named regattas (the International 49er page
     # rendered in Spanish). Gemini (already live on Vercel via GEMINI_API_KEY) is
-    # reliable and English-first. Falls back to Anthropic if the key is missing.
+    # reliable and English-first. Falls back to Anthropic if the key is missing;
+    # model is overridable via env (GEMINI_OVERVIEW_MODEL), matching nat/vision.
     "overview": {"provider": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
-                 "key_env": "GEMINI_API_KEY", "model": "gemini-2.5-flash"},
+                 "key_env": "GEMINI_API_KEY",   "model": "gemini-3.5-flash",
+                 "model_env": "GEMINI_OVERVIEW_MODEL"},
     # hover was Cerebras, but its public endpoint kept erroring (model churn /
     # key), so it's routed to Kimi — already live and free.
     "hover":    {"provider": "openai", "base_url": "https://api.moonshot.ai/v1",
