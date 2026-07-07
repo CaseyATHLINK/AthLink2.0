@@ -2585,7 +2585,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
                 {headToHead.w}–{headToHead.l}{headToHead.t>0?`–${headToHead.t}`:""}
               </span>
               <span style={{fontSize:11.5,color:"#9fbdd9",lineHeight:1.35}}>
-                {headToHead.avgGap===0?"dead even on average":`you finish ${Math.abs(headToHead.avgGap).toFixed(1)} place${Math.abs(headToHead.avgGap).toFixed(1)==="1.0"?"":"s"} ${headToHead.avgGap>0?"ahead":"behind"} on average`}
+                {headToHead.avgGap===0?"dead even on average":`${name} finished ${Math.abs(headToHead.avgGap).toFixed(1)} place${Math.abs(headToHead.avgGap).toFixed(1)==="1.0"?"":"s"} ${headToHead.avgGap>0?"ahead":"behind"} on average`}
               </span>
             </div>
             {headToHead.partners.length>0&&(
