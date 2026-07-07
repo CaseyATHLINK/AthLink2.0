@@ -173,14 +173,23 @@ def anthropic_text(resp):
                    if b.get("type") == "text")
 
 
-def call_gemini(key, model, parts, max_tokens=400, timeout=30):
+def call_gemini(key, model, parts, max_tokens=400, timeout=30,
+                thinking_budget=None):
     """Gemini REST generateContent. parts = list of Gemini content parts
     (e.g. [{"text": ...}, {"inline_data": {"mime_type": ..., "data": b64}}]).
-    Gemini ingests PDF/image natively via inline_data. Returns raw dict."""
+    Gemini ingests PDF/image natively via inline_data. Returns raw dict.
+
+    thinking_budget: pass 0 to DISABLE reasoning on 2.5/flash models. Gemini
+    flash turns thinking ON by default; for short-output text tasks the reasoning
+    eats the maxOutputTokens budget and the visible answer comes back truncated
+    (a 2-sentence bio degraded to just the athlete's name). Left None for the
+    PDF/image parser, which uses a large budget and benefits from reasoning."""
+    gen = {"maxOutputTokens": max_tokens}
+    if thinking_budget is not None:
+        gen["thinkingConfig"] = {"thinkingBudget": thinking_budget}
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{model}:generateContent?key={key}")
-    payload = {"contents": [{"parts": parts}],
-               "generationConfig": {"maxOutputTokens": max_tokens}}
+    payload = {"contents": [{"parts": parts}], "generationConfig": gen}
     headers = {"Content-Type": "application/json"}
     return _post_json(url, payload, headers, timeout)
 
@@ -222,10 +231,13 @@ def complete_text(task, prompt, max_tokens, timeout=20):
             resp = call_openai_compat(cfg["base_url"], key, cfg["model"],
                                       messages, max_tokens, timeout=timeout)
             return openai_text(resp), cfg["model"], None
-        # gemini text-only path (rare for ai_filter; supported for completeness)
+        # gemini text path. Disable thinking (budget 0) — these are short
+        # blurbs; otherwise reasoning consumes max_tokens and the answer is
+        # returned truncated (e.g. a bio degraded to just the athlete's name).
         if cfg["provider"] == "gemini":
             resp = call_gemini(key, cfg["model"], [{"text": prompt}],
-                               max_tokens=max_tokens, timeout=timeout)
+                               max_tokens=max_tokens, timeout=timeout,
+                               thinking_budget=0)
             return gemini_text(resp), cfg["model"], None
         fallback_error = f"unknown provider '{cfg['provider']}'"
     except LLMError as exc:
