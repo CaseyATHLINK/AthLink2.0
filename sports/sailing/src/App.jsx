@@ -7484,17 +7484,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .hrk{font-family:'Barlow',sans-serif;font-weight:800;font-size:22px;width:58px;text-align:center;flex:none;color:var(--navy);}
     .hrk.p1{color:#a87d00;}.hrk.p2{color:#1f6fb2;}.hrk.p3{color:#b23a3a;}
     .hrk small{display:block;font-size:10px;color:var(--mut);font-weight:600;}
-    .oab{flex:none;display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:12px;
-      background:linear-gradient(135deg,rgba(200,146,11,.14),rgba(22,58,99,.08));
-      border:.5px solid rgba(200,146,11,.38);color:var(--gold);
+    .oab{flex:none;display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:980px;
+      background:linear-gradient(135deg,rgba(200,146,11,.16),rgba(22,58,99,.08));
+      border:.5px solid rgba(200,146,11,.4);color:var(--gold);
       box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 1px 2px rgba(0,0,0,.06);
       backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
     .oab svg{flex:none;}
-    .oabtxt{display:flex;flex-direction:column;line-height:1.3;min-width:0;}
-    .oabk{font-size:8px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);opacity:.85;white-space:nowrap;}
-    .oabv{font-size:11.5px;font-weight:700;color:var(--navy);white-space:nowrap;}
-    @media(max-width:520px){.oabk{display:none;}.oab{padding:4px 9px;gap:5px;}.oabv{font-size:11px;}}
-    @media(max-width:430px){.oabtxt{display:none;}.oab{padding:5px 7px;gap:0;}}
+    .oabv{font-size:12px;font-weight:700;color:var(--navy);white-space:nowrap;}
+    @media(max-width:430px){.oabv{display:none;}.oab{padding:5px 7px;gap:0;}}
     .rolechip{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:980px;text-transform:uppercase;font-family:'Barlow',sans-serif;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
     .rolechip.helm{color:#fff;background:var(--navy2);}.rolechip.crew{color:var(--navy2);background:var(--sky);}
     .miniraces{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;}
@@ -9599,11 +9596,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               {(()=>{const oa=outstandingAchievementFor(h,name);return oa?(
                 <span className="oab" title={oa.title}>
-                  <Award size={15}/>
-                  <span className="oabtxt">
-                    <span className="oabk">Outstanding Achievement</span>
-                    <span className="oabv">{oa.divisionLabel}</span>
-                  </span>
+                  <Award size={13}/>
+                  <span className="oabv">{oa.divisionLabel}</span>
                 </span>):null;})()}
               {(()=>{const n=nuggetFor(h.ev.cls,h.ev.subclass);return n?<span className="cls" style={{background:n.color}}>{n.label}</span>:null;})()}
               <ChevronRight size={18} color="#9fb2c8"/>
