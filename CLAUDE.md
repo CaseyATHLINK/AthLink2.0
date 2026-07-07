@@ -199,6 +199,34 @@ resolution priority: reserved word > host > athlete.
   button calls `history.back()`. `navStack` now only feeds the Back label.
 - Unknown/unresolvable slugs silently fall to sailing home (by design).
 
+## Rating engine (Glicko-lite, client-side) — added 2026-07-08
+One global skill rating per athlete (NOT per-class) — R (start 1200) + uncertainty
+RD (∈ [60,350]). Module scope in `sports/sailing/src/App.jsx`, ~line 2281, just
+above `computeRivalCohort`. Constants block: `RATING_START/RD_START/RD_MIN/RD_MAX/
+RATING_SCALE/K_BASE/RD_DECAY_C/RD_EVENT_SHRINK/CLS_SWITCH_RD_BUMP`. One update per
+event, chronological dateKey order (stable tie-break on event id); undated/Draft/
+unscoreable events are never rated. Each event is multiplayer Elo from a
+pre-event snapshot (simultaneous deltas): pairwise `S` vs `E=1/(1+10^((Rj−Ri)/400))`,
+`ΔR_i=K_i·Σ(S−E)/(N−1)`, `K_i=32·(RD_i/60)` clamped [32,128]; same-boat partners
+are never compared against each other. RD grows on idle time
+(`√(RD²+18²·monthsIdle)`), bumps +60 the first time an athlete rates in a new
+class (capped 350), and shrinks ×0.97 per rated event (floored 60).
+- **Cache**: module-level `RATINGS_CACHE=new WeakMap()` keyed by the `events`
+  array's identity; accessor is `getAthleteRatings(events)`. A NEW filtered/sliced
+  events array (different identity, same contents) misses the cache and
+  recomputes — this is expected, not a bug. Dev-only `console.time("athlink
+  ratings")` behind `import.meta.env.DEV` (~65ms on the 59-event dataset).
+- **HARD BOUNDARY**: the PDF is ground truth. Ratings are a derived metric layered
+  on top — ranks are always READ from `scoreEvent(ev).rows` (tie-aware);
+  finishing order is never re-ranked, recalculated, or displayed altered by the
+  rating engine.
+- **Rival score** (in `computeRivalCohort`): `rivalScore = decayedJaccard^ALPHA ×
+  prox^BETA × ratingProx^GAMMA × activity`, where `ratingProx=exp(-|ΔR|/200)`
+  comes straight from this engine (neutral 0.5 if either athlete is unrated).
+- **Consumers**: `AthleteWeb` (node distance from focal via d3 `forceRadial`) and
+  `ProgressChart` (the skill-rating curve + uncertainty band) both read through
+  `getAthleteRatings`/`computeRivalCohort` — no separate rating logic lives there.
+
 ## Public usernames (URL identity) — migration 0007
 Two namespaces share the root path, so usernames are unique case-insensitively
 across BOTH: athletes (`athlete_usernames.username`, keyed by name_key =
@@ -293,6 +321,9 @@ Table: athlete_claims.
 2. DB migrations: custom_classes table + country column on hosts.
 3. Association + federation signup flows (club flow is done).
 4. Publish flow → then return to athlete side.
+5. Rating engine + rating-aware rival score (`feature/rival-rating-engine`,
+   2026-07-08) — built and validated on its branch, not yet merged to main;
+   see the "Rating engine" section above.
 
 ## Parser rules (api/parse_pdf.py) — v2, July 2026
 - Pipeline: detect → route → parse → normalise. `detect_format()` +
