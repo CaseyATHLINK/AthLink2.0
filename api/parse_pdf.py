@@ -51,7 +51,8 @@ except Exception:
     score_parse = None
 try:
     from llm import (call_gemini, gemini_text, call_openai_compat, openai_text,
-                     LLMError, ROUTES as _LLM_ROUTES, route as _llm_route)
+                     LLMError, ROUTES as _LLM_ROUTES, route as _llm_route,
+                     _gemini_key, _anthropic_fallback_model)
 except Exception:
     call_gemini = None
     gemini_text = None
@@ -60,6 +61,12 @@ except Exception:
     LLMError = Exception
     _LLM_ROUTES = {}
     _llm_route = None
+    # Fallbacks so the module still imports if llm.py is unavailable (e.g. an
+    # isolated test). Mirrors llm._gemini_key / llm._anthropic_fallback_model.
+    def _gemini_key():
+        return os.environ.get("Gemini_API_Key_Universal") or os.environ.get("GEMINI_API_KEY", "")
+    def _anthropic_fallback_model():
+        return os.environ.get("ANTHROPIC_FALLBACK_MODEL", "").strip() or "claude-sonnet-5"
 
 # ── penalty codes ──────────────────────────────────────────────────────────
 CODES = {
@@ -661,7 +668,11 @@ def parse_row_with_cols(row, cols, open_division=False):
     # div (which drives grouping); keep any other label as a genuine fleet name.
     if div_raw in ('---', '--', '—', '–', '-', 'n/a', 'N/A'):
         div_raw = ''
-    elif div_raw and not _looks_like_class(div_raw) and norm_category(div_raw):
+    elif (div_raw and not _looks_like_class(div_raw)
+          and not _looks_like_fleet_label(div_raw) and norm_category(div_raw)):
+        # A Division cell holding an AGE group ("U23") — not a boat class/fleet
+        # ("303 Doubles", "2.4mR", "Radial", which _looks_like_fleet_label catches)
+        # — is demographic, so route it to category and let a real fleet split.
         if not category:
             category = norm_category(div_raw)
         div_raw = ''
@@ -902,6 +913,7 @@ _EXCEL_HDR_MAP = {
     'no': 'Rank', 'no.': 'Rank', 'pos': 'Rank', 'place': 'Rank', 'rank': 'Rank',
     'skipper': 'Helm', 'skippername': 'Helm', "skipper'sname": 'Helm',
     'helm': 'Helm', 'helmname': 'Helm', "helm'sname": 'Helm',
+    'sailor': 'Helm', 'sailorname': 'Helm', 'competitor': 'Helm',
     'crew': 'Crew', 'crewname': 'Crew', "crew'sname": 'Crew',
     'sailnumber': 'Sail', 'sailno': 'Sail', 'sailno.': 'Sail', 'sail': 'Sail',
     'club': 'Club', 'boatclub': 'Club',
@@ -913,7 +925,8 @@ _EXCEL_HDR_MAP = {
 _EXCEL_HDR_KEYS = {'no', 'no.', 'rank', 'pos', 'place', 'skipper', 'skippername',
                    'helm', 'helmname', 'crew', 'crewname', 'sail', 'sailno',
                    'sailnumber', 'club', 'class', 'dinghy', 'total', 'nett',
-                   'net', 'nettotal'}
+                   'net', 'nettotal', 'sailor', 'sailorname', 'competitor',
+                   'boatname'}
 
 def _excel_is_titleish(row):
     """A merged-title row: ≤2 non-empty cells AND none of them is a header key or
@@ -930,15 +943,36 @@ def _excel_normalise_header(header):
     """Rewrite header cells to canonical labels parse_table's detect_cols reads.
     'Discard'/'1 Discard' and 'Place' (when a rank col exists) are cleared so
     they don't get mistaken for a race/rank column — the discard info already
-    lives in the race cells' brackets."""
+    lives in the race cells' brackets.
+
+    Two federation-sheet quirks (2nd SEA Para Sailing, Microsoft Excel producer):
+      - the finishing position is a TRAILING bare 'Points' column (values 1..N)
+        distinct from a 'Total Points' column → map it to Rank;
+      - 'After N Discard' is the NET-after-discards score, not a discarded value
+        → map it to Nett (only a plain 'Discard'/'N Discard' column is dropped)."""
+    cells = [str(c or '') for c in header]
+    flat = [re.sub(r'\s+', ' ', c).strip() for c in cells]
+    has_rank = any(hdr_key(c) in ('no', 'no.', 'rank', 'pos') for c in cells)
+    total_idx = next((i for i, c in enumerate(cells)
+                      if hdr_key(c) in ('total', 'totalpts', 'totalpoints')), None)
+    # A trailing bare Points/Place/Pos column, distinct from Total, is the rank
+    # when no dedicated rank column exists.
+    trailing_rank_idx = None
+    if not has_rank and total_idx is not None:
+        for i, c in enumerate(cells):
+            if hdr_key(c) in ('points', 'place', 'pos', 'pts') and i != total_idx:
+                trailing_rank_idx = i          # keep the last such column
     out = []
-    has_rank = any(hdr_key(c) in ('no', 'no.', 'rank', 'pos') for c in header)
-    for c in header:
+    for i, c in enumerate(cells):
         k = hdr_key(c)
-        if re.search(r'discard', str(c or ''), re.IGNORECASE):
-            out.append('')                         # drop the discarded-score column
+        if i == trailing_rank_idx:
+            out.append('Rank')
+        elif re.search(r'after.*discard', flat[i], re.IGNORECASE):
+            out.append('Nett')                 # net-after-discards column
+        elif re.search(r'discard', flat[i], re.IGNORECASE):
+            out.append('')                     # drop the discarded-score column
         elif k == 'place' and has_rank:
-            out.append('')                         # redundant with the rank column
+            out.append('')                     # redundant with the rank column
         elif k in _EXCEL_HDR_MAP:
             out.append(_EXCEL_HDR_MAP[k])
         else:
@@ -1117,6 +1151,74 @@ def _text_line_entry(rank, helm, crew, sail, nat, div, race_tokens, net_token=No
         'birth_year': None, 'crew_birth_year': None, '_age': None, '_crew_age': None,
     }
 
+# ── ioda-word-notice (IODA "General Notice" Word doc) ────────────────────────
+# Prose top-3 lists only — no score grid. e.g.
+#   Asian Overall Winners
+#   First: Ethan Chia (Singapore)
+#   Second: Chanatip Tongglum (Thailand)
+#   Third: Patcharaphan Ongkaloy (Thailand)
+# Extract the FIRST "Overall Winners" podium as a tiny 3-row result (§3c) — a
+# legitimate, if sparse, import — rather than erroring.
+_IODA_ORD = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5}
+# Common sailing-nation names → IOC. Only used for this prose notice (country is
+# spelled out in parens, never a code). Unknown names leave nat empty — the row
+# is still valid (helm + rank).
+_IODA_COUNTRY = {
+    'singapore': 'SGP', 'thailand': 'THA', 'hong kong': 'HKG', 'malaysia': 'MAS',
+    'indonesia': 'INA', 'philippines': 'PHI', 'japan': 'JPN', 'china': 'CHN',
+    'korea': 'KOR', 'south korea': 'KOR', 'india': 'IND', 'uae': 'UAE',
+    'united arab emirates': 'UAE', 'australia': 'AUS', 'new zealand': 'NZL',
+    'chinese taipei': 'TPE', 'taiwan': 'TPE', 'vietnam': 'VIE', 'sri lanka': 'SRI',
+    'oman': 'OMA', 'qatar': 'QAT', 'kuwait': 'KUW', 'guam': 'GUM', 'macau': 'MAC',
+    'great britain': 'GBR', 'usa': 'USA', 'united states': 'USA', 'france': 'FRA',
+    'germany': 'GER', 'italy': 'ITA', 'spain': 'ESP', 'turkey': 'TUR',
+}
+
+def try_ioda_notice(full_text):
+    """IODA General Notice prose podium → up to a few placement rows. Returns
+    entries or None. Gated by the caller on the notice signature."""
+    lines = [l.rstrip() for l in full_text.split('\n')]
+    low = full_text.lower()
+    # Need at least the First/Second/Third prose markers to be this format.
+    if not ('first:' in low and 'second:' in low):
+        return None
+    # Prefer the first "Overall Winners" heading (skip Boy/Girl/Team splits so we
+    # emit the single canonical podium, not four overlapping ones).
+    start = 0
+    label = 'Overall'
+    for i, l in enumerate(lines):
+        ll = l.strip().lower()
+        if 'overall' in ll and 'winner' in ll and 'boy' not in ll and 'girl' not in ll \
+           and 'team' not in ll:
+            start = i + 1
+            label = re.sub(r'\s+', ' ', l.strip())
+            break
+    row_re = re.compile(r'^\s*(First|Second|Third|Fourth|Fifth)\s*:\s*(.+?)\s*$',
+                        re.IGNORECASE)
+    entries = []
+    for l in lines[start:]:
+        m = row_re.match(l)
+        if not m:
+            # Stop at the next section once we've collected a podium.
+            if entries and l.strip() and not l.strip().lower().startswith(
+                    ('first', 'second', 'third', 'fourth', 'fifth')):
+                break
+            continue
+        rank = _IODA_ORD.get(m.group(1).lower())
+        body = m.group(2).strip()
+        # "Name (Country)" — country in the LAST parenthesis; ignore a trailing
+        # ", NAT" inside the name (e.g. "Lucas Cao, SGP").
+        cm = re.search(r'\(([^)]+)\)\s*$', body)
+        country = cm.group(1).strip() if cm else ''
+        name = re.sub(r'\s*\([^)]*\)\s*$', '', body).strip()
+        name = re.sub(r',\s*[A-Z]{2,3}\s*$', '', name).strip()  # drop ", SGP" tail
+        if not name or rank is None:
+            continue
+        nat = _IODA_COUNTRY.get(country.lower(), '')
+        entries.append(_text_line_entry(rank, name, '', '', nat, label, [], None))
+    return entries or None
+
+
 def try_sailingresults(full_text):
     """SailingResults.net: rank + (Forename SURNAME) + boat + sail + club + races
     + Total + Net on one line, with the crew (and sometimes the helm) on the
@@ -1165,6 +1267,77 @@ def try_sailingresults(full_text):
         crew = names[1] if len(names) > 1 else ''
         entries.append(_text_line_entry(int(toks[0]), helm, crew, sail, '', div, races, net))
     return entries or None
+
+def try_sailingresults_clipped(full_text):
+    """WordPress-embedded SailingResults.net (hansaworlds.org): the wide table is
+    clipped at the right print margin, so Total/Net and most race columns are cut
+    off the page and the helm/crew names wrap onto continuation lines. Recover
+    rank + sail + country + names + whatever race columns survive, and flag the
+    clip (§3c) rather than erroring. Row model:
+        <rank> [inline names…] <sail digits> <COUNTRY> <race…>
+    with the rest of the crew on the following line(s). Gated on the WordPress
+    'Pl Name Boat … Country' header so the clean overall.aspx prints (handled by
+    try_sailingresults) are never touched."""
+    low = full_text.lower()
+    if 'sailingresults.net' not in low or not re.search(r'\bpl\s+name\s+boat', low):
+        return None
+    raw = full_text.split('\n')
+    cm = re.search(r'(?:Overall\s+)?Results?\s*[-–—]\s*([0-9A-Za-z][0-9A-Za-z ]*)', full_text)
+    div = re.sub(r'\s+', ' ', cm.group(1)).strip() if cm else ''
+    # Two-person classes (303 2P / Doubles) carry a crew; single-handers (Liberty,
+    # 2.4mR) don't — so we never fold a boat-name token into a phantom crew.
+    is_doubles = bool(re.search(r'\bdouble|2\s*p\b|two[- ]person', (div + ' ' + full_text[:400]).lower()))
+    STATE = {'VIC', 'WA', 'NSW', 'QLD', 'SA', 'TAS', 'ACT', 'NT'}  # AUS state col
+
+    def is_name_tok(t):
+        return bool(re.match(r"^[A-Za-z][A-Za-z'’.\-]*,?$", t)) and t.upper() not in CODES
+
+    def find_sail_country(rest):
+        """Locate an adjacent <sail digits> <COUNTRY> pair. The country is a 2-3
+        letter code IMMEDIATELY preceded by the sail number — this disambiguates a
+        real code (…2736 HKG) from an all-caps surname (…Wai FOO 2736)."""
+        for k in range(len(rest) - 1):
+            if re.match(r'^\d{2,6}$', rest[k]) and re.match(r'^[A-Z]{2,3}$', rest[k + 1]) \
+               and rest[k + 1] not in CODES:
+                return k, rest[k], rest[k + 1]
+        return None, '', ''
+
+    rank_idx = []
+    for i, l in enumerate(raw):
+        toks = l.split()
+        if len(toks) >= 3 and toks[0].isdigit():
+            if find_sail_country(toks[1:])[0] is not None:
+                rank_idx.append(i)
+    entries = []
+    for j, i in enumerate(rank_idx):
+        toks = raw[i].split()
+        rank = int(toks[0])
+        rest = toks[1:]
+        sidx, sail, country = find_sail_country(rest)
+        inline_names = [t for t in rest[:sidx] if is_name_tok(t)]
+        # After the country: State (AUS) then any surviving race scores.
+        race_toks = [t for t in rest[sidx + 2:] if t not in STATE]
+        # names: inline tokens + name-like tokens on the continuation lines up to
+        # the next rank line (skip chrome / footer / stray codes / boat names in
+        # ALL-CAPS like "STATUE"/"Barracuda" are kept only as trailing helm words).
+        names_flat = list(inline_names)
+        end = rank_idx[j + 1] if j + 1 < len(rank_idx) else len(raw)
+        for k in range(i + 1, end):
+            ln = raw[k].strip()
+            lk = ln.lower()
+            if not ln or 'sailingresults' in lk or 'http' in lk or lk.startswith('created'):
+                continue
+            names_flat += [t for t in ln.split() if is_name_tok(t)]
+        cleaned = [re.sub(r',$', '', t) for t in names_flat if t]
+        helm = ' '.join(cleaned[:2]).strip()
+        crew = ' '.join(cleaned[2:4]).strip() if is_doubles else ''
+        if not helm:
+            continue
+        # Surviving trailing columns are races (Total/Net were clipped off-page).
+        e = _text_line_entry(rank, helm, crew, sail, country, div, race_toks, None)
+        entries.append(e)
+    return entries or None
+
 
 def try_sailwave_text(full_text):
     """Multi-page / flighted Sailwave where the table grid shatters. Each entry
@@ -1785,7 +1958,7 @@ def try_topyacht(full_text):
 # lines above/below the rank line.
 _WSID_RE  = re.compile(r'^[A-Z]{3}[A-Z]{1,4}\d{1,4}$')   # CHNYC14, MASMA27, HKGNH5
 _OR_GROUP = re.compile(r'^(U\d{2}|Masters?|Master|Youth|Junior|Jr|Veteran|Open)$', re.IGNORECASE)
-_OR_ROW   = re.compile(r'^\s*\d+\s+[A-Z]{3}\s?\d{2,7}\b')  # nat+sail glued or spaced
+_OR_ROW   = re.compile(r'^\s*\d+(?:st|nd|rd|th)?\s+[A-Z]{3}\s?\d{2,7}\b')  # rank(±ordinal) nat+sail
 _OR_NAMEFRAG = re.compile(r"^[A-Za-z][A-Za-z '’\-]+$")
 
 def _or_race_cells(toks):
@@ -1830,8 +2003,9 @@ def try_overall_results(full_text):
         idxset = set(idxs)
         for j in idxs:
             toks = block[j].split()
+            # rank may be plain ("1") or ordinal ("1st"/"2nd"/"11th")
             try:
-                rank = int(toks[0])
+                rank = int(re.sub(r'(?i)(st|nd|rd|th)$', '', toks[0]))
             except ValueError:
                 continue
             # nat+sail: glued ("CHN200777") or spaced ("CHN 200777")
@@ -1842,11 +2016,29 @@ def try_overall_results(full_text):
             else:
                 continue
             widx = next((k for k, t in enumerate(rest) if _WSID_RE.match(t)), None)
-            if widx is None or widx + 2 >= len(rest):
-                continue
-            head_toks = rest[:widx]
-            total_tok, net_tok = rest[widx + 1], rest[widx + 2]
-            race_cells = _or_race_cells(rest[widx + 3:])
+            if widx is not None and widx + 2 < len(rest):
+                # ── keelboat / two-person layout: a crew sail-id (WSID) sits
+                # between the name and the Total/Net pair (unchanged path). ──
+                head_toks = rest[:widx]
+                total_tok, net_tok = rest[widx + 1], rest[widx + 2]
+                race_cells = _or_race_cells(rest[widx + 3:])
+            else:
+                # ── single-hander layout (ILCA/Optimist): no crew id. Name is the
+                # leading alphabetic/category run; the numeric run that follows is
+                # R1..Rn then Total then Net. ──
+                nend = 0
+                for t in rest:
+                    # a score token starts with an optional '(' then a digit, or is
+                    # a bare penalty code — that marks the end of the name run.
+                    if re.match(r'^\(?-?\d', t) or (t.isupper() and t.strip('()') in CODES):
+                        break
+                    nend += 1
+                head_toks = rest[:nend]
+                nums = _or_race_cells(rest[nend:])
+                if len(nums) < 3:        # need at least 1 race + total + net
+                    continue
+                total_tok, net_tok = nums[-2], nums[-1]
+                race_cells = nums[:-2]
             cat, name_toks = '', []
             for t in head_toks:
                 if _OR_GROUP.match(t):
@@ -2523,14 +2715,15 @@ def detect_host(text):
 
 # ── Vision parse providers ──────────────────────────────────────────────────
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-# Haiku 4.5 reads PDFs natively (visual + text). It is now the universal FALLBACK
-# for the vision parse: PDFs route to Gemini 3, image uploads to Kimi, and any
-# provider error / rate-limit (429) / empty response degrades gracefully here.
-_AI_MODEL = "claude-haiku-4-5"
-# Gemini 3 Flash ingests PDFs natively (no rasterisation) and is the recommended
-# high-volume free model. Override via env without a code change if Google bumps
-# the id (e.g. "gemini-flash-latest") or you move to a paid tier.
-_PARSE_GEMINI_MODEL = os.environ.get("PARSE_GEMINI_MODEL", "gemini-3-flash-preview")
+# Anthropic Sonnet 5 is the ONE universal FALLBACK (text + vision) for every AI
+# path — vision parse, flag-nat reads and the agent loop. It fires only when
+# Gemini errors/rate-limits. NEVER Haiku. Env-overridable via
+# ANTHROPIC_FALLBACK_MODEL (resolved once at cold start).
+_AI_MODEL = _anthropic_fallback_model()
+# Gemini 3 Flash ingests PDFs natively (no rasterisation) and is the primary
+# vision model. Override via env (VISION_MODEL / legacy GEMINI_VISION_MODEL,
+# honoured through llm.route('vision')) without a code change.
+_PARSE_GEMINI_MODEL = os.environ.get("VISION_MODEL", "") or os.environ.get("PARSE_GEMINI_MODEL", "gemini-3-flash")
 # Kimi handles IMAGES natively (png/jpeg/webp/gif) — but NOT PDFs — so it only
 # serves image uploads. k2.5 is vision-capable.
 _VISION_KIMI_MODEL = os.environ.get("VISION_KIMI_MODEL", "kimi-k2.5")
@@ -2563,6 +2756,27 @@ The column order for every row on this page is:
 {header}
 Parse EVERY data row on this page. Return ONLY the rows visible on this page.
 """
+
+def _heic_to_jpeg(file_bytes: bytes):
+    """Decode an HEIC/HEIF photo to JPEG bytes. Registers pillow-heif with PIL
+    when available. Returns JPEG bytes, or None if HEIC support isn't installed
+    (caller then shows a clear 'export as JPEG' message)."""
+    try:
+        from PIL import Image
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+        except Exception:
+            pass
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=90)
+        return out.getvalue()
+    except Exception:
+        return None
+
 
 def _downscale_image(file_bytes: bytes, mime_type: str, max_dim: int = 2200, quality: int = 82):
     """Shrink oversized images before the AI call to cut upload + token cost.
@@ -2711,7 +2925,7 @@ def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str):
         # 25s budget made Gemini time out and silently degrade to fallbacks;
         # give it 38s. Kimi (~48s) can never fit as a mid-chain fallback inside
         # the 50s self-timeout, so it is only the primary when Gemini has no key.
-        gkey = os.environ.get("GEMINI_API_KEY", "")
+        gkey = _gemini_key()
         kkey = os.environ.get("KIMI_API_KEY", "")
         if gkey and call_gemini is not None:
             try:
@@ -2728,7 +2942,7 @@ def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str):
         return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
     # application/pdf (and any non-image) → Gemini, else Anthropic. Whole-file
     # calls only happen for small PDFs; big ones arrive page-chunked (?page=N).
-    gkey = os.environ.get("GEMINI_API_KEY", "")
+    gkey = _gemini_key()
     if gkey and call_gemini is not None:
         try:
             return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=35)
@@ -3236,6 +3450,15 @@ def _sig_ourclubadmin(fb, low, meta):
     return 'ourclubadmin' in low
 
 
+def _sig_ioda_notice(fb, low, meta):
+    title = _meta_get(meta, 'Title').lower()
+    if 'ioda' in title or 'general notice' in title:
+        return True
+    # Prose podium with no score grid: First/Second/Third markers + no table cues.
+    return ('first:' in low and 'second:' in low and 'third:' in low
+            and 'sailed:' not in low and 'rank' not in low[:2000])
+
+
 # Ordered registry. `input_types` is the set of input kinds a family is seen in;
 # `detect(file_bytes, full_text_lower, pdf_meta) -> bool`; `extractor` points at
 # the EXISTING rule function for families with a rule path today, else None.
@@ -3280,6 +3503,9 @@ FORMAT_REGISTRY = [
      "detect": _sig_excel_print,    "extractor": try_excel_print},
     {"family": "ourclubadmin", "input_types": ["html", "pdf-text"],
      "detect": _sig_ourclubadmin,   "extractor": None},
+    # Prose-only notice: keep LAST so any real results grid wins first.
+    {"family": "ioda-word-notice", "input_types": ["pdf-text"],
+     "detect": _sig_ioda_notice,    "extractor": try_ioda_notice},
 ]
 
 
@@ -3431,6 +3657,12 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         sr = try_sailingresults(full_text)
         if sr and len(sr) > len(all_parsed):
             all_parsed = sr
+        # WordPress-embedded (hansaworlds.org) clipped variant: recover placings +
+        # names + surviving races when the standard parser found nothing (§3c).
+        if len(all_parsed) < 3:
+            src = try_sailingresults_clipped(full_text)
+            if src and len(src) > len(all_parsed):
+                all_parsed = src
     if 'sailwave results for' in sig or re.search(r'sailed:\s*\d+.*entries:\s*\d+', sig):
         declared = max([int(x) for x in re.findall(r'[Ee]ntries:\s*(\d+)', full_text)] or [0])
         deficient = (not all_parsed) or len(all_parsed) < 5 or (declared and len(all_parsed) < 0.5 * declared)
@@ -3570,6 +3802,16 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         if orr:
             all_parsed = orr
 
+    # ioda-word-notice (IODA General Notice Word doc): prose "First/Second/Third:
+    # Name (Country)" podium, no score grid. Last-resort text extract → a tiny
+    # placements-only result rather than erroring (§3c).
+    if not all_parsed and ('ioda' in _meta_get(_pdf_meta, 'Title').lower()
+                           or 'general notice' in _meta_get(_pdf_meta, 'Title').lower()
+                           or ('first:' in sig and 'second:' in sig and 'third:' in sig)):
+        ioda = try_ioda_notice(full_text)
+        if ioda:
+            all_parsed = ioda
+
     # Sailwave multi-fleet: the table extractor drops the fleet headings, so
     # rows from every fleet arrive with a blank div and collapse into one table
     # with duplicate ranks. Recover each row's fleet from the text sections
@@ -3643,6 +3885,10 @@ def _detect_mime(data: bytes) -> str:
         return "image/webp"
     if data[:6] in (b"GIF87a", b"GIF89a"):
         return "image/gif"
+    # ── HEIC/HEIF (iPhone photos): ISO-BMFF 'ftyp' box with a heic/heif brand. ──
+    if data[4:8] == b"ftyp" and data[8:12] in (b"heic", b"heix", b"heif",
+                                               b"hevc", b"hevx", b"mif1", b"msf1"):
+        return "image/heic"
     # ── ZIP container (PK) — xlsx is a zip; peek the namelist for 'xl/' parts.
     # Checked BEFORE the HTML sniff so an .xlsx never falls through to pdfplumber.
     if data[:4] == b"PK\x03\x04":
@@ -3674,7 +3920,12 @@ def _detect_mime(data: bytes) -> str:
                          if l.count(',') >= 2 or l.count(';') >= 2)
         if len(lines) >= 3 and delim_hits >= 3:
             return "text/csv"
-    return "application/pdf"  # default — let pdfplumber try
+    # Real PDFs start with %PDF (caught above). If the bytes look like a PDF (have
+    # a %PDF marker anywhere in the head, e.g. a leading BOM) let pdfplumber try;
+    # otherwise it's an unrecognised/unsniffable type.
+    if b"%PDF" in data[:1024]:
+        return "application/pdf"
+    return "application/octet-stream"
 
 
 # ── xlsx / csv / blw ingestion ──────────────────────────────────────────────
@@ -4260,7 +4511,7 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
             out.setdefault('notes', []).insert(0, f"Loaded {url}")
             return out
         except ValueError as html_err:
-            if mode == 'ai' and os.environ.get("ANTHROPIC_API_KEY"):
+            if mode == 'ai' and (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY")):
                 # Some 'HTML' pages are really embedded PDFs / JS apps — let AI try the bytes.
                 try:
                     return _gemini_parse(data, "application/pdf")
@@ -4339,7 +4590,12 @@ def _gemini_read_nationalities(file_bytes: bytes, key: str, timeout: int = 25) -
     """Flag-image nationality read via Gemini (ingests the PDF natively as
     inline_data). Returns {normalised_sail: 'IOC'}. Raises on any error so the
     caller can fall back to Anthropic."""
-    model = (_LLM_ROUTES.get("nat") or {}).get("model", "gemini-2.5-flash")
+    model = "gemini-3-flash"
+    if _llm_route is not None:
+        try:
+            model = (_llm_route("nat") or {}).get("model") or model
+        except Exception:
+            pass
     parts = [
         {"inline_data": {"mime_type": "application/pdf",
                          "data": base64.b64encode(file_bytes).decode()}},
@@ -4391,7 +4647,7 @@ def _ai_read_nationalities(file_bytes: bytes) -> dict:
     Routes to Gemini (Phase 2) when GEMINI_API_KEY is set, falling back to
     Anthropic on any Gemini error so a miss degrades gracefully. Timeouts are
     bounded so a Gemini-then-Anthropic retry still fits the 60s Vercel ceiling."""
-    gkey = os.environ.get("GEMINI_API_KEY", "")
+    gkey = _gemini_key()
     if gkey and call_gemini is not None:
         try:
             return _gemini_read_nationalities(file_bytes, gkey, timeout=25)
@@ -4587,9 +4843,9 @@ def parse_pdf_page(file_bytes: bytes, page_index: int) -> dict:
     if mime != "application/pdf":
         # Other single files: no paging — parse whole thing.
         return _gemini_parse(file_bytes, mime)
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        raise ValueError("Page parsing requires AI, but ANTHROPIC_API_KEY is not configured.")
+    if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
+        raise ValueError("Page parsing requires AI, but no AI key is configured "
+                         "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback).")
     header = _pdf_header_hint(file_bytes)
     page_pdf = _extract_single_page_pdf(file_bytes, page_index)
     if page_pdf is None:
@@ -4613,10 +4869,21 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     mime = _detect_mime(file_bytes)
 
     def _stamp(res, family, input_type, conf=0.9):
-        """Attach a detected_format verdict when the extractor didn't set one."""
+        """Attach a detected_format verdict when the extractor didn't set one,
+        AND a real parse-quality confidence score (§3e). Every successful rule
+        parse — PDF, HTML, xlsx, blw, csv — must carry a confidence so a good
+        parse is never re-run through the slow AI path just because the field was
+        None. detected_format.confidence is the format-DETECTION certainty; the
+        top-level `confidence` is the parse-QUALITY score from score_parse."""
         if isinstance(res, dict) and "detected_format" not in res:
             res["detected_format"] = {"family": family, "input_type": input_type,
                                       "confidence": conf}
+        if isinstance(res, dict) and score_parse is not None and "confidence" not in res:
+            verdict = score_parse(res)
+            res["confidence"] = verdict["confidence"]
+            res["low_confidence"] = not verdict["ok"]
+            res["confidence_reasons"] = verdict["reasons"]
+            res.setdefault("ai_parsed", False)
         return res
 
     # ── HTML upload (rare; usually parsed client-side, but supported here too) ──
@@ -4636,6 +4903,14 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     if mime == "text/csv":
         return _stamp(_parse_csv_bytes(file_bytes), 'unknown', 'csv', 0.3)
 
+    # ── Unknown / unsniffable type → clear, actionable message (never a crash). ──
+    if mime in ("application/octet-stream", "application/zip"):
+        raise ValueError(
+            "Couldn't read this file — its format wasn't recognised. "
+            "Try exporting the results as PDF, Excel (.xlsx), CSV, or HTML "
+            "(or a clear screenshot/photo for the AI parser)."
+        )
+
     # ── Image upload → Gemini only (no rule-based parser exists for images) ──
     if mime.startswith("image/"):
         if mode == 'rule':
@@ -4643,11 +4918,22 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
                 "This is an image — the non-AI parser can't read it. "
                 "Use the AI parser for photos and screenshots."
             )
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not key:
+        if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
             raise ValueError(
-                "Image results require AI parsing, but ANTHROPIC_API_KEY is not configured."
+                "Image results require AI parsing, but no AI key is configured "
+                "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback)."
             )
+        # HEIC (iPhone photos): Gemini can't ingest HEIC directly and PIL needs
+        # pillow-heif to open it. Convert to JPEG first; if that isn't possible,
+        # say so clearly rather than sending bytes the model can't read.
+        if mime in ("image/heic", "image/heif"):
+            jpeg = _heic_to_jpeg(file_bytes)
+            if jpeg is None:
+                raise ValueError(
+                    "Couldn't decode this HEIC photo. On your phone, share/export "
+                    "it as JPEG (or take a screenshot) and upload that."
+                )
+            file_bytes, mime = jpeg, "image/jpeg"
         return _stamp(_gemini_parse(file_bytes, mime), 'unknown', 'image', 0.3)
 
     # ── PDF → rule-based first ──
@@ -4665,9 +4951,10 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
         return result
 
     # ── AI mode ──
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        # No AI key — fall back to rule-based only, surface errors
+    # Gemini is the primary AI provider; Anthropic Sonnet is the fallback. Either
+    # key enables AI mode (Gemini alone is sufficient — no Anthropic required).
+    if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
+        # No AI key at all — fall back to rule-based only, surface errors
         return _rule_based_parse(file_bytes)
 
     # Fast path: try the deterministic rule parser DIRECTLY first. When it parses
@@ -4722,10 +5009,14 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     # (the agent's finalized dict won't set it itself).
     _fmt = rule_result.get("detected_format") if isinstance(rule_result, dict) else None
 
-    # Rules failed, scored low-confidence, or the nat fast path errored →
-    # hand off to the agent loop (rule + vision + nationality merge).
-    try:
-        res = _agent_parse(file_bytes)
+    # Rules failed, scored low-confidence, or the nat fast path errored → hand off
+    # to vision. Gemini is the primary provider: a single direct _gemini_parse is
+    # faster and cheaper than the Anthropic agent loop (multiple model calls + a
+    # whole-table echo that can truncate), so prefer it whenever a Gemini key is
+    # present. The Anthropic agent loop is used only when there is NO Gemini key
+    # (Anthropic-only deploy). _gemini_parse itself falls back to Anthropic Sonnet
+    # internally on a Gemini error, so a Gemini hiccup still degrades gracefully.
+    def _finish(res):
         if isinstance(res, dict):
             res.setdefault("ai_parsed", True)
             if _fmt:
@@ -4734,6 +5025,25 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
                 res.setdefault("detected_format",
                                {"family": "unknown", "input_type": "pdf-text", "confidence": 0.3})
         return res
+
+    if _gemini_key():
+        try:
+            return _finish(_gemini_parse(file_bytes, "application/pdf"))
+        except Exception as vision_err:
+            # Vision failed too; try the Anthropic agent loop if that key exists,
+            # else return the rule result rather than erroring the whole upload.
+            if os.environ.get("ANTHROPIC_API_KEY", ""):
+                try:
+                    return _finish(_agent_parse(file_bytes))
+                except Exception:
+                    pass
+            if rule_result is not None:
+                return rule_result
+            raise ValueError(f"Vision parse failed: {vision_err}")
+
+    # No Gemini key — Anthropic-only path via the agent loop.
+    try:
+        return _finish(_agent_parse(file_bytes))
     except Exception as agent_err:
         # If the agent fails but the rule parser produced something usable,
         # return that rather than erroring the whole upload.

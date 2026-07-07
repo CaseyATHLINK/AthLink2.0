@@ -6261,6 +6261,13 @@ export default function AthLinkMVP(){
   const[profileSuggestions,setProfileSuggestions]=useState([]);
   const[profileSugLoading,setProfileSugLoading]=useState(false);
   const[profileSugTimer,setProfileSugTimer]=useState(null);
+  // Fast-suggestion plumbing (§5c): cancel the in-flight request on every new
+  // keystroke (AbortController) so a slow earlier query never overwrites a newer
+  // one, and cache completed suggestions per query so backspacing is instant.
+  const evSugAbortRef=React.useRef(null);
+  const evSugCacheRef=React.useRef(new Map());
+  const profileSugAbortRef=React.useRef(null);
+  const profileSugCacheRef=React.useRef(new Map());
   // Global search
   const[gSearch,setGSearch]=useState("");
   // Calendar
@@ -6931,6 +6938,12 @@ Query: "${qq}"`,
   /* ── AI suggestions (debounced) ─────────────────────────── */
   const fetchEvSuggestions=async(q)=>{
     if(!q.trim()||q.length<3){setEvSuggestions([]);return;}
+    const key=q.trim().toLowerCase();
+    // Cache hit → instant, no network (backspacing to a prior prefix is free).
+    if(evSugCacheRef.current.has(key)){setEvSuggestions(evSugCacheRef.current.get(key));setEvSugLoading(false);return;}
+    // Cancel any in-flight request so a slower older one can't clobber this.
+    if(evSugAbortRef.current)evSugAbortRef.current.abort();
+    const ctrl=new AbortController();evSugAbortRef.current=ctrl;
     setEvSugLoading(true);
     try{
       const eventCtx=classEvents.slice(0,5).map(e=>`"${e.name}" (${scoreEvent(e).fleet} boats)`).join(", ");
@@ -6939,34 +6952,44 @@ Return ONLY a JSON array of 4 strings (no markdown). Each string is a complete n
 Context: portal=${host?.name||"unknown"}, recent events: ${eventCtx}
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        signal:ctrl.signal,
         body:JSON.stringify({task:"filter",prompt,max_tokens:200})});
       const data=await res.json();
       if(data.ok){
         const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
         const arr=JSON.parse(clean);
-        setEvSuggestions(Array.isArray(arr)?arr.slice(0,4):[]);
+        const out=Array.isArray(arr)?arr.slice(0,4):[];
+        evSugCacheRef.current.set(key,out);
+        setEvSuggestions(out);
       }
-    }catch{setEvSuggestions([]);}
-    finally{setEvSugLoading(false);}
+    }catch(e){if(e?.name==="AbortError")return;setEvSuggestions([]);}
+    finally{if(evSugAbortRef.current===ctrl){evSugAbortRef.current=null;setEvSugLoading(false);}}
   };
 
   const fetchProfileSuggestions=async(q)=>{
     if(!q.trim()||q.length<3){setProfileSuggestions([]);return;}
+    const key=q.trim().toLowerCase();
+    if(profileSugCacheRef.current.has(key)){setProfileSuggestions(profileSugCacheRef.current.get(key));setProfileSugLoading(false);return;}
+    if(profileSugAbortRef.current)profileSugAbortRef.current.abort();
+    const ctrl=new AbortController();profileSugAbortRef.current=ctrl;
     setProfileSugLoading(true);
     try{
       const prompt=`Suggest 4 short sailing result filter queries for an athlete profile.
 Return ONLY a JSON array of 4 strings. Each is a complete filter query.
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        signal:ctrl.signal,
         body:JSON.stringify({task:"filter",prompt,max_tokens:150})});
       const data=await res.json();
       if(data.ok){
         const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
         const arr=JSON.parse(clean);
-        setProfileSuggestions(Array.isArray(arr)?arr.slice(0,4):[]);
+        const out=Array.isArray(arr)?arr.slice(0,4):[];
+        profileSugCacheRef.current.set(key,out);
+        setProfileSuggestions(out);
       }
-    }catch{setProfileSuggestions([]);}
-    finally{setProfileSugLoading(false);}
+    }catch(e){if(e?.name==="AbortError")return;setProfileSuggestions([]);}
+    finally{if(profileSugAbortRef.current===ctrl){profileSugAbortRef.current=null;setProfileSugLoading(false);}}
   };
 
   /* ── Global search ───────────────────────────────────────── */
@@ -7426,9 +7449,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       return d;
     }
 
-    // 2) parse each page on its OWN request, strictly SEQUENTIAL with one retry.
-    //    (Firing pages concurrently tripped Anthropic's per-minute rate limit,
-    //    so only the final page survived — hence "last page only".)
+    // 2) parse each page on its OWN request, with BOUNDED CONCURRENCY (§4.3).
+    //    The old design was strictly sequential because Anthropic's per-minute
+    //    rate limit meant firing pages at once left only the last page alive.
+    //    Gemini's limits are far higher, so we now run up to PAGE_CONCURRENCY
+    //    pages at a time — a 9-page scan drops from ~90s to ~25s. Results are
+    //    stored by page index, so order is preserved regardless of finish order.
     onProgress&&onProgress(0,pageCount);
     const pageResults=new Array(pageCount).fill(null);
     const pageErrors=[];
@@ -7436,7 +7462,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const r=await fetch(`/api/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       return r.json();
     };
-    for(let pi=0;pi<pageCount;pi++){
+    let doneP=0;
+    const parseOnePage=async(pi)=>{
       let d=null,err="page failed";
       for(let attempt=0;attempt<2;attempt++){
         try{
@@ -7444,12 +7471,16 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           if(d&&d.ok&&Array.isArray(d.entries)) break;
           err=(d&&d.error)||"page failed"; d=null;
         }catch(e){ err="network/timeout"; d=null; }
-        if(attempt===0) await new Promise(r=>setTimeout(r,8000)); // backoff long enough for a provider rate-limit window to clear
+        if(attempt===0) await new Promise(r=>setTimeout(r,8000)); // backoff for a rate-limit window
       }
       if(d) pageResults[pi]={entries:d.entries,name:d.name,date:d.date,discards:d.discards,division:d.division||""};
       else pageErrors.push({page:pi+1,error:err});
-      onProgress&&onProgress(pi+1,pageCount);
-    }
+      onProgress&&onProgress(++doneP,pageCount);
+    };
+    const PAGE_CONCURRENCY=4;
+    let nextPage=0;
+    const pageWorker=async()=>{ while(nextPage<pageCount){ const pi=nextPage++; await parseOnePage(pi); } };
+    await Promise.all(Array.from({length:Math.min(PAGE_CONCURRENCY,pageCount)},pageWorker));
 
     // 3) group pages into DIVISIONS by their section heading. A page that
     //    repeats the current heading — or carries none (a continuation page) —
@@ -7603,6 +7634,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // Cap concurrency so a large batch doesn't fire dozens of simultaneous AI calls.
     let done=0;
     const handleOne=async(i)=>{
+     try{
       const f=files[i];
       const isPdf=f.name.toLowerCase().endsWith(".pdf")||f.type==="application/pdf";
       let data;
@@ -7657,6 +7689,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       }
       done++; setParseProgress({done,total:files.length});
       return rows;
+     }catch(err){
+      // §6: one bad file must never fail the whole batch. Any unexpected throw
+      // becomes this file's own error row; siblings continue.
+      const msg=(err&&err.message)?err.message:"Couldn't read this file — try exporting it as PDF, Excel, or HTML.";
+      done++; setParseProgress({done,total:files.length});
+      setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"error",notes:[msg]}:l));
+      return[{...seed[i],status:"error",error:msg}];
+     }
     };
     const perFile=new Array(files.length);
     let next=0;
@@ -9664,7 +9704,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 onChange={e=>{
                   setEvFilter(e.target.value);
                   clearTimeout(evSugTimer);
-                  setEvSugTimer(setTimeout(()=>fetchEvSuggestions(e.target.value),500));
+                  setEvSugTimer(setTimeout(()=>fetchEvSuggestions(e.target.value),200));
                 }}
                 onKeyDown={e=>{
                   if(e.key==="Enter"){setEvSuggestions([]);runEvFilter();}
@@ -10396,7 +10436,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 onChange={e=>{
                   setProfileFilter(e.target.value);
                   clearTimeout(profileSugTimer);
-                  setProfileSugTimer(setTimeout(()=>fetchProfileSuggestions(e.target.value),500));
+                  setProfileSugTimer(setTimeout(()=>fetchProfileSuggestions(e.target.value),200));
                 }}
                 onKeyDown={e=>{
                   if(e.key==="Enter"){setProfileSuggestions([]);runProfileFilter();}
@@ -10531,7 +10571,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>For known formats — <strong style={{color:"var(--ink)"}}>Sailwave</strong>, Sailwave HTML, <strong style={{color:"var(--ink)"}}>Manage2sail</strong>, SailingResults.net and Clubspot. Fast and exact, no AI. Select one or more PDF/HTML files; multi-fleet files split into a tab per fleet. If a file isn't recognised, switch to the AI parser.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose files</>}
-                <input type="file" multiple accept={IMPORT_ACCEPT} style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"rule")}/>
+                <input type="file" multiple style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"rule")}/>
               </label>
               <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here</span>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
@@ -10540,7 +10580,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Working…</>:<><Sparkles size={16}/>Choose files</>}
-                <input type="file" multiple accept={IMPORT_ACCEPT} style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"ai")}/>
+                <input type="file" multiple style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"ai")}/>
               </label>
               <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here</span>
               <div style={{margin:"16px 0 6px",display:"flex",alignItems:"center",gap:10}}>

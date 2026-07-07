@@ -1,0 +1,113 @@
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+OK  sailwave               n=  95 cf=0.8  DUPRANK65                  2020 southside .pdf
+OK  sailwave               n= 242 cf=None                            2022 worlds.html
+OK  sailwave               n=  15 cf=1.0  DUPRANK1                   2023 asians.pdf
+OK  sailwave               n=  18 cf=1.0                             2024 asians.pdf
+OK  sailwave               n=  19 cf=1.0                             2025 asians.pdf
+OK  sailwave               n=  25 cf=1.0  DUPRANK1                   29er Asians 2026.pdf
+OK  manage2sail            n=  54 cf=1.0                             49er Euros 2025.pdf
+OK  manage2sail            n=  53 cf=1.0                             49er JWC 2025.pdf
+OK  manage2sail            n=  74 cf=1.0  RAGGED6-10                 49er Kiel 2025.pdf
+OK  sailingresults         n=   9 cf=1.0                             Aussie nationals.pdf
+OK  sailwave               n= 165 cf=None                            Euros 2022.html
+OK  sailwave               n= 135 cf=0.8  DUPRANK69                  First ASAF Youth Sailing Cup (2016 – 17) Series – Esctasy An
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, Hebe 2021.pdf
+OK  sailwave               n=  21 cf=1.0                             ILCA 6 HKRW 2024.pdf
+OK  sailwave               n=  13 cf=1.0                             ILCA HKRW 2026.pdf
+OK  sailwave               n=  17 cf=None                            ILCA6 HKRW 2025.html
+OK  sailwave               n=   4 cf=None                            ILCA7 HKRW 2025.html
+OK  manage2sail            n=  60 cf=1.0                             JWC 2024.pdf
+OK  manage2sail            n=  56 cf=1.0                             JWC2023 c.pdf
+OK  manage2sail            n= 127 cf=1.0  RAGGED8-12                 Kiel 2022.pdf
+OK  sailwave               n= 104 cf=None DUPRANK52                  OPTI HKRW 2017.htm
+OK  sailwave               n= 104 cf=0.8  DUPRANK52                  OPTI HKRW 2017.pdf
+OK  sailwave               n=  76 cf=None DUPRANK3                   OPTI HKRW 2023.html
+OK  sailwave               n=  68 cf=1.0                             OPti 2025 HKRW.pdf
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, Palma 2026.pdf
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, SOF 2023.pdf
+OK  sailti-web             n= 101 cf=None RAGGED12-15                Sailing Grand Slam.html
+OK  sailwave               n=  95 cf=0.8  DUPRANK60                  Southside 2022.pdf
+OK  sailwave               n= 132 cf=0.8  DUPRANK98                  Southside 2023.pdf
+OK  sailwave               n=  50 cf=0.85                            UK nats 29er 2025.pdf
+OK  pya-events             n=  52 cf=None DUPRANK26 RAGGED11-14      events.pya.org.pl.html
+OK  manage2sail            n= 168 cf=1.0                             kiel 2023 29er.pdf
+OK  sailwave               n= 123 cf=0.8  DUPRANK81                  southside 2024.pdf
+OK  excel-print-pdf        n=   9 cf=1.0                             ABC imports/2016 RS Feva Championship Result 20160228 1720.p
+OK  excel-print-pdf        n=   8 cf=1.0                             ABC imports/2019 Prov Results.pdf
+OK  sailwave-blw           n=  13 cf=None                            ABC imports/HK 29er Champs 2021.blw
+OK  club-custom-xlsx       n=  74 cf=None DUPRANK26                  ABC imports/Opening Regatta Sept 2017 results.xlsx
+OK  club-custom-xlsx       n= 141 cf=None DUPRANK83 RAGGED2-5        ABC imports/SS Fast Boat Result File 04 Dec 2016.xlsx
+OK  club-custom-xlsx       n=  57 cf=None DUPRANK6                   ABC imports/SS Open Div Optimist Result 2016.xlsx
+OK  sailwave               n=  48 cf=1.0  DUPRANK2                   ABC imports/Sailwave results for 2019 Southside Open Dinghy 
+OK  sailwave               n=  95 cf=0.8  DUPRANK65                  ABC imports/Sailwave results for Aberdeen Boat Club South Si
+OK  excel-print-pdf        n=   7 cf=1.0                             ABC imports/Southside Regatta 29er Results 20181202.pdf
+OK  club-custom-xlsx       n=  74 cf=None DUPRANK24                  ABC imports/Southside Regatta Dinghy Results 2017.xlsx
+OK  excel-print-pdf        n=   8 cf=1.0                             ABC imports/Southside Regatta Div A One Design Results 20181
+OK  excel-print-pdf        n=  49 cf=1.0                             ABC imports/Southside Regatta OP Dinghy Results 2018 Day 2 f
+OK  overall-results        n= 351 cf=0.8  DUPRANK309                 HKSF imports/Email 1/Result - 2025 ILCA Asian & Open Champio
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 1/Result - 2025 ILCA Asian Open Champions
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 1/Result - 2025 ILCA Asian Open Champions
+OK  sailwave               n= 240 cf=0.8  SLOW2.8s DUPRANK100        HKSF imports/Email 1/Results - 2025 ILCA 4 Youth World Champ
+OK  sailwave               n=  13 cf=1.0                             HKSF imports/Email 6/2022 ILCA4-GIRLS-YOUTH-U18-ASIAN-FINAL.
+OK  sailwave               n=  16 cf=1.0                             HKSF imports/Email 6/2022 Result 1) ILCA6-WOMEN-U19-ASIAN-FI
+OK  sailwave               n=  13 cf=1.0                             HKSF imports/Email 6/2022 Result 1) ILCA7-MEN-ASIAN-FINAL.pd
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 6/2023 29er Worlds Silver fleet.pdf
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 6/2023 ILCA Asians Overall Results.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 6/2023 OP Asians.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 6/2023 OP Wolrds.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 6/2023-ILCA-6-Youth-Men-Results.pdf
+OK  bornan                 n=   8 cf=0.9  NOSAIL8/8                  HKSF imports/Email 6/AG2022-_SAL_C74FA_SALM49ER-------------
+OK  bornan                 n=   9 cf=0.9  NOSAIL9/9                  HKSF imports/Email 6/AG2022-_SAL_ILCA 6_SAL-----------------
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 6/OP Asian Girls top places 2023.pdf
+OK  sailwave-html-native   n= 136 cf=None DUPRANK90 RAGGED9-13       HKSF imports/Email 6/Sailwave results for Asian Sailing Cham
+OK  sailwave               n= 202 cf=1.0  SLOW3.1s                   HKSF imports/Email 3/Result - 2025 29er World Championship -
+OK  hubsail                n=  49 cf=1.0                             HKSF imports/Email 3/Result - 2025 RS21 World Championship -
+OK  sailingresults         n=   5 cf=0.8                             HKSF imports/Email 3/Results - 2025 International Hansa Clas
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, HKSF imports/Email 3/Results - 第十五届全国运动会帆船比赛成绩册.pdf
+OK  sailti                 n= 284 cf=1.0  SLOW3.5s RAGGED5-12        HKSF imports/Email 4/2026 worlds overall_Optimist.pdf
+OK  sailti                 n= 281 cf=1.0  SLOW2.6s RAGGED5-9         HKSF imports/Email 2/Result - 2025 Optimist World Championsh
+OK  sailti                 n= 133 cf=1.0  RAGGED6-9                  HKSF imports/Email 2/Results - 2024 Optimist Asian & Oceania
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 7/2024 29er Asians.pdf
+OK  sailwave               n= 258 cf=1.0  SLOW10.1s                  Email 7/2024 29er World Championship 2024 at Aarhus Internat
+OK  sailti-web             n= 120 cf=1.0                             Email 7/2024 OP Europeans Colourful.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 7/2024 OP Europeans.pdf
+OK  sailti-web             n= 133 cf=1.0                             Email 7/2024 Optimist Asian & Oceanian Championship ALL.pdf
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, Email 7/2nd South East Asian Para Sailing Revised (final).pd
+OK  manage2sail            n=  71 cf=1.0                             Email 7/49er Worlds_Overall-Results.pdf
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, Email 7/Allianz Sailing World Championships_ The Hague 2023 
+OK  topyacht               n=  18 cf=1.0  DUPRANK2                   Email 7/Hansa Class Asia Pacific Championships 2024 - Sing -
+OK  topyacht               n=  18 cf=1.0  DUPRANK2                   Email 7/Hansa Class Asia Pacific Championships 2024 - Sing -
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 7/OG 2024 ILCA7.pdf
+OK  sailwave               n=  18 cf=1.0                             Email 7/Sailwave results for 2024 29er Asian Championship at
+OK  worldsailing-resultscentre n=  20 cf=0.3  NOSAIL20/20                Email 7/Youth Sailing World Championships - 2024 Results 29e
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 9/2026 ILCA 4 Worlds Girls.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 9/2026 ILCA 4 Worlds boys.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 9/2026 Optimist Worlds Girls.pdf
+OK  sailwave               n=  25 cf=1.0  DUPRANK1                   Email 9/Sailwave results for 2026 29er Asian Championship at
+OK  sailwave               n=  49 cf=1.0                             Email 9/Sailwave results for Sun Hung Kai & Co. Hong Kong Ra
+OK  sailwave               n=  13 cf=1.0                             Email 9/Sun Hung Kai & Co. Hong Kong Race Week 2026  ILCA 6.
+OK  sailwave               n=  77 cf=1.0                             Email 9/Sun Hung Kai & Co. Hong Kong Race Week 2026 OP main.
+OK  sailti                 n=  96 cf=1.0  RAGGED6-12                 Email 9/U21-ILCA-7-Men.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 8/2025 ILCA 4 Youth Worlds Boys.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 8/2025 ILCA 4 Youth Worlds Girls.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 8/2025 OP Worlds Girls.pdf
+OK  sailti-web             n= 170 cf=1.0                             Email 8/2025 Optimist Asian & Oceanian Championship.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 8/29er Wolrds 2025 results.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 8/ILCA 4 & 6-AOC-2025.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 8/Kiel Week results 49er.pdf
+ERR SCAN                   n=   0 cf=None No results table found. Supported: Sailwave, Email 8/Kiel Week results 49erFX.pdf
+OK  sailti                 n= 281 cf=1.0  SLOW2.8s RAGGED5-9         Email 8/Result - 2025 Optimist World Championships - Overall
+OK  sailti                 n=   1 cf=0.4                             Email 8/Result_2025 Dragon Wolrds.pdf
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, Email 8/Results 303 Double _ hansaworlds.org.pdf
+ERR TEXTERR                n=   0 cf=None No results table found. Supported: Sailwave, Email 8/Results Liberty Gold _ hansaworlds.org.pdf
+
+== 101 files | OK 72 | ERR 29 | suspicious-OK 36
+ERR-text (fixable rule gaps): ['Hebe 2021.pdf', 'Palma 2026.pdf', 'SOF 2023.pdf', 'HKSF imports/Email 6/2023 ILCA Asians Overall Results.pdf', 'HKSF imports/Email 6/OP Asian Girls top places 2023.pdf', 'HKSF imports/Email 3/Results - 第十五届全国运动会帆船比赛成绩册.pdf', 'Email 7/2nd South East Asian Para Sailing Revised (final).pdf', 'Email 7/Allianz Sailing World Championships_ The Hague 2023 - Single.pdf', 'Email 8/Results 303 Double _ hansaworlds.org.pdf', 'Email 8/Results Liberty Gold _ hansaworlds.org.pdf']
+ERR-scan (need vision): 19
