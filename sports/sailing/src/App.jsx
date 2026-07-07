@@ -2937,83 +2937,77 @@ function InfoHint({text}){
   );
 }
 
-/* ── Rival-relative career progress (per boat-class era) ─────────────────────
-   Each competition is scored against the athlete's top rivals FOR THAT BOAT
-   CLASS — a distinct cohort per class-era (computeRivalCohort over all events of
-   that class), so 2017-Optimist rivals ≠ 2022-29er rivals. Score = share of that
-   era's cohort present in the event that the athlete finished ahead of (ties=½).
-   Bounded 0–1, fleet-size independent: 50% = level with your rivals. Official
-   ranks only — we filter and count, never re-rank. Year-nuggets pick which
-   competitions show; the era cohorts stay stable regardless of selection. */
-const MIN_RIVALS_PRESENT=1; // events with fewer cohort rivals present are not scored (tunable). 1 = show any competition with ≥1 era rival (partners excluded); a lone-rival event just scores 0/100%.
-const SMOOTH_WINDOW=5;      // trend = rolling mean of the last N scored events
-const PROGRESS_RIVAL_HINT="Rivals here are the athletes you race most in this boat class — a separate top group per class era, ranked by how often you meet and how close your finishes are. Your results in one class are only measured against that class's rivals.";
+/* ── Skill-rating career progress ────────────────────────────────────────────
+   Plots the focal athlete's skill rating over time — a DERIVED metric from the
+   global rating engine (getAthleteRatings), never a re-read of results. Each
+   dot is one rated competition; the line connects actual post-event ratings
+   (p.r) with NO smoothing. Ranks shown in tooltips/sidebar are always READ from
+   scoreEvent(ev).rows (PDF is ground truth); only the rating is computed.
+   The shaded band is the rating's uncertainty (r±rd). It is drawn from actual
+   points only — RD is NOT interpolated inside idle gaps, so the band visibly
+   widens across a long lay-off (RD had grown by the next event), which is the
+   honest signal, not an artefact. Year-nuggets pick which competitions show
+   (the rating history itself is global and unaffected by selection). In the
+   enlarged view a chip row overlays a rival's rating curve (dashed, no band)
+   for direct comparison; clicking a dot opens a per-competition sidebar with
+   the athlete's result and the rival cohort who sailed that same competition. */
+const PROGRESS_RIVAL_HINT="Skill rating is computed from every official result — beating higher-rated athletes in stronger fleets moves it most. The shaded band shows uncertainty: it widens when an athlete races rarely. Official results are never altered.";
 function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=260,enlarged=false,onOpenEvent,onPick,onSelectionChange,deselectKey=0}){
   const [tip,setTip]=React.useState(null);       // {x,y,lines:[..]}  (inline hover)
   const [selPt,setSelPt]=React.useState(null);   // selected competition index (enlarged sidebar)
+  const [rivalKey,setRivalKey]=React.useState(null); // active overlay rival canon key (enlarged only)
   const sel=React.useMemo(()=>yrKey?new Set(selYears):null,[yrKey]);  // null = all years
+  // Focal rating history — filtered to the selected years, chronological already.
   const data=React.useMemo(()=>{
-    const focalKey=canonName(name);
-    // One rival cohort per boat class, computed over ALL that class's events
-    // (the era) — stable no matter which years are selected below.
-    const eraCache=new Map();
-    const cohortForCls=cls=>{
-      const key=cls||"__none";
-      if(eraCache.has(key))return eraCache.get(key);
-      const evsC=(events||[]).filter(ev=>(ev.cls||"__none")===key);
-      const co=computeRivalCohort(name,evsC,15);
-      const obj={keys:new Set(co.rivals.map(r=>r.key)),disp:co.disp};
-      eraCache.set(key,obj);return obj;
-    };
-    const pts=[];
-    (history||[]).forEach(h=>{
-      const ev=h?.ev; if(!ev||ev.status==="Draft")return;
-      const dk=dateKey(ev.date); if(!dk)return;              // undated → excluded
-      const y=+dk.slice(0,4); if(sel&&!sel.has(y))return;    // outside the selected years
-      const myRank=h.row?.rank; if(!(myRank>=1))return;
-      const co=cohortForCls(ev.cls); if(!co.keys.size)return;
-      let rows; try{rows=scoreEvent(ev).rows;}catch{return;}
-      const rankOf=new Map();                                // era rival canon -> best rank in this event
-      const mates=new Set();                                 // who shared the focal's boat here (partners, not rivals)
-      rows.forEach(r=>{
-        const hk=canonName(r.helm),ck=canonName(r.crew);
-        if(hk===focalKey||ck===focalKey){const other=hk===focalKey?ck:hk;if(other&&other!==focalKey)mates.add(other);}
-        if(r.rank>=1)[hk,ck].forEach(k=>{if(k&&co.keys.has(k)){const prev=rankOf.get(k);if(prev===undefined||r.rank<prev)rankOf.set(k,r.rank);}});
-      });
-      // Partners (same boat) are never scored as rivals — you can't beat your own crew.
-      let beaten=0; const trueRivals=[]; const partners=[];
-      rankOf.forEach((rk,k)=>{
-        const nm=co.disp.get(k)||k;
-        if(mates.has(k)){partners.push({key:k,name:nm,rank:rk,sameBoat:true});return;}
-        if(myRank<rk)beaten+=1;else if(myRank===rk)beaten+=0.5;
-        trueRivals.push({key:k,name:nm,rank:rk,sameBoat:false});
-      });
-      if(trueRivals.length<MIN_RIVALS_PRESENT)return;
-      trueRivals.sort((a,b)=>a.rank-b.rank);
-      pts.push({dk,date:ev.date,evId:ev.id,evName:ev.name,cls:ev.cls,subclass:ev.subclass,score:beaten/trueRivals.length,beaten,rivals:trueRivals.length,rank:myRank,fleet:h.fleet,rivalsHere:[...trueRivals,...partners]});
-    });
-    pts.sort((a,b)=>a.dk.localeCompare(b.dk));               // oldest → newest
-    pts.forEach((p,i)=>{const win=pts.slice(Math.max(0,i-SMOOTH_WINDOW+1),i+1);p.trend=win.reduce((s,x)=>s+x.score,0)/win.length;});
+    const hist=getAthleteRatings(events).get(canonName(name))?.history||[];
+    const pts=hist.filter(p=>!(sel&&!sel.has(+p.dk.slice(0,4))));
     return{pts};
-  },[name,events,history,sel]);
-  React.useEffect(()=>{setSelPt(null);},[yrKey,name]);       // clear selection when the window/athlete changes
-  React.useEffect(()=>{if(deselectKey)setSelPt(null);},[deselectKey]); // external deselect (popup header)
+  },[name,events,sel]);
+  // Top-5 rival chips + top-15 cohort for the sidebar — memoised once (NOT per dot).
+  const cohort5=React.useMemo(()=>enlarged?computeRivalCohort(name,events,5):null,[name,events,enlarged]);
+  const cohort15=React.useMemo(()=>enlarged?computeRivalCohort(name,events,15):null,[name,events,enlarged]);
+  // Active overlay rival's rating history, clipped to the same selected years.
+  const overlayPts=React.useMemo(()=>{
+    if(!rivalKey)return null;
+    const h=getAthleteRatings(events).get(rivalKey)?.history||[];
+    return h.filter(p=>!(sel&&!sel.has(+p.dk.slice(0,4))));
+  },[rivalKey,events,sel]);
+  React.useEffect(()=>{setSelPt(null);setRivalKey(null);},[yrKey,name]);  // clear selection + overlay when the window/athlete changes
+  React.useEffect(()=>{if(deselectKey)setSelPt(null);},[deselectKey]);    // external deselect (popup header)
   React.useEffect(()=>{onSelectionChange&&onSelectionChange(selPt);},[selPt]); // report selection for the deselect button
-  const S=w/260;                                             // scales the trend line / dot geometry with the chart width
+  const S=w/260;                                             // scales the line / dot geometry with the chart width
   const glowId="pgGlow"+Math.round(w), softId="pgSoft"+Math.round(w);
-  const AX=9.5, AXm=8.5;                                     // axis label sizes — fixed, matching the Trend/Competition legend
-  const titleBlock=enlarged?24:0, captionBlock=enlarged?26:0, legendBlock=enlarged?20:0;   // header/footer live in the popup only; inline is just the chart
-  const CH=Math.max(70,height-titleBlock-captionBlock-legendBlock-6);
-  const M={l:32,r:11,t:9,b:16};                              // fixed gutters — axis labels are a fixed size, so margins don't scale
+  const AX=9.5;                                              // axis label size — fixed, matching the Rating/Competition legend
+  const titleBlock=enlarged?24:0, captionBlock=enlarged?26:0, legendBlock=enlarged?20:0, chipBlock=enlarged?30:0;
+  const CH=Math.max(70,height-titleBlock-captionBlock-legendBlock-chipBlock-6);
+  const M={l:34,r:11,t:9,b:16};                             // fixed gutters — axis labels are a fixed size, so margins don't scale
   const plotW=w-M.l-M.r, plotH=CH-M.t-M.b;
-  const yOf=s=>M.t+plotH*(1-s);
   const showTip=(e,lines)=>{const host=e.currentTarget.ownerSVGElement.parentElement.getBoundingClientRect();const r=e.currentTarget.getBoundingClientRect();
     setTip({x:Math.min(Math.max(r.left-host.left+r.width/2,60),host.width-60),y:r.top-host.top,lines});};
+  const fmtDelta=d=>`${d>=0?"+":"−"}${Math.abs(Math.round(d))}`;   // signed, rounded: +12 / −8 / +0
   const pts=data.pts;
   let body;
   if(pts.length<3){
-    body=<div style={{height:CH,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#7fa0c0",fontSize:12,padding:"0 18px"}}>Not enough shared competitions with rivals in this period yet to chart progress.</div>;
+    body=<div style={{height:CH,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#7fa0c0",fontSize:12,padding:"0 18px"}}>Not enough rated competitions in this period yet to chart a skill rating.</div>;
   }else{
+    // ── Y domain: [min(r−rd), max(r+rd)] over visible pts (+ overlay r's when
+    // active), padded 5%, then rounded OUTWARD to a multiple of 50.
+    let lo=Infinity, hi=-Infinity;
+    pts.forEach(p=>{lo=Math.min(lo,p.r-p.rd);hi=Math.max(hi,p.r+p.rd);});
+    if(overlayPts)overlayPts.forEach(p=>{lo=Math.min(lo,p.r);hi=Math.max(hi,p.r);});
+    const padAmt=Math.max(10,(hi-lo)*0.05);
+    lo=Math.floor((lo-padAmt)/50)*50; hi=Math.ceil((hi+padAmt)/50)*50;
+    if(hi<=lo)hi=lo+50;
+    const ySpan=hi-lo;
+    const yOf=r=>M.t+plotH*(1-(r-lo)/ySpan);
+    // 3–4 round tick values: step ≈ span/3 snapped to 50/100/200 (…), floor to a
+    // multiple of the step so labels land on round numbers within the domain.
+    const rawStep=ySpan/3;
+    const nice=[50,100,150,200,250,500,1000];
+    const step=nice.find(s=>s>=rawStep)||Math.ceil(rawStep/100)*100;
+    const ticks=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+0.5; v+=step)ticks.push(v);
+    // ── X axis (unchanged): year gridlines + labels, t0/t1 from selected years
+    // or first/last point.
     const yearsSel=sel?[...sel].sort((a,b)=>a-b):null;
     const y0=yearsSel?yearsSel[0]:+pts[0].dk.slice(0,4);
     const y1=yearsSel?yearsSel[yearsSel.length-1]:+pts[pts.length-1].dk.slice(0,4);
@@ -3021,8 +3015,13 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
     const xForTs=ts=>M.l+plotW*(ts-t0)/span;
     const tsOf=p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8));
     const xOf=p=>Math.min(Math.max(xForTs(tsOf(p)),M.l),w-M.r);
-    const trendPts=pts.map(p=>`${xOf(p)},${yOf(p.trend)}`).join(" ");
     const nY=y1-y0+1, every=nY>12?3:nY>7?2:1;
+    // Rating line + uncertainty band (band = actual points only, never interpolated in gaps)
+    const linePts=pts.map(p=>`${xOf(p)},${yOf(p.r)}`).join(" ");
+    const bandUp=pts.map(p=>`${xOf(p)},${yOf(p.r+p.rd)}`);
+    const bandLo=pts.map(p=>`${xOf(p)},${yOf(p.r-p.rd)}`).reverse();
+    const bandPath=`M${bandUp.join("L")}L${bandLo.join("L")}Z`;
+    const overlayLine=overlayPts&&overlayPts.length?overlayPts.map(p=>`${xOf(p)},${yOf(p.r)}`).join(" "):null;
     body=(
       <svg width="100%" height={CH} viewBox={`0 0 ${w} ${CH}`} style={{display:"block"}}>
         <defs>
@@ -3034,13 +3033,11 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
             <feGaussianBlur stdDeviation={3.4*S}/>
           </filter>
         </defs>
-        {/* y axis: 0 / 50 / 100% of rivals beaten */}
-        <text transform={`rotate(-90 10 ${M.t+plotH/2})`} x={10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fill="#7fa0c0">Rivals beaten</text>
-        {[["100%",1],["50%",.5],["0%",0]].map(([lab,s])=>
-          <text key={lab} x={M.l-4} y={yOf(s)+3} textAnchor="end" fontSize={AX} fill="#7fa0c0">{lab}</text>)}
-        <line x1={M.l} y1={yOf(.5)} x2={w-M.r} y2={yOf(.5)} stroke="rgba(220,236,248,.3)" strokeWidth={S} strokeDasharray={`${3*S} ${3*S}`}/>
-        <text x={w-M.r} y={yOf(.5)-4} textAnchor="end" fontSize={AXm} fill="#7fa0c0">level with rivals</text>
-        <line x1={M.l} y1={yOf(0)} x2={w-M.r} y2={yOf(0)} stroke="rgba(220,236,248,.18)" strokeWidth={S}/>
+        {/* y axis: skill-rating ticks at round values */}
+        <text transform={`rotate(-90 10 ${M.t+plotH/2})`} x={10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fill="#7fa0c0">Skill rating</text>
+        {ticks.map(v=>
+          <text key={v} x={M.l-4} y={yOf(v)+3} textAnchor="end" fontSize={AX} fill="#7fa0c0">{v}</text>)}
+        <line x1={M.l} y1={M.t+plotH} x2={w-M.r} y2={M.t+plotH} stroke="rgba(220,236,248,.18)" strokeWidth={S}/>
         {/* x axis: a gridline + label per year (thinned if the window is wide) */}
         {Array.from({length:nY},(_,i)=>y0+i).map((Y,idx)=>{
           const gx=xForTs(Date.UTC(Y,0,1));
@@ -3051,14 +3048,18 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
             {show&&<text x={cx} y={CH-4} textAnchor="middle" fontSize={AX} fill="#7fa0c0">{Y}</text>}
           </g>);
         })}
-        {/* the trend line: always shown, with a slow soft glow gliding left → right */}
-        <polyline points={trendPts} fill="none" stroke="#34a9e6" strokeWidth={2.1*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
-        <polyline className="pg-pulse" pathLength="1" points={trendPts} fill="none" stroke="#a9e0ff" strokeWidth={3.4*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
+        {/* uncertainty band, under everything */}
+        <path d={bandPath} fill="rgba(52,169,230,.13)" stroke="none"/>
+        {/* rival overlay: dashed muted line, no band, no dots, no glow */}
+        {overlayLine&&<polyline points={overlayLine} fill="none" stroke="#8fa8c4" strokeWidth={1.6*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${5*S} ${4*S}`}/>}
+        {/* the rating line: always shown, with a slow soft glow gliding left → right */}
+        <polyline points={linePts} fill="none" stroke="#34a9e6" strokeWidth={2.1*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
+        <polyline className="pg-pulse" pathLength="1" points={linePts} fill="none" stroke="#a9e0ff" strokeWidth={3.4*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
         {/* per-competition dots ringed in their boat-class colour */}
         {pts.map((p,i)=>{const on=enlarged&&selPt===i;const cc=classColor(p.cls);return(
-          <circle key={i} cx={xOf(p)} cy={yOf(p.score)} r={(on?4.6:3)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?2:1.6)*S} style={{cursor:"pointer"}}
+          <circle key={i} cx={xOf(p)} cy={yOf(p.r)} r={(on?4.6:3)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?2:1.6)*S} style={{cursor:"pointer"}}
             onClick={enlarged?()=>setSelPt(i===selPt?null:i):undefined}
-            onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Beat ${p.beaten%1?p.beaten.toFixed(1):p.beaten} of ${p.rivals} rivals`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
+            onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Rating ${Math.round(p.r)} (${fmtDelta(p.delta)})`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
             onMouseLeave={enlarged?undefined:()=>setTip(null)}/>);})}
       </svg>);
   }
@@ -3066,13 +3067,23 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
     <div style={{position:"relative",display:"flex",flexDirection:"column",width:"100%",height}}>
       {enlarged&&<div style={{flex:"none",textAlign:"center",fontSize:15.5,fontWeight:800,color:"#fff",letterSpacing:"-.01em"}}>Progress</div>}
       {enlarged&&<div style={{flex:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:6,color:"#9fbdd9",fontSize:13,lineHeight:1.35,margin:"3px 12px 6px"}}>
-        <span>How {name} placed relative to their rivals over time.</span>
+        <span>How {name}'s skill rating has developed over time.</span>
         <InfoHint text={PROGRESS_RIVAL_HINT}/>
       </div>}
+      {enlarged&&cohort5&&cohort5.rivals.length>0&&(
+        <div style={{flex:"none",display:"flex",alignItems:"center",gap:8,justifyContent:"center",flexWrap:"wrap",margin:"0 12px 6px"}}>
+          <span style={{fontSize:11,fontWeight:700,color:"#7fa0c0",letterSpacing:".02em"}}>Compare:</span>
+          {cohort5.rivals.map(r=>{const active=rivalKey===r.key;const cc=classColor(modeOfCountMap(cohort5.clsCount.get(r.key)));return(
+            <button key={r.key} onClick={()=>setRivalKey(active?null:r.key)}
+              style={{display:"inline-flex",alignItems:"center",gap:6,border:"1px solid "+(active?"var(--accent)":"rgba(120,160,210,.32)"),background:active?"var(--accent)":"rgba(120,160,210,.1)",
+                color:active?"#fff":"#cfe0f2",borderRadius:980,padding:"3px 11px",fontSize:11.5,fontWeight:700,cursor:"pointer",lineHeight:1.2}}>
+              <span style={{width:8,height:8,borderRadius:"50%",background:cc,flex:"none"}}/>{r.name}</button>);})}
+        </div>)}
       {body}
       {enlarged&&<div style={{flex:"none",display:"flex",gap:16,justifyContent:"center",alignItems:"center",marginTop:6,flexWrap:"wrap"}}>
-        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Trend</span>
+        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Rating</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:9,height:9,borderRadius:"50%",background:"#fff",boxShadow:"0 0 0 1.5px var(--accent)"}}/>Competition</span>
+        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:9,borderRadius:3,background:"rgba(52,169,230,.25)"}}/>Uncertainty</span>
       </div>}
       {tip&&!enlarged&&(
         <div style={{position:"absolute",left:tip.x,top:Math.max(titleBlock,tip.y),transform:"translate(-50%,-100%)",pointerEvents:"none",zIndex:5,
@@ -3081,40 +3092,58 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
         </div>)}
     </div>);
   if(!enlarged)return chartCol;
-  // enlarged: chart + per-competition rival sidebar (click a dot to populate)
+  // enlarged: chart + per-competition sidebar (click a dot to populate)
   const sp=selPt!=null?pts[selPt]:null;
   const sidebar=!sp
-    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a point on the line to see who you raced in that competition — the rivals from that boat-class era and how you placed against each.</div>
-    : (<div style={{padding:"4px 0"}}>
-        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
-          <div onClick={()=>onOpenEvent&&onOpenEvent(sp.evId)} title={onOpenEvent?"Open results":undefined} style={{fontWeight:700,fontSize:15.5,color:"#eaf3fc",cursor:onOpenEvent?"pointer":"default",lineHeight:1.2}}>{sp.evName}</div>
-          <div style={{marginTop:7,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-            {sp.cls&&(()=>{const ng=nuggetFor(sp.cls,sp.subclass);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
-            <span style={{color:"#9fbdd9",fontSize:12}}>{formatDate(sp.date)}</span>
-            <span style={{color:"#9fc4ec",fontWeight:800,fontSize:12.5,fontVariantNumeric:"tabular-nums"}}>{ordinalOf(sp.rank)} of {sp.fleet}</span>
+    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a point on the line to see this competition's result — the athlete's rating after it and the rivals who sailed it.</div>
+    : (()=>{
+        // Build the rank lookup from the SELECTED event only (scoreEvent, PDF-truth,
+        // tie-aware best rank per canon). Partners (helm/crew of the focal's row)
+        // are flagged same-boat exactly as the old sidebar did.
+        const focalKey=canonName(name);
+        const ev=(events||[]).find(e=>e.id===sp.evId);
+        const rankOf=new Map();          // canon -> best (lowest) rank in this event
+        const mates=new Set();
+        if(ev){try{
+          scoreEvent(ev).rows.forEach(r=>{
+            const hk=canonName(r.helm),ck=canonName(r.crew);
+            if(hk===focalKey||ck===focalKey){const other=hk===focalKey?ck:hk;if(other&&other!==focalKey)mates.add(other);}
+            if(r.rank>=1)[hk,ck].forEach(k=>{if(k){const prev=rankOf.get(k);if(prev===undefined||r.rank<prev)rankOf.set(k,r.rank);}});
+          });
+        }catch{/* unscoreable — leave rankOf empty */}}
+        // Cohort members (top-15) who sailed THIS competition, with their placement.
+        const trues=[]; const partners=[];
+        (cohort15?cohort15.rivals:[]).forEach(r=>{
+          const rk=rankOf.get(r.key); if(rk===undefined)return;    // didn't sail this comp
+          if(mates.has(r.key))partners.push({key:r.key,name:r.name,rank:rk});
+          else trues.push({key:r.key,name:r.name,rank:rk});
+        });
+        trues.sort((a,b)=>a.rank-b.rank);
+        const idx=trues.findIndex(r=>r.rank>sp.rank);
+        const ordered=idx<0?[...trues,{focal:true}]:[...trues.slice(0,idx),{focal:true},...trues.slice(idx)];
+        const rowStyle=hl=>({margin:"4px 12px",padding:"8px 12px",borderRadius:9,display:"flex",alignItems:"center",gap:10,
+          background:hl?"rgba(13,142,207,.2)":"rgba(120,160,210,.08)",border:"1px solid "+(hl?"rgba(90,180,235,.6)":"rgba(120,160,210,.16)")});
+        const rankBadge=(n,hl)=><span style={{flex:"none",width:24,textAlign:"right",fontWeight:800,fontSize:12.5,fontVariantNumeric:"tabular-nums",color:hl?"#eaf3fc":"#9fc4ec"}}>{n}</span>;
+        const nameCell=(nm,bold)=><span style={{flex:1,minWidth:0,fontWeight:bold?800:700,fontSize:12.5,color:"#eaf3fc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</span>;
+        const rows=ordered.map(r=> r.focal
+          ? <div key="__you" style={rowStyle(true)}>{rankBadge(sp.rank,true)}{nameCell(name,true)}<span style={{fontSize:10,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"#7fd0ff",flex:"none"}}>You</span></div>
+          : <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:sp.rank<r.rank?"#ffcf2e":sp.rank===r.rank?"#9fbdd9":"#c98b8b",flex:"none"}}>{sp.rank<r.rank?"beat":sp.rank===r.rank?"tie":"lost"}</span></div>);
+        partners.forEach(r=>rows.push(
+          <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:"#9fc4ec",flex:"none"}}>same boat</span></div>));
+        return(<div style={{padding:"4px 0"}}>
+          <div style={{padding:"14px 16px 12px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
+            <div onClick={()=>onOpenEvent&&onOpenEvent(sp.evId)} title={onOpenEvent?"Open results":undefined} style={{fontWeight:700,fontSize:15.5,color:"#eaf3fc",cursor:onOpenEvent?"pointer":"default",lineHeight:1.2}}>{sp.evName}</div>
+            <div style={{marginTop:7,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              {sp.cls&&(()=>{const ng=nuggetFor(sp.cls,sp.subclass);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
+              <span style={{color:"#9fbdd9",fontSize:12}}>{formatDate(sp.date)}</span>
+            </div>
+            <div style={{marginTop:8,fontSize:12,color:"#cfe0f2"}}>Rating <b>{Math.round(sp.r)}</b> ({fmtDelta(sp.delta)})</div>
+            <div style={{marginTop:4,fontSize:12,color:"#cfe0f2"}}>Your result: <b>{ordinalOf(sp.rank)}</b> of <b>{sp.fleet}</b></div>
           </div>
-          <div style={{marginTop:8,fontSize:12,color:"#cfe0f2"}}>Beat <b>{sp.beaten%1?sp.beaten.toFixed(1):sp.beaten}</b> of <b>{sp.rivals}</b> rivals here — <b>{Math.round(sp.score*100)}%</b></div>
-        </div>
-        <div style={{padding:"11px 16px 4px",fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0"}}>Placing among rivals</div>
-        {(()=>{
-          // Leaderboard slice: rivals ranked by finish, with the focal athlete's own
-          // placement highlighted in line so you can see exactly where they landed.
-          const trues=sp.rivalsHere.filter(r=>!r.sameBoat);           // already rank-sorted
-          const mates=sp.rivalsHere.filter(r=>r.sameBoat);
-          const idx=trues.findIndex(r=>r.rank>sp.rank);
-          const ordered=idx<0?[...trues,{focal:true}]:[...trues.slice(0,idx),{focal:true},...trues.slice(idx)];
-          const rowStyle=hl=>({margin:"4px 12px",padding:"8px 12px",borderRadius:9,display:"flex",alignItems:"center",gap:10,
-            background:hl?"rgba(13,142,207,.2)":"rgba(120,160,210,.08)",border:"1px solid "+(hl?"rgba(90,180,235,.6)":"rgba(120,160,210,.16)")});
-          const rankBadge=(n,hl)=><span style={{flex:"none",width:24,textAlign:"right",fontWeight:800,fontSize:12.5,fontVariantNumeric:"tabular-nums",color:hl?"#eaf3fc":"#9fc4ec"}}>{n}</span>;
-          const nameCell=(nm,bold)=><span style={{flex:1,minWidth:0,fontWeight:bold?800:700,fontSize:12.5,color:"#eaf3fc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</span>;
-          const rows=ordered.map((r,i)=> r.focal
-            ? <div key="__you" style={rowStyle(true)}>{rankBadge(sp.rank,true)}{nameCell(name,true)}<span style={{fontSize:10,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"#7fd0ff",flex:"none"}}>You</span></div>
-            : <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:sp.rank<r.rank?"#ffcf2e":sp.rank===r.rank?"#9fbdd9":"#c98b8b",flex:"none"}}>{sp.rank<r.rank?"beat":sp.rank===r.rank?"tie":"lost"}</span></div>);
-          mates.forEach(r=>rows.push(
-            <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:"#9fc4ec",flex:"none"}}>sailed together</span></div>));
-          return rows;
-        })()}
-      </div>);
+          <div style={{padding:"11px 16px 4px",fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0"}}>Rivals here</div>
+          {rows}
+        </div>);
+      })();
   return(
     <div style={{display:"flex",width:"100%",height}}>
       <div style={{flex:"0 0 64%",height}}>{chartCol}</div>
