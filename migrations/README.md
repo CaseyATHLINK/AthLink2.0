@@ -14,6 +14,7 @@ and re-run safely.
 |-------|------|--------|---------|
 | 0001 | `0001_baseline_schema.sql` | ✅ Already live | Full reconstruction of the current public schema — tables, indexes, triggers, RLS policies, helper functions. Re-running it is a no-op. |
 | 0002 | `0002_custom_classes.sql` | ✅ **Applied 2026-07-01** | Adds the `custom_classes` table to persist the `CUSTOM_CLASSES` registry. Fixes the grey unrecognized-class nuggets. |
+| 0011 | `0011_host_logos_bucket.sql` | ✅ **Applied 2026-07-07** | Public `host-logos` storage bucket (5MB, PNG/webp) + public-read/authenticated-write policies (mirrors 0010). Backs host/association self-logos: client uploads a navy-recolored-on-transparent PNG (baked at save time in App.jsx), URL saved to the existing `hosts.logo_url` column (from 0008). Supersedes 0008's data-URL approach. |
 
 Every statement is idempotent (`if not exists` / `create or replace` /
 `drop policy if exists … create`). After any DDL, run
