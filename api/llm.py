@@ -190,17 +190,25 @@ def anthropic_text(resp):
                    if b.get("type") == "text")
 
 
-def call_gemini(key, model, parts, max_tokens=400, timeout=30, tools=None):
+def call_gemini(key, model, parts, max_tokens=400, timeout=30, tools=None,
+                thinking_budget=None):
     """Gemini REST generateContent. parts = list of Gemini content parts
     (e.g. [{"text": ...}, {"inline_data": {"mime_type": ..., "data": b64}}]).
     Gemini ingests PDF/image natively via inline_data.
 
     tools: optional list of Gemini tool declarations, e.g.
     [{"google_search": {}}] to enable Google Search grounding (used by enrich).
+    thinking_budget: pass 0 to DISABLE reasoning on flash models. Gemini flash
+    turns thinking ON by default; for short-output TEXT tasks the reasoning eats
+    the maxOutputTokens budget and the visible answer comes back truncated (a
+    2-sentence bio degraded to just the athlete's name). Left None for the
+    PDF/image vision parser, which uses a large budget and benefits from it.
     Returns raw dict."""
+    gen = {"maxOutputTokens": max_tokens}
+    if thinking_budget is not None:
+        gen["thinkingConfig"] = {"thinkingBudget": thinking_budget}
     url = f"{GEMINI_BASE}/models/{model}:generateContent?key={key}"
-    payload = {"contents": [{"parts": parts}],
-               "generationConfig": {"maxOutputTokens": max_tokens}}
+    payload = {"contents": [{"parts": parts}], "generationConfig": gen}
     if tools:
         payload["tools"] = tools
     headers = {"Content-Type": "application/json"}
@@ -226,6 +234,12 @@ def complete_text(task, prompt, max_tokens, timeout=20):
     secret).
     """
     cfg = route(task)
+    # Force English for the prose tasks. Flash otherwise drifts into the language
+    # of the source data — foreign-named regattas rendered an athlete's overview
+    # in Spanish. Left off filter/nat (structured/JSON output).
+    if task in ("overview", "hover"):
+        prompt = ("Respond in English only, regardless of the language of any "
+                  "names, competitions, or places mentioned below.\n\n") + prompt
     messages = [{"role": "user", "content": prompt}]
 
     try:
@@ -235,8 +249,11 @@ def complete_text(task, prompt, max_tokens, timeout=20):
                                   timeout=timeout)
             return anthropic_text(resp), cfg["model"], None
         if cfg["provider"] == "gemini":
+            # thinking_budget=0: short text blurbs — reasoning would consume the
+            # token budget and truncate the answer (main's bio-truncation fix).
             resp = call_gemini(_gemini_key(), cfg["model"], [{"text": prompt}],
-                               max_tokens=max_tokens, timeout=timeout)
+                               max_tokens=max_tokens, timeout=timeout,
+                               thinking_budget=0)
             return gemini_text(resp), cfg["model"], None
         if cfg["provider"] == "openai":
             key = os.environ.get(cfg.get("key_env", ""), "")
