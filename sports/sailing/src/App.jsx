@@ -2368,7 +2368,7 @@ function computeRivalCohort(name,events,N=15){
   return{focal,disp,focalEvents,totals,rivals,clsCount,natCount,focalEvData};
 }
 
-function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,onSelectionChange,deselectKey=0,enlarged=false}){
+function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,onSelectionChange,deselectKey=0,enlarged=false,selYears=null,yrKey=""}){
   const canvasRef=React.useRef(null);
   const wrapRef=React.useRef(null);
   const simRef=React.useRef(null);
@@ -2384,7 +2384,10 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   // against — along with focalEvData, the per-event rank maps reused by the
   // sidebar's head-to-head + shared-competition memos below.
   const graph=React.useMemo(()=>{
-    const{focal,disp,rivals,clsCount,natCount,focalEvData}=computeRivalCohort(name,events,15);
+    // Same selected-year filter the Globe/Progress use (undated events kept only when all years selected).
+    const sel=yrKey?new Set(selYears):null;
+    const evs=sel?(events||[]).filter(ev=>{const dk=dateKey(ev.date);if(!dk)return false;return sel.has(+dk.slice(0,4));}):events;
+    const{focal,disp,rivals,clsCount,natCount,focalEvData}=computeRivalCohort(name,evs,15);
     const keep=new Set(rivals.map(r=>r.key)); keep.add(focal);
     const maxShared=rivals.length?Math.max(...rivals.map(r=>r.shared)):1;
     const maxCorr=rivals.length?rivals[0].corr:1;
@@ -2401,7 +2404,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
     });
     const links=[...ew.entries()].map(([key,w])=>{const p=key.split("|");return{source:p[0],target:p[1],w};});
     return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:rivals.length,focalEvData};
-  },[name,events]);
+  },[name,events,yrKey]);
 
   // selected node (lifted to React state so the enlarged sidebar can render it)
   const [selNode,setSelNode]=React.useState(null);
@@ -2603,21 +2606,19 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   const canvasPane=(
     <div ref={wrapRef} style={{position:"relative",width:"100%",height}}>
       <canvas ref={canvasRef} style={{display:"block",width:"100%",height,touchAction:"none"}}/>
-      <div style={{position:"absolute",top:8,left:8,display:"flex",flexDirection:"column",gap:4,pointerEvents:"none",
-        background:"rgba(8,24,45,.5)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",
-        border:"1px solid rgba(120,160,210,.22)",borderRadius:9,padding:"7px 10px"}}>
-        {legend.map(l=>(
-          <div key={l.id} style={{display:"flex",alignItems:"center",gap:7,fontSize:enlarged?11.5:10,color:"#dcecf8",fontWeight:600,lineHeight:1}}>
-            <span style={{width:enlarged?11:9,height:enlarged?11:9,borderRadius:"50%",background:l.color,flex:"none",boxShadow:"0 0 0 1px rgba(255,255,255,.4)"}}/>{l.label}
-          </div>
+      {/* Foot bar: frameless class legend (enlarged only) sitting next to the caption */}
+      <div style={{position:"absolute",bottom:4,left:0,right:0,display:"flex",justifyContent:"center",alignItems:"center",gap:12,flexWrap:"wrap",padding:"0 12px",fontSize:10,color:"#7fa0c0",pointerEvents:"none"}}>
+        {enlarged&&legend.map(l=>(
+          <span key={l.id} style={{display:"inline-flex",alignItems:"center",gap:5,fontWeight:600,color:"#cfe0f2"}}>
+            <span style={{width:9,height:9,borderRadius:"50%",background:l.color,flex:"none",boxShadow:"0 0 0 1px rgba(255,255,255,.4)"}}/>{l.label}
+          </span>
         ))}
+        <span>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 Rivals`}</span>
       </div>
-      <div style={{position:"absolute",bottom:4,left:0,right:0,textAlign:"center",fontSize:10,color:"#7fa0c0",pointerEvents:"none"}}>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 Rivals`}</div>
     </div>
   );
   if(!enlarged)return canvasPane;
   // shared competitions grouped by host country (mirrors the globe's footprint list)
-  const sharedGroups=(()=>{const m={};sharedComps.forEach(sc=>{const ioc=sc.ev.country||"";const iso=IOC_ISO[ioc]||"";const cname=GLOBE_NAMES[iso]||ioc||"Unknown";const key=iso||ioc||"ZZ";if(!m[key])m[key]={iso,cname,items:[]};m[key].items.push(sc);});return Object.values(m).sort((a,b)=>a.cname.localeCompare(b.cname));})();
   const sidebar=!selNode
     ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a node to see your head-to-head record against that athlete — overall, split by your partner, and across every shared competition. Click a competition to open its results.</div>
     : (<div style={{padding:"4px 0"}}>
@@ -2634,7 +2635,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
         </div>
         {headToHead&&(headToHead.n>0?(
           <div style={{padding:"13px 16px 14px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
-            <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:4}}>Head-to-head</div>
+            <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:4,display:"flex",alignItems:"center",gap:6}}>Head-to-head<InfoHint text="Your rivals are the athletes you've raced most in the selected years — ranked by how often you meet and how close your finishes are. Bigger, closer nodes race you more often. Events you sailed together in don't count toward this record."/></div>
             <div style={{fontSize:11,color:"#7fa0c0",lineHeight:1.4,marginBottom:8}}>How {name} ranked up against {selNode.name} in common competitions.</div>
             <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
               <span style={{fontWeight:800,fontSize:22,lineHeight:1,color:"#eaf3fc",fontVariantNumeric:"tabular-nums",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif"}}>
@@ -2661,37 +2662,32 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
             No ranked head-to-head results with this athlete yet.
           </div>
         ))}
-        {sharedGroups.map(g=>(
-          <div key={g.cname}>
-            <div style={{position:"sticky",top:0,padding:"9px 14px 7px",zIndex:1,display:"flex"}}>
-              <span style={{display:"inline-flex",alignItems:"center",gap:8,background:"rgba(120,160,210,.16)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",border:"1px solid rgba(120,160,210,.3)",borderRadius:980,padding:"5px 13px",color:"#eaf3fc",fontWeight:700,fontFamily:"'Barlow',sans-serif",fontSize:13,letterSpacing:".02em",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)"}}>
-                <span style={{fontSize:16,lineHeight:1}}>{g.iso?isoFlag(g.iso):""}</span>{g.cname}
-                <span style={{color:"#9fc4ec",fontWeight:800}}>{g.items.length}</span>
-              </span>
+        {/* shared competitions, newest first, each prefixed with the host-country flag */}
+        {sharedComps.map((sc,i)=>{const ev=sc.ev;const ng=ev.cls?nuggetFor(ev.cls,ev.subclass):null;
+          const iso=IOC_ISO[ev.country||""]||"";
+          const won=!sc.sameBoat&&sc.focalRank!=null&&sc.rivalRank!=null&&sc.focalRank<sc.rivalRank;
+          return(
+          <div key={i} onClick={()=>onOpenEventRef.current&&onOpenEventRef.current(ev.id)} title="Open results"
+            style={{margin:"7px 12px",padding:"10px 12px",borderRadius:10,cursor:"pointer",transition:"all .15s",
+              background:"rgba(120,160,210,.08)",border:"1px solid rgba(120,160,210,.16)"}}
+            onMouseEnter={e=>{e.currentTarget.style.background="rgba(90,150,215,.2)";e.currentTarget.style.borderColor="rgba(120,180,235,.5)";}}
+            onMouseLeave={e=>{e.currentTarget.style.background="rgba(120,160,210,.08)";e.currentTarget.style.borderColor="rgba(120,160,210,.16)";}}>
+            <div style={{fontWeight:700,color:"#eaf3fc",fontSize:13.5,marginBottom:3,display:"flex",alignItems:"center",gap:7}}>
+              {iso&&<span style={{fontSize:15,lineHeight:1,flex:"none"}}>{isoFlag(iso)}</span>}
+              <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.name}</span>
             </div>
-            {g.items.map((sc,i)=>{const ev=sc.ev;const ng=ev.cls?nuggetFor(ev.cls,ev.subclass):null;
-              const won=!sc.sameBoat&&sc.focalRank!=null&&sc.rivalRank!=null&&sc.focalRank<sc.rivalRank;
-              return(
-              <div key={i} onClick={()=>onOpenEventRef.current&&onOpenEventRef.current(ev.id)} title="Open results"
-                style={{margin:"7px 12px",padding:"10px 12px",borderRadius:10,cursor:"pointer",transition:"all .15s",
-                  background:"rgba(120,160,210,.08)",border:"1px solid rgba(120,160,210,.16)"}}
-                onMouseEnter={e=>{e.currentTarget.style.background="rgba(90,150,215,.2)";e.currentTarget.style.borderColor="rgba(120,180,235,.5)";}}
-                onMouseLeave={e=>{e.currentTarget.style.background="rgba(120,160,210,.08)";e.currentTarget.style.borderColor="rgba(120,160,210,.16)";}}>
-                <div style={{fontWeight:700,color:"#eaf3fc",fontSize:13.5,marginBottom:3}}>{ev.name}</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:"4px 10px",fontSize:12,color:"#9fbdd9",alignItems:"center"}}>
-                  <span>{formatDate(ev.date)}</span>
-                  {ng&&<span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 9px",fontWeight:700,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>}
-                  {sc.sameBoat
-                    ?<span style={{color:"#9fc4ec",fontWeight:700,fontSize:11.5}}>Sailed together{sc.focalRank!=null?` · #${sc.focalRank}`:""}</span>
-                    :<span style={{fontVariantNumeric:"tabular-nums",fontWeight:800,fontSize:11.5}}>
-                      <span style={{color:won?"#ffcf2e":"#dcecf8"}}>{sc.focalRank!=null?`#${sc.focalRank}`:"—"}</span>
-                      <span style={{fontWeight:600,color:"#7fa0c0"}}>{" vs "}</span>
-                      <span style={{color:"#dcecf8"}}>{sc.rivalRank!=null?`#${sc.rivalRank}`:"—"}</span>
-                    </span>}
-                </div>
-              </div>);})}
-          </div>
-        ))}
+            <div style={{display:"flex",flexWrap:"wrap",gap:"4px 10px",fontSize:12,color:"#9fbdd9",alignItems:"center"}}>
+              <span>{formatDate(ev.date)}</span>
+              {ng&&<span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 9px",fontWeight:700,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>}
+              {sc.sameBoat
+                ?<span style={{color:"#9fc4ec",fontWeight:700,fontSize:11.5}}>Sailed together{sc.focalRank!=null?` · ${sc.focalRank}`:""}</span>
+                :<span style={{fontVariantNumeric:"tabular-nums",fontWeight:800,fontSize:11.5}}>
+                  <span style={{color:won?"#ffcf2e":"#dcecf8"}}>{sc.focalRank!=null?sc.focalRank:"—"}</span>
+                  <span style={{fontWeight:600,color:"#7fa0c0"}}>{" vs "}</span>
+                  <span style={{color:"#dcecf8"}}>{sc.rivalRank!=null?sc.rivalRank:"—"}</span>
+                </span>}
+            </div>
+          </div>);})}
         {sharedComps.length===0&&<div style={{padding:16,color:"#9fbdd9",fontSize:12}}>No shared competitions found.</div>}
       </div>);
   return(
@@ -2702,114 +2698,237 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   );
 }
 
-/* ── Rival-relative career progress ──────────────────────────────────────────
-   Score per event = share of the athlete's top rivals (computeRivalCohort —
-   the SAME cohort the rival web shows) they finished ahead of. Bounded 0–1,
-   independent of fleet size and event strength, so it reads across events:
-   50% = level with your rivals wherever you race. Official overall ranks
-   only — we filter and count, never re-rank. */
-const MIN_RIVALS_PRESENT=2; // events with fewer cohort rivals present are not scored (tunable)
-const SMOOTH_WINDOW=5;      // trend = rolling mean of the last N scored events
-function ProgressChart({name,events,history,height=220}){
-  const [mode,setMode]=React.useState("career"); // "career" | "year"
-  const [tip,setTip]=React.useState(null);       // {x,y,lines:[..]}
-  const data=React.useMemo(()=>{
-    const cohort=computeRivalCohort(name,events,15);
-    const rivalKeys=new Set(cohort.rivals.map(r=>r.key));
-    const pts=[];
-    if(rivalKeys.size)(history||[]).forEach(h=>{
-      const ev=h?.ev; if(!ev||ev.status==="Draft")return;
-      const dk=dateKey(ev.date); if(!dk)return;            // undated → excluded
-      const myRank=h.row?.rank; if(!(myRank>=1))return;
-      let rows; try{rows=scoreEvent(ev).rows;}catch{return;}
-      const rankOf=new Map();                              // rival canon -> best official rank in this event
-      rows.forEach(r=>{if(r.rank>=1)[r.helm,r.crew].forEach(nm=>{const k=canonName(nm);if(k&&rivalKeys.has(k)){const prev=rankOf.get(k);if(prev===undefined||r.rank<prev)rankOf.set(k,r.rank);}});});
-      if(rankOf.size<MIN_RIVALS_PRESENT)return;
-      let beaten=0; rankOf.forEach(rk=>{if(myRank<rk)beaten+=1;else if(myRank===rk)beaten+=0.5;});
-      pts.push({dk,date:ev.date,evName:ev.name,score:beaten/rankOf.size,beaten,rivals:rankOf.size,rank:myRank,fleet:h.fleet});
-    });
-    pts.sort((a,b)=>a.dk.localeCompare(b.dk));             // oldest → newest
-    pts.forEach((p,i)=>{const w=pts.slice(Math.max(0,i-SMOOTH_WINDOW+1),i+1);p.trend=w.reduce((s,x)=>s+x.score,0)/w.length;});
-    const byY=new Map();
-    pts.forEach(p=>{const y=p.dk.slice(0,4);const o=byY.get(y)||{y,sum:0,n:0};o.sum+=p.score;o.n++;byY.set(y,o);});
-    const years=[...byY.values()].sort((a,b)=>a.y.localeCompare(b.y)).map(o=>({year:o.y,score:o.sum/o.n,n:o.n}));
-    return{pts,years};
-  },[name,events,history]);
-  const W=260, headH=64, CH=Math.max(80,height-headH-6);
-  const M={l:26,r:8,t:10,b:14};
-  const plotW=W-M.l-M.r, plotH=CH-M.t-M.b;
-  const yOf=s=>M.t+plotH*(1-s);
-  const infoTxt="Measured against the same top rivals shown in the Rival Web — the athletes this athlete races most often. This normalizes for event difficulty: 50% means finishing level with your rivals, wherever you race.";
-  const chip=(k,lab)=>(
-    <button key={k} onClick={()=>{setMode(k);setTip(null);}}
-      style={{fontSize:10,fontWeight:700,letterSpacing:".02em",border:"1px solid rgba(120,160,210,.3)",borderRadius:980,
-        padding:"2px 10px",cursor:"pointer",transition:"all .2s ease",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
-        background:mode===k?"rgba(146,180,222,.34)":"rgba(120,160,210,.16)",color:mode===k?"#fff":"#cfe0f2"}}>{lab}</button>);
-  const showTip=(e,lines)=>{const host=e.currentTarget.ownerSVGElement.parentElement.getBoundingClientRect();const r=e.currentTarget.getBoundingClientRect();
-    setTip({x:Math.min(Math.max(r.left-host.left+r.width/2,60),W-60),y:r.top-host.top,lines});};
-  let body;
-  if(data.pts.length<3){
-    body=<div style={{height:CH,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#7fa0c0",fontSize:11,padding:"0 18px"}}>Not enough shared competitions with rivals yet.</div>;
-  }else{
-    const grid=(
-      <g>
-        <text transform={`rotate(-90 7 ${M.t+plotH/2})`} x={7} y={M.t+plotH/2} textAnchor="middle" fontSize="7" fill="#7fa0c0">Rivals beaten</text>
-        {[["100%",1],["50%",.5],["0%",0]].map(([lab,s])=>
-          <text key={lab} x={M.l-3} y={yOf(s)+2.5} textAnchor="end" fontSize="7" fill="#7fa0c0">{lab}</text>)}
-        <line x1={M.l} y1={yOf(.5)} x2={W-M.r} y2={yOf(.5)} stroke="rgba(220,236,248,.32)" strokeWidth="1" strokeDasharray="3 3"/>
-        <text x={W-M.r} y={yOf(.5)-3} textAnchor="end" fontSize="6.5" fill="#7fa0c0">level with rivals</text>
-        <line x1={M.l} y1={yOf(0)} x2={W-M.r} y2={yOf(0)} stroke="rgba(220,236,248,.18)" strokeWidth="1"/>
-      </g>);
-    if(mode==="career"){
-      const ts=data.pts.map(p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8)));
-      const t0=ts[0],t1=ts[ts.length-1],span=Math.max(1,t1-t0);
-      const xOf=i=>ts.length>1?M.l+plotW*(ts[i]-t0)/span:M.l+plotW/2;
-      const trendPts=data.pts.map((p,i)=>`${xOf(i)},${yOf(p.trend)}`).join(" ");
-      const area=`M ${xOf(0)},${yOf(data.pts[0].trend)} `+data.pts.map((p,i)=>`L ${xOf(i)},${yOf(p.trend)}`).join(" ")+` L ${xOf(data.pts.length-1)},${yOf(0)} L ${xOf(0)},${yOf(0)} Z`;
-      body=(
-        <svg width="100%" height={CH} viewBox={`0 0 ${W} ${CH}`} style={{display:"block"}}>
-          {grid}
-          <path d={area} fill="rgba(200,146,11,.10)"/>
-          <polyline points={trendPts} fill="none" stroke="var(--gold)" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round"/>
-          {data.pts.map((p,i)=>(
-            <circle key={i} cx={xOf(i)} cy={yOf(p.score)} r="3" fill="var(--accent)" stroke="rgba(255,255,255,.55)" strokeWidth="1" style={{cursor:"pointer"}}
-              onMouseEnter={e=>showTip(e,[p.evName,formatDate(p.date),`Beat ${p.beaten%1?p.beaten.toFixed(1):p.beaten} of ${p.rivals} rivals`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
-              onMouseLeave={()=>setTip(null)}/>))}
-          <text x={M.l} y={CH-3} fontSize="7" fill="#7fa0c0">{data.pts[0].dk.slice(0,4)}</text>
-          {data.pts[data.pts.length-1].dk.slice(0,4)!==data.pts[0].dk.slice(0,4)&&
-            <text x={W-M.r} y={CH-3} textAnchor="end" fontSize="7" fill="#7fa0c0">{data.pts[data.pts.length-1].dk.slice(0,4)}</text>}
-        </svg>);
-    }else{
-      const n=data.years.length, slot=plotW/n, bw=Math.min(26,slot*.55);
-      body=(
-        <svg width="100%" height={CH} viewBox={`0 0 ${W} ${CH}`} style={{display:"block"}}>
-          {grid}
-          {data.years.map((y,i)=>{const x=M.l+slot*i+(slot-bw)/2;const h=plotH*y.score;return(
-            <g key={y.year}>
-              <rect x={x} y={yOf(y.score)} width={bw} height={Math.max(1,h)} rx="3" fill="rgba(13,142,207,.75)" stroke="rgba(255,255,255,.25)" strokeWidth=".5" style={{cursor:"pointer"}}
-                onMouseEnter={e=>showTip(e,[y.year,`Avg ${Math.round(y.score*100)}% of rivals beaten`,`${y.n} scored competition${y.n>1?"s":""}`])}
-                onMouseLeave={()=>setTip(null)}/>
-              <text x={x+bw/2} y={CH-3} textAnchor="middle" fontSize="7" fill="#7fa0c0">{y.year}</text>
-            </g>);})}
-        </svg>);
-    }
-  }
+/* ── YearNuggets — small selectable per-year chips (replaces the range slider) ─
+   Multi-select: click a year to isolate it, click more to add, "All" resets.
+   Each nugget's ring is a conic gradient of the boat classes raced that year
+   (e.g. 4 Optimist + 3 29er → 4/7 black, 3/7 red), so the chip carries its own
+   class context. selYears=null means all years. Floats under the frames. */
+function YearNuggets({years,selYears,classByYear,onPick,onAll}){
+  const sel=selYears&&selYears.length?new Set(selYears):null;   // null = all years
+  const isAll=!sel;
+  const ringFor=y=>{
+    const m=classByYear&&classByYear.get(y);
+    if(!m||!m.size)return "rgba(140,170,205,.6)";
+    const total=[...m.values()].reduce((s,v)=>s+v,0);
+    const segs=[...m.entries()].sort((a,b)=>b[1]-a[1]);
+    let acc=0;const stops=[];
+    segs.forEach(([cls,cnt])=>{const a=acc/total*360,b=(acc+cnt)/total*360;acc+=cnt;
+      const col=cls==="__none"?"#8aa0bb":classColor(cls);stops.push(`${col} ${a}deg ${b}deg`);});
+    return `conic-gradient(${stops.join(",")})`;
+  };
   return(
-    <div style={{position:"relative",width:"100%",height}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-        <span style={{fontSize:12.5,fontWeight:800,color:"#fff",letterSpacing:"-.01em"}}>Progress vs Rivals</span>
-        <span title={infoTxt} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:"50%",
-          border:"1px solid rgba(127,160,192,.6)",color:"#7fa0c0",fontSize:9,fontWeight:700,cursor:"help",fontStyle:"italic",fontFamily:"Georgia,serif"}}>i</span>
-      </div>
-      <div style={{textAlign:"center",fontSize:9,color:"#7fa0c0",lineHeight:1.35,margin:"2px 6px 5px"}}>Share of your top rivals you finished ahead of, per competition</div>
-      <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:4}}>{[chip("career","Career"),chip("year","By year")]}</div>
+    <div className="ynugs">
+      <button type="button" className={"ynug-all"+(isAll?" on":"")} onClick={()=>onAll&&onAll()}>All</button>
+      {years.map(y=>{
+        const on=isAll||sel.has(y);
+        return(
+          <button type="button" key={y} className={"ynug"+(on?" on":"")} style={{background:ringFor(y)}} onClick={()=>onPick&&onPick(y)} title={String(y)}>
+            <span className="ynug-in">{"'"+String(y).slice(2)}</span>
+          </button>);
+      })}
+    </div>
+  );
+}
+
+/* ── InfoHint — small "i" badge that reveals an explanatory popover on hover ── */
+function InfoHint({text}){
+  const [open,setOpen]=React.useState(false);
+  return(
+    <span style={{position:"relative",display:"inline-flex",alignItems:"center",verticalAlign:"middle"}}
+      onMouseEnter={()=>setOpen(true)} onMouseLeave={()=>setOpen(false)}>
+      <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:14,height:14,borderRadius:"50%",border:"1px solid rgba(127,160,192,.7)",color:"#9fbdd9",fontSize:9,fontWeight:700,fontStyle:"italic",fontFamily:"Georgia,serif",cursor:"help",flex:"none"}}>i</span>
+      {open&&<span style={{position:"absolute",top:"calc(100% + 8px)",left:"50%",transform:"translateX(-50%)",width:236,zIndex:30,
+        background:"rgba(8,24,45,.97)",border:"1px solid rgba(120,160,210,.4)",borderRadius:9,padding:"9px 12px",
+        fontSize:11,fontWeight:500,lineHeight:1.5,color:"#cfe0f2",boxShadow:"0 6px 22px rgba(0,0,0,.5)",pointerEvents:"none",
+        fontStyle:"normal",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif",letterSpacing:0,textTransform:"none",textAlign:"left",whiteSpace:"normal"}}>{text}</span>}
+    </span>
+  );
+}
+
+/* ── Rival-relative career progress (per boat-class era) ─────────────────────
+   Each competition is scored against the athlete's top rivals FOR THAT BOAT
+   CLASS — a distinct cohort per class-era (computeRivalCohort over all events of
+   that class), so 2017-Optimist rivals ≠ 2022-29er rivals. Score = share of that
+   era's cohort present in the event that the athlete finished ahead of (ties=½).
+   Bounded 0–1, fleet-size independent: 50% = level with your rivals. Official
+   ranks only — we filter and count, never re-rank. Year-nuggets pick which
+   competitions show; the era cohorts stay stable regardless of selection. */
+const MIN_RIVALS_PRESENT=1; // events with fewer cohort rivals present are not scored (tunable). 1 = show any competition with ≥1 era rival (partners excluded); a lone-rival event just scores 0/100%.
+const SMOOTH_WINDOW=5;      // trend = rolling mean of the last N scored events
+const PROGRESS_RIVAL_HINT="Rivals here are the athletes you race most in this boat class — a separate top group per class era, ranked by how often you meet and how close your finishes are. Your results in one class are only measured against that class's rivals.";
+function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=260,enlarged=false,onOpenEvent,onPick,onSelectionChange,deselectKey=0}){
+  const [tip,setTip]=React.useState(null);       // {x,y,lines:[..]}  (inline hover)
+  const [selPt,setSelPt]=React.useState(null);   // selected competition index (enlarged sidebar)
+  const sel=React.useMemo(()=>yrKey?new Set(selYears):null,[yrKey]);  // null = all years
+  const data=React.useMemo(()=>{
+    const focalKey=canonName(name);
+    // One rival cohort per boat class, computed over ALL that class's events
+    // (the era) — stable no matter which years are selected below.
+    const eraCache=new Map();
+    const cohortForCls=cls=>{
+      const key=cls||"__none";
+      if(eraCache.has(key))return eraCache.get(key);
+      const evsC=(events||[]).filter(ev=>(ev.cls||"__none")===key);
+      const co=computeRivalCohort(name,evsC,15);
+      const obj={keys:new Set(co.rivals.map(r=>r.key)),disp:co.disp};
+      eraCache.set(key,obj);return obj;
+    };
+    const pts=[];
+    (history||[]).forEach(h=>{
+      const ev=h?.ev; if(!ev||ev.status==="Draft")return;
+      const dk=dateKey(ev.date); if(!dk)return;              // undated → excluded
+      const y=+dk.slice(0,4); if(sel&&!sel.has(y))return;    // outside the selected years
+      const myRank=h.row?.rank; if(!(myRank>=1))return;
+      const co=cohortForCls(ev.cls); if(!co.keys.size)return;
+      let rows; try{rows=scoreEvent(ev).rows;}catch{return;}
+      const rankOf=new Map();                                // era rival canon -> best rank in this event
+      const mates=new Set();                                 // who shared the focal's boat here (partners, not rivals)
+      rows.forEach(r=>{
+        const hk=canonName(r.helm),ck=canonName(r.crew);
+        if(hk===focalKey||ck===focalKey){const other=hk===focalKey?ck:hk;if(other&&other!==focalKey)mates.add(other);}
+        if(r.rank>=1)[hk,ck].forEach(k=>{if(k&&co.keys.has(k)){const prev=rankOf.get(k);if(prev===undefined||r.rank<prev)rankOf.set(k,r.rank);}});
+      });
+      // Partners (same boat) are never scored as rivals — you can't beat your own crew.
+      let beaten=0; const trueRivals=[]; const partners=[];
+      rankOf.forEach((rk,k)=>{
+        const nm=co.disp.get(k)||k;
+        if(mates.has(k)){partners.push({key:k,name:nm,rank:rk,sameBoat:true});return;}
+        if(myRank<rk)beaten+=1;else if(myRank===rk)beaten+=0.5;
+        trueRivals.push({key:k,name:nm,rank:rk,sameBoat:false});
+      });
+      if(trueRivals.length<MIN_RIVALS_PRESENT)return;
+      trueRivals.sort((a,b)=>a.rank-b.rank);
+      pts.push({dk,date:ev.date,evId:ev.id,evName:ev.name,cls:ev.cls,subclass:ev.subclass,score:beaten/trueRivals.length,beaten,rivals:trueRivals.length,rank:myRank,fleet:h.fleet,rivalsHere:[...trueRivals,...partners]});
+    });
+    pts.sort((a,b)=>a.dk.localeCompare(b.dk));               // oldest → newest
+    pts.forEach((p,i)=>{const win=pts.slice(Math.max(0,i-SMOOTH_WINDOW+1),i+1);p.trend=win.reduce((s,x)=>s+x.score,0)/win.length;});
+    return{pts};
+  },[name,events,history,sel]);
+  React.useEffect(()=>{setSelPt(null);},[yrKey,name]);       // clear selection when the window/athlete changes
+  React.useEffect(()=>{if(deselectKey)setSelPt(null);},[deselectKey]); // external deselect (popup header)
+  React.useEffect(()=>{onSelectionChange&&onSelectionChange(selPt);},[selPt]); // report selection for the deselect button
+  const S=w/260;                                             // scales the trend line / dot geometry with the chart width
+  const glowId="pgGlow"+Math.round(w), softId="pgSoft"+Math.round(w);
+  const AX=9.5, AXm=8.5;                                     // axis label sizes — fixed, matching the Trend/Competition legend
+  const titleBlock=enlarged?24:0, captionBlock=enlarged?26:0, legendBlock=enlarged?20:0;   // header/footer live in the popup only; inline is just the chart
+  const CH=Math.max(70,height-titleBlock-captionBlock-legendBlock-6);
+  const M={l:32,r:11,t:9,b:16};                              // fixed gutters — axis labels are a fixed size, so margins don't scale
+  const plotW=w-M.l-M.r, plotH=CH-M.t-M.b;
+  const yOf=s=>M.t+plotH*(1-s);
+  const showTip=(e,lines)=>{const host=e.currentTarget.ownerSVGElement.parentElement.getBoundingClientRect();const r=e.currentTarget.getBoundingClientRect();
+    setTip({x:Math.min(Math.max(r.left-host.left+r.width/2,60),host.width-60),y:r.top-host.top,lines});};
+  const pts=data.pts;
+  let body;
+  if(pts.length<3){
+    body=<div style={{height:CH,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#7fa0c0",fontSize:12,padding:"0 18px"}}>Not enough shared competitions with rivals in this period yet to chart progress.</div>;
+  }else{
+    const yearsSel=sel?[...sel].sort((a,b)=>a-b):null;
+    const y0=yearsSel?yearsSel[0]:+pts[0].dk.slice(0,4);
+    const y1=yearsSel?yearsSel[yearsSel.length-1]:+pts[pts.length-1].dk.slice(0,4);
+    const t0=Date.UTC(y0,0,1), t1=Date.UTC(y1,11,31), span=Math.max(1,t1-t0);
+    const xForTs=ts=>M.l+plotW*(ts-t0)/span;
+    const tsOf=p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8));
+    const xOf=p=>Math.min(Math.max(xForTs(tsOf(p)),M.l),w-M.r);
+    const trendPts=pts.map(p=>`${xOf(p)},${yOf(p.trend)}`).join(" ");
+    const nY=y1-y0+1, every=nY>12?3:nY>7?2:1;
+    body=(
+      <svg width="100%" height={CH} viewBox={`0 0 ${w} ${CH}`} style={{display:"block"}}>
+        <defs>
+          <filter id={glowId} x="-25%" y="-25%" width="150%" height="150%">
+            <feGaussianBlur stdDeviation={1.8*S} result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          {/* soft blur (no source merge) → the moving contrail reads as a diffuse glow */}
+          <filter id={softId} x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation={3.4*S}/>
+          </filter>
+        </defs>
+        {/* y axis: 0 / 50 / 100% of rivals beaten */}
+        <text transform={`rotate(-90 10 ${M.t+plotH/2})`} x={10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fill="#7fa0c0">Rivals beaten</text>
+        {[["100%",1],["50%",.5],["0%",0]].map(([lab,s])=>
+          <text key={lab} x={M.l-4} y={yOf(s)+3} textAnchor="end" fontSize={AX} fill="#7fa0c0">{lab}</text>)}
+        <line x1={M.l} y1={yOf(.5)} x2={w-M.r} y2={yOf(.5)} stroke="rgba(220,236,248,.3)" strokeWidth={S} strokeDasharray={`${3*S} ${3*S}`}/>
+        <text x={w-M.r} y={yOf(.5)-4} textAnchor="end" fontSize={AXm} fill="#7fa0c0">level with rivals</text>
+        <line x1={M.l} y1={yOf(0)} x2={w-M.r} y2={yOf(0)} stroke="rgba(220,236,248,.18)" strokeWidth={S}/>
+        {/* x axis: a gridline + label per year (thinned if the window is wide) */}
+        {Array.from({length:nY},(_,i)=>y0+i).map((Y,idx)=>{
+          const gx=xForTs(Date.UTC(Y,0,1));
+          const cx=Math.min(Math.max(xForTs(Date.UTC(Y,5,15)),M.l),w-M.r);
+          const show=(idx%every===0)||Y===y1;
+          return(<g key={Y}>
+            {Y>y0&&<line x1={gx} y1={M.t} x2={gx} y2={M.t+plotH} stroke="rgba(220,236,248,.07)" strokeWidth={S}/>}
+            {show&&<text x={cx} y={CH-4} textAnchor="middle" fontSize={AX} fill="#7fa0c0">{Y}</text>}
+          </g>);
+        })}
+        {/* the trend line: always shown, with a slow soft glow gliding left → right */}
+        <polyline points={trendPts} fill="none" stroke="#34a9e6" strokeWidth={2.1*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
+        <polyline className="pg-pulse" pathLength="1" points={trendPts} fill="none" stroke="#a9e0ff" strokeWidth={3.4*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
+        {/* per-competition dots ringed in their boat-class colour */}
+        {pts.map((p,i)=>{const on=enlarged&&selPt===i;const cc=classColor(p.cls);return(
+          <circle key={i} cx={xOf(p)} cy={yOf(p.score)} r={(on?4.6:3)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?2:1.6)*S} style={{cursor:"pointer"}}
+            onClick={enlarged?()=>setSelPt(i===selPt?null:i):undefined}
+            onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Beat ${p.beaten%1?p.beaten.toFixed(1):p.beaten} of ${p.rivals} rivals`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
+            onMouseLeave={enlarged?undefined:()=>setTip(null)}/>);})}
+      </svg>);
+  }
+  const chartCol=(
+    <div style={{position:"relative",display:"flex",flexDirection:"column",width:"100%",height}}>
+      {enlarged&&<div style={{flex:"none",textAlign:"center",fontSize:15.5,fontWeight:800,color:"#fff",letterSpacing:"-.01em"}}>Progress</div>}
+      {enlarged&&<div style={{flex:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:6,color:"#9fbdd9",fontSize:13,lineHeight:1.35,margin:"3px 12px 6px"}}>
+        <span>How {name} placed relative to their rivals over time.</span>
+        <InfoHint text={PROGRESS_RIVAL_HINT}/>
+      </div>}
       {body}
-      {tip&&(
-        <div style={{position:"absolute",left:tip.x,top:Math.max(headH,tip.y),transform:"translate(-50%,-100%)",pointerEvents:"none",zIndex:5,
+      {enlarged&&<div style={{flex:"none",display:"flex",gap:16,justifyContent:"center",alignItems:"center",marginTop:6,flexWrap:"wrap"}}>
+        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Trend</span>
+        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:9,height:9,borderRadius:"50%",background:"#fff",boxShadow:"0 0 0 1.5px var(--accent)"}}/>Competition</span>
+      </div>}
+      {tip&&!enlarged&&(
+        <div style={{position:"absolute",left:tip.x,top:Math.max(titleBlock,tip.y),transform:"translate(-50%,-100%)",pointerEvents:"none",zIndex:5,
           background:"rgba(8,24,45,.94)",border:"1px solid rgba(120,160,210,.35)",borderRadius:8,padding:"6px 9px",maxWidth:200,boxShadow:"0 4px 14px rgba(0,0,0,.4)"}}>
           {tip.lines.map((l,i)=><div key={i} style={{fontSize:i?9.5:10,fontWeight:i?500:700,color:i?"#a9c4de":"#fff",whiteSpace:i?"nowrap":"normal"}}>{l}</div>)}
         </div>)}
     </div>);
+  if(!enlarged)return chartCol;
+  // enlarged: chart + per-competition rival sidebar (click a dot to populate)
+  const sp=selPt!=null?pts[selPt]:null;
+  const sidebar=!sp
+    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a point on the line to see who you raced in that competition — the rivals from that boat-class era and how you placed against each.</div>
+    : (<div style={{padding:"4px 0"}}>
+        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
+          <div onClick={()=>onOpenEvent&&onOpenEvent(sp.evId)} title={onOpenEvent?"Open results":undefined} style={{fontWeight:700,fontSize:15.5,color:"#eaf3fc",cursor:onOpenEvent?"pointer":"default",lineHeight:1.2}}>{sp.evName}</div>
+          <div style={{marginTop:7,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            {sp.cls&&(()=>{const ng=nuggetFor(sp.cls,sp.subclass);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
+            <span style={{color:"#9fbdd9",fontSize:12}}>{formatDate(sp.date)}</span>
+            <span style={{color:"#9fc4ec",fontWeight:800,fontSize:12.5,fontVariantNumeric:"tabular-nums"}}>{ordinalOf(sp.rank)} of {sp.fleet}</span>
+          </div>
+          <div style={{marginTop:8,fontSize:12,color:"#cfe0f2"}}>Beat <b>{sp.beaten%1?sp.beaten.toFixed(1):sp.beaten}</b> of <b>{sp.rivals}</b> rivals here — <b>{Math.round(sp.score*100)}%</b></div>
+        </div>
+        <div style={{padding:"11px 16px 4px",fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0"}}>Placing among rivals</div>
+        {(()=>{
+          // Leaderboard slice: rivals ranked by finish, with the focal athlete's own
+          // placement highlighted in line so you can see exactly where they landed.
+          const trues=sp.rivalsHere.filter(r=>!r.sameBoat);           // already rank-sorted
+          const mates=sp.rivalsHere.filter(r=>r.sameBoat);
+          const idx=trues.findIndex(r=>r.rank>sp.rank);
+          const ordered=idx<0?[...trues,{focal:true}]:[...trues.slice(0,idx),{focal:true},...trues.slice(idx)];
+          const rowStyle=hl=>({margin:"4px 12px",padding:"8px 12px",borderRadius:9,display:"flex",alignItems:"center",gap:10,
+            background:hl?"rgba(13,142,207,.2)":"rgba(120,160,210,.08)",border:"1px solid "+(hl?"rgba(90,180,235,.6)":"rgba(120,160,210,.16)")});
+          const rankBadge=(n,hl)=><span style={{flex:"none",width:24,textAlign:"right",fontWeight:800,fontSize:12.5,fontVariantNumeric:"tabular-nums",color:hl?"#eaf3fc":"#9fc4ec"}}>{n}</span>;
+          const nameCell=(nm,bold)=><span style={{flex:1,minWidth:0,fontWeight:bold?800:700,fontSize:12.5,color:"#eaf3fc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</span>;
+          const rows=ordered.map((r,i)=> r.focal
+            ? <div key="__you" style={rowStyle(true)}>{rankBadge(sp.rank,true)}{nameCell(name,true)}<span style={{fontSize:10,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"#7fd0ff",flex:"none"}}>You</span></div>
+            : <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:sp.rank<r.rank?"#ffcf2e":sp.rank===r.rank?"#9fbdd9":"#c98b8b",flex:"none"}}>{sp.rank<r.rank?"beat":sp.rank===r.rank?"tie":"lost"}</span></div>);
+          mates.forEach(r=>rows.push(
+            <div key={r.key} onClick={()=>onPick&&onPick(r.name)} title={onPick?"Open profile":undefined} style={{...rowStyle(false),cursor:onPick?"pointer":"default"}}>{rankBadge(r.rank,false)}{nameCell(r.name)}<span style={{fontSize:10.5,fontWeight:700,color:"#9fc4ec",flex:"none"}}>sailed together</span></div>));
+          return rows;
+        })()}
+      </div>);
+  return(
+    <div style={{display:"flex",width:"100%",height}}>
+      <div style={{flex:"0 0 64%",height}}>{chartCol}</div>
+      <div style={{flex:"0 0 36%",height,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)"}}>{sidebar}</div>
+    </div>
+  );
 }
 
 function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="competition",hostIso=null,rankShade=false,markersHostOnly=false}){
@@ -3522,33 +3641,43 @@ function FootprintLegend({label="Competitions / country",showHost=false,rank=fal
 }
 
 /* ── FootprintModal: dark popup · big globe · sticky country spotlight ──────── */
-function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffix="Globe",webProps=null,initialTab="footprint"}){
+function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffix="Globe",webProps=null,initialTab="footprint",years=[],selYears=null,yrKey="",classByYear=null,onPickYear,onPickAll}){
   const [sel,setSel]=React.useState(null); // selected ISO (sticky)
-  const [ftab,setFtab]=React.useState(webProps?initialTab:"footprint"); // footprint(globe) | web
+  const [ftab,setFtab]=React.useState(webProps?initialTab:"footprint"); // footprint(globe) | web | progress
   const [webSel,setWebSel]=React.useState(null); // athlete selected inside the web
   const [deselectKey,setDeselectKey]=React.useState(0); // bump to clear the web selection
+  const [progSel,setProgSel]=React.useState(null); // selected progress point (for the deselect button)
+  const [progDeselectKey,setProgDeselectKey]=React.useState(0); // bump to clear the progress selection
+  // Country list respects the selected years (undated kept only when all years selected).
+  // The globe uses the parent's countryCounts, which is already selection-filtered.
+  const selSet=React.useMemo(()=>yrKey?new Set(selYears):null,[yrKey]);
+  const histF=React.useMemo(()=>{
+    if(!selSet)return ag.history||[];
+    return (ag.history||[]).filter(h=>{const dk=dateKey(h.ev.date);if(!dk)return false;return selSet.has(+dk.slice(0,4));});
+  },[ag,selSet]);
+  const showNuggets=!!webProps&&years.length>0;
   const groups=React.useMemo(()=>{
     const m={};
-    ag.history.forEach(h=>{
+    histF.forEach(h=>{
       const ioc=h.ev.country||"";const iso=IOC_ISO[ioc]||"";
       const cname=GLOBE_NAMES[iso]||ioc||"Unknown";const key=iso||ioc||"ZZ";
       if(!m[key])m[key]={iso,cname,items:[]};
       m[key].items.push(h);
     });
     return Object.values(m).sort((a,b)=>a.cname.localeCompare(b.cname));
-  },[ag]);
+  },[histF]);
 
   return(
     <div className="ov" onClick={onClose}>
       <div className="modal wide" onClick={e=>e.stopPropagation()}
         style={{maxWidth:1000,background:"linear-gradient(160deg,rgba(13,35,64,0.82),rgba(9,26,49,0.82))",border:"1px solid rgba(120,160,210,.22)"}}>
         <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
-          <Flag size={18}/><h3>{name} — {ftab==="web"?"Athlete web":titleSuffix}</h3>
-          {((ftab==="footprint"&&sel)||(ftab==="web"&&webSel))&&
+          <h3>{name} — {ftab==="web"?"Athlete web":ftab==="progress"?"Progress":titleSuffix}</h3>
+          {((ftab==="footprint"&&sel)||(ftab==="web"&&webSel)||(ftab==="progress"&&progSel!=null))&&
             <button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}}
-              onClick={()=>{if(ftab==="web")setDeselectKey(k=>k+1);else setSel(null);}}>Deselect</button>}
+              onClick={()=>{if(ftab==="web")setDeselectKey(k=>k+1);else if(ftab==="progress")setProgDeselectKey(k=>k+1);else setSel(null);}}>Deselect</button>}
           {webProps&&<div style={{display:"flex",gap:4}}>
-            {[["footprint","Globe",Globe],["web","Web",WebIcon]].map(([k,lab,Ico])=>(
+            {[["footprint","Globe",Globe],["web","Web",WebIcon],["progress","Progress",TrendingUp]].map(([k,lab,Ico])=>(
               <button key={k} onClick={()=>setFtab(k)}
                 style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,letterSpacing:".02em",
                   border:"1px solid rgba(120,160,210,.3)",borderRadius:980,padding:"4px 12px",cursor:"pointer",transition:"all .2s ease",
@@ -3560,11 +3689,17 @@ function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffi
           </div>}
           <button className="x" onClick={onClose}><X size={16}/></button>
         </div>
+        {/* Shared year nuggets — govern Globe · Web · Progress together (floating, not a banner) */}
+        {showNuggets&&<div style={{padding:"12px 18px 4px",display:"flex",justifyContent:"center"}}>
+          <YearNuggets years={years} selYears={selYears} classByYear={classByYear} onPick={onPickYear} onAll={onPickAll}/>
+        </div>}
         {ftab==="web"
-        ? <div style={{height:540}}><AthleteWeb {...webProps} enlarged height={540} dark onSelectionChange={setWebSel} deselectKey={deselectKey}/></div>
+        ? <div style={{height:540}}><AthleteWeb {...webProps} enlarged height={540} dark onSelectionChange={setWebSel} deselectKey={deselectKey} selYears={selYears} yrKey={yrKey}/></div>
+        : ftab==="progress"
+        ? <div style={{height:540}}><ProgressChart name={name} events={webProps?webProps.events:[]} history={ag.history} selYears={selYears} yrKey={yrKey} enlarged height={540} w={600} onOpenEvent={webProps?webProps.onOpenEvent:undefined} onPick={webProps?webProps.onPick:undefined} onSelectionChange={setProgSel} deselectKey={progDeselectKey}/></div>
         : <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
           <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
-            <SailingGlobe countryData={countryCounts} height={460} pulseIso={sel} dark/>
+            <SailingGlobe countryData={countryCounts} height={460} pulseIso={sel} dark bare/>
             <FootprintLegend/>
           </div>
           <div style={{flex:"1 1 360px",minWidth:280,maxHeight:520,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)",padding:"8px 0"}}
@@ -6249,6 +6384,9 @@ export default function AthLinkMVP(){
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
   const[footprintOpen,setFootprintOpen]=useState(false);
   const[profileTab,setProfileTab]=useState("footprint");
+  // Shared profile year selection {key:athleteName, years:[...]}; null = all years.
+  // Keyed by athlete so switching profiles cleanly falls back to that athlete's full career.
+  const[yearSel,setYearSel]=useState(null);
   const[hostFootprintOpen,setHostFootprintOpen]=useState(false);
   const[confirmState,setConfirmState]=useState(null); // in-app confirm dialog (replaces window.confirm)
   const[editingAthName,setEditingAthName]=useState(null); // {orig} when renaming on the profile page
@@ -8235,6 +8373,21 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .phead .av{width:74px;height:74px;font-size:26px;border:3px solid rgba(255,255,255,.22);}
     .globe-wrap .expand-tip{opacity:0;transition:opacity .15s;}
     .globe-wrap:hover .expand-tip{opacity:1;}
+    /* Year nuggets — per-year chips (same pill size as All) with a class-coloured ring */
+    .ynugs{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;}
+    .ynug{padding:2px;border:0;border-radius:980px;cursor:pointer;transition:transform .12s,filter .12s;background:rgba(140,170,205,.6);}
+    .ynug:hover{transform:translateY(-1px);filter:brightness(1.1);}
+    .ynug-in{display:block;border-radius:980px;padding:3px 10px;font-size:10.5px;line-height:1.1;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.02em;background:#2b4d74;color:#bcd2ea;transition:.12s;}
+    .ynug.on .ynug-in{background:#4a76ad;color:#fff;}
+    .ynug-all{border:0;border-radius:980px;padding:5px 12px;font-size:10.5px;line-height:1.1;font-weight:800;letter-spacing:.02em;cursor:pointer;background:rgba(120,160,210,.16);color:#9fbdd9;transition:.12s;}
+    .ynug-all:hover{filter:brightness(1.1);}
+    .ynug-all.on{background:rgba(146,180,222,.34);color:#fff;}
+    /* Progress trend line: always shown, with a slow soft glow gliding left → right.
+       dasharray period (0.4+0.6) = pathLength(1), and the animation shifts by exactly
+       one period, so the loop is seamless (no jump back to the start). */
+    @keyframes pgPulse{from{stroke-dashoffset:1;}to{stroke-dashoffset:0;}}
+    .pg-pulse{stroke-dasharray:0.4 0.6;animation:pgPulse 12s linear infinite;}
+    @media(prefers-reduced-motion:reduce){.pg-pulse{display:none;}}
     .pname{font-family:'Barlow',sans-serif;font-weight:800;font-size:28px;margin:0;line-height:1;}
     .pflag{font-size:28px;line-height:1;margin-right:4px;}
     .pmeta{color:#bcd2e8;font-size:14px;margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;}
@@ -10292,12 +10445,40 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       </div>
       {(()=>{
         // compute footprint + overview once, used by both the globe (right) and the strip (below)
-        const countryCounts={};
-        ag.history.forEach(h=>{
-          const country=h.ev.country;
-          if(country){const iso=IOC_ISO[country];if(iso)countryCounts[iso]=(countryCounts[iso]||0)+1;}
+        // ── Shared year selection: one set of nuggets drives Globe · Web · Progress ──
+        const yearOfRow=h=>{const dk=dateKey(h.ev.date);return dk?+dk.slice(0,4):null;};
+        const careerYears=[...new Set(ag.history.map(yearOfRow).filter(y=>y!=null))].sort((a,b)=>a-b);
+        const hasYears=careerYears.length>0;
+        // yearSel is keyed by athlete; a stale selection from another profile falls back to all years.
+        const selSet=(yearSel&&yearSel.key===name&&yearSel.years&&yearSel.years.length)?new Set(yearSel.years):null;
+        const isAllYears=!selSet||careerYears.every(y=>selSet.has(y));
+        const selYears=isAllYears?null:[...selSet].sort((a,b)=>a-b);   // null = all years
+        const yrKey=selYears?selYears.join(","):"";                    // stable memo key for children
+        const inWindow=h=>{if(!selSet)return true;const y=yearOfRow(h);return y!=null&&selSet.has(y);};
+        // Per-year boat-class breakdown for the nugget rings (class -> #competitions that year).
+        const classByYear=new Map();
+        ag.history.forEach(h=>{const y=yearOfRow(h);if(y==null)return;const cls=h.ev.cls||"__none";let m=classByYear.get(y);if(!m){m=new Map();classByYear.set(y,m);}m.set(cls,(m.get(cls)||0)+1);});
+        // Toggle handlers: click a year to isolate it, click more to add, "All" resets.
+        const pickYear=y=>setYearSel(prev=>{
+          const cur=(prev&&prev.key===name&&prev.years)?new Set(prev.years):null;
+          let next;
+          if(!cur)next=[y];                                            // isolate from "all"
+          else if(cur.has(y)){cur.delete(y);next=cur.size?[...cur]:null;} // remove; empty → all
+          else{cur.add(y);next=[...cur];}
+          return next?{key:name,years:next.sort((a,b)=>a-b)}:null;
         });
-        const hasFootprint=Object.keys(countryCounts).length>0;
+        const pickAll=()=>setYearSel(null);
+        // Globe footprint — selection-filtered (all-years still counts undated country events).
+        const countryCounts={};
+        let hasFootprintAll=false;
+        ag.history.forEach(h=>{
+          const country=h.ev.country; if(!country)return;
+          const iso=IOC_ISO[country]; if(!iso)return;
+          hasFootprintAll=true;
+          if(!inWindow(h))return;
+          countryCounts[iso]=(countryCounts[iso]||0)+1;
+        });
+        const hasFootprint=hasFootprintAll;   // frame shows whenever the athlete has ANY footprint ever
         if(ag.events>0&&profileSummaries[name]===undefined) fetchFullProfileSummary(name,ag);
         const summary=profileSummaries[name];
         return(<>
@@ -10379,7 +10560,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
             {/* Footprint globe / Athlete web — toggled, with a shrink/reveal swap */}
             {ag.events>0&&hasFootprint&&(
-              <div className="globe-wrap" style={{flex:"0 0 260px",maxWidth:"100%"}}>
+              <div className="globe-wrap" style={{flex:"0 0 286px",maxWidth:"100%"}}>
                 <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6}}>
                   {[["footprint","Globe",Globe],["web","Web",WebIcon],["progress","Progress",TrendingUp]].map(([k,lab,Ico])=>(
                     <button key={k} onClick={()=>setProfileTab(k)}
@@ -10402,25 +10583,30 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="web"?1:0,transform:profileTab==="web"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="web"?"auto":"none"}}>
-                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})}/>}
+                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})} selYears={selYears} yrKey={yrKey}/>}
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click a node to open ⤢</div>
                   </div>
-                  <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
+                  <div onClick={()=>setFootprintOpen(true)} title="Click to expand"
+                    style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="progress"?1:0,transform:profileTab==="progress"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="progress"?"auto":"none"}}>
-                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} height={220}/>}
+                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} selYears={selYears} yrKey={yrKey} height={220} w={286}/>}
+                    <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                   </div>
                 </div>
                 {/* Caption sits below the globe (not over it) so it clears the sphere + glow. */}
                 {profileTab==="footprint"&&<div style={{textAlign:"center",fontSize:10,color:"#7fa0c0",marginTop:10}}>Competition footprint</div>}
+                {/* Shared year nuggets — sit under the frame, drive all three views */}
+                {hasYears&&<div style={{marginTop:12}}><YearNuggets years={careerYears} selYears={selYears} classByYear={classByYear} onPick={pickYear} onAll={pickAll}/></div>}
               </div>
             )}
           </div>
 
           {/* expanded footprint popup */}
           {footprintOpen&&hasFootprint&&(
-            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)}
-              initialTab={profileTab==="web"?"web":"footprint"}
+            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)} titleSuffix="Competition Footprint"
+              initialTab={profileTab==="web"?"web":profileTab==="progress"?"progress":"footprint"}
+              years={careerYears} selYears={selYears} yrKey={yrKey} classByYear={classByYear} onPickYear={pickYear} onPickAll={pickAll}
               webProps={{name,events,onPick:nm=>{setFootprintOpen(false);go({name:"profile",id:nm});},onOpenEvent:id=>{setFootprintOpen(false);go({name:"event",id});}}}/>
           )}
         </>);
