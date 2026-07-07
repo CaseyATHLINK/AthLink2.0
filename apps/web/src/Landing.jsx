@@ -63,12 +63,14 @@ const CSS = `
 .hs-bar:focus-within{box-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 0 0 1px rgba(160,205,250,.5),0 20px 44px -18px rgba(0,0,0,.55);}
 .hs-bar input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:17px;color:#fff;letter-spacing:-.01em;}
 .hs-bar input::placeholder{color:rgba(220,236,248,.62);}
-.hs-drop{position:absolute;top:calc(100% + 10px);left:0;right:0;z-index:8;background:rgba(9,26,48,.94);backdrop-filter:blur(30px) saturate(185%);-webkit-backdrop-filter:blur(30px) saturate(185%);border-radius:18px;box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 26px 60px -18px rgba(0,0,0,.6);overflow:hidden;text-align:left;padding:6px;}
-.hs-row{display:flex;align-items:center;gap:11px;padding:11px 14px;border-radius:12px;cursor:pointer;color:#eaf3fc;font-weight:600;font-size:14.5px;transition:background .14s;}
-.hs-row:hover{background:rgba(120,170,220,.16);}
-.hs-row .sub{color:#9fc4ec;font-weight:500;font-size:12.5px;margin-left:auto;flex:none;}
-.hs-type{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:rgba(120,170,220,.16);color:#9fc4ec;flex:none;}
-.hs-empty{padding:14px 16px;color:#9fc4ec;font-size:13.5px;}
+/* Light glass dropdown — same translucency/blur family as the hero search bar,
+   dark text at full contrast, rows highlighting with a subtle sky tint. */
+.hs-drop{position:absolute;top:calc(100% + 10px);left:0;right:0;z-index:8;background:rgba(255,255,255,.72);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:18px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 26px 60px -18px rgba(0,0,0,.42);overflow:hidden;text-align:left;padding:6px;color:var(--ink);}
+.hs-row{display:flex;align-items:center;gap:11px;padding:11px 14px;border-radius:12px;cursor:pointer;color:var(--navy);font-weight:600;font-size:14.5px;transition:background .14s;}
+.hs-row:hover{background:rgba(13,142,207,.12);}
+.hs-row .sub{color:var(--mut);font-weight:500;font-size:12.5px;margin-left:auto;flex:none;}
+.hs-type{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:rgba(13,142,207,.12);color:var(--accent);flex:none;}
+.hs-empty{padding:14px 16px;color:var(--mut);font-size:13.5px;}
 .hero-portals{display:flex;gap:14px;justify-content:center;margin-top:34px;flex-wrap:wrap;}
 .pbtn{display:inline-flex;align-items:center;gap:10px;font:inherit;font-weight:800;font-size:16.5px;letter-spacing:-.02em;color:var(--navy);background:var(--mat-reg,rgba(255,255,255,.7));backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border:0;border-radius:980px;padding:13px 24px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 12px 30px -14px rgba(0,0,0,.5);transition:transform .16s,box-shadow .16s;}
 .pbtn:hover{transform:translateY(-3px);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 22px 44px -18px rgba(0,0,0,.55);}
@@ -411,11 +413,47 @@ async function fetchSuggestions(term) {
   SEARCH_CACHE.set(term, res);
   return res;
 }
+/* ── In-memory search index — prefetched ONCE so hero suggestions filter
+   synchronously on every keystroke (like the sailing app's global search),
+   instead of a debounced network round-trip per term. The network path above
+   stays as the fallback while this hasn't resolved (or if it fails). ── */
+let SEARCH_INDEX = null;         // { athletes:[], hosts:[], events:[] } once loaded
+let SEARCH_INDEX_PROMISE = null; // in-flight prefetch (dedup across focus/mount)
+function prefetchSearchIndex() {
+  if (SEARCH_INDEX || SEARCH_INDEX_PROMISE || !sbHeaders) return SEARCH_INDEX_PROMISE;
+  SEARCH_INDEX_PROMISE = (async () => {
+    const [aths, hosts, evs] = await Promise.all([
+      sbRows(`athlete_usernames?select=username,display_name&order=display_name.asc&limit=5000`),
+      sbRows(`hosts?select=id,name,slug&order=name.asc&limit=1000`),
+      sbRows(`events?select=id,name,date&order=date.desc&limit=3000`),
+    ]);
+    SEARCH_INDEX = {
+      athletes: (aths || []).map((a) => ({ type: "athlete", Icon: User, label: a.display_name || a.username, path: `/${a.username}`, q: `${a.display_name || ""} ${a.username || ""}`.toLowerCase() })),
+      hosts: (hosts || []).map((h) => ({ type: "host", Icon: Landmark, label: h.name, path: `/${h.slug || h.id}`, q: (h.name || "").toLowerCase() })),
+      events: (evs || []).map((e) => ({ type: "competition", Icon: Flag, label: e.name, sub: e.date || "", path: `/event/${e.id}`, q: (e.name || "").toLowerCase() })),
+    };
+    return SEARCH_INDEX;
+  })();
+  return SEARCH_INDEX_PROMISE;
+}
+// Synchronous contains-match against the prefetched index (athletes → hosts →
+// competitions, capped ~9). Returns null when the index isn't ready yet.
+function filterIndex(term) {
+  if (!SEARCH_INDEX) return null;
+  const t = term.toLowerCase();
+  const hit = (arr, n) => arr.filter((x) => x.q.includes(t)).slice(0, n);
+  return [...hit(SEARCH_INDEX.athletes, 5), ...hit(SEARCH_INDEX.hosts, 3), ...hit(SEARCH_INDEX.events, 3)].slice(0, 9);
+}
 function useHeroSearch(q) {
   const [res, setRes] = useState(null); // null = idle, [] = no hits
   useEffect(() => {
     const term = q.trim();
-    if (!term || !sbHeaders) { setRes(null); return; }
+    if (!term) { setRes(null); return; }
+    // Instant path: filter the prefetched index synchronously (zero debounce/await).
+    const local = filterIndex(term);
+    if (local) { setRes(local); return; }
+    // Fallback: index not loaded yet (or unavailable) → the debounced network path.
+    if (!sbHeaders) { setRes(null); return; }
     if (SEARCH_CACHE.has(term)) { setRes(SEARCH_CACHE.get(term)); return; }
     let dead = false;
     const t = setTimeout(async () => {
@@ -458,7 +496,12 @@ export default function Landing({ sports = [] }) {
     })();
   }, []);
 
+  // Prefetch the search index once on mount so the very first keystroke is instant.
+  useEffect(() => { prefetchSearchIndex(); }, []);
+
   const toTop = () => window.scrollTo({ top: 0, behavior: "smooth" });
+  // Smooth-scroll to a section WITHOUT writing a #fragment into the URL.
+  const scrollToId = (id) => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: "smooth" }); };
   const openContact = (e) => { if (e) e.preventDefault(); setContactOpen(true); };
   const copyEmail = () => {
     const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1600); };
@@ -486,7 +529,7 @@ export default function Landing({ sports = [] }) {
     // keystroke — and never races the debounce into the sailing home.
     const term = q.trim();
     if (term) {
-      const out = await fetchSuggestions(term);
+      const out = filterIndex(term) ?? await fetchSuggestions(term);
       if (out.length) { goPath(out[0].path); return; }
     }
     goSailing();
@@ -507,10 +550,10 @@ export default function Landing({ sports = [] }) {
         </div>
         <div className="tb-center">
           <nav className="tb-nav">
-            <a className="tb-link" href="#trusted">Collaborators</a>
-            <a className="tb-link" href="#ecosystem">Who it's for</a>
-            <a className="tb-link" href="#mission">Mission</a>
-            <a className="tb-link" href="#contact" onClick={openContact}>Contact</a>
+            <button className="tb-link" onClick={() => scrollToId("trusted")}>Collaborators</button>
+            <button className="tb-link" onClick={() => scrollToId("ecosystem")}>Who it's for</button>
+            <button className="tb-link" onClick={() => scrollToId("mission")}>Mission</button>
+            <button className="tb-link" onClick={openContact}>Contact</button>
           </nav>
         </div>
         <div className="tb-spacer" />
@@ -645,8 +688,8 @@ export default function Landing({ sports = [] }) {
             </div>
             <div className="foot-links">
               <div className="foot-col"><h5>Portals</h5><a onClick={goSailing}>Sailing</a><span className="dead">Golf — coming soon</span></div>
-              <div className="foot-col"><h5>Platform</h5><a href="#trusted">Collaborators</a><a href="#ecosystem">Who it's for</a></div>
-              <div className="foot-col"><h5>Company</h5><a href="#mission">Mission</a><a onClick={openContact}>Contact</a></div>
+              <div className="foot-col"><h5>Platform</h5><a onClick={() => scrollToId("trusted")}>Collaborators</a><a onClick={() => scrollToId("ecosystem")}>Who it's for</a></div>
+              <div className="foot-col"><h5>Company</h5><a onClick={() => scrollToId("mission")}>Mission</a><a onClick={openContact}>Contact</a></div>
             </div>
           </div>
           <div className="foot-base"><span>© 2026 AthLink</span><span>athlink.win</span></div>
