@@ -2352,22 +2352,6 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   React.useEffect(()=>{onSelChangeRef.current&&onSelChangeRef.current(selNode);},[selNode]);
   // external "Deselect" (from the popup header) clears the current selection
   React.useEffect(()=>{const st=stateRef.current;st.sel=null;setSelNode(null);st.draw&&st.draw();},[deselectKey]);
-  // select a node programmatically (sidebar "connections" chips)
-  const selectById=(id)=>{
-    const st=stateRef.current;const n=st.byId?.get(id);if(!n)return;
-    st.sel=n;setSelNode({id:n.id,name:n.name,shared:n.shared,cls:n.cls,nat:n.nat});
-    st.draw&&st.draw();
-  };
-  // who the selected athlete is connected to in the visible web (edge weight desc)
-  const selConnections=React.useMemo(()=>{
-    if(!selNode)return [];
-    const byId=new Map(graph.nodes.map(n=>[n.id,n]));
-    return graph.links
-      .filter(l=>l.source===selNode.id||l.target===selNode.id)
-      .map(l=>({n:byId.get(l.source===selNode.id?l.target:l.source),w:l.w}))
-      .filter(x=>x.n)
-      .sort((a,b)=>b.w-a.w);
-  },[selNode,graph]);
   // the competitions the focal + selected athlete both sailed, with both
   // placements (from the rank maps already built in the graph memo)
   const sharedComps=React.useMemo(()=>{
@@ -2591,27 +2575,11 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
             {selNode.cls&&(()=>{const ng=nuggetFor(selNode.cls);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
             <span style={{color:"#9fc4ec",fontWeight:800,fontSize:13,fontVariantNumeric:"tabular-nums"}}>{sharedComps.length} shared competition{sharedComps.length===1?"":"s"}</span>
           </div>
-          {selConnections.length>0&&(
-            <div style={{marginTop:11}}>
-              <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:6}}>Connected to</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                {selConnections.map(({n,w})=>(
-                  <button key={n.id} onClick={()=>selectById(n.id)} title={`${w} competition${w===1?"":"s"} together — view`}
-                    style={{display:"inline-flex",alignItems:"center",gap:6,border:"1px solid rgba(120,160,210,.3)",
-                      background:"rgba(120,160,210,.12)",color:"#dcecf8",borderRadius:980,padding:"3px 10px",
-                      fontFamily:"inherit",fontSize:11.5,fontWeight:700,cursor:"pointer",lineHeight:1.4}}>
-                    <span style={{width:7,height:7,borderRadius:"50%",flex:"none",
-                      background:n.focal?"#ffcf2e":classColor(n.cls),boxShadow:"0 0 0 1px rgba(255,255,255,.35)"}}/>
-                    {n.name}<span style={{color:"#9fc4ec",fontWeight:800}}>{w}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
         {headToHead&&(headToHead.n>0?(
           <div style={{padding:"13px 16px 14px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
-            <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:8}}>Head-to-head</div>
+            <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:4}}>Head-to-head</div>
+            <div style={{fontSize:11,color:"#7fa0c0",lineHeight:1.4,marginBottom:8}}>How you finish against this athlete when you both have a result, split by who you sailed with.</div>
             <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
               <span style={{fontWeight:800,fontSize:22,lineHeight:1,color:"#eaf3fc",fontVariantNumeric:"tabular-nums",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif"}}>
                 {headToHead.w}–{headToHead.l}{headToHead.t>0?`–${headToHead.t}`:""}
