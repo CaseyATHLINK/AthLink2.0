@@ -912,6 +912,10 @@ function LiquidBackground(){
   useEffect(()=>{
     const canvas=ref.current; if(!canvas) return;
     const ctx=canvas.getContext("2d"); if(!ctx) return;
+    // Accessibility + battery: skip the animation entirely under reduced-motion,
+    // and run fewer balls on phones.
+    if(window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const BALL_COUNT=window.innerWidth<=700?8:13;
     const SCALE=0.24; let W=1,H=1,raf=0;
     const balls=[];
     // Navy header family (dark -> mid blue).
@@ -922,7 +926,7 @@ function LiquidBackground(){
       canvas.width=W; canvas.height=H;
       if(balls.length===0){
         const base=Math.max(W,H);
-        for(let i=0;i<13;i++) balls.push({x:Math.random()*W,y:Math.random()*H,
+        for(let i=0;i<BALL_COUNT;i++) balls.push({x:Math.random()*W,y:Math.random()*H,
           vx:(Math.random()-0.5)*W*0.0018,vy:(Math.random()-0.5)*H*0.0018,
           r:base*(0.22+Math.random()*0.24),c:i%palette.length});
       }
@@ -3615,7 +3619,7 @@ function SpmDuo({cfg,compact}){
       <div className="spm-info">
         {info
           ?(<><b>{info.t}</b><span> — {info.d}</span></>)
-          :(<span className="spm-info-hint">Drag the boat to spin it · hover any part or course mark for details</span>)}
+          :(<span className="spm-info-hint"><span className="spm-hint-mouse">Drag the boat to spin it · hover any part or course mark for details</span><span className="spm-hint-touch">Drag the boat to spin it · tap any part for details</span></span>)}
       </div>
     </div>
   );
@@ -8809,6 +8813,161 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .spm-halo{transform-box:fill-box;transform-origin:center;animation:spmPulse 2.4s ease-out infinite}
     @keyframes spmPulse{0%{transform:scale(.55);opacity:.75}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}
     @media (prefers-reduced-motion:reduce){.spm-halo{animation:none;opacity:.35}}
+
+    /* ══════════ MOBILE OPTIMIZATION (≤700px unless noted) ══════════
+       Additive layer only — desktop (≥701px) must render pixel-identical.
+       Later-in-cascade rules win; !important appears ONLY where an inline
+       style={{...}} in the JSX would otherwise beat the mobile override. */
+
+    /* ── Touch affordances (any coarse-pointer device, any width) ── */
+    .spm-hint-touch{display:none;}
+    @media (pointer:coarse){
+      .al-root button,.al-root select,.al-root input,.al-root .acard,.al-root .strip-card,
+      .al-root .class-card,.al-root .ev,.al-root .histrow,.al-root .namelink,
+      .al-root .strip-chip,.al-root .lens-chip{-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
+      .globe-wrap .expand-tip{display:none;}
+      .row-ai-tooltip{display:none;}          /* hover-driven scout tooltip has no tap path */
+      .spm-hint-mouse{display:none;}
+      .spm-hint-touch{display:inline;}
+    }
+    @media (pointer:coarse) and (prefers-reduced-motion:no-preference){
+      .acard:active,.strip-card:active,.class-card:active,.ev:active,.histrow:active,
+      .strip-chip:active,.lens-chip:active,.cal-cls-mini:active,.filter-chip:active{transform:scale(.98);transition:transform .08s;}
+    }
+
+    @media (max-width:700px){
+      /* ── §1 safe areas ── */
+      .al-root{padding-bottom:env(safe-area-inset-bottom);}
+      .foot{padding:24px 0 calc(24px + env(safe-area-inset-bottom));}
+      .notice{bottom:calc(16px + env(safe-area-inset-bottom));max-width:calc(100% - 24px);}
+
+      /* ── §2 global scale ── */
+      .wrap{padding:0 14px;}
+      .topin{padding:10px 14px;}
+      .sec{padding:18px 0 44px;}
+      .strip{padding:12px 0;}
+      .page-head{margin-bottom:14px;}
+      .page-title,.strip h1{font-size:clamp(21px,5.5vw,28px);}
+      .home-hero h1{font-size:clamp(26px,8vw,36px);}
+      .page-sub{font-size:13px;}
+      .seclabel{margin:0 0 10px;}
+      .cal-head-glass{padding:12px 14px;border-radius:18px;}
+      .phead{padding:18px 16px;gap:14px;border-radius:18px;}
+      .phead .av{width:88px!important;height:88px!important;font-size:30px!important;} /* profile photo is inline-sized to 111px */
+      .pname,.pflag{font-size:clamp(20px,6vw,28px);}
+      .pmeta{font-size:13px;gap:10px;}
+      .pstats{gap:18px;margin-top:14px;}
+      .pstats .v{font-size:19px;}
+      .histrow{padding:12px 13px;gap:11px;margin-bottom:8px;}
+      .hrk{width:40px;font-size:18px;}
+      .mbody{padding:16px 16px 20px;}
+      .import-actionbar{margin:16px -16px -20px;padding:12px 16px;}
+      .team-summary{padding:10px 12px;}
+      .x{width:40px;height:40px;}
+      .np-srchbtn,.np-menubtn{width:44px;height:44px;}
+      .back{min-height:44px;}
+
+      /* ── §3 athlete cards → compact rows (~8 per screen) ── */
+      .agrid{grid-template-columns:1fr;gap:8px;}
+      .acard{display:grid;grid-template-columns:40px minmax(0,1fr);column-gap:12px;row-gap:2px;align-items:center;padding:10px 12px;border-radius:14px;}
+      .achead{display:contents;}
+      .achead .av{width:40px;height:40px;font-size:13px;grid-row:1/span 2;}
+      .achead>div{min-width:0;}
+      .acn{font-size:16px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .acstat{grid-column:2;border-top:0;padding-top:0;gap:5px;font-size:12.5px;flex-wrap:nowrap;min-width:0;overflow:hidden;}
+      .acstat div{display:flex;align-items:baseline;gap:3px;white-space:nowrap;}
+      .acstat b{display:inline;font-size:12.5px;}
+      .acstat div+div::before{content:"·";margin-right:4px;color:var(--mut);}
+
+      /* ── §10 country group headers ── */
+      .cgroup-head{margin:2px 0 8px!important;gap:7px!important;}
+      .cgroup-head span:first-child{font-size:15px!important;}
+      .cgroup-head span:nth-child(2){font-size:13px!important;}
+
+      /* ── §4 competition / featured cards → compact rows ── */
+      .strip-cards{grid-template-columns:1fr;gap:8px;margin-bottom:22px;}
+      .strip-card{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:2px;align-items:center;padding:11px 13px;border-radius:14px;}
+      .strip-card .sc-top{display:contents;}
+      .strip-card .sc-top>*{grid-column:1;grid-row:2;justify-self:start;margin:0;}
+      .strip-card .sc-top>.cls{grid-column:2;grid-row:1/span 3;justify-self:end;align-self:center;}
+      .strip-card .sc-name{grid-column:1;grid-row:1;font-size:15.5px;line-height:1.25;margin:0;}
+      .strip-card .sc-date{font-size:12.5px;}
+      .strip-card .sc-sub{grid-column:1;grid-row:3;margin:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      /* event list rows (.ev) — drop the vertical year + redundant date/count lines */
+      .ev{padding:12px 13px;gap:10px;margin-bottom:8px;}
+      .evicon-year{display:none;}
+      .evicon-date{width:44px;height:44px;}
+      .evicon-date .eid{font-size:18px;}
+      .evname{font-size:15.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+      .evmeta{font-size:12.5px;gap:9px;}
+      .evmeta span.ev-cal,.evmeta span.ev-count{display:none;}
+
+      /* ── §5 host / association cards → compact rows ── */
+      .classes-grid{grid-template-columns:1fr;gap:8px;}
+      .class-card{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:2px;align-items:center;padding:12px 13px;}
+      .class-card>div:first-child{grid-column:2;grid-row:1/span 2;flex-direction:column;align-items:flex-end!important;justify-content:center;gap:5px!important;margin-bottom:0!important;max-width:40vw;}
+      .class-card>div:first-child>*{flex:none!important;max-width:100%;min-width:0;}
+      .class-card>div:first-child div{flex-wrap:wrap!important;row-gap:4px;justify-content:flex-end;}
+      .class-card .cls{font-size:10.5px;padding:3px 8px;}
+      .class-card .class-name{grid-column:1;grid-row:1;font-size:16px;margin:0;line-height:1.3;}
+      .class-card .class-stats{grid-column:1;grid-row:2;gap:5px;font-size:12.5px;margin:0;}
+      .class-card .class-stats div{display:flex;align-items:baseline;gap:3px;white-space:nowrap;}
+      .class-card .class-stats b{display:inline;font-size:12.5px;}
+      .class-card .class-stats div+div::before{content:"·";margin-right:4px;color:var(--mut);}
+      .class-card>img{display:none;}
+
+      /* ── §6 chip / control rows → one horizontally scrollable line each ── */
+      .strip-chips,.pagetabs .wrap,.rank-src-row,.rank-sel-row,.rank-year-row,.rank-mode-row{
+        display:flex;flex-wrap:nowrap!important;overflow-x:auto;-webkit-overflow-scrolling:touch;
+        scrollbar-width:none;padding-bottom:2px;
+        -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 26px),transparent);
+        mask-image:linear-gradient(90deg,#000 calc(100% - 26px),transparent);}
+      .strip-chips::-webkit-scrollbar,.pagetabs .wrap::-webkit-scrollbar,.rank-src-row::-webkit-scrollbar,
+      .rank-sel-row::-webkit-scrollbar,.rank-year-row::-webkit-scrollbar,.rank-mode-row::-webkit-scrollbar{display:none;}
+      .strip-chips>*,.rank-src-row>*,.rank-sel-row>*,.rank-year-row>*,.rank-mode-row>*{flex:none;white-space:nowrap;}
+      .strip-break{display:none;} /* Fix 9b's row-break: selects stay inline in the one-line scroll rail */
+      .pagetabs button{flex:none;white-space:nowrap;min-height:44px;}
+      .strip-chip,.lens-chip,.filter-chip,.cal-cls-mini,.nd-chip,.lens-select{min-height:44px;}
+      .seg button{min-height:44px;}
+      .rank-src-row button,.rank-year-row button,.rank-sel-row button,.rank-mode-row button{min-height:44px;}
+      .rank-disc-btn{width:44px!important;height:44px!important;}
+      .rank-src-row{margin-bottom:8px!important;}
+      .rank-mode-row{gap:10px!important;margin-bottom:10px!important;align-items:center;}
+      .rank-year-row{padding:4px 0!important;}
+
+      /* ── §7 results & rankings tables — sticky rank + name columns ── */
+      .panel{-webkit-overflow-scrolling:touch;}
+      table{min-width:0;font-size:12px;}
+      thead th{padding:8px 5px;font-size:11px;white-space:nowrap;}
+      thead th.l{padding-left:10px;}
+      tbody td{padding:6px 5px;}
+      tbody td.l{padding-left:10px;}
+      .rk{font-size:13px;}
+      .panel table thead th>div{max-width:84px!important;}
+      .panel table thead th:first-child{position:sticky;left:0;z-index:4;width:40px!important;min-width:40px!important;background:linear-gradient(180deg,rgb(31,78,128),rgb(19,49,78));}
+      .panel table thead th:nth-child(2){position:sticky;left:40px;z-index:4;background:linear-gradient(180deg,rgb(31,78,128),rgb(19,49,78));box-shadow:2px 0 4px rgba(20,33,58,.18);}
+      .panel table tbody td.rk{position:sticky;left:0;z-index:2;background:#fff;width:40px;min-width:40px;max-width:40px;}
+      .panel table tbody td.rk+td{position:sticky;left:40px;z-index:2;background:#fff;box-shadow:2px 0 4px rgba(20,33,58,.08);}
+      .panel table tbody td.rk+td .namelink{display:inline-block;max-width:31vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;}
+      .boat{gap:8px;}
+      .panel table .boat>*:first-child{display:none;} /* avatars: density over decoration in phone tables */
+      .cn{font-size:11px;max-width:31vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      /* import-preview table (admin) gets the same treatment, lighter */
+      .rtable-wrap{-webkit-overflow-scrolling:touch;}
+      .rtable thead th{padding:6px 3px;}
+      .rtable thead th:first-child,.rtable tbody td:first-child{position:sticky;left:0;z-index:2;background:#fff;}
+      .rtable thead th:first-child{z-index:3;background:linear-gradient(180deg,rgb(31,78,128),rgb(19,49,78));}
+
+      /* ── §9 landing page ── */
+      .home-hero{padding:4px 0 0;}
+      .spm-sec{margin:18px 0 44px;}
+      .spm-sec--home{margin:6px 0 30px;}
+      .spm-duorow--home{justify-content:center;}
+      .spm-duorow--home .spm-holo:last-child{display:none;} /* course diagram lives on class pages */
+      .spm-duorow--home .spm-holo:first-child{margin-right:0;max-width:min(320px,82vw);}
+      .spm-duo--home .spm-info{position:static;margin-top:8px;text-align:center;min-height:36px;}
+      .hero-srch{padding:12px 15px;margin:14px 0 6px;}
+    }
   `}</style>
 
   {/* ── FLOATING TOP BAR (no frame; glass pills that hide on scroll-down) ── */}
@@ -9422,8 +9581,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <div className="evmeta">
               {hostName&&<span><Waves size={13}/>{hostName}</span>}
               <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
-              <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={e=>{e.stopPropagation();openCalendarAt(ev.date);}}>{formatDate(ev.date)}</span></span>
-              <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
+              <span className="ev-cal"><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={e=>{e.stopPropagation();openCalendarAt(ev.date);}}>{formatDate(ev.date)}</span></span>
+              <span className="ev-count"><Users size={13}/>{s.fleet} boats · {s.races} races</span>
             </div>
           </div>
           {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
@@ -9645,7 +9804,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </span>
         </div>
         {/* Source nuggets */}
-        <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <div className="rank-src-row" style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
           {[["federation","Federation",fedEvents.length],["international","International",intEvents.length]].map(([id,label,n])=>{
             const on=rankSourceOpen===id;
             return<button key={id} onClick={()=>setRankSourceOpen(o=>o===id?null:id)}
@@ -9661,7 +9820,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {rankSourceOpen&&<div style={{marginBottom:16}}>
           {years.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:0}}>No {clsShort} {rankSourceOpen==="federation"?"federation":"international"} competitions yet.</p>}
           {years.map(y=>(
-            <div key={y} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"5px 0"}}>
+            <div key={y} className="rank-year-row" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"5px 0"}}>
               <span style={{fontSize:12,fontWeight:800,color:"var(--mut)",letterSpacing:".04em",minWidth:38}}>{y}</span>
               {byYear[y].map(ev=>{
                 const sel=rankSelected.has(ev.id);
@@ -9682,7 +9841,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Selected regattas combine into one series — lowest total wins.</p>
           :<>
           {/* When the source pickers are collapsed, show the selected competitions as removable nuggets */}
-          {!rankSourceOpen&&<div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
+          {!rankSourceOpen&&<div className="rank-sel-row" style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
             {comps.map(c=>(
               <button key={c.id} onClick={()=>setRankSelected(prev=>{const n=new Set(prev);n.delete(c.id);return n;})} title="Remove from ranking"
                 style={{border:"1px solid "+classColor(rankCls),background:classColor(rankCls),color:"#fff",borderRadius:980,padding:"5px 12px",fontSize:12,fontWeight:600,cursor:"pointer",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:5,boxShadow:"inset 0 1px 0 rgba(255,255,255,.35)",transition:".12s"}}
@@ -9693,7 +9852,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             ))}
           </div>}
           {/* Ranking controls: mode toggle + discard stepper (verified engine) */}
-          <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:14}}>
+          <div className="rank-mode-row" style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:14}}>
             <div style={{display:"inline-flex",borderRadius:980,overflow:"hidden",border:"1px solid var(--line)"}}>
               {[["cumulative","Cumulative"],["position","Position"]].map(([id,label])=>{
                 const on=rankMode===id;
@@ -9703,9 +9862,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             <div style={{display:"inline-flex",alignItems:"center",gap:7,fontSize:12.5,fontWeight:700,color:"var(--navy)"}}>
               Discards
-              <button onClick={()=>setRankDiscards(d=>Math.max(0,d-1))} title="Fewer discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>–</button>
+              <button className="rank-disc-btn" onClick={()=>setRankDiscards(d=>Math.max(0,d-1))} title="Fewer discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>–</button>
               <span style={{minWidth:16,textAlign:"center"}}>{rankDiscards}</span>
-              <button onClick={()=>setRankDiscards(d=>d+1)} title="More discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>+</button>
+              <button className="rank-disc-btn" onClick={()=>setRankDiscards(d=>d+1)} title="More discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>+</button>
             </div>
             <span style={{fontSize:11.5,color:"var(--mut)"}}>{rankMode==="cumulative"?"Combined series · every race counts · DNC = entries+1":"Sum of competition placings · DNC = entries+1"}</span>
           </div>
@@ -10000,8 +10159,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <p className="evname">{ev.name}</p>
                   <div className="evmeta">
                     <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
-                    <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-                    <span><Users size={13}/>{s.fleet} boats · {s.races} races{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
+                    <span className="ev-cal"><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
+                    <span className="ev-count"><Users size={13}/>{s.fleet} boats · {s.races} races{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
                   </div>
                 </div>
                 {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
@@ -10437,7 +10596,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const slice=g.people.slice(0,Math.max(0,athLimit-rendered));rendered+=slice.length;
           out.push(
           <div key={g.cname} style={{marginBottom:22}}>
-            <div style={{display:"flex",alignItems:"center",gap:9,margin:"4px 0 11px"}}>
+            <div className="cgroup-head" style={{display:"flex",alignItems:"center",gap:9,margin:"4px 0 11px"}}>
               <span style={{fontSize:18}}>{g.nat?iocFlag(g.nat):""}</span>
               <span style={{fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:15,color:"var(--navy)"}}>{g.cname}</span>
               <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{g.people.length}</span>
