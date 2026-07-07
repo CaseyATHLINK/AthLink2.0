@@ -11524,4 +11524,4 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
    The all-sports landing (apps/web/src/Landing.jsx) reuses the interactive
    globe + athlete web as live demos, and needs the DB→app event mapper plus
    the IOC→ISO country map to feed them. Re-exported via manifest.jsx. */
-export { SailingGlobe, AthleteWeb, dbToApp, IOC_ISO };
+export { SailingGlobe, AthleteWeb, ProgressChart, aggregate, dbToApp, IOC_ISO };

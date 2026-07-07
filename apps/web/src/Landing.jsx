@@ -8,7 +8,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Search, Sparkles, ArrowRight, Copy, Check, X, Loader2,
   Upload, Database, BarChart3, Globe2, Share2, Clock, ShieldCheck, Trophy,
-  User, Landmark, Flag,
+  User, Landmark, Flag, TrendingUp, MousePointerClick,
 } from "lucide-react";
 
 const CSS = `
@@ -189,10 +189,10 @@ const HOSTS = [
 const ATHLETES = [
   { title: "Your career, mapped", pain: "no way to show where you've competed", value: "The globe.", desc: "An interactive globe of every venue and country you've raced. Your international footprint at a glance, the moment someone opens your profile. Go on — drag it.", demo: "globe", Icon: Globe2 },
   { title: "See who you've raced", pain: "your competitive network is invisible", value: "The web.", desc: "A living force-directed web of the athletes you've competed against most. Your rivals, mapped by shared competitions and colour-coded by class. Drag the nodes around.", demo: "web", Icon: Share2 },
-  { title: "Every result since day one", pain: "early results forgotten and lost", value: "Nothing lost.", desc: "Your record reaches back to your very first competition. The whole arc of your career in one place, growing automatically every time a host posts a result.", img: "/landing/athlete-3.png", gif: true, Icon: Clock },
+  { title: "Track your progress", pain: "no way to see if you're actually improving", value: "Your trajectory, charted.", desc: "AthLink charts your progress across your whole career — and measures it by how you performed against your rivals, the athletes you actually race, not just your raw finishing place. Watch your trajectory climb as you start beating a stronger field.", demo: "progress", Icon: TrendingUp },
 ];
 const SPONSORS = [
-  { title: "AI that scouts for you", pain: "too many athletes to track by hand", value: "Never miss a rising star.", desc: "AI summaries and signals across every profile surface the best emerging athletes automatically. Sponsor-lens overviews judge each result by the level of the field.", img: "/landing/sponsor-1.png", gif: true, Icon: Sparkles },
+  { title: "Interactive models", pain: "athlete CVs tell you nothing at a glance", value: "Understand an athlete in seconds.", desc: "Every profile comes with quick interactive explainers — the globe, the rivals web, the progress chart — that let you understand an athlete in seconds by playing with the data instead of reading a CV.", demo: "web", Icon: MousePointerClick },
   { title: "100% verified. Zero fakes.", pain: "fake accounts and inflated claims", value: "Vetted at the source.", desc: "Every result is vetted by the host that ran the event. No self-reported records, no fake athlete accounts, just verified results traceable to the original PDF.", img: "/landing/sponsor-2.png", gif: true, Icon: ShieldCheck },
   { title: "Ranked, not just results", pain: "hard to compare athletes objectively", value: "Level-adjusted rankings.", desc: "Rank athletes by results weighted for the strength of the field. Add or remove the competitions that count and watch relative positions change. Find the best, fast.", img: "/landing/sponsor-3.png", gif: true, Icon: Trophy },
 ];
@@ -355,8 +355,24 @@ function DemoPane({ kind, demo }) {
       <DemoBoundary>
         {kind === "globe"
           ? <Globe countryData={counts} height={320} dark bare />
-          : <Web name={DEMO_ATHLETE} events={events} height={320} dark />}
+          : kind === "progress"
+            ? <ProgressDemo mod={mod} events={events} />
+            : <Web name={DEMO_ATHLETE} events={events} height={320} dark />}
       </DemoBoundary>
+    </div>
+  );
+}
+
+// Rendered INSIDE DemoBoundary so building the history (aggregate) or the chart
+// itself can never crash the page — a throw just shows the boundary fallback.
+// ProgressChart is light-themed (no dark mode), so it sits on a light card.
+function ProgressDemo({ mod, events }) {
+  const history = mod.aggregate(DEMO_ATHLETE, events).history;
+  return (
+    <div style={{ width: "100%", padding: 18 }}>
+      <div style={{ background: "rgba(255,255,255,.96)", borderRadius: 12, padding: "16px 14px", boxShadow: "inset 0 0 0 .5px rgba(255,255,255,.5)" }}>
+        <mod.ProgressChart name={DEMO_ATHLETE} events={events} history={history} selYears={null} yrKey="" height={280} w={460} />
+      </div>
     </div>
   );
 }
@@ -476,7 +492,7 @@ export default function Landing({ sports = [] }) {
   const bgRef = useRef(null);
   const heroRef = useRef(null);
   const results = useHeroSearch(q);
-  const demo = useSailingDemo(tab === "athletes");
+  const demo = useSailingDemo(tab === "athletes" || tab === "sponsors");
 
   useLiquid(bgRef, { scoped: false, count: 13, alpha: 0.42, palette: [[36, 58, 86], [44, 74, 110], [30, 50, 78], [52, 86, 128], [38, 64, 96], [46, 78, 118]] });
   useLiquid(heroRef, { scoped: true, count: 11, alpha: 0.5, palette: [[31, 78, 128], [40, 92, 150], [23, 58, 98], [54, 120, 190], [28, 70, 120], [46, 104, 168]] });
