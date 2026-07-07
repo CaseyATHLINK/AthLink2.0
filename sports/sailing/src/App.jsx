@@ -5528,6 +5528,7 @@ export default function AthLinkMVP(){
   const[usernameBusy,setUsernameBusy]=useState(false);
   const[usernameErr,setUsernameErr]=useState("");
   const[navSearchOpen,setNavSearchOpen]=useState(false); // top-bar nav pill flipped into search mode
+  const[navMenuOpen,setNavMenuOpen]=useState(false); // mobile: nav links collapsed into a menu
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
   // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
@@ -6473,14 +6474,14 @@ export default function AthLinkMVP(){
     let lastY=window.scrollY;
     const onScroll=()=>{
       const y=window.scrollY;
-      if(y>lastY+6&&y>90){setBarHidden(true);setNavSearchOpen(false);}
+      if(y>lastY+6&&y>90){setBarHidden(true);setNavSearchOpen(false);setNavMenuOpen(false);}
       else if(y<lastY-6){setBarHidden(false);}
       lastY=y;
     };
     window.addEventListener("scroll",onScroll,{passive:true});
     return()=>window.removeEventListener("scroll",onScroll);
   },[]);
-  useEffect(()=>{setBarHidden(false);setNavSearchOpen(false);},[view.name,portal]);
+  useEffect(()=>{setBarHidden(false);setNavSearchOpen(false);setNavMenuOpen(false);},[view.name,portal]);
 
   /* ── Clean-URL sync (shareable links + native back/forward) ───────────────
      stateToPath / pathToState (module scope) define the mapping. This block is
@@ -8065,6 +8066,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .np-link.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .np-srchbtn{flex:none;width:36px;height:36px;margin-left:2px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
     .np-srchbtn:hover{background:rgba(255,255,255,.85);}
+    /* Mobile: nav links collapse into a hamburger that opens a flat menu */
+    .np-menubtn{display:none;flex:none;width:36px;height:36px;border-radius:980px;border:0;background:none;color:var(--navy);place-items:center;cursor:pointer;transition:.15s;padding:0;}
+    .np-menubtn:hover{background:rgba(255,255,255,.5);}
+    .np-menu{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);min-width:220px;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;z-index:80;animation:fade .15s both;}
+    .np-mrow{display:flex;align-items:center;gap:11px;width:100%;border:0;background:none;font:inherit;font-size:14px;font-weight:700;color:var(--navy);padding:11px 14px;border-radius:12px;cursor:pointer;transition:.12s;text-align:left;letter-spacing:-.01em;}
+    .np-mrow svg{flex:none;color:var(--navy2);}
+    .np-mrow:hover{background:rgba(255,255,255,.55);}
+    .np-mrow.on{background:rgba(255,255,255,.92);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
     .mp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.45);border-radius:980px;padding:8px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
     .mp-star{color:var(--accent);flex:none;}
@@ -8088,7 +8097,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .tb-profile:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
     .tb-acct{position:absolute;right:0;top:calc(100% + 8px);background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;min-width:200px;z-index:80;}
     @media(max-width:640px){.np-link{font-size:12.5px;padding:8px 10px;}.np-srchbtn{width:32px;height:32px;}}
-    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}.tb-divider{display:none;}}
+    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}.tb-divider{display:none;}.np-bar .np-item{display:none;}.np-menubtn{display:grid;}}
     .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
     .class-card{background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border:0;border-radius:16px;padding:24px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .class-card:hover{transform:translateY(-5px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),inset 0 0 0 .5px rgba(255,255,255,.55),0 24px 48px -20px rgba(0,0,0,.34);}
@@ -8323,6 +8332,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
           : <div className="np-bar">
+              {/* Mobile: hamburger collapses the four links into a flat menu */}
+              <button className="np-menubtn" title="Menu" aria-label="Menu" onClick={()=>setNavMenuOpen(o=>!o)}><Menu size={18}/></button>
               {/* Athletes — by class / by country / by host */}
               <div className="np-item">
                 <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
@@ -8406,6 +8417,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </div>
               </div>
               <button className="np-srchbtn" title="Search" onClick={()=>setNavSearchOpen(true)}><Search size={16}/></button>
+              {navMenuOpen&&(
+                <div className="np-menu">
+                  <button className={`np-mrow${navOn==="athletes"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("athletes");}}><Users size={16}/>Athletes</button>
+                  <button className={`np-mrow${navOn==="competitions"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("competitions");}}><Anchor size={16}/>Competitions</button>
+                  <button className={`np-mrow${navOn==="hosts"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("hosts");}}><Waves size={16}/>Hosts</button>
+                  <button className={`np-mrow${navOn==="ranking"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("ranking");}}><Trophy size={16}/>Rankings</button>
+                </div>
+              )}
             </div>}
         {navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
           <div className="mp-drop">
@@ -8645,7 +8664,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       </div>
     </div>
   )}
-  {(gSearchOpen||navSearchOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setNavSearchOpen(false);}}/>}
+  {(gSearchOpen||navSearchOpen||navMenuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setNavSearchOpen(false);setNavMenuOpen(false);}}/>}
 
   {/* ── Breadcrumb wayfinding — entity pages only (top-level pages carry their own
       titles; the top bar has no back button by rule, so this is the "you are here"). ── */}
