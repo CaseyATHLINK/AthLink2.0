@@ -1509,53 +1509,48 @@ async function uploadAthleteMedia(file,name,tok){
 
 /* ── Host / association portal logos (host-logos bucket) ──────────────────────
    A host (federation, club, OR class association) can upload its own logo in the
-   Edit page. Every uploaded logo is transformed ONCE, at upload time, into a navy
-   monochrome watermark on a transparent background (--navy2 #1f4e80), then stored
-   in the public `host-logos` bucket (migrations/0011). The recolor is baked in
-   here — never at render — so the single stored asset renders consistently in the
-   directory thumbnail (bottom-right) and the portal header (far right).
-   Associations reuse this exact path: an association IS a class-locked host, so
-   its uploaded logo is its "class logo" — no separate class-logo subsystem. */
+   Edit page. The uploader lets the user square-crop/centre the image, then the
+   background is removed ONCE at upload time (KEEPING the logo's original colours)
+   and the transparent PNG is stored in the public `host-logos` bucket
+   (migrations/0011). The transform is baked in here — never at render — so the
+   single stored asset renders consistently in the directory thumbnail and the
+   portal header. Associations reuse this exact path: an association IS a class-
+   locked host, so its uploaded logo is its "class logo" — no separate subsystem. */
 const HOST_LOGO_BUCKET="host-logos";
-const LOGO_NAVY=[31,78,128];   // --navy2 #1f4e80, "AthLink muted blue"
-// Draw file to an offscreen canvas (cap longest edge at ~512px), then remap every
-// pixel to navy whose OPACITY = how dark/saturated the source pixel is. Near-white
-// / near-transparent source pixels become fully transparent → clean watermark on
-// transparent. Returns a Blob (image/png).
-async function recolorLogoToNavy(file){
-  const img=await new Promise((res,rej)=>{
-    const i=new Image(); i.onload=()=>res(i); i.onerror=rej;
-    i.src=URL.createObjectURL(file);
-  });
-  const MAX=512;
-  const scale=Math.min(1, MAX/Math.max(img.width,img.height));
-  const W=Math.max(1,Math.round(img.width*scale)), H=Math.max(1,Math.round(img.height*scale));
-  const c=document.createElement("canvas"); c.width=W; c.height=H;
-  const ctx=c.getContext("2d"); ctx.drawImage(img,0,0,W,H);
+// Remove the (assumed roughly-uniform) background from a logo while KEEPING its
+// original colours. Samples the four corners to estimate the background colour,
+// makes pixels within tolerance of it transparent, and feathers the transition
+// band so edges don't alias. `src` is a square canvas (from the cropper); returns
+// a PNG Blob on transparent. Deterministic; runs client-side.
+function removeLogoBackground(src){
+  const W=src.width, H=src.height;
+  const ctx=src.getContext("2d");
   const id=ctx.getImageData(0,0,W,H); const d=id.data;
+  // Estimate background colour from a small patch at each corner (averaged over
+  // still-opaque source pixels).
+  const P=Math.max(2,Math.round(Math.min(W,H)*0.06));
+  let sr=0,sg=0,sb=0,cnt=0;
+  const acc=(x,y)=>{const i=(y*W+x)*4; if(d[i+3]>10){sr+=d[i];sg+=d[i+1];sb+=d[i+2];cnt++;}};
+  for(let y=0;y<P;y++)for(let x=0;x<P;x++){acc(x,y);acc(W-1-x,y);acc(x,H-1-y);acc(W-1-x,H-1-y);}
+  if(!cnt) return new Promise(res=>src.toBlob(res,"image/png")); // already transparent
+  const bgR=sr/cnt,bgG=sg/cnt,bgB=sb/cnt;
+  // Euclidean RGB distance to the background: inside NEAR → fully transparent;
+  // between NEAR and FAR → feather; beyond FAR → keep opaque at original colour.
+  const NEAR=48, FAR=112;
   for(let p=0;p<d.length;p+=4){
-    const r=d[p],g=d[p+1],b=d[p+2],a=d[p+3];
-    // luminance 0..255 (Rec.601). Dark ink → high ink-opacity; white bg → 0.
-    const lum=0.299*r+0.587*g+0.114*b;
-    let ink=(255-lum)/255;                 // 0 (white) .. 1 (black)
-    ink*=(a/255);                          // respect source transparency
-    if(ink<0.06) ink=0;                    // drop near-white background noise
-    // TODO corner-detect inversion: light ink on a dark background renders nearly
-    // empty here. If reported, sample the 4 corners; if mean corner luminance is
-    // dark, use ink = lum/255 instead.
-    d[p]=LOGO_NAVY[0]; d[p+1]=LOGO_NAVY[1]; d[p+2]=LOGO_NAVY[2];
-    d[p+3]=Math.round(ink*255);
+    const dist=Math.sqrt((d[p]-bgR)**2+(d[p+1]-bgG)**2+(d[p+2]-bgB)**2);
+    if(dist<=NEAR) d[p+3]=0;
+    else if(dist<FAR) d[p+3]=Math.round(d[p+3]*((dist-NEAR)/(FAR-NEAR)));
+    // else: keep original RGBA untouched
   }
   ctx.putImageData(id,0,0);
-  return await new Promise(res=>c.toBlob(res,"image/png"));
+  return new Promise(res=>src.toBlob(res,"image/png"));
 }
-// Recolor `file` to navy-on-transparent, upload the PNG to `host-logos` under a
-// `<host slug>/` prefix, and return its public URL (or null on any failure —
-// never throws, mirroring the other upload helpers).
-async function uploadHostLogo(file,host,tok){
-  if(!SB_URL||!file||!tok||!host) return null;   // storage write needs a token
-  const blob=await recolorLogoToNavy(file).catch(e=>{console.error("recolorLogo",e);return null;});
-  if(!blob) return null;
+// Upload an already-processed logo PNG Blob (background removed, original colours
+// kept) to `host-logos` under a `<host slug>/` prefix; returns its public URL
+// (or null on any failure — never throws, mirroring the other upload helpers).
+async function uploadHostLogo(blob,host,tok){
+  if(!SB_URL||!blob||!tok||!host) return null;   // storage write needs a token
   const slug=String(host.id||"host").replace(/[^a-z0-9-]+/gi,"-").toLowerCase()||"host";
   const path=`${slug}/${Date.now()}.png`;
   try{
@@ -5439,6 +5434,74 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,onSaveUsername,upl
    Members (embedded member management). Owners/editors/dev use this to rename
    the host, set its location (→ globe by the title), and manage co-admins.
    ═══════════════════════════════════════════════════════════════════════ */
+// Square pan + zoom cropper for host logos. The user drags to reposition and
+// zooms so the logo sits centred; on "Use logo" it renders the visible square to
+// a canvas and hands it back (onApply) — the modal then background-removes +
+// uploads it. Viewport matches the globe column (200px); output is 512px.
+function LogoCropper({src,onCancel,onApply,busy}){
+  const VP=200, OUT=512;
+  const[nat,setNat]=React.useState(null);      // {w,h} once the image has loaded
+  const[zoom,setZoom]=React.useState(1);
+  const[off,setOff]=React.useState({x:0,y:0}); // pan offset from centre, viewport px
+  const imgRef=React.useRef(null);
+  const drag=React.useRef(null);
+  React.useEffect(()=>{
+    const i=new Image();
+    i.onload=()=>{imgRef.current=i;setNat({w:i.naturalWidth,h:i.naturalHeight});};
+    i.src=src;
+    return ()=>{imgRef.current=null;};
+  },[src]);
+  const baseScale=nat?VP/Math.min(nat.w,nat.h):1;   // cover-fit: min dim fills viewport
+  const dScale=baseScale*zoom;
+  const dispW=nat?nat.w*dScale:VP, dispH=nat?nat.h*dScale:VP;
+  // Clamp pan so the image always covers the viewport (no empty gaps), for a given zoom.
+  const clampFor=(o,z)=>{
+    if(!nat) return o;
+    const ds=baseScale*z, dw=nat.w*ds, dh=nat.h*ds;
+    return {x:Math.max(-(dw-VP)/2,Math.min((dw-VP)/2,o.x)),
+            y:Math.max(-(dh-VP)/2,Math.min((dh-VP)/2,o.y))};
+  };
+  const onDown=(e)=>{if(busy)return;e.preventDefault();drag.current={sx:e.clientX,sy:e.clientY,ox:off.x,oy:off.y};
+    try{e.currentTarget.setPointerCapture(e.pointerId);}catch{}};
+  const onMove=(e)=>{if(!drag.current)return;
+    setOff(clampFor({x:drag.current.ox+(e.clientX-drag.current.sx),y:drag.current.oy+(e.clientY-drag.current.sy)},zoom));};
+  const onUp=()=>{drag.current=null;};
+  const changeZoom=(z)=>{setZoom(z);setOff(o=>clampFor(o,z));};
+  const apply=()=>{
+    const img=imgRef.current; if(!img||!nat) return;
+    const ds=baseScale*zoom;
+    const x0=(VP-nat.w*ds)/2+off.x, y0=(VP-nat.h*ds)/2+off.y;   // image top-left in viewport coords
+    const sx=(0-x0)/ds, sy=(0-y0)/ds, sSize=VP/ds;              // source rect (natural px) for the viewport window
+    const c=document.createElement("canvas"); c.width=OUT; c.height=OUT;
+    const g=c.getContext("2d"); g.imageSmoothingEnabled=true; g.imageSmoothingQuality="high";
+    g.drawImage(img, sx, sy, sSize, sSize, 0,0,OUT,OUT);
+    onApply(c);
+  };
+  const cropBtn={borderRadius:980,padding:"8px 12px",font:"inherit",fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",flex:1,display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6};
+  return(
+    <div style={{width:VP}}>
+      <div style={{position:"relative",width:VP,height:VP,borderRadius:16,overflow:"hidden",
+          background:"rgba(31,78,128,.06)",border:"1px solid rgba(31,78,128,.16)",touchAction:"none",cursor:busy?"default":"grab"}}
+          onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp}>
+        {nat
+          ? <img src={src} alt="" draggable={false}
+              style={{position:"absolute",width:dispW,height:dispH,left:(VP-dispW)/2+off.x,top:(VP-dispH)/2+off.y,userSelect:"none",pointerEvents:"none"}}/>
+          : <div style={{position:"absolute",inset:0,display:"grid",placeItems:"center"}}><Loader2 size={18} className="spin" style={{color:"var(--navy2)"}}/></div>}
+      </div>
+      <input type="range" min="1" max="4" step="0.01" value={zoom} disabled={busy||!nat}
+        onChange={e=>changeZoom(parseFloat(e.target.value))}
+        style={{width:VP,marginTop:10,accentColor:"var(--navy2)",cursor:busy?"default":"pointer"}}/>
+      <div style={{display:"flex",gap:8,marginTop:8}}>
+        <button type="button" disabled={busy} onClick={onCancel}
+          style={{...cropBtn,background:"rgba(255,255,255,.6)",border:"1px solid rgba(31,78,128,.16)",color:"var(--navy)"}}>Cancel</button>
+        <button type="button" disabled={busy||!nat} onClick={apply}
+          style={{...cropBtn,background:"var(--navy2)",border:"1px solid var(--navy2)",color:"#fff"}}>
+          {busy?<Loader2 size={13} className="spin"/>:null}Use logo</button>
+      </div>
+    </div>
+  );
+}
+
 function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,membersProps}){
   const[tab,setTab]=React.useState("details");
   const[name,setName]=React.useState(host?.name||"");
@@ -5446,23 +5509,34 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
   const[slug,setSlug]=React.useState(host?.slug||pascalSlug(host?.name||""));
   const[slugErr,setSlugErr]=React.useState("");
   const[busy,setBusy]=React.useState(false);
-  // Logo: navy-recolored at upload time (uploadHostLogo). `logo` holds the pending
-  // public URL, or null when removed; compared against host.logo_url on save so we
-  // only send the key when it actually changed (avoids clobbering).
+  // Logo: `logo` holds the pending public URL (or null when removed); compared
+  // against host.logo_url on save so we only send the key when it actually changed
+  // (avoids clobbering). `cropSrc` is the object URL of a just-picked file being
+  // cropped — while set, the cropper is shown in place of the preview.
   const[logo,setLogo]=React.useState(host?.logo_url||null);
   const[logoBusy,setLogoBusy]=React.useState(false);
   const[logoErr,setLogoErr]=React.useState("");
+  const[cropSrc,setCropSrc]=React.useState(null);
   const iso=IOC_ISO[(country||"").toUpperCase()]||"";
-  const onPickLogo=async(e)=>{
+  const onPickLogo=(e)=>{
     const file=e.target.files&&e.target.files[0]; e.target.value=""; // allow re-picking same file
     if(!file) return;
     if(!file.type.startsWith("image/")){setLogoErr("Please choose an image file (PNG or JPG).");return;}
     if(file.size>5*1024*1024){setLogoErr("Image is too large — keep it under 5 MB.");return;}
+    setLogoErr("");
+    setCropSrc(prev=>{ if(prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
+  };
+  const cancelCrop=()=>{ setCropSrc(prev=>{ if(prev) URL.revokeObjectURL(prev); return null; }); };
+  // Cropper hands back a square canvas: background-remove (keep colours) → upload.
+  const applyCrop=async(canvas)=>{
     setLogoErr(""); setLogoBusy(true);
-    const url=await onUploadLogo?.(file);   // recolors + uploads; null on any failure (never throws)
+    let url=null;
+    try{ const blob=await removeLogoBackground(canvas); if(blob) url=await onUploadLogo?.(blob); }
+    catch(err){ console.error("applyCrop",err); }
     setLogoBusy(false);
-    if(!url){setLogoErr("Couldn't upload — sign in and try again.");return;}  // don't wipe existing logo
+    if(!url){ setLogoErr("Couldn't upload — sign in and try again."); return; }  // don't wipe existing logo
     setLogo(url);
+    cancelCrop();
   };
   const barStyle={width:"100%",border:"0",borderRadius:980,padding:"13px 18px",font:"inherit",fontSize:15,outline:"none",
     background:"rgba(255,255,255,.55)",backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",
@@ -5500,27 +5574,32 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
                 {iso
                   ? <SailingGlobe countryData={{[iso]:1}} height={200} dark mini bare hostIso={iso}/>
                   : <div style={{width:200,height:200,borderRadius:16,background:"rgba(31,78,128,.06)",border:"1px dashed rgba(31,78,128,.25)",display:"grid",placeItems:"center",color:"var(--mut)",fontSize:12,textAlign:"center",padding:16}}>Enter a location code to show a globe</div>}
-                {/* Logo uploader — recolored to navy/transparent at upload time. Managers only. */}
+                {/* Logo uploader — square crop/centre, then background removed
+                    (original colours kept) at upload time. Managers only. */}
                 {canManage&&(
                   <div style={{marginTop:16}}>
                     <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Logo</label>
-                    <label style={{display:"grid",placeItems:"center",width:200,height:96,borderRadius:16,overflow:"hidden",position:"relative",transition:".16s",
-                        cursor:logoBusy?"default":"pointer",
-                        background:logo?"rgba(31,78,128,.04)":"rgba(31,78,128,.06)",
-                        border:logo?"1px solid rgba(31,78,128,.16)":"1px dashed rgba(31,78,128,.25)"}}>
-                      {logoBusy
-                        ? <Loader2 size={18} className="spin" style={{color:"var(--navy2)"}}/>
-                        : logo
-                          ? <img src={logo} alt="" style={{maxWidth:"84%",maxHeight:"78%",objectFit:"contain",background:"transparent"}}/>
-                          : <span style={{color:"var(--mut)",fontSize:12,textAlign:"center",padding:12,lineHeight:1.45}}>Add logo<br/><span style={{fontSize:11,opacity:.8}}>PNG or JPG · recolored to navy</span></span>}
-                      <input type="file" accept="image/*" disabled={logoBusy} onChange={onPickLogo}
-                        style={{position:"absolute",inset:0,opacity:0,cursor:"inherit"}}/>
-                    </label>
-                    {logo&&!logoBusy&&(
-                      <button type="button" onClick={()=>{setLogo(null);setLogoErr("");}}
-                        style={{marginTop:8,background:"none",border:0,padding:0,cursor:"pointer",color:"var(--mut)",fontSize:12,fontWeight:600}}>Remove logo</button>
-                    )}
-                    {logoErr&&<div style={{fontSize:12,color:"#c0392b",marginTop:6,fontWeight:600}}>{logoErr}</div>}
+                    {cropSrc
+                      ? <LogoCropper src={cropSrc} busy={logoBusy} onCancel={cancelCrop} onApply={applyCrop}/>
+                      : (<>
+                          <label style={{display:"grid",placeItems:"center",width:200,height:200,borderRadius:16,overflow:"hidden",position:"relative",transition:".16s",
+                              cursor:logoBusy?"default":"pointer",
+                              background:logo?"rgba(31,78,128,.04)":"rgba(31,78,128,.06)",
+                              border:logo?"1px solid rgba(31,78,128,.16)":"1px dashed rgba(31,78,128,.25)"}}>
+                            {logoBusy
+                              ? <Loader2 size={18} className="spin" style={{color:"var(--navy2)"}}/>
+                              : logo
+                                ? <img src={logo} alt="" style={{maxWidth:"86%",maxHeight:"86%",objectFit:"contain",background:"transparent"}}/>
+                                : <span style={{color:"var(--mut)",fontSize:12,textAlign:"center",padding:12,lineHeight:1.45}}>Add logo<br/><span style={{fontSize:11,opacity:.8}}>PNG or JPG · background removed</span></span>}
+                            <input type="file" accept="image/*" disabled={logoBusy} onChange={onPickLogo}
+                              style={{position:"absolute",inset:0,opacity:0,cursor:"inherit"}}/>
+                          </label>
+                          {logo&&!logoBusy&&(
+                            <button type="button" onClick={()=>{setLogo(null);setLogoErr("");}}
+                              style={{marginTop:8,background:"none",border:0,padding:0,cursor:"pointer",color:"var(--mut)",fontSize:12,fontWeight:600}}>Remove logo</button>
+                          )}
+                        </>)}
+                    {logoErr&&<div style={{fontSize:12,color:"#c0392b",marginTop:6,fontWeight:600,width:200}}>{logoErr}</div>}
                   </div>
                 )}
               </div>
@@ -9205,7 +9284,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             <p className="class-name">{h.loc?<span style={{marginRight:6}}>{iocFlag(h.loc)}</span>:null}{h.name}</p>
             <div className="class-stats" style={{marginBottom:0}}><div><b>{h.n}</b>competitions</div><div><b>{ppl.size}</b>athletes</div></div>
-            {h.logo_url&&<img src={h.logo_url} alt="" style={{position:"absolute",right:14,bottom:14,width:34,height:34,objectFit:"contain",opacity:.9,pointerEvents:"none",background:"transparent"}}/>}
+            {h.logo_url&&<img src={h.logo_url} alt="" style={{position:"absolute",right:16,bottom:16,width:60,height:60,objectFit:"contain",pointerEvents:"none",background:"transparent"}}/>}
           </div>);
         })}
       </div>
@@ -9536,26 +9615,27 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
           );
-          // Recolored logo, far right of the title row, sized to optically align
-          // with the 150px globe. hostById(portal) is null for synthetic class
-          // portals (no host row), so they simply render no logo — associations
-          // (real hosts) resolve their logo_url here just like clubs/federations.
+          // Logo sits just to the RIGHT of the title (close to it), vertically
+          // centred and sized to optically align with the 150px globe. Original
+          // colours, background removed. hostById(portal) is null for synthetic
+          // class portals (no host row) → no logo; real associations resolve their
+          // logo_url here just like clubs/federations.
           const headerLogo=(()=>{
             const hl=hostById(portal)?.logo_url;
             if(!hl) return null;
-            return <img src={hl} alt="" style={{width:120,height:120,flex:"none",objectFit:"contain",alignSelf:"center",maxWidth:"100%",background:"transparent"}}/>;
+            return <img src={hl} alt="" style={{width:128,height:128,flex:"none",objectFit:"contain",alignSelf:"center",maxWidth:"100%",background:"transparent"}}/>;
           })();
-          // Single header row: globe LEFT · title/meta/pills flexible MIDDLE ·
-          // [logo][buttons] together on the FAR RIGHT, vertically centered to the
-          // globe. flex:none on both side clusters + flex:1 middle keeps the row
-          // on one line on desktop; only genuinely narrow widths wrap the right
-          // cluster (logo+buttons as a unit) below — never stacked under the globe.
+          // Single header row: globe LEFT · title (natural width) · logo hugging
+          // the title · action buttons pushed to the FAR RIGHT (marginLeft:auto),
+          // all vertically centred to the globe. On narrow widths the buttons wrap
+          // below — the globe/title/logo never stack.
           const head=(
             <div style={{minWidth:0,display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
               {globe}
-              <div style={{flex:"1 1 260px",minWidth:0}}>{titleBlock}</div>
-              <div style={{display:"flex",gap:16,alignItems:"center",flex:"none"}}>
-                {headerLogo}{actions}
+              <div style={{flex:"0 1 auto",minWidth:0}}>{titleBlock}</div>
+              {headerLogo}
+              <div style={{display:"flex",gap:16,alignItems:"center",flex:"none",marginLeft:"auto"}}>
+                {actions}
               </div>
             </div>
           );
@@ -9595,7 +9675,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   </div>
                   <p className="class-name">{a.name}</p>
                   <div className="class-stats" style={{marginBottom:0}}><div><b>{ce.length}</b>competitions</div></div>
-                  {a.logo_url&&<img src={a.logo_url} alt="" style={{position:"absolute",right:14,bottom:14,width:34,height:34,objectFit:"contain",opacity:.9,pointerEvents:"none",background:"transparent"}}/>}
+                  {a.logo_url&&<img src={a.logo_url} alt="" style={{position:"absolute",right:16,bottom:16,width:60,height:60,objectFit:"contain",pointerEvents:"none",background:"transparent"}}/>}
                 </div>;
               })}
             </div>
