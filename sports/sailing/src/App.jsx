@@ -5465,6 +5465,7 @@ function HostEditModal({host,onSave,onSaveSlug,onClose,canManage,membersProps}){
 
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
+  const[initialLoading,setInitialLoading]=useState(true); // true until the first Supabase load settles (drives the branded splash)
   const[showDevProfiles,setShowDevProfiles]=useState(false);    // dev-only all-profiles panel
   const[showHostEdit,setShowHostEdit]=useState(false);          // host portal edit modal
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
@@ -6171,26 +6172,33 @@ export default function AthLinkMVP(){
 
   useEffect(()=>{
     (async()=>{
+     try{
       if(!sbH){
         console.warn("No Supabase credentials — no events to show");
         setEvents([]);
         return;
       }
       console.log("Loading from Supabase:", SB_URL);
-      const data=await sbGet("events?select=*,entries(*)&order=created_at.desc");
+      // Fetch events, hosts and the athlete-username registry IN PARALLEL. These
+      // are independent queries; running them as a waterfall (as before) stacked
+      // their latencies and left the screen blank for ~5s. We still APPLY hosts +
+      // usernames before setEvents so the clean-URL resolvers can map
+      // slugs/usernames on first paint.
+      const [data,hostRows,uRows]=await Promise.all([
+        sbGet("events?select=*,entries(*)&order=created_at.desc"),
+        sbGet("hosts?select=*"),
+        sbGet("athlete_usernames?select=name_key,username,display_name"),
+      ]);
       if(data===null){
         console.error("Supabase load failed — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY");
         setEvents([]);
         return;
       }
       console.log("Loaded",data.length,"events from Supabase");
-      // Load hosts (with slugs) + the public athlete-username registry BEFORE
-      // events, so the clean-URL resolvers can map slugs/usernames on first paint.
-      const hostRows=await sbGet("hosts?select=*");
       if(hostRows){applyDbHosts(hostRows);setHostsVersion(v=>v+1);}
-      const uRows=await sbGet("athlete_usernames?select=name_key,username,display_name");
       if(uRows){applyAthleteUsernames(uRows);}
       setEvents(data.map(dbToApp));
+     } finally { setInitialLoading(false); }
     })();
   },[]);
 
@@ -6331,6 +6339,21 @@ export default function AthLinkMVP(){
     return s;
   };
 
+  // Nickname / abbreviation match on two canonical (sorted-token) keys: every
+  // token identical except one pair, where the shorter is a prefix of the longer
+  // — e.g. "chris lam" ⟷ "christopher lam". Levenshtein can't catch these (the
+  // length gap is too big), so they were never surfaced for merging.
+  const nickPair=(a,b)=>{
+    const ta=a.split(" "),tb=b.split(" ");
+    if(ta.length<2||tb.length<2) return false;            // need a surname for context
+    const rem=new Map(); tb.forEach(t=>rem.set(t,(rem.get(t)||0)+1));
+    const onlyA=[]; ta.forEach(t=>{const c=rem.get(t)||0; if(c>0) rem.set(t,c-1); else onlyA.push(t);});
+    const onlyB=[...rem.entries()].flatMap(([t,c])=>Array(Math.max(0,c)).fill(t));
+    if(onlyA.length!==1||onlyB.length!==1) return false;  // exactly one differing token each side
+    const x=onlyA[0],y=onlyB[0];
+    const short=x.length<=y.length?x:y, long=x.length<=y.length?y:x;
+    return short.length>=3&&short!==long&&long.startsWith(short);
+  };
   const dupGroups=useMemo(()=>{
     // distinct canonical keys (already display-deduped) → find near neighbours
     const keys=[...new Set(allPeople.map(p=>canonName(p.name)).filter(Boolean))];
@@ -6339,12 +6362,13 @@ export default function AthLinkMVP(){
       const a=keys[i];
       for(let j=i+1;j<keys.length;j++){
         const b=keys[j];
-        if(Math.abs(a.length-b.length)>2) continue;
-        if(Math.min(a.length,b.length)<4) continue;
-        const dist=lev(a,b);
-        if(dist>0&&dist<=2){
+        // Near-spelling match: Levenshtein ≤2 on similarly-sized keys.
+        const near=Math.abs(a.length-b.length)<=2&&Math.min(a.length,b.length)>=4&&(()=>{const d=lev(a,b);return d>0&&d<=2;})();
+        // Nickname/abbreviation match (same surname, first name shortened).
+        const nick=!near&&nickPair(a,b);
+        if(near||nick){
           const na=displayNameFor(a),nb=displayNameFor(b);
-          if(na&&nb) groups.push({names:[na,nb].sort((x,y)=>rawNameCount(y)-rawNameCount(x)||regCount(y)-regCount(x)),kind:"near",key:[a,b].sort().join("~")});
+          if(na&&nb) groups.push({names:[na,nb].sort((x,y)=>rawNameCount(y)-rawNameCount(x)||regCount(y)-regCount(x)),kind:near?"near":"nick",key:[a,b].sort().join("~")});
         }
       }
     }
@@ -6372,6 +6396,22 @@ export default function AthLinkMVP(){
     if(myAssoc) g=g.filter(x=>x.names.some(nm=>athleteHostAssocs(nm).has(myAssoc)));
     return g;
   },[dupGroups,dismissedDups2,myAssoc,events,portal,isClassPortal,portalCls]);
+
+  // Manual merge — lets an admin pick ANY two profiles the auto-detector missed
+  // (e.g. "Chris Lam" vs "Christopher Lam" when names diverge too far) and merge
+  // them directly via mergeAthletes(). mmA = primary kept, mmB = folded in.
+  const[mmA,setMmA]=useState(null);
+  const[mmB,setMmB]=useState(null);
+  const[mmActive,setMmActive]=useState(null); // which slot the picker is filling: "a"|"b"|null
+  const[mmQ,setMmQ]=useState("");
+  const doManualMerge=async()=>{
+    if(!mmA||!mmB||canonName(mmA)===canonName(mmB)) return;
+    await mergeAthletes(mmA,mmB);
+    const key=[canonName(mmA),canonName(mmB)].sort().join("~");
+    setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});
+    saveDupDismissals([key]);
+    setMmA(null);setMmB(null);setMmActive(null);setMmQ("");
+  };
 
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
@@ -6793,6 +6833,21 @@ Partial query: "${q}"`;
 
   const SPONSOR_LENS=`Write for a prospective SPONSOR/INVESTOR evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-fleet finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the fleet, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
 
+  // POST to the AI summary endpoint with a hard timeout. Throws on a non-2xx
+  // response (e.g. a 504 HTML gateway page that res.json() would choke on) or a
+  // timeout, so callers can log the real failure instead of silently rendering
+  // a blank "no summary" tab. Returns parsed {ok,text,model}.
+  const aiFilter=async(task,prompt,max_tokens)=>{
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(),15000);
+    try{
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({task,prompt,max_tokens}),signal:ctrl.signal});
+      if(!res.ok) throw new Error(`ai_filter HTTP ${res.status}`);
+      return await res.json();
+    } finally { clearTimeout(t); }
+  };
+
   const fetchEventSummary=async(ev)=>{
     if(eventSummaries[ev.id]!==undefined) return;
     setEventSummaries(m=>({...m,[ev.id]:null}));
@@ -6802,12 +6857,10 @@ Partial query: "${q}"`;
       const prompt=`${SPONSOR_LENS}
 In 2-4 sentences, summarize this sailing competition for a sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical fleet strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club regatta) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
 Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev.country||"unknown"}. Fleet size: ${sc.fleet} boats. Races sailed: ${sc.races}.`;
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"overview",prompt,max_tokens:220})});
-      const data=await res.json();
+      const data=await aiFilter("overview",prompt,220);
       if(data.ok) setEventSummaries(m=>({...m,[ev.id]:cleanAISummary(data.text)}));
       else setEventSummaries(m=>({...m,[ev.id]:""}));
-    }catch{setEventSummaries(m=>({...m,[ev.id]:""}));}
+    }catch(e){console.warn("fetchEventSummary failed:",e);setEventSummaries(m=>({...m,[ev.id]:""}));}
   };
 
   const execGSearch=(r)=>{
@@ -6873,12 +6926,10 @@ Together: ${togLine}`;
         prompt=`Write a SHORT scouting blurb for a SINGLE-HANDED sailor: 2 sentences, MAX 32 words. Focus mainly on how they performed RELATIVE TO COMPETITORS OF SIMILAR CALIBRE — i.e. where they placed within the fleet at their events, and against peers who finished near them. Factual, no markdown, no heading. Always refer to the athlete by their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name.
 Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins} race wins. Placings: ${peerNote||"unknown"}.`;
       }
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"hover",prompt,max_tokens:90})});
-      const data=await res.json();
+      const data=await aiFilter("hover",prompt,90);
       if(data.ok) setHoverSummaries(h=>({...h,[key]:cleanAISummary(data.text)}));
       else setHoverSummaries(h=>({...h,[key]:""}));
-    }catch{setHoverSummaries(h=>({...h,[key]:""}));}
+    }catch(e){console.warn("fetchHoverSummary failed:",e);setHoverSummaries(h=>({...h,[key]:""}));}
   };
 
   // Signature of an athlete's result set — changes only when a competition is
@@ -6909,16 +6960,14 @@ Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins}
       const recentLine=recent?`Most recent: ${recent.ev.name} (${recent.ev.date?.split('/')?.[2]||''}), finished #${recent.row.rank} of ${recent.fleet}.`:"";
       const prompt=`Write a SHORT athlete bio: 2 sentences, MAX 45 words total, third person. Focus on the athlete's JOURNEY — when they started competing, any class change, the class they've excelled in, and where they place now. Do NOT list every stat. No heading, no markdown, no "#", do not begin with the name. Whenever you refer to the athlete, use their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name on its own.
 Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${journey||'unknown'}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. ${recentLine}`;
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"overview",prompt,max_tokens:110})});
-      const data=await res.json();
+      const data=await aiFilter("overview",prompt,110);
       if(data.ok){
         const text=cleanAISummary(data.text);
         setProfileSummaries(h=>({...h,[name]:text}));
         try{localStorage.setItem("athlink_bio_v2_"+name,JSON.stringify({sig,text}));}catch{}
       }
       else setProfileSummaries(h=>({...h,[name]:""}));
-    }catch{setProfileSummaries(h=>({...h,[name]:""}));}
+    }catch(e){console.warn("fetchFullProfileSummary failed:",e);setProfileSummaries(h=>({...h,[name]:""}));}
   };
 
 
@@ -7771,6 +7820,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   /* ═════════════════════════════════════════════════════════════ */
   return(
   <div className="al-root">
+  {initialLoading&&(
+    <div className="al-splash" role="status" aria-label="Loading AthLink">
+      <img src="/brand/icon-white.png" alt="AthLink" className="al-splash-logo"/>
+      <div className="al-splash-bar"><span/></div>
+    </div>
+  )}
   <svg xmlns="http://www.w3.org/2000/svg" style={{display:'none'}} aria-hidden="true">
     <filter id="glass-distortion" x="-20%" y="-20%" width="140%" height="140%" filterUnits="objectBoundingBox">
       <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch" result="turbulence"/>
@@ -7782,6 +7837,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   <LiquidBackground/>
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&display=swap');
+    /* Branded initial-load splash — shown while the first Supabase fetch settles
+       so the app never reads as a broken blank white screen. */
+    .al-splash{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;
+      background:radial-gradient(120% 120% at 50% 0%,#1f4e80 0%,#13314e 55%,#0e2137 100%);}
+    .al-splash-logo{width:78px;height:78px;object-fit:contain;filter:drop-shadow(0 8px 24px rgba(0,0,0,.35));animation:al-splash-pulse 1.5s ease-in-out infinite;}
+    .al-splash-bar{width:160px;height:4px;border-radius:980px;background:rgba(255,255,255,.18);overflow:hidden;}
+    .al-splash-bar span{display:block;height:100%;width:40%;border-radius:980px;background:rgba(255,255,255,.88);animation:al-splash-slide 1.1s ease-in-out infinite;}
+    @keyframes al-splash-pulse{0%,100%{transform:scale(1);opacity:.9;}50%{transform:scale(1.08);opacity:1;}}
+    @keyframes al-splash-slide{0%{transform:translateX(-120%);}100%{transform:translateX(320%);}}
     .al-root{
       --navy:#13314e;--navy2:#1f4e80;--accent:#0a84ff;--accent2:#409cff;--sky:#e8f1fc;
       --paper:#eef3fb;--ink:#1d1d1f;--mut:rgba(44,52,68,0.86);--line:rgba(60,60,67,0.12);
@@ -7985,7 +8049,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        z-index sits above the click-away overlay (55) so the field stays interactive. */
     .hero-srch{position:relative;z-index:56;display:flex;align-items:center;gap:10px;max-width:640px;margin:20px 0 8px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:14px 20px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 8px 26px -14px rgba(0,0,0,.25);transition:box-shadow .16s,background .16s;}
     .hero-srch:focus-within{background:rgba(255,255,255,.74);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 0 0 4px var(--halo),0 8px 26px -14px rgba(0,0,0,.25);}
-    .hero-srch input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:16px;color:var(--ink);}
+    .hero-srch input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:16px;color:var(--ink);-webkit-appearance:none;appearance:none;border-radius:inherit;}
     .hero-srch input::placeholder{color:var(--mut);}
     .hero-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:380px;overflow:auto;z-index:5;}
     /* Breadth strip — quiet chips + cards under the hero */
@@ -8056,7 +8120,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        closed). Height-independent: as the panel elongates only the body grows — the
        top half keeps its exact shape, no radius reflow, no stretch-and-snap. */
     .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:background .34s ease;}
-    .menupill.navmode{width:auto;}
+    /* In nav mode the pill must size to its content; the 440px cap (meant for
+       the search field) squeezed the flex row so the last item — the search
+       button — spilled ~5px past the pill's right edge and read as detached. */
+    .menupill.navmode{width:auto;max-width:none;}
     .menupill.searching{background:rgba(255,255,255,.70);}
     /* 3-item primary nav — seg-control idiom inside the glass capsule */
     .np-bar{display:flex;align-items:center;gap:2px;padding:5px;}
@@ -8068,7 +8135,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
     .mp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.45);border-radius:980px;padding:8px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
     .mp-star{color:var(--accent);flex:none;}
-    .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);}
+    .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);-webkit-appearance:none;appearance:none;border-radius:inherit;}
     .mp-search input::placeholder{color:var(--mut);}
     .mp-clear{flex:none;border:0;background:none;cursor:pointer;color:var(--mut);display:flex;padding:0;}
     .mp-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:340px;overflow:auto;z-index:5;}
@@ -9740,7 +9807,55 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       )}
       {filter==="duplicates"&&canEdit&&(
         <div>
-          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Profiles whose names are close but differ in spelling — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more competitions and moves the other's results into it.</p>
+          {/* Manual merge — pick ANY two profiles the auto-detector didn't flag. */}
+          <div style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:16,marginBottom:18}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <Users size={15} color="var(--accent)"/><b style={{fontSize:14}}>Manual merge</b>
+            </div>
+            <p style={{fontSize:12.5,color:"var(--mut)",margin:"0 0 12px"}}>Same person but not auto-flagged? Pick both profiles below. The first is kept; the second's results move into it.</p>
+            <div style={{display:"flex",alignItems:"flex-end",gap:10,flexWrap:"wrap"}}>
+              {["a","b"].map(slot=>{
+                const val=slot==="a"?mmA:mmB;
+                return(
+                  <div key={slot} style={{flex:1,minWidth:190,position:"relative"}}>
+                    <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",color:"var(--mut)",marginBottom:4}}>{slot==="a"?"Keep (primary)":"Merge in"}</div>
+                    {val
+                      ? <div style={{display:"flex",alignItems:"center",gap:8,background:"var(--sky)",borderRadius:10,padding:"8px 10px"}}>
+                          <div className="av" style={{background:avatarColor(val),width:24,height:24,fontSize:10}}>{initials(val)}</div>
+                          <span style={{fontSize:13,fontWeight:600,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{val}</span>
+                          <button className="mp-clear" onClick={()=>slot==="a"?setMmA(null):setMmB(null)}><X size={14}/></button>
+                        </div>
+                      : <input placeholder="Search athletes…" value={mmActive===slot?mmQ:""}
+                          onFocus={()=>{setMmActive(slot);setMmQ("");}}
+                          onChange={e=>{setMmActive(slot);setMmQ(e.target.value);}}
+                          onBlur={()=>setTimeout(()=>setMmActive(a=>a===slot?null:a),150)}
+                          style={{width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"8px 10px",fontSize:13,outline:"none",background:"var(--card)",color:"var(--ink)"}}/>}
+                    {mmActive===slot&&mmQ.trim()&&(
+                      <div className="hero-drop" style={{maxHeight:220}}>
+                        {(()=>{
+                          const dq=mmQ.trim().toLowerCase();
+                          const other=slot==="a"?mmB:mmA;
+                          const matches=[...new Set(allPeople.map(p=>p.name).filter(Boolean))]
+                            .filter(nm=>nm.toLowerCase().includes(dq)&&nm!==other)
+                            .sort((x,y)=>regCount(y)-regCount(x)).slice(0,8);
+                          if(!matches.length) return <div className="gsrch-item" style={{cursor:"default"}}><div className="gi-sub">No matches</div></div>;
+                          return matches.map(nm=>(
+                            <div key={nm} className="gsrch-item" onMouseDown={()=>{slot==="a"?setMmA(nm):setMmB(nm);setMmActive(null);setMmQ("");}}>
+                              <div className="av" style={{background:avatarColor(nm),width:26,height:26,fontSize:10}}>{initials(nm)}</div>
+                              <div style={{minWidth:0}}><div className="gi-label">{nm}</div><div className="gi-sub">{regCount(nm)} competitions</div></div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <button className="btn cta" disabled={!mmA||!mmB} style={{fontSize:13,padding:"9px 18px",opacity:(!mmA||!mmB)?.5:1,cursor:(!mmA||!mmB)?"not-allowed":"pointer"}}
+                onClick={doManualMerge}><Users size={14}/> Merge</button>
+            </div>
+          </div>
+          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Below: profiles whose names are close but differ in spelling or use a nickname / short form — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more competitions and moves the other's results into it.</p>
           {(()=>{
             const dq=q.trim().toLowerCase();
             const shown=visibleDupGroups
@@ -9778,7 +9893,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
                     <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",
                       color:"#b8860b",background:"#fdf6e3",borderRadius:6,padding:"3px 9px"}}>
-                      <AlertCircle size={12}/>Review — spelling differs
+                      <AlertCircle size={12}/>Review — {g.kind==="nick"?"nickname / short form":"spelling differs"}
                     </span>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
