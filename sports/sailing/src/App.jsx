@@ -304,6 +304,7 @@ function applyDbHosts(rows){
     id:r.id, type:r.type, scope:r.scope||"HK", name:r.name,
     ...(r.cls?{cls:r.cls}:{}), ...(r.country?{country:r.country}:{}),
     ...(r.slug?{slug:r.slug}:{}),
+    ...(r.logo_url?{logo_url:r.logo_url}:{}),          // recolored host/association logo (bucket url)
   }));
   // DB rows are the source of truth: defaults seed first, DB overwrites on id clash.
   // (Seeded once via hosts_seed_migration.sql; defaults remain only as an
@@ -1504,6 +1505,66 @@ async function uploadAthleteMedia(file,name,tok){
     if(!r.ok){console.error("uploadAthleteMedia",r.status,await r.text().catch(()=>""));return null;}
     return {url:`${SB_URL}/storage/v1/object/public/${ATHLETE_MEDIA_BUCKET}/${path}`,type:isVideo?"video":"image"};
   }catch(e){console.error("uploadAthleteMedia network",e);return null;}
+}
+
+/* ── Host / association portal logos (host-logos bucket) ──────────────────────
+   A host (federation, club, OR class association) can upload its own logo in the
+   Edit page. Every uploaded logo is transformed ONCE, at upload time, into a navy
+   monochrome watermark on a transparent background (--navy2 #1f4e80), then stored
+   in the public `host-logos` bucket (migrations/0011). The recolor is baked in
+   here — never at render — so the single stored asset renders consistently in the
+   directory thumbnail (bottom-right) and the portal header (far right).
+   Associations reuse this exact path: an association IS a class-locked host, so
+   its uploaded logo is its "class logo" — no separate class-logo subsystem. */
+const HOST_LOGO_BUCKET="host-logos";
+const LOGO_NAVY=[31,78,128];   // --navy2 #1f4e80, "AthLink muted blue"
+// Draw file to an offscreen canvas (cap longest edge at ~512px), then remap every
+// pixel to navy whose OPACITY = how dark/saturated the source pixel is. Near-white
+// / near-transparent source pixels become fully transparent → clean watermark on
+// transparent. Returns a Blob (image/png).
+async function recolorLogoToNavy(file){
+  const img=await new Promise((res,rej)=>{
+    const i=new Image(); i.onload=()=>res(i); i.onerror=rej;
+    i.src=URL.createObjectURL(file);
+  });
+  const MAX=512;
+  const scale=Math.min(1, MAX/Math.max(img.width,img.height));
+  const W=Math.max(1,Math.round(img.width*scale)), H=Math.max(1,Math.round(img.height*scale));
+  const c=document.createElement("canvas"); c.width=W; c.height=H;
+  const ctx=c.getContext("2d"); ctx.drawImage(img,0,0,W,H);
+  const id=ctx.getImageData(0,0,W,H); const d=id.data;
+  for(let p=0;p<d.length;p+=4){
+    const r=d[p],g=d[p+1],b=d[p+2],a=d[p+3];
+    // luminance 0..255 (Rec.601). Dark ink → high ink-opacity; white bg → 0.
+    const lum=0.299*r+0.587*g+0.114*b;
+    let ink=(255-lum)/255;                 // 0 (white) .. 1 (black)
+    ink*=(a/255);                          // respect source transparency
+    if(ink<0.06) ink=0;                    // drop near-white background noise
+    // TODO corner-detect inversion: light ink on a dark background renders nearly
+    // empty here. If reported, sample the 4 corners; if mean corner luminance is
+    // dark, use ink = lum/255 instead.
+    d[p]=LOGO_NAVY[0]; d[p+1]=LOGO_NAVY[1]; d[p+2]=LOGO_NAVY[2];
+    d[p+3]=Math.round(ink*255);
+  }
+  ctx.putImageData(id,0,0);
+  return await new Promise(res=>c.toBlob(res,"image/png"));
+}
+// Recolor `file` to navy-on-transparent, upload the PNG to `host-logos` under a
+// `<host slug>/` prefix, and return its public URL (or null on any failure —
+// never throws, mirroring the other upload helpers).
+async function uploadHostLogo(file,host,tok){
+  if(!SB_URL||!file||!tok||!host) return null;   // storage write needs a token
+  const blob=await recolorLogoToNavy(file).catch(e=>{console.error("recolorLogo",e);return null;});
+  if(!blob) return null;
+  const slug=String(host.id||"host").replace(/[^a-z0-9-]+/gi,"-").toLowerCase()||"host";
+  const path=`${slug}/${Date.now()}.png`;
+  try{
+    const r=await fetch(`${SB_URL}/storage/v1/object/${HOST_LOGO_BUCKET}/${path}`,{method:"POST",
+      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":"image/png","x-upsert":"true"},
+      body:blob});
+    if(!r.ok){console.error("uploadHostLogo",r.status,await r.text().catch(()=>""));return null;}
+    return `${SB_URL}/storage/v1/object/public/${HOST_LOGO_BUCKET}/${path}`;
+  }catch(e){console.error("uploadHostLogo network",e);return null;}
 }
 
 /* ── Custom boat classes (custom_classes) ─────────────────────────────────────
@@ -5378,20 +5439,39 @@ function AthleteEditModal({name,profile,onSaveExtras,onRename,onSaveUsername,upl
    Members (embedded member management). Owners/editors/dev use this to rename
    the host, set its location (→ globe by the title), and manage co-admins.
    ═══════════════════════════════════════════════════════════════════════ */
-function HostEditModal({host,onSave,onSaveSlug,onClose,canManage,membersProps}){
+function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,membersProps}){
   const[tab,setTab]=React.useState("details");
   const[name,setName]=React.useState(host?.name||"");
   const[country,setCountry]=React.useState(host?.country||"");
   const[slug,setSlug]=React.useState(host?.slug||pascalSlug(host?.name||""));
   const[slugErr,setSlugErr]=React.useState("");
   const[busy,setBusy]=React.useState(false);
+  // Logo: navy-recolored at upload time (uploadHostLogo). `logo` holds the pending
+  // public URL, or null when removed; compared against host.logo_url on save so we
+  // only send the key when it actually changed (avoids clobbering).
+  const[logo,setLogo]=React.useState(host?.logo_url||null);
+  const[logoBusy,setLogoBusy]=React.useState(false);
+  const[logoErr,setLogoErr]=React.useState("");
   const iso=IOC_ISO[(country||"").toUpperCase()]||"";
+  const onPickLogo=async(e)=>{
+    const file=e.target.files&&e.target.files[0]; e.target.value=""; // allow re-picking same file
+    if(!file) return;
+    if(!file.type.startsWith("image/")){setLogoErr("Please choose an image file (PNG or JPG).");return;}
+    if(file.size>5*1024*1024){setLogoErr("Image is too large — keep it under 5 MB.");return;}
+    setLogoErr(""); setLogoBusy(true);
+    const url=await onUploadLogo?.(file);   // recolors + uploads; null on any failure (never throws)
+    setLogoBusy(false);
+    if(!url){setLogoErr("Couldn't upload — sign in and try again.");return;}  // don't wipe existing logo
+    setLogo(url);
+  };
   const barStyle={width:"100%",border:"0",borderRadius:980,padding:"13px 18px",font:"inherit",fontSize:15,outline:"none",
     background:"rgba(255,255,255,.55)",backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",
     boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",transition:"box-shadow .16s"};
   const save=async()=>{
     setBusy(true); setSlugErr("");
-    await onSave({name:name.trim()||host.name,country:(country||"").toUpperCase()||null});
+    const patch={name:name.trim()||host.name,country:(country||"").toUpperCase()||null};
+    if((logo||null)!==(host?.logo_url||null)) patch.logo_url=logo||null;  // only when changed
+    await onSave(patch);
     // Public slug (URL). Saved separately so a "taken" clash can be reported.
     if(onSaveSlug&&(slug||"").trim()&&slug.trim()!==(host?.slug||pascalSlug(host?.name||""))){
       const r=await onSaveSlug(host.id,slug.trim());
@@ -5420,6 +5500,29 @@ function HostEditModal({host,onSave,onSaveSlug,onClose,canManage,membersProps}){
                 {iso
                   ? <SailingGlobe countryData={{[iso]:1}} height={200} dark mini bare hostIso={iso}/>
                   : <div style={{width:200,height:200,borderRadius:16,background:"rgba(31,78,128,.06)",border:"1px dashed rgba(31,78,128,.25)",display:"grid",placeItems:"center",color:"var(--mut)",fontSize:12,textAlign:"center",padding:16}}>Enter a location code to show a globe</div>}
+                {/* Logo uploader — recolored to navy/transparent at upload time. Managers only. */}
+                {canManage&&(
+                  <div style={{marginTop:16}}>
+                    <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Logo</label>
+                    <label style={{display:"grid",placeItems:"center",width:200,height:96,borderRadius:16,overflow:"hidden",position:"relative",transition:".16s",
+                        cursor:logoBusy?"default":"pointer",
+                        background:logo?"rgba(31,78,128,.04)":"rgba(31,78,128,.06)",
+                        border:logo?"1px solid rgba(31,78,128,.16)":"1px dashed rgba(31,78,128,.25)"}}>
+                      {logoBusy
+                        ? <Loader2 size={18} className="spin" style={{color:"var(--navy2)"}}/>
+                        : logo
+                          ? <img src={logo} alt="" style={{maxWidth:"84%",maxHeight:"78%",objectFit:"contain",background:"transparent"}}/>
+                          : <span style={{color:"var(--mut)",fontSize:12,textAlign:"center",padding:12,lineHeight:1.45}}>Add logo<br/><span style={{fontSize:11,opacity:.8}}>PNG or JPG · recolored to navy</span></span>}
+                      <input type="file" accept="image/*" disabled={logoBusy} onChange={onPickLogo}
+                        style={{position:"absolute",inset:0,opacity:0,cursor:"inherit"}}/>
+                    </label>
+                    {logo&&!logoBusy&&(
+                      <button type="button" onClick={()=>{setLogo(null);setLogoErr("");}}
+                        style={{marginTop:8,background:"none",border:0,padding:0,cursor:"pointer",color:"var(--mut)",fontSize:12,fontWeight:600}}>Remove logo</button>
+                    )}
+                    {logoErr&&<div style={{fontSize:12,color:"#c0392b",marginTop:6,fontWeight:600}}>{logoErr}</div>}
+                  </div>
+                )}
               </div>
               {/* Right column: name → location (tight) → buttons (pushed to bottom = globe bottom) */}
               <div style={{flex:1,minWidth:0,minHeight:200,display:"flex",flexDirection:"column"}}>
@@ -5465,6 +5568,7 @@ function HostEditModal({host,onSave,onSaveSlug,onClose,canManage,membersProps}){
 
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
+  const[initialLoading,setInitialLoading]=useState(true); // true until the first Supabase load settles (drives the branded splash)
   const[showDevProfiles,setShowDevProfiles]=useState(false);    // dev-only all-profiles panel
   const[showHostEdit,setShowHostEdit]=useState(false);          // host portal edit modal
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
@@ -5528,6 +5632,7 @@ export default function AthLinkMVP(){
   const[usernameBusy,setUsernameBusy]=useState(false);
   const[usernameErr,setUsernameErr]=useState("");
   const[navSearchOpen,setNavSearchOpen]=useState(false); // top-bar nav pill flipped into search mode
+  const[navMenuOpen,setNavMenuOpen]=useState(false); // mobile: nav links collapsed into a menu
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
   // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
@@ -5617,7 +5722,8 @@ export default function AthLinkMVP(){
   const saveHost=async(hostId,patch)=>{
     // Update local registry immediately (optimistic).
     const h=hostById(hostId);
-    if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country; }
+    if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country;
+      if("logo_url"in patch){ if(patch.logo_url) h.logo_url=patch.logo_url; else delete h.logo_url; } }
     setHostsVersion(v=>v+1);
     // Persist. PATCH alone silently no-ops if the row was never inserted
     // (the 11 defaults aren't in the hosts table until seeded), so UPSERT:
@@ -5627,7 +5733,8 @@ export default function AthLinkMVP(){
       const hit=Array.isArray(patched)&&patched.length>0;
       if(!hit&&h){
         const row={id:h.id,type:h.type,scope:h.scope||"HK",name:h.name,
-          ...(h.cls?{cls:h.cls}:{}),...(h.country?{country:h.country}:{})};
+          ...(h.cls?{cls:h.cls}:{}),...(h.country?{country:h.country}:{}),
+          ...(h.logo_url?{logo_url:h.logo_url}:{})};
         await sbPost("hosts",row);
       }
     }catch(e){console.error("saveHost persist",e);}
@@ -6178,26 +6285,33 @@ export default function AthLinkMVP(){
 
   useEffect(()=>{
     (async()=>{
+     try{
       if(!sbH){
         console.warn("No Supabase credentials — no events to show");
         setEvents([]);
         return;
       }
       console.log("Loading from Supabase:", SB_URL);
-      const data=await sbGet("events?select=*,entries(*)&order=created_at.desc");
+      // Fetch events, hosts and the athlete-username registry IN PARALLEL. These
+      // are independent queries; running them as a waterfall (as before) stacked
+      // their latencies and left the screen blank for ~5s. We still APPLY hosts +
+      // usernames before setEvents so the clean-URL resolvers can map
+      // slugs/usernames on first paint.
+      const [data,hostRows,uRows]=await Promise.all([
+        sbGet("events?select=*,entries(*)&order=created_at.desc"),
+        sbGet("hosts?select=*"),
+        sbGet("athlete_usernames?select=name_key,username,display_name"),
+      ]);
       if(data===null){
         console.error("Supabase load failed — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY");
         setEvents([]);
         return;
       }
       console.log("Loaded",data.length,"events from Supabase");
-      // Load hosts (with slugs) + the public athlete-username registry BEFORE
-      // events, so the clean-URL resolvers can map slugs/usernames on first paint.
-      const hostRows=await sbGet("hosts?select=*");
       if(hostRows){applyDbHosts(hostRows);setHostsVersion(v=>v+1);}
-      const uRows=await sbGet("athlete_usernames?select=name_key,username,display_name");
       if(uRows){applyAthleteUsernames(uRows);}
       setEvents(data.map(dbToApp));
+     } finally { setInitialLoading(false); }
     })();
   },[]);
 
@@ -6338,6 +6452,21 @@ export default function AthLinkMVP(){
     return s;
   };
 
+  // Nickname / abbreviation match on two canonical (sorted-token) keys: every
+  // token identical except one pair, where the shorter is a prefix of the longer
+  // — e.g. "chris lam" ⟷ "christopher lam". Levenshtein can't catch these (the
+  // length gap is too big), so they were never surfaced for merging.
+  const nickPair=(a,b)=>{
+    const ta=a.split(" "),tb=b.split(" ");
+    if(ta.length<2||tb.length<2) return false;            // need a surname for context
+    const rem=new Map(); tb.forEach(t=>rem.set(t,(rem.get(t)||0)+1));
+    const onlyA=[]; ta.forEach(t=>{const c=rem.get(t)||0; if(c>0) rem.set(t,c-1); else onlyA.push(t);});
+    const onlyB=[...rem.entries()].flatMap(([t,c])=>Array(Math.max(0,c)).fill(t));
+    if(onlyA.length!==1||onlyB.length!==1) return false;  // exactly one differing token each side
+    const x=onlyA[0],y=onlyB[0];
+    const short=x.length<=y.length?x:y, long=x.length<=y.length?y:x;
+    return short.length>=3&&short!==long&&long.startsWith(short);
+  };
   const dupGroups=useMemo(()=>{
     // distinct canonical keys (already display-deduped) → find near neighbours
     const keys=[...new Set(allPeople.map(p=>canonName(p.name)).filter(Boolean))];
@@ -6346,12 +6475,13 @@ export default function AthLinkMVP(){
       const a=keys[i];
       for(let j=i+1;j<keys.length;j++){
         const b=keys[j];
-        if(Math.abs(a.length-b.length)>2) continue;
-        if(Math.min(a.length,b.length)<4) continue;
-        const dist=lev(a,b);
-        if(dist>0&&dist<=2){
+        // Near-spelling match: Levenshtein ≤2 on similarly-sized keys.
+        const near=Math.abs(a.length-b.length)<=2&&Math.min(a.length,b.length)>=4&&(()=>{const d=lev(a,b);return d>0&&d<=2;})();
+        // Nickname/abbreviation match (same surname, first name shortened).
+        const nick=!near&&nickPair(a,b);
+        if(near||nick){
           const na=displayNameFor(a),nb=displayNameFor(b);
-          if(na&&nb) groups.push({names:[na,nb].sort((x,y)=>rawNameCount(y)-rawNameCount(x)||regCount(y)-regCount(x)),kind:"near",key:[a,b].sort().join("~")});
+          if(na&&nb) groups.push({names:[na,nb].sort((x,y)=>rawNameCount(y)-rawNameCount(x)||regCount(y)-regCount(x)),kind:near?"near":"nick",key:[a,b].sort().join("~")});
         }
       }
     }
@@ -6379,6 +6509,22 @@ export default function AthLinkMVP(){
     if(myAssoc) g=g.filter(x=>x.names.some(nm=>athleteHostAssocs(nm).has(myAssoc)));
     return g;
   },[dupGroups,dismissedDups2,myAssoc,events,portal,isClassPortal,portalCls]);
+
+  // Manual merge — lets an admin pick ANY two profiles the auto-detector missed
+  // (e.g. "Chris Lam" vs "Christopher Lam" when names diverge too far) and merge
+  // them directly via mergeAthletes(). mmA = primary kept, mmB = folded in.
+  const[mmA,setMmA]=useState(null);
+  const[mmB,setMmB]=useState(null);
+  const[mmActive,setMmActive]=useState(null); // which slot the picker is filling: "a"|"b"|null
+  const[mmQ,setMmQ]=useState("");
+  const doManualMerge=async()=>{
+    if(!mmA||!mmB||canonName(mmA)===canonName(mmB)) return;
+    await mergeAthletes(mmA,mmB);
+    const key=[canonName(mmA),canonName(mmB)].sort().join("~");
+    setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});
+    saveDupDismissals([key]);
+    setMmA(null);setMmB(null);setMmActive(null);setMmQ("");
+  };
 
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
@@ -6480,14 +6626,14 @@ export default function AthLinkMVP(){
     let lastY=window.scrollY;
     const onScroll=()=>{
       const y=window.scrollY;
-      if(y>lastY+6&&y>90){setBarHidden(true);setNavSearchOpen(false);}
+      if(y>lastY+6&&y>90){setBarHidden(true);setNavSearchOpen(false);setNavMenuOpen(false);}
       else if(y<lastY-6){setBarHidden(false);}
       lastY=y;
     };
     window.addEventListener("scroll",onScroll,{passive:true});
     return()=>window.removeEventListener("scroll",onScroll);
   },[]);
-  useEffect(()=>{setBarHidden(false);setNavSearchOpen(false);},[view.name,portal]);
+  useEffect(()=>{setBarHidden(false);setNavSearchOpen(false);setNavMenuOpen(false);},[view.name,portal]);
 
   /* ── Clean-URL sync (shareable links + native back/forward) ───────────────
      stateToPath / pathToState (module scope) define the mapping. This block is
@@ -6816,6 +6962,21 @@ Partial query: "${q}"`;
 
   const SPONSOR_LENS=`Write for a prospective SPONSOR/INVESTOR evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-fleet finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the fleet, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
 
+  // POST to the AI summary endpoint with a hard timeout. Throws on a non-2xx
+  // response (e.g. a 504 HTML gateway page that res.json() would choke on) or a
+  // timeout, so callers can log the real failure instead of silently rendering
+  // a blank "no summary" tab. Returns parsed {ok,text,model}.
+  const aiFilter=async(task,prompt,max_tokens)=>{
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(),15000);
+    try{
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({task,prompt,max_tokens}),signal:ctrl.signal});
+      if(!res.ok) throw new Error(`ai_filter HTTP ${res.status}`);
+      return await res.json();
+    } finally { clearTimeout(t); }
+  };
+
   const fetchEventSummary=async(ev)=>{
     if(eventSummaries[ev.id]!==undefined) return;
     setEventSummaries(m=>({...m,[ev.id]:null}));
@@ -6825,12 +6986,10 @@ Partial query: "${q}"`;
       const prompt=`${SPONSOR_LENS}
 In 2-4 sentences, summarize this sailing competition for a sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical fleet strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club regatta) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
 Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev.country||"unknown"}. Fleet size: ${sc.fleet} boats. Races sailed: ${sc.races}.`;
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"overview",prompt,max_tokens:220})});
-      const data=await res.json();
+      const data=await aiFilter("overview",prompt,220);
       if(data.ok) setEventSummaries(m=>({...m,[ev.id]:cleanAISummary(data.text)}));
       else setEventSummaries(m=>({...m,[ev.id]:""}));
-    }catch{setEventSummaries(m=>({...m,[ev.id]:""}));}
+    }catch(e){console.warn("fetchEventSummary failed:",e);setEventSummaries(m=>({...m,[ev.id]:""}));}
   };
 
   const execGSearch=(r)=>{
@@ -6896,12 +7055,10 @@ Together: ${togLine}`;
         prompt=`Write a SHORT scouting blurb for a SINGLE-HANDED sailor: 2 sentences, MAX 32 words. Focus mainly on how they performed RELATIVE TO COMPETITORS OF SIMILAR CALIBRE — i.e. where they placed within the fleet at their events, and against peers who finished near them. Factual, no markdown, no heading. Always refer to the athlete by their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name.
 Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins} race wins. Placings: ${peerNote||"unknown"}.`;
       }
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"hover",prompt,max_tokens:90})});
-      const data=await res.json();
+      const data=await aiFilter("hover",prompt,90);
       if(data.ok) setHoverSummaries(h=>({...h,[key]:cleanAISummary(data.text)}));
       else setHoverSummaries(h=>({...h,[key]:""}));
-    }catch{setHoverSummaries(h=>({...h,[key]:""}));}
+    }catch(e){console.warn("fetchHoverSummary failed:",e);setHoverSummaries(h=>({...h,[key]:""}));}
   };
 
   // Signature of an athlete's result set — changes only when a competition is
@@ -6932,16 +7089,14 @@ Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins}
       const recentLine=recent?`Most recent: ${recent.ev.name} (${recent.ev.date?.split('/')?.[2]||''}), finished #${recent.row.rank} of ${recent.fleet}.`:"";
       const prompt=`Write a SHORT athlete bio: 2 sentences, MAX 45 words total, third person. Focus on the athlete's JOURNEY — when they started competing, any class change, the class they've excelled in, and where they place now. Do NOT list every stat. No heading, no markdown, no "#", do not begin with the name. Whenever you refer to the athlete, use their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name on its own.
 Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${journey||'unknown'}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. ${recentLine}`;
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"overview",prompt,max_tokens:110})});
-      const data=await res.json();
+      const data=await aiFilter("overview",prompt,110);
       if(data.ok){
         const text=cleanAISummary(data.text);
         setProfileSummaries(h=>({...h,[name]:text}));
         try{localStorage.setItem("athlink_bio_v2_"+name,JSON.stringify({sig,text}));}catch{}
       }
       else setProfileSummaries(h=>({...h,[name]:""}));
-    }catch{setProfileSummaries(h=>({...h,[name]:""}));}
+    }catch(e){console.warn("fetchFullProfileSummary failed:",e);setProfileSummaries(h=>({...h,[name]:""}));}
   };
 
 
@@ -7811,6 +7966,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   /* ═════════════════════════════════════════════════════════════ */
   return(
   <div className="al-root">
+  {initialLoading&&(
+    <div className="al-splash" role="status" aria-label="Loading AthLink">
+      <img src="/brand/icon-white.png" alt="AthLink" className="al-splash-logo"/>
+      <div className="al-splash-bar"><span/></div>
+    </div>
+  )}
   <svg xmlns="http://www.w3.org/2000/svg" style={{display:'none'}} aria-hidden="true">
     <filter id="glass-distortion" x="-20%" y="-20%" width="140%" height="140%" filterUnits="objectBoundingBox">
       <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch" result="turbulence"/>
@@ -7822,6 +7983,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   <LiquidBackground/>
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&display=swap');
+    /* Branded initial-load splash — shown while the first Supabase fetch settles
+       so the app never reads as a broken blank white screen. */
+    .al-splash{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;
+      background:radial-gradient(120% 120% at 50% 0%,#1f4e80 0%,#13314e 55%,#0e2137 100%);}
+    .al-splash-logo{width:78px;height:78px;object-fit:contain;filter:drop-shadow(0 8px 24px rgba(0,0,0,.35));animation:al-splash-pulse 1.5s ease-in-out infinite;}
+    .al-splash-bar{width:160px;height:4px;border-radius:980px;background:rgba(255,255,255,.18);overflow:hidden;}
+    .al-splash-bar span{display:block;height:100%;width:40%;border-radius:980px;background:rgba(255,255,255,.88);animation:al-splash-slide 1.1s ease-in-out infinite;}
+    @keyframes al-splash-pulse{0%,100%{transform:scale(1);opacity:.9;}50%{transform:scale(1.08);opacity:1;}}
+    @keyframes al-splash-slide{0%{transform:translateX(-120%);}100%{transform:translateX(320%);}}
     .al-root{
       --navy:#13314e;--navy2:#1f4e80;--accent:#0a84ff;--accent2:#409cff;--sky:#e8f1fc;
       --paper:#eef3fb;--ink:#1d1d1f;--mut:rgba(44,52,68,0.86);--line:rgba(60,60,67,0.12);
@@ -8025,7 +8195,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        z-index sits above the click-away overlay (55) so the field stays interactive. */
     .hero-srch{position:relative;z-index:56;display:flex;align-items:center;gap:10px;max-width:640px;margin:20px 0 8px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:14px 20px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 8px 26px -14px rgba(0,0,0,.25);transition:box-shadow .16s,background .16s;}
     .hero-srch:focus-within{background:rgba(255,255,255,.74);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 0 0 4px var(--halo),0 8px 26px -14px rgba(0,0,0,.25);}
-    .hero-srch input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:16px;color:var(--ink);}
+    .hero-srch input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:16px;color:var(--ink);-webkit-appearance:none;appearance:none;border-radius:inherit;}
     .hero-srch input::placeholder{color:var(--mut);}
     .hero-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:380px;overflow:auto;z-index:5;}
     /* Breadth strip — quiet chips + cards under the hero */
@@ -8096,7 +8266,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        closed). Height-independent: as the panel elongates only the body grows — the
        top half keeps its exact shape, no radius reflow, no stretch-and-snap. */
     .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:background .34s ease;}
-    .menupill.navmode{width:auto;}
+    /* In nav mode the pill must size to its content; the 440px cap (meant for
+       the search field) squeezed the flex row so the last item — the search
+       button — spilled ~5px past the pill's right edge and read as detached. */
+    .menupill.navmode{width:auto;max-width:none;}
     .menupill.searching{background:rgba(255,255,255,.70);}
     /* 3-item primary nav — seg-control idiom inside the glass capsule */
     .np-bar{display:flex;align-items:center;gap:2px;padding:5px;}
@@ -8105,10 +8278,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .np-link.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .np-srchbtn{flex:none;width:36px;height:36px;margin-left:2px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
     .np-srchbtn:hover{background:rgba(255,255,255,.85);}
+    /* Mobile: nav links collapse into a hamburger that opens a flat menu */
+    .np-menubtn{display:none;flex:none;width:36px;height:36px;border-radius:980px;border:0;background:none;color:var(--navy);place-items:center;cursor:pointer;transition:.15s;padding:0;}
+    .np-menubtn:hover{background:rgba(255,255,255,.5);}
+    .np-menu{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);min-width:220px;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;z-index:80;animation:fade .15s both;}
+    .np-mrow{display:flex;align-items:center;gap:11px;width:100%;border:0;background:none;font:inherit;font-size:14px;font-weight:700;color:var(--navy);padding:11px 14px;border-radius:12px;cursor:pointer;transition:.12s;text-align:left;letter-spacing:-.01em;}
+    .np-mrow svg{flex:none;color:var(--navy2);}
+    .np-mrow:hover{background:rgba(255,255,255,.55);}
+    .np-mrow.on{background:rgba(255,255,255,.92);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
     .mp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.45);border-radius:980px;padding:8px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
     .mp-star{color:var(--accent);flex:none;}
-    .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);}
+    .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);-webkit-appearance:none;appearance:none;border-radius:inherit;}
     .mp-search input::placeholder{color:var(--mut);}
     .mp-clear{flex:none;border:0;background:none;cursor:pointer;color:var(--mut);display:flex;padding:0;}
     .mp-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:340px;overflow:auto;z-index:5;}
@@ -8128,7 +8309,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .tb-profile:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
     .tb-acct{position:absolute;right:0;top:calc(100% + 8px);background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;min-width:200px;z-index:80;}
     @media(max-width:640px){.np-link{font-size:12.5px;padding:8px 10px;}.np-srchbtn{width:32px;height:32px;}}
-    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}.tb-divider{display:none;}}
+    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}.tb-divider{display:none;}.np-bar .np-item{display:none;}.np-menubtn{display:grid;}}
     .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
     .class-card{background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border:0;border-radius:16px;padding:24px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .class-card:hover{transform:translateY(-5px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),inset 0 0 0 .5px rgba(255,255,255,.55),0 24px 48px -20px rgba(0,0,0,.34);}
@@ -8363,6 +8544,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
           : <div className="np-bar">
+              {/* Mobile: hamburger collapses the four links into a flat menu */}
+              <button className="np-menubtn" title="Menu" aria-label="Menu" onClick={()=>setNavMenuOpen(o=>!o)}><Menu size={18}/></button>
               {/* Athletes — by class / by country / by host */}
               <div className="np-item">
                 <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
@@ -8446,6 +8629,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </div>
               </div>
               <button className="np-srchbtn" title="Search" onClick={()=>setNavSearchOpen(true)}><Search size={16}/></button>
+              {navMenuOpen&&(
+                <div className="np-menu">
+                  <button className={`np-mrow${navOn==="athletes"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("athletes");}}><Users size={16}/>Athletes</button>
+                  <button className={`np-mrow${navOn==="competitions"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("competitions");}}><Anchor size={16}/>Competitions</button>
+                  <button className={`np-mrow${navOn==="hosts"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("hosts");}}><Waves size={16}/>Hosts</button>
+                  <button className={`np-mrow${navOn==="ranking"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("ranking");}}><Trophy size={16}/>Rankings</button>
+                </div>
+              )}
             </div>}
         {navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
           <div className="mp-drop">
@@ -8639,6 +8830,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
     <HostEditModal host={hostById(portal)} canManage={canManageMembers}
       onSave={(patch)=>saveHost(portal,patch)} onSaveSlug={saveHostSlug}
+      onUploadLogo={(file)=>uploadHostLogo(file,hostById(portal),auth?.token)}
       membersProps={{hostId:portal,hostName:hostById(portal).name,auth,myMembership:myPortalMembership,
         pendingClaims:pendingClaimsHere,pendingEventClaims:pendingEventClaimsHere,canVouch:devMode||(!!myPortalMembership&&myPortalMembership.verified),
         onDecideClaim:(claim,approve)=>resolveClaim(claim,approve,portal),
@@ -8685,7 +8877,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       </div>
     </div>
   )}
-  {(gSearchOpen||navSearchOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setNavSearchOpen(false);}}/>}
+  {(gSearchOpen||navSearchOpen||navMenuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setNavSearchOpen(false);setNavMenuOpen(false);}}/>}
 
   {/* ── Breadcrumb wayfinding — entity pages only (top-level pages carry their own
       titles; the top bar has no back button by rule, so this is the "you are here"). ── */}
@@ -9004,7 +9196,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const main=CLASSES.filter(c=>ids.includes(c.id)).map(c=>c.id);
           const clsIds=[...main,...ids.filter(id=>!main.includes(id))];
           return(
-          <div className="class-card" key={h.id} style={{animationDelay:`${Math.min(i,10)*60}ms`}} onClick={()=>enterPortal(h.id)}>
+          <div className="class-card" key={h.id} style={{animationDelay:`${Math.min(i,10)*60}ms`,position:"relative"}} onClick={()=>enterPortal(h.id)}>
             <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
               <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flex:"1 1 0",minWidth:0}}>
@@ -9013,6 +9205,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             <p className="class-name">{h.loc?<span style={{marginRight:6}}>{iocFlag(h.loc)}</span>:null}{h.name}</p>
             <div className="class-stats" style={{marginBottom:0}}><div><b>{h.n}</b>competitions</div><div><b>{ppl.size}</b>athletes</div></div>
+            {h.logo_url&&<img src={h.logo_url} alt="" style={{position:"absolute",right:14,bottom:14,width:34,height:34,objectFit:"contain",opacity:.9,pointerEvents:"none",background:"transparent"}}/>}
           </div>);
         })}
       </div>
@@ -9343,12 +9536,27 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
           );
+          // Recolored logo, far right of the title row, sized to optically align
+          // with the 150px globe. hostById(portal) is null for synthetic class
+          // portals (no host row), so they simply render no logo — associations
+          // (real hosts) resolve their logo_url here just like clubs/federations.
+          const headerLogo=(()=>{
+            const hl=hostById(portal)?.logo_url;
+            if(!hl) return null;
+            return <img src={hl} alt="" style={{width:120,height:120,flex:"none",objectFit:"contain",alignSelf:"center",maxWidth:"100%",background:"transparent"}}/>;
+          })();
+          // Single header row: globe LEFT · title/meta/pills flexible MIDDLE ·
+          // [logo][buttons] together on the FAR RIGHT, vertically centered to the
+          // globe. flex:none on both side clusters + flex:1 middle keeps the row
+          // on one line on desktop; only genuinely narrow widths wrap the right
+          // cluster (logo+buttons as a unit) below — never stacked under the globe.
           const head=(
-            <div style={{minWidth:0,display:"flex",gap:18,alignItems:"flex-start",flexWrap:"wrap"}}>
-              <div style={{display:"flex",flexDirection:"column",gap:14,alignItems:"center",flex:"none"}}>
-                {globe}{actions}
+            <div style={{minWidth:0,display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+              {globe}
+              <div style={{flex:"1 1 260px",minWidth:0}}>{titleBlock}</div>
+              <div style={{display:"flex",gap:16,alignItems:"center",flex:"none"}}>
+                {headerLogo}{actions}
               </div>
-              {titleBlock}
             </div>
           );
           if(!modelCfg) return head;
@@ -9380,13 +9588,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {feAssoc.map(a=>{
                 const ce=events.filter(e=>eventAssocs(e).includes(a.id));
                 const col=classColor(a.cls);const short=classLabel(a.cls);
-                return <div className="class-card" key={a.id} style={{cursor:"pointer"}} onClick={()=>enterPortal(a.id)}>
+                return <div className="class-card" key={a.id} style={{cursor:"pointer",position:"relative"}} onClick={()=>enterPortal(a.id)}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
                     <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px"}}>Association</span>
                     <span className="cls" style={{background:col}}>{short}</span>
                   </div>
                   <p className="class-name">{a.name}</p>
                   <div className="class-stats" style={{marginBottom:0}}><div><b>{ce.length}</b>competitions</div></div>
+                  {a.logo_url&&<img src={a.logo_url} alt="" style={{position:"absolute",right:14,bottom:14,width:34,height:34,objectFit:"contain",opacity:.9,pointerEvents:"none",background:"transparent"}}/>}
                 </div>;
               })}
             </div>
@@ -9780,7 +9989,55 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       )}
       {filter==="duplicates"&&canEdit&&(
         <div>
-          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Profiles whose names are close but differ in spelling — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more competitions and moves the other's results into it.</p>
+          {/* Manual merge — pick ANY two profiles the auto-detector didn't flag. */}
+          <div style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:16,marginBottom:18}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <Users size={15} color="var(--accent)"/><b style={{fontSize:14}}>Manual merge</b>
+            </div>
+            <p style={{fontSize:12.5,color:"var(--mut)",margin:"0 0 12px"}}>Same person but not auto-flagged? Pick both profiles below. The first is kept; the second's results move into it.</p>
+            <div style={{display:"flex",alignItems:"flex-end",gap:10,flexWrap:"wrap"}}>
+              {["a","b"].map(slot=>{
+                const val=slot==="a"?mmA:mmB;
+                return(
+                  <div key={slot} style={{flex:1,minWidth:190,position:"relative"}}>
+                    <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",color:"var(--mut)",marginBottom:4}}>{slot==="a"?"Keep (primary)":"Merge in"}</div>
+                    {val
+                      ? <div style={{display:"flex",alignItems:"center",gap:8,background:"var(--sky)",borderRadius:10,padding:"8px 10px"}}>
+                          <div className="av" style={{background:avatarColor(val),width:24,height:24,fontSize:10}}>{initials(val)}</div>
+                          <span style={{fontSize:13,fontWeight:600,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{val}</span>
+                          <button className="mp-clear" onClick={()=>slot==="a"?setMmA(null):setMmB(null)}><X size={14}/></button>
+                        </div>
+                      : <input placeholder="Search athletes…" value={mmActive===slot?mmQ:""}
+                          onFocus={()=>{setMmActive(slot);setMmQ("");}}
+                          onChange={e=>{setMmActive(slot);setMmQ(e.target.value);}}
+                          onBlur={()=>setTimeout(()=>setMmActive(a=>a===slot?null:a),150)}
+                          style={{width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"8px 10px",fontSize:13,outline:"none",background:"var(--card)",color:"var(--ink)"}}/>}
+                    {mmActive===slot&&mmQ.trim()&&(
+                      <div className="hero-drop" style={{maxHeight:220}}>
+                        {(()=>{
+                          const dq=mmQ.trim().toLowerCase();
+                          const other=slot==="a"?mmB:mmA;
+                          const matches=[...new Set(allPeople.map(p=>p.name).filter(Boolean))]
+                            .filter(nm=>nm.toLowerCase().includes(dq)&&nm!==other)
+                            .sort((x,y)=>regCount(y)-regCount(x)).slice(0,8);
+                          if(!matches.length) return <div className="gsrch-item" style={{cursor:"default"}}><div className="gi-sub">No matches</div></div>;
+                          return matches.map(nm=>(
+                            <div key={nm} className="gsrch-item" onMouseDown={()=>{slot==="a"?setMmA(nm):setMmB(nm);setMmActive(null);setMmQ("");}}>
+                              <div className="av" style={{background:avatarColor(nm),width:26,height:26,fontSize:10}}>{initials(nm)}</div>
+                              <div style={{minWidth:0}}><div className="gi-label">{nm}</div><div className="gi-sub">{regCount(nm)} competitions</div></div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <button className="btn cta" disabled={!mmA||!mmB} style={{fontSize:13,padding:"9px 18px",opacity:(!mmA||!mmB)?.5:1,cursor:(!mmA||!mmB)?"not-allowed":"pointer"}}
+                onClick={doManualMerge}><Users size={14}/> Merge</button>
+            </div>
+          </div>
+          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Below: profiles whose names are close but differ in spelling or use a nickname / short form — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more competitions and moves the other's results into it.</p>
           {(()=>{
             const dq=q.trim().toLowerCase();
             const shown=visibleDupGroups
@@ -9818,7 +10075,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
                     <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",
                       color:"#b8860b",background:"#fdf6e3",borderRadius:6,padding:"3px 9px"}}>
-                      <AlertCircle size={12}/>Review — spelling differs
+                      <AlertCircle size={12}/>Review — {g.kind==="nick"?"nickname / short form":"spelling differs"}
                     </span>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
