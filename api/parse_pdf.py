@@ -668,7 +668,11 @@ def parse_row_with_cols(row, cols, open_division=False):
     # div (which drives grouping); keep any other label as a genuine fleet name.
     if div_raw in ('---', '--', '—', '–', '-', 'n/a', 'N/A'):
         div_raw = ''
-    elif div_raw and not _looks_like_class(div_raw) and norm_category(div_raw):
+    elif (div_raw and not _looks_like_class(div_raw)
+          and not _looks_like_fleet_label(div_raw) and norm_category(div_raw)):
+        # A Division cell holding an AGE group ("U23") — not a boat class/fleet
+        # ("303 Doubles", "2.4mR", "Radial", which _looks_like_fleet_label catches)
+        # — is demographic, so route it to category and let a real fleet split.
         if not category:
             category = norm_category(div_raw)
         div_raw = ''
@@ -909,6 +913,7 @@ _EXCEL_HDR_MAP = {
     'no': 'Rank', 'no.': 'Rank', 'pos': 'Rank', 'place': 'Rank', 'rank': 'Rank',
     'skipper': 'Helm', 'skippername': 'Helm', "skipper'sname": 'Helm',
     'helm': 'Helm', 'helmname': 'Helm', "helm'sname": 'Helm',
+    'sailor': 'Helm', 'sailorname': 'Helm', 'competitor': 'Helm',
     'crew': 'Crew', 'crewname': 'Crew', "crew'sname": 'Crew',
     'sailnumber': 'Sail', 'sailno': 'Sail', 'sailno.': 'Sail', 'sail': 'Sail',
     'club': 'Club', 'boatclub': 'Club',
@@ -920,7 +925,8 @@ _EXCEL_HDR_MAP = {
 _EXCEL_HDR_KEYS = {'no', 'no.', 'rank', 'pos', 'place', 'skipper', 'skippername',
                    'helm', 'helmname', 'crew', 'crewname', 'sail', 'sailno',
                    'sailnumber', 'club', 'class', 'dinghy', 'total', 'nett',
-                   'net', 'nettotal'}
+                   'net', 'nettotal', 'sailor', 'sailorname', 'competitor',
+                   'boatname'}
 
 def _excel_is_titleish(row):
     """A merged-title row: ≤2 non-empty cells AND none of them is a header key or
@@ -937,15 +943,36 @@ def _excel_normalise_header(header):
     """Rewrite header cells to canonical labels parse_table's detect_cols reads.
     'Discard'/'1 Discard' and 'Place' (when a rank col exists) are cleared so
     they don't get mistaken for a race/rank column — the discard info already
-    lives in the race cells' brackets."""
+    lives in the race cells' brackets.
+
+    Two federation-sheet quirks (2nd SEA Para Sailing, Microsoft Excel producer):
+      - the finishing position is a TRAILING bare 'Points' column (values 1..N)
+        distinct from a 'Total Points' column → map it to Rank;
+      - 'After N Discard' is the NET-after-discards score, not a discarded value
+        → map it to Nett (only a plain 'Discard'/'N Discard' column is dropped)."""
+    cells = [str(c or '') for c in header]
+    flat = [re.sub(r'\s+', ' ', c).strip() for c in cells]
+    has_rank = any(hdr_key(c) in ('no', 'no.', 'rank', 'pos') for c in cells)
+    total_idx = next((i for i, c in enumerate(cells)
+                      if hdr_key(c) in ('total', 'totalpts', 'totalpoints')), None)
+    # A trailing bare Points/Place/Pos column, distinct from Total, is the rank
+    # when no dedicated rank column exists.
+    trailing_rank_idx = None
+    if not has_rank and total_idx is not None:
+        for i, c in enumerate(cells):
+            if hdr_key(c) in ('points', 'place', 'pos', 'pts') and i != total_idx:
+                trailing_rank_idx = i          # keep the last such column
     out = []
-    has_rank = any(hdr_key(c) in ('no', 'no.', 'rank', 'pos') for c in header)
-    for c in header:
+    for i, c in enumerate(cells):
         k = hdr_key(c)
-        if re.search(r'discard', str(c or ''), re.IGNORECASE):
-            out.append('')                         # drop the discarded-score column
+        if i == trailing_rank_idx:
+            out.append('Rank')
+        elif re.search(r'after.*discard', flat[i], re.IGNORECASE):
+            out.append('Nett')                 # net-after-discards column
+        elif re.search(r'discard', flat[i], re.IGNORECASE):
+            out.append('')                     # drop the discarded-score column
         elif k == 'place' and has_rank:
-            out.append('')                         # redundant with the rank column
+            out.append('')                     # redundant with the rank column
         elif k in _EXCEL_HDR_MAP:
             out.append(_EXCEL_HDR_MAP[k])
         else:
@@ -2659,6 +2686,27 @@ The column order for every row on this page is:
 Parse EVERY data row on this page. Return ONLY the rows visible on this page.
 """
 
+def _heic_to_jpeg(file_bytes: bytes):
+    """Decode an HEIC/HEIF photo to JPEG bytes. Registers pillow-heif with PIL
+    when available. Returns JPEG bytes, or None if HEIC support isn't installed
+    (caller then shows a clear 'export as JPEG' message)."""
+    try:
+        from PIL import Image
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+        except Exception:
+            pass
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=90)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
 def _downscale_image(file_bytes: bytes, mime_type: str, max_dim: int = 2200, quality: int = 82):
     """Shrink oversized images before the AI call to cut upload + token cost.
     Returns (new_bytes, new_mime). No-op (returns originals) if Pillow is
@@ -3760,6 +3808,10 @@ def _detect_mime(data: bytes) -> str:
         return "image/webp"
     if data[:6] in (b"GIF87a", b"GIF89a"):
         return "image/gif"
+    # ── HEIC/HEIF (iPhone photos): ISO-BMFF 'ftyp' box with a heic/heif brand. ──
+    if data[4:8] == b"ftyp" and data[8:12] in (b"heic", b"heix", b"heif",
+                                               b"hevc", b"hevx", b"mif1", b"msf1"):
+        return "image/heic"
     # ── ZIP container (PK) — xlsx is a zip; peek the namelist for 'xl/' parts.
     # Checked BEFORE the HTML sniff so an .xlsx never falls through to pdfplumber.
     if data[:4] == b"PK\x03\x04":
@@ -3791,7 +3843,12 @@ def _detect_mime(data: bytes) -> str:
                          if l.count(',') >= 2 or l.count(';') >= 2)
         if len(lines) >= 3 and delim_hits >= 3:
             return "text/csv"
-    return "application/pdf"  # default — let pdfplumber try
+    # Real PDFs start with %PDF (caught above). If the bytes look like a PDF (have
+    # a %PDF marker anywhere in the head, e.g. a leading BOM) let pdfplumber try;
+    # otherwise it's an unrecognised/unsniffable type.
+    if b"%PDF" in data[:1024]:
+        return "application/pdf"
+    return "application/octet-stream"
 
 
 # ── xlsx / csv / blw ingestion ──────────────────────────────────────────────
@@ -4769,6 +4826,14 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     if mime == "text/csv":
         return _stamp(_parse_csv_bytes(file_bytes), 'unknown', 'csv', 0.3)
 
+    # ── Unknown / unsniffable type → clear, actionable message (never a crash). ──
+    if mime in ("application/octet-stream", "application/zip"):
+        raise ValueError(
+            "Couldn't read this file — its format wasn't recognised. "
+            "Try exporting the results as PDF, Excel (.xlsx), CSV, or HTML "
+            "(or a clear screenshot/photo for the AI parser)."
+        )
+
     # ── Image upload → Gemini only (no rule-based parser exists for images) ──
     if mime.startswith("image/"):
         if mode == 'rule':
@@ -4781,6 +4846,17 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
                 "Image results require AI parsing, but no AI key is configured "
                 "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback)."
             )
+        # HEIC (iPhone photos): Gemini can't ingest HEIC directly and PIL needs
+        # pillow-heif to open it. Convert to JPEG first; if that isn't possible,
+        # say so clearly rather than sending bytes the model can't read.
+        if mime in ("image/heic", "image/heif"):
+            jpeg = _heic_to_jpeg(file_bytes)
+            if jpeg is None:
+                raise ValueError(
+                    "Couldn't decode this HEIC photo. On your phone, share/export "
+                    "it as JPEG (or take a screenshot) and upload that."
+                )
+            file_bytes, mime = jpeg, "image/jpeg"
         return _stamp(_gemini_parse(file_bytes, mime), 'unknown', 'image', 0.3)
 
     # ── PDF → rule-based first ──
