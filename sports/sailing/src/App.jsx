@@ -458,8 +458,11 @@ const eventFingerprint=ev=>{
   const sails=[...new Set((ev.entries||[]).map(e=>norm(e.sail)).filter(Boolean))].sort();
   return [norm(ev.name),norm(ev.date),norm(ev.cls||ev.class),sails.join(",")].join("|");
 };
-// A host's display location (IOC code): its explicitly-set country, else the
-// most common country across the events it owns/co-owns. evList is all events.
+// Where a host's globe is oriented (IOC code): its explicitly-set country, else
+// the most common country across the events it owns/co-owns. Used ONLY for the
+// "where they compete" globe/footprint and overridable form prefills — NEVER for
+// a flag next to the host's name. A host with no explicit country and no events
+// has no orientation (null); we never assume one from `scope` (no default HKG).
 const hostLocation=(hostId,evList)=>{
   const h=hostById(hostId);
   if(h?.country) return String(h.country).toUpperCase();
@@ -469,8 +472,7 @@ const hostLocation=(hostId,evList)=>{
     const cc=eventCountryCode(ev); if(cc) counts[cc]=(counts[cc]||0)+1;
   });
   const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-  if(top) return top[0];
-  return SCOPE_COUNTRY[h?.scope]||null;
+  return top?top[0]:null;
 };
 
 // ── Sub-classes (per-event) for ILCA and Optimist ──
@@ -6846,7 +6848,10 @@ export default function AthLinkMVP(){
       ...FEDERATIONS.map(h=>({...h,htype:"federation"})),
       ...CLUBS.map(h=>({...h,htype:"club"})),
       ...ASSOCIATIONS.map(h=>({...h,htype:"association"})),
-    ].map(h=>({...h,n:pub.filter(ev=>eventAssocs(ev).includes(h.id)).length,loc:hostLocation(h.id,events)||""}))
+    ].map(h=>({...h,n:pub.filter(ev=>eventAssocs(ev).includes(h.id)).length,
+      // Flag/location next to the host name reads the EXPLICIT country only — never
+      // derived from events or scope, so a country-less host shows no flag (Fix 2).
+      loc:h.country?String(h.country).toUpperCase():""}))
      .sort((a,b)=>b.n-a.n);
   })();
   const hostCountries=[...new Set(navHosts.map(h=>h.loc).filter(Boolean))]
@@ -8881,13 +8886,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                           <span className="nd-cnt">{navHosts.filter(h=>h.loc===cc).length}</span>
                         </button>
                       ))}
+                      {navHosts.some(h=>!h.loc)&&(
+                        <button className="nd-row" onClick={()=>goTop("hosts",{country:"__none__"})}>
+                          <span style={{fontSize:15,flex:"none",width:15,display:"inline-block"}}/>Unspecified
+                          <span className="nd-cnt">{navHosts.filter(h=>!h.loc).length}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
               {/* Rankings — by class / by country */}
               <div className="np-item">
-                <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
+                <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("ranking");}}>Rankings</button>
                 <div className="np-drop">
                   <p className="nd-label">By class</p>
                   <div className="nd-chips">
@@ -9431,7 +9442,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const tLens=view.type||null, cLens=view.country||null;
     const list=navHosts
       .filter(h=>!tLens||h.htype===tLens)
-      .filter(h=>!cLens||h.loc===cLens)
+      .filter(h=>!cLens||(cLens==="__none__"?!h.loc:h.loc===cLens))
       .filter(h=>!q||h.name.toLowerCase().includes(q));
     const published=events.filter(ev=>ev.status!=="Draft");
     return(
@@ -9451,10 +9462,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
           <button key={t} className={`lens-chip${tLens===t?" on":""}`} onClick={()=>setView(v=>({...v,type:v.type===t?undefined:t}))}>{label}<span className="cnt">{navHosts.filter(h=>h.htype===t).length}</span></button>
         ))}
+        <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
         <span className="lens-selwrap">
           <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
             <option value="">All countries</option>
             {hostCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+            {navHosts.some(h=>!h.loc)&&<option value="__none__">Unspecified</option>}
           </select>
           <ChevronRight size={13} className="lens-selchev"/>
         </span>
