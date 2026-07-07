@@ -8743,7 +8743,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        Athletes/Calendar buttons isn't pushed down twice. Global-class grid lives in
        .wrap.sec (no .strip) and keeps the 22px above. */
     .strip .spm-classgrid{margin-bottom:4px}
-    @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}.spm-classgrid .spm-duo{padding-bottom:46px}}
+    /* The hover-info line is bottom-anchored and grows UPWARD. On the global-class page the
+       header and the models are nearly the same height, so there's no clearance and the long
+       3-line "How a race works" course blurb climbs up into the diagram. Reserve a fixed zone
+       below the models (>= the 3-line text height) so the text sits under them, never over
+       them. Self-scoping: this only makes the models column taller than the header on the
+       global-class page; the association header is already taller, so its layout is unchanged. */
+    .spm-classgrid .spm-duo{padding-bottom:62px}
+    /* stacked (single column): no cross-column alignment to preserve, so let the info flow
+       IN-FLOW below the models — it self-sizes to any wrap count (long text wraps to 4-5
+       lines on a phone) and can never overlap the models or the results. */
+    @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}.spm-classgrid .spm-duo{padding-bottom:0}.spm-classgrid .spm-info{position:static;margin-top:10px}}
     .spm-duo{position:relative;min-width:0}
     .spm-duorow{display:flex;gap:0;justify-content:center;align-items:flex-start}
     /* pull the two boats together — their outer whitespace overlaps, closing the empty gap */
