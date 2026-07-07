@@ -82,18 +82,35 @@ The live parser is slow for two reasons: (1) good rule parses sometimes fall thr
 
 ---
 
-## 5. Pluggable AI providers (Casey must be able to swap the AI without a deploy)
+## 5. AI provider routing — Gemini universal primary, Anthropic fallback  ← UPDATED per Casey 2026-07
 
-Extend `api/llm.py`'s router so the vision provider and model are chosen by env vars, resolved at call time:
+Casey has provisioned **one paid Gemini key** in Vercel named **`Gemini_API_Key_Universal`** (Production + Preview) and is **deactivating** the old free Gemini keys (`parser` …7qyQ, `flag-reading` …18vw, `athlink2.0` …Etaw). The decision:
 
-- `VISION_PROVIDER` = `gemini` | `openai` | `qwen` | `mistral` (default `gemini`).
-- `VISION_MODEL` = overrides the model id for whichever provider (e.g. `gemini-3-flash`, `gpt-5-mini`, `qwen3-vl-plus`).
-- `VISION_FALLBACK_PROVIDER` = the second provider tried on error (default `openai`). **Anthropic is no longer the default fallback** — it stays wired only as a last-resort if explicitly set, because Casey considers it too expensive.
-- Optional `VISION_CJK_PROVIDER` — if set, route detected CJK families (`aspose-bilingual-cn`, `cn-games-book`, Chinese scans) to it.
+- **`Gemini_API_Key_Universal` is the single primary key for EVERY AI task in AthLink** — not just parsing. Search-bar suggestions, smart filters, athlete overviews, hover blurbs, flag/nationality reads, photo/scan vision parsing, and date/country enrichment all run on Gemini with this one key.
+- **Anthropic is the universal fallback** (fires only when Gemini errors/rate-limits). **Do NOT use Haiku anymore** — use `claude-sonnet-5` (Sonnet 5) as the fallback model across the board: it handles both text and vision, balances cost vs quality, and rarely fires. (Reserve `claude-opus-4-8` only if a Sonnet vision fallback measurably underperforms on the hardest scans.)
+- Kimi / DeepSeek / Cerebras are **retired from the default routes** (Cerebras was already unreliable — it 403s). Keep the `openai`-compatible caller in `llm.py` so a provider can be re-added via env, but no task should route to them by default.
 
-Implement each provider behind the existing `call_*` idiom (pure urllib, no SDKs): OpenAI/Qwen are OpenAI-compatible chat-completions with an `image_url` data-URI part (Qwen via DashScope's OpenAI-compatible endpoint or OpenRouter); Gemini stays the native `inline_data` path (the only one that ingests PDF bytes directly — for OpenAI/Qwen you must rasterize PDF pages to PNG first, which the page-chunking flow already produces). Keep the same JSON contract out of `_vision_raw` so `_gemini_parse`'s downstream normalization is provider-agnostic (rename it or add a thin `_vision_parse`). Every provider key is a distinct env var (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `QWEN_API_KEY`, `MISTRAL_API_KEY`); a missing key cleanly falls to the next provider. Document the env matrix in `CLAUDE.md` and `docs/parser-formats.md`.
+### 5a. Key resolution (do this centrally in `llm.py`)
+Add one helper: `_gemini_key()` returns `os.environ.get("Gemini_API_Key_Universal") or os.environ.get("GEMINI_API_KEY", "")` — the exact mixed-case name Vercel shows, with the legacy `GEMINI_API_KEY` as a fallback so local dev (`.env.local` still has the old value) keeps working. **Every** Gemini call in `api/parse_pdf.py`, `api/llm.py`, `api/enrich.py`, `api/ai_filter.py` must resolve its key through this helper — grep for `GEMINI_API_KEY` and `Gemini_API_Key_Universal` and make sure there is exactly one resolution path. Do the same for the model ids so they're env-overridable.
 
-**Enrichment note:** `api/enrich.py` currently uses Anthropic's server-side web search. To drop Anthropic, switch it to **Gemini with Google Search grounding** (`google_search` tool) — same "low-confidence suggestion, never auto-applied" contract. Make its provider env-swappable too (`ENRICH_PROVIDER`).
+### 5b. Per-task model map (rewrite `llm.py`'s `ROUTES`; all provider `gemini`, key via `_gemini_key()`)
+| task | used by | Gemini model (default, env-overridable) | why |
+|---|---|---|---|
+| `filter` | **search-bar suggestions** (`/api/ai_filter`, `App.jsx` `fetchEvSuggestions`/`fetchProfileSuggestions`) | **`gemini-3.1-flash-lite`** | **latency — see §5c** |
+| `overview` | athlete overview blurbs | `gemini-3.1-flash-lite` (or `flash` if quality needs it) | short text, cheap |
+| `hover` | hover summaries | `gemini-3.1-flash-lite` | short text, cheap |
+| `nat` | flag/nationality reads (vision, small) | `gemini-3-flash` / `gemini-3.5-flash` | small vision |
+| `vision` | photo/scan results parsing | `gemini-3-flash` / `gemini-3.5-flash` | main OCR model |
+| `enrich` | date/country web lookup | `gemini-3-flash` + Google Search grounding | see enrichment note |
+| fallback (all) | on any Gemini error | **`claude-sonnet-5`** via `ANTHROPIC_API_KEY` | non-Haiku, text+vision |
+
+Env overrides so Casey can retune without a deploy: `VISION_MODEL`, `NAT_MODEL`, `FILTER_MODEL`, `ENRICH_MODEL`, and `ANTHROPIC_FALLBACK_MODEL` (default `claude-sonnet-5`). Optionally keep `VISION_PROVIDER`/`VISION_CJK_PROVIDER` hooks (Qwen3-VL for CJK, GPT-5-mini) as future swap points, but the shipped default is Gemini-primary / Sonnet-fallback everywhere.
+
+### 5c. Fast search suggestions (Casey: "suggestions need to appear faster") ← benchmarked
+The search bars call `/api/ai_filter` with `task:"filter"` (currently → Kimi, ~1.7s). Measured on a real suggestion prompt (3-run median): **`gemini-3.1-flash-lite` 0.92s**, kimi-k2.5 1.72s, gemini-2.5-flash-lite 1.97s, gemini-2.5-flash 2.19s, Cerebras 403. **Route `filter` to `gemini-3.1-flash-lite`.** Also cut perceived latency further: keep the ~200 `max_tokens` cap, ensure the debounce isn't too long (≤250ms), cancel in-flight requests when the query changes (AbortController), and cache completed suggestions per query prefix so backspacing is instant. Target first-suggestion under ~1s.
+
+### 5d. Implementation notes
+Each provider stays behind the existing pure-urllib `call_*` idiom (no SDKs). Gemini keeps the native `inline_data` path (only one that ingests PDF bytes directly). Keep the JSON contract out of `_vision_raw` provider-agnostic so `_gemini_parse`'s normalization doesn't care who answered. A missing/instructed-off provider cleanly falls to Anthropic Sonnet. **Enrichment:** switch `api/enrich.py` off Anthropic web-search onto **Gemini + Google Search grounding** (`google_search` tool), same "low-confidence, never auto-applied" contract; Sonnet-with-web-search only as fallback. Document the full env matrix (`Gemini_API_Key_Universal`, `ANTHROPIC_API_KEY`, the model overrides) in `CLAUDE.md` and `docs/parser-formats.md`, and note the retired keys.
 
 ---
 
@@ -113,6 +130,7 @@ In `sports/sailing/src/App.jsx` the import drop zone / file input must accept an
 2. Corpus harness: **every non-photo file parses by rule** (0 rule-fixable errors remaining), and **every photo/scan parses by vision** in ai-mode — no file in the corpus ends with "no results / crash".
 3. Zero correctness regressions: the per-file snapshot shows every previously-correct file still correct; the §3 bugs (dup ranks, ragged races) are resolved on the named files.
 4. Every rule-mode parse < 2s locally; no AI path can exceed the 60s ceiling (verify the worst multi-page scan and the tallest screenshot).
-5. `VISION_PROVIDER` swap works: flip it to at least one non-Gemini provider and confirm a scan still parses end-to-end.
-6. Docs updated: `CLAUDE.md` parser section + env matrix, `docs/parser-formats.md` status, and a short `docs/parser-v3-results.md` with the final corpus scoreboard.
+5. **Provider routing (§5):** every AI call resolves its key through `_gemini_key()` (`Gemini_API_Key_Universal` → legacy `GEMINI_API_KEY`); every task defaults to a Gemini model per the §5b map; Anthropic **Sonnet 5** (never Haiku) is the only fallback and fires only on Gemini error. Grep confirms no default route to Kimi/DeepSeek/Cerebras and no `claude-haiku` default anywhere.
+6. **Search suggestions:** `filter` task runs on `gemini-3.1-flash-lite`; first suggestion returns in ≲1s; in-flight requests are cancelled on new keystrokes and prefixes are cached.
+7. Docs updated: `CLAUDE.md` parser section + full env matrix (incl. `Gemini_API_Key_Universal` and the retired keys), `docs/parser-formats.md` status, and a short `docs/parser-v3-results.md` with the final corpus scoreboard.
 Then push to `main` (Vercel deploys it live).
