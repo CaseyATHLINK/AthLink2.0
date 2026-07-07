@@ -192,9 +192,26 @@ def run_one(path):
 
     # Classify an error as SCAN (zero text layer → vision by design) vs a
     # rule-fixable text error. Only rule-fixable errors count against "green".
+    # Families deliberately routed to vision even when they DO have a text layer
+    # (§3d/§3c): World Sailing Results Centre, the CJK games book, hubsail.
+    _VISION_FAMILIES = {"worldsailing-resultscentre", "cn-games-book", "hubsail"}
     is_scan = False
+    vision_family = None
     if err is not None and ext == ".pdf":
-        is_scan = 0 <= _pdf_text_len(data) < 120
+        if 0 <= _pdf_text_len(data) < 120:
+            is_scan = True
+        else:
+            try:
+                import pdfplumber
+                with pdfplumber.open(io.BytesIO(data)) as pdf:
+                    meta = dict(pdf.metadata or {}); meta["_page_count"] = len(pdf.pages)
+                    ft = "\n".join((p.extract_text() or "") for p in pdf.pages)
+                fam, _it, _c = pp.detect_format(data, ft.lower(), meta)
+                if fam in _VISION_FAMILIES:
+                    is_scan = True
+                    vision_family = fam
+            except Exception:
+                pass
 
     fmt = (result or {}).get("detected_format") or {}
     verdict = None
@@ -207,6 +224,7 @@ def run_one(path):
     return {
         "error": err,
         "is_scan": is_scan,
+        "vision_family": vision_family,
         "family": fmt.get("family"),
         "input_type": fmt.get("input_type"),
         "confidence": (verdict or {}).get("confidence"),
@@ -295,7 +313,8 @@ def main():
             detail = rec["error"][:60]
             if rec.get("is_scan"):
                 n_scan += 1
-                print(f"SCAN {'(vision by design)':22} {'':30} {rel}")
+                tag = f"(vision: {rec['vision_family']})" if rec.get("vision_family") else "(vision by design)"
+                print(f"SCAN {tag:26} {'':26} {rel}")
             else:
                 rule_fixable.append(rel)
                 print(f"ERR* {'(RULE-FIXABLE)':22} {'':30} {rel}")

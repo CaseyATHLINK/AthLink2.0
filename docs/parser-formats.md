@@ -119,6 +119,24 @@ all zero-text scans. SailSys deferred (big-boat software; no sample).
 families; 29 fall through to AI — 19 zero-text scans (vision by design) and 10
 text docs (all verified to fail identically on the pre-v2 parser: Hebe/clubspot,
 Palma+SOF Sailti glyph-interleave, hansaworlds clipped prints, Allianz, CJK
-games book, IODA notice, SEA-Para Excel). Vision fallback = Gemini
-`gemini-3.5-flash` (verified on the configured key; 11s/page on a scanned
-table), Haiku 4.5 universal fallback.
+games book, IODA notice, SEA-Para Excel).
+
+## Parser v3 status (2026-07-07)
+
+Provider routing switched to **Gemini-universal primary / Anthropic Sonnet 5
+fallback** (one paid key `Gemini_API_Key_Universal` via `llm._gemini_key()`;
+per-task model map in `api/llm.py`; no Haiku, Kimi/DeepSeek/Cerebras retired
+from defaults). Enrichment → Gemini + Google Search grounding. See CLAUDE.md
+for the full env matrix and the retired keys.
+
+**Full-corpus sweep, rule mode only** (105 files incl. extracted zips):
+**77 parsed OK by rule**; 21 vision-by-design (19 zero-text scans +
+worldsailing-resultscentre "Allianz" + cn-games-book); 4 images; **3 text docs
+still deferred to vision** (Palma/SOF 2-person Sailti glyph-interleave;
+Hebe clubspot). Newly RULE-parsed in v3: `overall-results` now handles ordinal
+ranks + single-hander layout (`try_overall_results`); `ioda-word-notice`
+(`try_ioda_notice`, prose podium); `excel-print-pdf` extended to the Microsoft-
+Excel federation sheet (Sailor/trailing-Points header); `sailingresults` gained
+a WordPress-embedded **clipped** variant (`try_sailingresults_clipped`,
+hansaworlds.org). Full change log + limitations: **docs/parser-v3-results.md**.
+Regression harness: **tools/corpus_test.py** (rule-mode, snapshot contract).
