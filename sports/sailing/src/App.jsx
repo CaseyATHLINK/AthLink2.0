@@ -2579,7 +2579,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
         {headToHead&&(headToHead.n>0?(
           <div style={{padding:"13px 16px 14px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
             <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:4}}>Head-to-head</div>
-            <div style={{fontSize:11,color:"#7fa0c0",lineHeight:1.4,marginBottom:8}}>How you finish against this athlete when you both have a result, split by who you sailed with.</div>
+            <div style={{fontSize:11,color:"#7fa0c0",lineHeight:1.4,marginBottom:8}}>How {name} ranked up against {selNode.name} in common competitions.</div>
             <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
               <span style={{fontWeight:800,fontSize:22,lineHeight:1,color:"#eaf3fc",fontVariantNumeric:"tabular-nums",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif"}}>
                 {headToHead.w}–{headToHead.l}{headToHead.t>0?`–${headToHead.t}`:""}
