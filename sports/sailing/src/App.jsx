@@ -8455,6 +8455,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .hero-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:380px;overflow:auto;z-index:5;}
     /* Breadth strip — quiet chips + cards under the hero */
     .strip-chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 30px;}
+    /* Forces the country/host selects onto their own row below the class chips
+       (Fix 9b) — the strip-chips row gap gives a tight vertical gap between them. */
+    .strip-break{flex-basis:100%;height:0;margin:0;padding:0;}
     .strip-chip{display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:13.5px;font-weight:700;color:var(--navy);border:0;background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border-radius:980px;padding:9px 16px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.7),0 1px 2px rgba(0,0,0,.08);transition:.16s;}
     .strip-chip:hover{transform:translateY(-2px);background:rgba(255,255,255,.85);}
     .strip-chip .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
@@ -9369,6 +9372,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </button>
               );
             })}
+            <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
             <span className="lens-selwrap">
               <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
                 <option value="">All countries</option>
@@ -9631,6 +9635,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
             </button>
           ))}
+          <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
           <span className="lens-selwrap">
             <select className="lens-select" value={rankCountry} onChange={e=>setRankCountry(e.target.value)}>
               <option value="">All countries</option>
@@ -10262,6 +10267,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
             </button>);
           })}
+          <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
           <span className="lens-selwrap">
             <select className="lens-select" value={athCountry||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
               <option value="">All countries</option>
@@ -10532,13 +10538,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           return next?{key:name,years:next.sort((a,b)=>a-b)}:null;
         });
         const pickAll=()=>setYearSel(null);
-        // Globe footprint — selection-filtered (all-years still counts undated country events).
+        // Globe footprint. countryCountsAll = whole career (drives the always-all-years
+        // mini globe on the profile); countryCounts = year-selection-filtered (drives the
+        // popup globe, whose YearNuggets are the ONLY year filter now — Fix 9a).
         const countryCounts={};
+        const countryCountsAll={};
         let hasFootprintAll=false;
         ag.history.forEach(h=>{
           const country=h.ev.country; if(!country)return;
           const iso=IOC_ISO[country]; if(!iso)return;
           hasFootprintAll=true;
+          countryCountsAll[iso]=(countryCountsAll[iso]||0)+1;
           if(!inWindow(h))return;
           countryCounts[iso]=(countryCounts[iso]||0)+1;
         });
@@ -10641,34 +10651,34 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="footprint"?1:0,transform:profileTab==="footprint"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="footprint"?"auto":"none"}}>
-                    <SailingGlobe countryData={countryCounts} height={220} dark bare/>
+                    <SailingGlobe countryData={countryCountsAll} height={220} dark bare/>
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                   </div>
                   <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="web"?1:0,transform:profileTab==="web"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="web"?"auto":"none"}}>
-                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})} selYears={selYears} yrKey={yrKey}/>}
+                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})} selYears={null} yrKey=""/>}
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click a node to open ⤢</div>
                   </div>
                   <div onClick={()=>setFootprintOpen(true)} title="Click to expand"
                     style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="progress"?1:0,transform:profileTab==="progress"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="progress"?"auto":"none"}}>
-                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} selYears={selYears} yrKey={yrKey} height={220} w={286}/>}
+                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} selYears={null} yrKey="" height={220} w={286}/>}
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                   </div>
                 </div>
                 {/* Caption sits below the globe (not over it) so it clears the sphere + glow. */}
                 {profileTab==="footprint"&&<div style={{textAlign:"center",fontSize:10,color:"#7fa0c0",marginTop:10}}>Competition footprint</div>}
-                {/* Shared year nuggets — sit under the frame, drive all three views */}
-                {hasYears&&<div style={{marginTop:12}}><YearNuggets years={careerYears} selYears={selYears} classByYear={classByYear} onPick={pickYear} onAll={pickAll}/></div>}
+                {/* Year nuggets live ONLY in the expanded popup now (Fix 9a); the mini
+                    displays above always show the entire career. */}
               </div>
             )}
           </div>
 
           {/* expanded footprint popup */}
           {footprintOpen&&hasFootprint&&(
-            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)} titleSuffix="Competition Footprint"
+            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>{setFootprintOpen(false);setYearSel(null);}} titleSuffix="Competition Footprint"
               initialTab={profileTab==="web"?"web":profileTab==="progress"?"progress":"footprint"}
               years={careerYears} selYears={selYears} yrKey={yrKey} classByYear={classByYear} onPickYear={pickYear} onPickAll={pickAll}
               webProps={{name,events,onPick:nm=>{setFootprintOpen(false);go({name:"profile",id:nm});},onOpenEvent:id=>{setFootprintOpen(false);go({name:"event",id});}}}/>
