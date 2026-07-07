@@ -4,7 +4,8 @@ import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
-  CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram
+  CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram,
+  Award, TrendingUp
 } from "lucide-react";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
@@ -1165,6 +1166,63 @@ function resolvedEntryGender(e,doublehanded){
   return rememberedGender(e.helm)||stated||null;
 }
 
+/* ── Outstanding Achievement (division podium) ────────────────────────────────
+   A result can be excellent *within a division* yet buried by a mediocre
+   overall position (3rd overall but 1st Under-18). Derived strictly from the
+   official overall order — we only filter and count, never re-rank. */
+const MIN_DIVISION_SIZE=4; // a division needs at least this many entries to count (tunable)
+function ordinalOf(n){const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
+function divisionDisplayName(code){
+  if(!code) return "";
+  const m=String(code).match(/^U(\d{1,2})$/i); if(m) return "Under-"+m[1];
+  if(code==="Jr") return "Junior";
+  if(code==="Mst") return "Masters";
+  if(code==="F") return "Female";
+  if(code==="M") return "Male";
+  if(code==="Mix") return "Mixed";
+  return String(code); // unknown code: show as-is, never guess
+}
+// h = an ag.history row. Returns {rank, divisionLabel, label, title} | null.
+// Two independent axes: age category and gender. One badge per row — best
+// division rank wins, tie prefers category; runner-up goes in the tooltip.
+function outstandingAchievementFor(h,athleteName){
+  const ev=h?.ev, entries=ev?.entries;
+  if(!entries||entries.length<MIN_DIVISION_SIZE) return null;
+  const overall=h.row?.rank;
+  if(!(overall>=1)) return null;
+  const target=canonName(athleteName);
+  const own=entries.find(e=>canonName(e.helm)===target||canonName(e.crew)===target);
+  if(!own) return null;
+  const dh=!!ev.doublehanded;
+  const ownCat=genderCatOf(own).category;
+  const ownGen=resolvedEntryGender(own,dh);
+  const axes=[];
+  if(ownCat) axes.push({axis:"category",code:ownCat,of:e=>genderCatOf(e).category});
+  if(ownGen) axes.push({axis:"gender",code:ownGen,of:e=>resolvedEntryGender(e,dh)});
+  if(!axes.length) return null;
+  // Official overall order: scoreEvent rows are sorted by official rank (PDF
+  // ground truth first); unranked rows keep their official array order.
+  let rows;
+  try{rows=scoreEvent(ev).rows;}catch{return null;}
+  const isOwn=r=>r.helm===own.helm&&r.crew===own.crew&&r.sail===own.sail;
+  const hits=[];
+  for(const {axis,code,of} of axes){
+    const div=rows.filter(r=>of(r)===code);
+    if(div.length<MIN_DIVISION_SIZE||div.length>=rows.length) continue; // must be a strict, real subset
+    const pos=div.findIndex(isOwn)+1;
+    if(pos<1||pos>3) continue;          // division podium only
+    if(pos>=overall) continue;          // must beat the overall rank chip
+    hits.push({axis,code,rank:pos});
+  }
+  if(!hits.length) return null;
+  hits.sort((a,b)=>a.rank-b.rank||(a.axis==="category"?-1:1)); // best rank; tie → age category
+  const best=hits[0], second=hits[1];
+  const divisionLabel=`${ordinalOf(best.rank)} ${divisionDisplayName(best.code)}`;
+  const label=`Outstanding Achievement: ${divisionLabel}`;
+  const title=second?`${label} · also ${ordinalOf(second.rank)} ${divisionDisplayName(second.code)}`:label;
+  return{rank:best.rank,divisionLabel,label,title};
+}
+
 // Derive athlete's primary nationality from their result history
 function athleteNat(name,evList){
   const counts={};
@@ -2146,20 +2204,114 @@ function WebIcon({size=12}){
   </svg>);
 }
 
-/* === AthleteWeb: force-directed "web" of co-competitors ======================
+/* === AthleteWeb: force-directed "web" of rivals ==============================
    Each node is an athlete the focal athlete has raced against. Rivals are
-   ranked and sized by a Jaccard correlation on a 0–1 scale:
-       corr = shared / (focalTotal + rivalTotal − shared)
-   i.e. shared competitions over the union of both athletes' competition sets.
-   Jaccard (over shared/min) damps one-event wonders — a newcomer whose only 2
-   comps were with the focal isn't a "perfect 1.0" — and damps mega-active
-   athletes who co-appear with everyone by sheer volume. Raw shared count stays
-   on the node for human-readable display. Edges connect any two shown athletes
-   who appeared in the same event (weight = times together). Limited to the
-   top 15 co-competitors. Drag nodes; hover to spotlight a node and its
-   connections; click to pin (sidebar shows shared comps + connections);
+   ranked and sized by a combined rivalry score on a 0–1 scale:
+       rivalry = jaccard^ALPHA × proximity^BETA
+   jaccard = shared / (focalTotal + rivalTotal − shared) — co-appearance over
+   the union of both athletes' competition sets. Damps one-event wonders and
+   mega-active athletes who co-appear with everyone by sheer volume.
+   proximity = mean over shared events of exp(−GAP_K × |rankGap| / (fleet−1)) —
+   how close the two actually finish. Ranks are read from scoreEvent (PDF is
+   ground truth, never re-ranked). Events where either rank is missing, or
+   where the two sailed the SAME boat (partners), count for co-appearance but
+   never for closeness; zero ranked meetings ⇒ proximity = PROX_FLOOR.
+   Raw shared count stays on the node for human-readable display. Edges connect
+   any two shown athletes who appeared in the same event (weight = times
+   together). Limited to the top 15 rivals with ≥MIN_SHARED shared events
+   (relaxed to 1 for young profiles). Drag nodes; hover to spotlight a node and
+   its connections; click to pin (sidebar shows head-to-head + shared comps);
    double-click to open that athlete's profile.
    Self-contained 2D canvas (matches SailingGlobe) + d3-force physics. */
+const GAP_K=5;          // steepness of placement-gap decay: prox_e = exp(-GAP_K * gap)
+const ALPHA=1;          // exponent on the Jaccard co-appearance term
+const BETA=1;           // exponent on the placement-proximity term
+const PROX_FLOOR=0.15;  // proximity when no shared event has both ranks (heavy damping, never fake closeness)
+const MIN_SHARED=2;     // min shared events to qualify as a rival (relaxed to 1 if <5 athletes qualify)
+/* ── Rival cohort — single source of truth for "real rivals" ─────────────────
+   Shared by AthleteWeb (rival web) and ProgressChart so both views measure
+   against the IDENTICAL cohort: canonName keys, Draft events skipped, helm+crew
+   both counted. Rivals rank by the combined rivalry score described above —
+   jaccard^ALPHA × proximity^BETA (co-appearance × placement closeness) — with
+   ≥MIN_SHARED shared events to qualify (relaxed when <5 qualify), top-N,
+   raw-shared then name tiebreaks. `corr` on each rival carries the rivalry
+   score. Also returns focalEvData: the per-event rank maps built ONCE here
+   (ranks READ from scoreEvent rows — PDF-truth, tie-aware) and reused by the
+   web's proximity, head-to-head and partner-split views. */
+function modeOfCountMap(m){if(!m)return null;let best=null,bc=-1;m.forEach((c,k)=>{if(c>bc){bc=c;best=k;}});return best;}
+function computeRivalCohort(name,events,N=15){
+  const focal=canonName(name);
+  const disp=new Map();                 // canon -> display name
+  const shared=new Map();               // canon -> # events shared with focal
+  const totals=new Map();               // canon -> total events appeared in (for Jaccard union)
+  const focalEvData=[];                 // per focal event: {ev, present, rankOf, N(fleet), focalRank, partnerKey, partnerName, mates}
+  const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
+  const natCount=new Map();             // canon -> Map(nat -> count)
+  const bump=(map,k,v)=>{if(!v)return;let m=map.get(k);if(!m){m=new Map();map.set(k,m);}m.set(v,(m.get(v)||0)+1);};
+  const remember=raw=>{const k=canonName(raw);if(!k)return null;if(!disp.has(k))disp.set(k,raw);return k;};
+  (events||[]).forEach(ev=>{
+    if(ev.status==="Draft")return;
+    const present=new Set();
+    (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
+    present.forEach(k=>totals.set(k,(totals.get(k)||0)+1));
+    if(!present.has(focal))return;
+    // Rank map built ONCE per focal event — ranks READ from scoreEvent rows
+    // (PDF-truth, tie-aware), reused for proximity + head-to-head + partner split.
+    const rankOf=new Map();             // canon -> best (lowest) rank in this event
+    const mates=new Set();              // canons who shared the focal's boat here (partners, not rivals)
+    let fleetN=0,focalRank=null,partnerKey="",partnerName="";
+    try{
+      const sc=scoreEvent(ev);
+      fleetN=sc.rows.length;
+      let focalRow=null;
+      sc.rows.forEach(r=>{
+        const hk=canonName(r.helm),ck=canonName(r.crew);
+        if(hk===focal||ck===focal){
+          const other=hk===focal?ck:hk;
+          if(other&&other!==focal)mates.add(other);
+          if(r.rank!=null&&(focalRank==null||r.rank<focalRank)){focalRank=r.rank;focalRow=r;}
+        }
+        if(r.rank==null)return;
+        [hk,ck].forEach(k=>{if(!k)return;const cur=rankOf.get(k);if(cur==null||r.rank<cur)rankOf.set(k,r.rank);});
+      });
+      if(focalRow){
+        const pRaw=canonName(focalRow.helm)===focal?focalRow.crew:focalRow.helm;
+        partnerKey=canonName(pRaw)||"";partnerName=pRaw||"";
+      }
+    }catch{/* unscoreable event: still counts for co-appearance, never for closeness */}
+    focalEvData.push({ev,present,rankOf,N:fleetN,focalRank,partnerKey,partnerName,mates});
+    present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
+  });
+  const focalEvents=focalEvData.map(d=>d.present);   // back-compat: [Set(canon)] events the focal sailed
+  // Jaccard correlation (0–1): shared / union of the two competition sets.
+  const focalTotal=focalEvData.length;
+  const corrOf=(k,sh)=>{const u=focalTotal+(totals.get(k)||sh)-sh;return u>0?sh/u:0;};
+  // Placement proximity (0–1): mean of exp(-GAP_K*gap) over shared events where
+  // both have ranks and they weren't in the same boat. Missing/partner events
+  // are skipped — missing data must never read as either huge gap or closeness.
+  const proxOf=k=>{
+    let sum=0,n=0;
+    focalEvData.forEach(d=>{
+      if(!d.present.has(k)||d.mates.has(k))return;
+      const rr=d.rankOf.get(k);
+      if(d.focalRank==null||rr==null)return;
+      sum+=Math.exp(-GAP_K*Math.abs(d.focalRank-rr)/Math.max(d.N-1,1));n++;
+    });
+    return{prox:n>0?sum/n:PROX_FLOOR,ranked:n};
+  };
+  // Combined rivalry = co-appearance × placement proximity; both must matter.
+  const scored=[...shared.entries()].map(([k,sh])=>{
+    const{prox,ranked}=proxOf(k);
+    return{key:k,name:disp.get(k)||k,shared:sh,ranked,corr:Math.pow(corrOf(k,sh),ALPHA)*Math.pow(prox,BETA)};
+  });
+  let eligible=scored.filter(s=>s.shared>=MIN_SHARED);
+  if(eligible.length<5)eligible=scored;   // young profiles: relax to 1 shared so the web isn't empty
+  const rivals=eligible
+    .sort((a,b)=>b.corr-a.corr||b.shared-a.shared||a.name.localeCompare(b.name))
+    .slice(0,N);                          // rank by rivalry, tie-break raw shared, then name
+  return{focal,disp,focalEvents,totals,rivals,clsCount,natCount,focalEvData};
+}
+
 function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,onSelectionChange,deselectKey=0,enlarged=false}){
   const canvasRef=React.useRef(null);
   const wrapRef=React.useRef(null);
@@ -2172,39 +2324,19 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   const stateRef=React.useRef({w:260,h:height,dpr:1,nodes:[],links:[],hover:null,sel:null,drag:null,maxShared:1,down:null,scale:1,ox:0,oy:0,pan:null});
 
   // Build {nodes, links} from all events, centred on the focal athlete.
+  // Cohort comes from computeRivalCohort — the same set ProgressChart scores
+  // against — along with focalEvData, the per-event rank maps reused by the
+  // sidebar's head-to-head + shared-competition memos below.
   const graph=React.useMemo(()=>{
-    const focal=canonName(name);
-    const disp=new Map();                 // canon -> display name
-    const shared=new Map();               // canon -> # events shared with focal
-    const totals=new Map();               // canon -> total events appeared in (for Jaccard union)
-    const focalEvents=[];                 // [Set(canon)] events the focal sailed
-    const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
-    const natCount=new Map();             // canon -> Map(nat -> count)
-    const bump=(map,k,v)=>{if(!v)return;let m=map.get(k);if(!m){m=new Map();map.set(k,m);}m.set(v,(m.get(v)||0)+1);};
-    const modeOf=m=>{if(!m)return null;let best=null,bc=-1;m.forEach((c,k)=>{if(c>bc){bc=c;best=k;}});return best;};
-    const remember=raw=>{const k=canonName(raw);if(!k)return null;if(!disp.has(k))disp.set(k,raw);return k;};
-    (events||[]).forEach(ev=>{
-      if(ev.status==="Draft")return;
-      const present=new Set();
-      (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
-      present.forEach(k=>totals.set(k,(totals.get(k)||0)+1));
-      if(!present.has(focal))return;
-      focalEvents.push(present);
-      present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
-    });
-    // Jaccard correlation (0–1): shared / union of the two competition sets.
-    const focalTotal=focalEvents.length;
-    const corrOf=(k,sh)=>{const u=focalTotal+(totals.get(k)||sh)-sh;return u>0?sh/u:0;};
-    const top=[...shared.entries()].map(([k,sh])=>[k,sh,corrOf(k,sh)])
-      .sort((a,b)=>b[2]-a[2]||b[1]-a[1]).slice(0,15);   // rank by corr, tie-break raw shared
-    const keep=new Set(top.map(([k])=>k)); keep.add(focal);
-    const maxShared=top.length?Math.max(...top.map(t=>t[1])):1;
-    const maxCorr=top.length?top[0][2]:1;
+    const{focal,disp,rivals,clsCount,natCount,focalEvData}=computeRivalCohort(name,events,15);
+    const keep=new Set(rivals.map(r=>r.key)); keep.add(focal);
+    const maxShared=rivals.length?Math.max(...rivals.map(r=>r.shared)):1;
+    const maxCorr=rivals.length?rivals[0].corr:1;
     // node class = the boat class they shared MOST competitions with the focal in (drives node colour)
-    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOf(natCount.get(focal)),shared:maxShared,corr:maxCorr||1,focal:true}];
-    top.forEach(([k,c,q])=>nodes.push({id:k,name:disp.get(k)||k,cls:modeOf(clsCount.get(k)),nat:modeOf(natCount.get(k)),shared:c,corr:q,focal:false}));
+    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOfCountMap(natCount.get(focal)),shared:maxShared,corr:maxCorr||1,focal:true}];
+    rivals.forEach(r=>nodes.push({id:r.key,name:r.name,cls:modeOfCountMap(clsCount.get(r.key)),nat:modeOfCountMap(natCount.get(r.key)),shared:r.shared,corr:r.corr,ranked:r.ranked,focal:false}));
     const ew=new Map();
-    focalEvents.forEach(present=>{
+    focalEvData.forEach(({present})=>{
       const arr=[...present].filter(k=>keep.has(k));
       for(let i=0;i<arr.length;i++)for(let j=i+1;j<arr.length;j++){
         const a=arr[i],b=arr[j];const key=a<b?a+"|"+b:b+"|"+a;
@@ -2212,7 +2344,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
       }
     });
     const links=[...ew.entries()].map(([key,w])=>{const p=key.split("|");return{source:p[0],target:p[1],w};});
-    return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:top.length};
+    return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:rivals.length,focalEvData};
   },[name,events]);
 
   // selected node (lifted to React state so the enlarged sidebar can render it)
@@ -2220,34 +2352,40 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   React.useEffect(()=>{onSelChangeRef.current&&onSelChangeRef.current(selNode);},[selNode]);
   // external "Deselect" (from the popup header) clears the current selection
   React.useEffect(()=>{const st=stateRef.current;st.sel=null;setSelNode(null);st.draw&&st.draw();},[deselectKey]);
-  // select a node programmatically (sidebar "connections" chips)
-  const selectById=(id)=>{
-    const st=stateRef.current;const n=st.byId?.get(id);if(!n)return;
-    st.sel=n;setSelNode({id:n.id,name:n.name,shared:n.shared,cls:n.cls,nat:n.nat});
-    st.draw&&st.draw();
-  };
-  // who the selected athlete is connected to in the visible web (edge weight desc)
-  const selConnections=React.useMemo(()=>{
-    if(!selNode)return [];
-    const byId=new Map(graph.nodes.map(n=>[n.id,n]));
-    return graph.links
-      .filter(l=>l.source===selNode.id||l.target===selNode.id)
-      .map(l=>({n:byId.get(l.source===selNode.id?l.target:l.source),w:l.w}))
-      .filter(x=>x.n)
-      .sort((a,b)=>b.w-a.w);
-  },[selNode,graph]);
-  // the competitions the focal + selected athlete both sailed
+  // the competitions the focal + selected athlete both sailed, with both
+  // placements (from the rank maps already built in the graph memo)
   const sharedComps=React.useMemo(()=>{
     if(!selNode)return [];
-    const focal=graph.focal,target=selNode.id,out=[];
-    (events||[]).forEach(ev=>{
-      if(ev.status==="Draft")return;
-      const present=new Set();
-      (ev.entries||[]).forEach(e=>[e.helm,e.crew].forEach(raw=>{const k=canonName(raw);if(k)present.add(k);}));
-      if(present.has(focal)&&present.has(target))out.push(ev);
+    const target=selNode.id;
+    return graph.focalEvData
+      .filter(d=>d.present.has(target))
+      .map(d=>({ev:d.ev,focalRank:d.focalRank,rivalRank:d.rankOf.get(target)??null,sameBoat:d.mates.has(target)}))
+      .sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date)));
+  },[selNode,graph]);
+  // head-to-head record vs the selected athlete — overall and split by the
+  // focal athlete's partner in each event. Only events where BOTH have ranks
+  // and the two weren't in the same boat count; missing data never fabricates
+  // a win, a loss, or closeness.
+  const headToHead=React.useMemo(()=>{
+    if(!selNode)return null;
+    const target=selNode.id;
+    let w=0,l=0,t=0,gapSum=0,n=0;
+    const byPartner=new Map();            // partnerKey -> {name,w,l,t,n}
+    graph.focalEvData.forEach(d=>{
+      if(!d.present.has(target)||d.mates.has(target))return;
+      const rr=d.rankOf.get(target);
+      if(d.focalRank==null||rr==null)return;
+      const res=d.focalRank<rr?"w":(d.focalRank>rr?"l":"t");
+      if(res==="w")w++;else if(res==="l")l++;else t++;
+      gapSum+=rr-d.focalRank;n++;
+      const pk=d.partnerKey||"__solo";
+      let g=byPartner.get(pk);
+      if(!g){g={name:d.partnerKey?d.partnerName:"Solo",w:0,l:0,t:0,n:0};byPartner.set(pk,g);}
+      g[res]++;g.n++;
     });
-    return out.sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
-  },[selNode,events,graph.focal]);
+    return{n,w,l,t,avgGap:n>0?gapSum/n:0,
+      partners:[...byPartner.values()].sort((a,b)=>b.n-a.n||a.name.localeCompare(b.name))};
+  },[selNode,graph]);
 
   React.useEffect(()=>{
     const cv=canvasRef.current,wrap=wrapRef.current;
@@ -2423,9 +2561,9 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
   );
   if(!enlarged)return canvasPane;
   // shared competitions grouped by host country (mirrors the globe's footprint list)
-  const sharedGroups=(()=>{const m={};sharedComps.forEach(ev=>{const ioc=ev.country||"";const iso=IOC_ISO[ioc]||"";const cname=GLOBE_NAMES[iso]||ioc||"Unknown";const key=iso||ioc||"ZZ";if(!m[key])m[key]={iso,cname,items:[]};m[key].items.push(ev);});return Object.values(m).sort((a,b)=>a.cname.localeCompare(b.cname));})();
+  const sharedGroups=(()=>{const m={};sharedComps.forEach(sc=>{const ioc=sc.ev.country||"";const iso=IOC_ISO[ioc]||"";const cname=GLOBE_NAMES[iso]||ioc||"Unknown";const key=iso||ioc||"ZZ";if(!m[key])m[key]={iso,cname,items:[]};m[key].items.push(sc);});return Object.values(m).sort((a,b)=>a.cname.localeCompare(b.cname));})();
   const sidebar=!selNode
-    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a node to see the competitions you shared with that athlete — grouped by country. Click a competition to open its results.</div>
+    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a node to see your head-to-head record against that athlete — overall, split by your partner, and across every shared competition. Click a competition to open its results.</div>
     : (<div style={{padding:"4px 0"}}>
         <div style={{padding:"14px 16px 12px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
           <h3 onClick={()=>onPickRef.current&&onPickRef.current(selNode.name)} title="Open profile"
@@ -2437,24 +2575,36 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
             {selNode.cls&&(()=>{const ng=nuggetFor(selNode.cls);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
             <span style={{color:"#9fc4ec",fontWeight:800,fontSize:13,fontVariantNumeric:"tabular-nums"}}>{sharedComps.length} shared competition{sharedComps.length===1?"":"s"}</span>
           </div>
-          {selConnections.length>0&&(
-            <div style={{marginTop:11}}>
-              <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:6}}>Connected to</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                {selConnections.map(({n,w})=>(
-                  <button key={n.id} onClick={()=>selectById(n.id)} title={`${w} competition${w===1?"":"s"} together — view`}
-                    style={{display:"inline-flex",alignItems:"center",gap:6,border:"1px solid rgba(120,160,210,.3)",
-                      background:"rgba(120,160,210,.12)",color:"#dcecf8",borderRadius:980,padding:"3px 10px",
-                      fontFamily:"inherit",fontSize:11.5,fontWeight:700,cursor:"pointer",lineHeight:1.4}}>
-                    <span style={{width:7,height:7,borderRadius:"50%",flex:"none",
-                      background:n.focal?"#ffcf2e":classColor(n.cls),boxShadow:"0 0 0 1px rgba(255,255,255,.35)"}}/>
-                    {n.name}<span style={{color:"#9fc4ec",fontWeight:800}}>{w}</span>
-                  </button>
+        </div>
+        {headToHead&&(headToHead.n>0?(
+          <div style={{padding:"13px 16px 14px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
+            <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:4}}>Head-to-head</div>
+            <div style={{fontSize:11,color:"#7fa0c0",lineHeight:1.4,marginBottom:8}}>How {name} ranked up against {selNode.name} in common competitions.</div>
+            <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
+              <span style={{fontWeight:800,fontSize:22,lineHeight:1,color:"#eaf3fc",fontVariantNumeric:"tabular-nums",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif"}}>
+                {headToHead.w}–{headToHead.l}{headToHead.t>0?`–${headToHead.t}`:""}
+              </span>
+              <span style={{fontSize:11.5,color:"#9fbdd9",lineHeight:1.35}}>
+                {headToHead.avgGap===0?"dead even on average":`${name} finished ${Math.abs(headToHead.avgGap).toFixed(1)} place${Math.abs(headToHead.avgGap).toFixed(1)==="1.0"?"":"s"} ${headToHead.avgGap>0?"ahead":"behind"} on average`}
+              </span>
+            </div>
+            {headToHead.partners.length>0&&(
+              <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:5}}>
+                {headToHead.partners.map(p=>(
+                  <div key={p.name} style={{display:"flex",alignItems:"center",gap:8,fontSize:11.5,color:"#dcecf8"}}>
+                    <span style={{fontWeight:700,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name==="Solo"?"Solo":`With ${p.name}`}</span>
+                    <span style={{fontWeight:800,fontVariantNumeric:"tabular-nums",color:p.w>p.l?"#ffcf2e":"#dcecf8"}}>{p.w}–{p.l}{p.t>0?`–${p.t}`:""}</span>
+                    <span style={{color:"#7fa0c0",fontVariantNumeric:"tabular-nums"}}>{p.n} comp{p.n===1?"":"s"}</span>
+                  </div>
                 ))}
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        ):(
+          <div style={{padding:"12px 16px",borderBottom:"1px solid rgba(120,160,210,.16)",color:"#9fbdd9",fontSize:11.5,lineHeight:1.5}}>
+            No ranked head-to-head results with this athlete yet.
+          </div>
+        ))}
         {sharedGroups.map(g=>(
           <div key={g.cname}>
             <div style={{position:"sticky",top:0,padding:"9px 14px 7px",zIndex:1,display:"flex"}}>
@@ -2463,7 +2613,9 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
                 <span style={{color:"#9fc4ec",fontWeight:800}}>{g.items.length}</span>
               </span>
             </div>
-            {g.items.map((ev,i)=>{const ng=ev.cls?nuggetFor(ev.cls,ev.subclass):null;return(
+            {g.items.map((sc,i)=>{const ev=sc.ev;const ng=ev.cls?nuggetFor(ev.cls,ev.subclass):null;
+              const won=!sc.sameBoat&&sc.focalRank!=null&&sc.rivalRank!=null&&sc.focalRank<sc.rivalRank;
+              return(
               <div key={i} onClick={()=>onOpenEventRef.current&&onOpenEventRef.current(ev.id)} title="Open results"
                 style={{margin:"7px 12px",padding:"10px 12px",borderRadius:10,cursor:"pointer",transition:"all .15s",
                   background:"rgba(120,160,210,.08)",border:"1px solid rgba(120,160,210,.16)"}}
@@ -2473,6 +2625,13 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
                 <div style={{display:"flex",flexWrap:"wrap",gap:"4px 10px",fontSize:12,color:"#9fbdd9",alignItems:"center"}}>
                   <span>{formatDate(ev.date)}</span>
                   {ng&&<span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 9px",fontWeight:700,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>}
+                  {sc.sameBoat
+                    ?<span style={{color:"#9fc4ec",fontWeight:700,fontSize:11.5}}>Sailed together{sc.focalRank!=null?` · #${sc.focalRank}`:""}</span>
+                    :<span style={{fontVariantNumeric:"tabular-nums",fontWeight:800,fontSize:11.5}}>
+                      <span style={{color:won?"#ffcf2e":"#dcecf8"}}>{sc.focalRank!=null?`#${sc.focalRank}`:"—"}</span>
+                      <span style={{fontWeight:600,color:"#7fa0c0"}}>{" vs "}</span>
+                      <span style={{color:"#dcecf8"}}>{sc.rivalRank!=null?`#${sc.rivalRank}`:"—"}</span>
+                    </span>}
                 </div>
               </div>);})}
           </div>
@@ -2485,6 +2644,116 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
       <div style={{flex:"0 0 30%",height,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)"}}>{sidebar}</div>
     </div>
   );
+}
+
+/* ── Rival-relative career progress ──────────────────────────────────────────
+   Score per event = share of the athlete's top rivals (computeRivalCohort —
+   the SAME cohort the rival web shows) they finished ahead of. Bounded 0–1,
+   independent of fleet size and event strength, so it reads across events:
+   50% = level with your rivals wherever you race. Official overall ranks
+   only — we filter and count, never re-rank. */
+const MIN_RIVALS_PRESENT=2; // events with fewer cohort rivals present are not scored (tunable)
+const SMOOTH_WINDOW=5;      // trend = rolling mean of the last N scored events
+function ProgressChart({name,events,history,height=220}){
+  const [mode,setMode]=React.useState("career"); // "career" | "year"
+  const [tip,setTip]=React.useState(null);       // {x,y,lines:[..]}
+  const data=React.useMemo(()=>{
+    const cohort=computeRivalCohort(name,events,15);
+    const rivalKeys=new Set(cohort.rivals.map(r=>r.key));
+    const pts=[];
+    if(rivalKeys.size)(history||[]).forEach(h=>{
+      const ev=h?.ev; if(!ev||ev.status==="Draft")return;
+      const dk=dateKey(ev.date); if(!dk)return;            // undated → excluded
+      const myRank=h.row?.rank; if(!(myRank>=1))return;
+      let rows; try{rows=scoreEvent(ev).rows;}catch{return;}
+      const rankOf=new Map();                              // rival canon -> best official rank in this event
+      rows.forEach(r=>{if(r.rank>=1)[r.helm,r.crew].forEach(nm=>{const k=canonName(nm);if(k&&rivalKeys.has(k)){const prev=rankOf.get(k);if(prev===undefined||r.rank<prev)rankOf.set(k,r.rank);}});});
+      if(rankOf.size<MIN_RIVALS_PRESENT)return;
+      let beaten=0; rankOf.forEach(rk=>{if(myRank<rk)beaten+=1;else if(myRank===rk)beaten+=0.5;});
+      pts.push({dk,date:ev.date,evName:ev.name,score:beaten/rankOf.size,beaten,rivals:rankOf.size,rank:myRank,fleet:h.fleet});
+    });
+    pts.sort((a,b)=>a.dk.localeCompare(b.dk));             // oldest → newest
+    pts.forEach((p,i)=>{const w=pts.slice(Math.max(0,i-SMOOTH_WINDOW+1),i+1);p.trend=w.reduce((s,x)=>s+x.score,0)/w.length;});
+    const byY=new Map();
+    pts.forEach(p=>{const y=p.dk.slice(0,4);const o=byY.get(y)||{y,sum:0,n:0};o.sum+=p.score;o.n++;byY.set(y,o);});
+    const years=[...byY.values()].sort((a,b)=>a.y.localeCompare(b.y)).map(o=>({year:o.y,score:o.sum/o.n,n:o.n}));
+    return{pts,years};
+  },[name,events,history]);
+  const W=260, headH=64, CH=Math.max(80,height-headH-6);
+  const M={l:26,r:8,t:10,b:14};
+  const plotW=W-M.l-M.r, plotH=CH-M.t-M.b;
+  const yOf=s=>M.t+plotH*(1-s);
+  const infoTxt="Measured against the same top rivals shown in the Rival Web — the athletes this athlete races most often. This normalizes for event difficulty: 50% means finishing level with your rivals, wherever you race.";
+  const chip=(k,lab)=>(
+    <button key={k} onClick={()=>{setMode(k);setTip(null);}}
+      style={{fontSize:10,fontWeight:700,letterSpacing:".02em",border:"1px solid rgba(120,160,210,.3)",borderRadius:980,
+        padding:"2px 10px",cursor:"pointer",transition:"all .2s ease",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
+        background:mode===k?"rgba(146,180,222,.34)":"rgba(120,160,210,.16)",color:mode===k?"#fff":"#cfe0f2"}}>{lab}</button>);
+  const showTip=(e,lines)=>{const host=e.currentTarget.ownerSVGElement.parentElement.getBoundingClientRect();const r=e.currentTarget.getBoundingClientRect();
+    setTip({x:Math.min(Math.max(r.left-host.left+r.width/2,60),W-60),y:r.top-host.top,lines});};
+  let body;
+  if(data.pts.length<3){
+    body=<div style={{height:CH,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#7fa0c0",fontSize:11,padding:"0 18px"}}>Not enough shared competitions with rivals yet.</div>;
+  }else{
+    const grid=(
+      <g>
+        <text transform={`rotate(-90 7 ${M.t+plotH/2})`} x={7} y={M.t+plotH/2} textAnchor="middle" fontSize="7" fill="#7fa0c0">Rivals beaten</text>
+        {[["100%",1],["50%",.5],["0%",0]].map(([lab,s])=>
+          <text key={lab} x={M.l-3} y={yOf(s)+2.5} textAnchor="end" fontSize="7" fill="#7fa0c0">{lab}</text>)}
+        <line x1={M.l} y1={yOf(.5)} x2={W-M.r} y2={yOf(.5)} stroke="rgba(220,236,248,.32)" strokeWidth="1" strokeDasharray="3 3"/>
+        <text x={W-M.r} y={yOf(.5)-3} textAnchor="end" fontSize="6.5" fill="#7fa0c0">level with rivals</text>
+        <line x1={M.l} y1={yOf(0)} x2={W-M.r} y2={yOf(0)} stroke="rgba(220,236,248,.18)" strokeWidth="1"/>
+      </g>);
+    if(mode==="career"){
+      const ts=data.pts.map(p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8)));
+      const t0=ts[0],t1=ts[ts.length-1],span=Math.max(1,t1-t0);
+      const xOf=i=>ts.length>1?M.l+plotW*(ts[i]-t0)/span:M.l+plotW/2;
+      const trendPts=data.pts.map((p,i)=>`${xOf(i)},${yOf(p.trend)}`).join(" ");
+      const area=`M ${xOf(0)},${yOf(data.pts[0].trend)} `+data.pts.map((p,i)=>`L ${xOf(i)},${yOf(p.trend)}`).join(" ")+` L ${xOf(data.pts.length-1)},${yOf(0)} L ${xOf(0)},${yOf(0)} Z`;
+      body=(
+        <svg width="100%" height={CH} viewBox={`0 0 ${W} ${CH}`} style={{display:"block"}}>
+          {grid}
+          <path d={area} fill="rgba(200,146,11,.10)"/>
+          <polyline points={trendPts} fill="none" stroke="var(--gold)" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round"/>
+          {data.pts.map((p,i)=>(
+            <circle key={i} cx={xOf(i)} cy={yOf(p.score)} r="3" fill="var(--accent)" stroke="rgba(255,255,255,.55)" strokeWidth="1" style={{cursor:"pointer"}}
+              onMouseEnter={e=>showTip(e,[p.evName,formatDate(p.date),`Beat ${p.beaten%1?p.beaten.toFixed(1):p.beaten} of ${p.rivals} rivals`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
+              onMouseLeave={()=>setTip(null)}/>))}
+          <text x={M.l} y={CH-3} fontSize="7" fill="#7fa0c0">{data.pts[0].dk.slice(0,4)}</text>
+          {data.pts[data.pts.length-1].dk.slice(0,4)!==data.pts[0].dk.slice(0,4)&&
+            <text x={W-M.r} y={CH-3} textAnchor="end" fontSize="7" fill="#7fa0c0">{data.pts[data.pts.length-1].dk.slice(0,4)}</text>}
+        </svg>);
+    }else{
+      const n=data.years.length, slot=plotW/n, bw=Math.min(26,slot*.55);
+      body=(
+        <svg width="100%" height={CH} viewBox={`0 0 ${W} ${CH}`} style={{display:"block"}}>
+          {grid}
+          {data.years.map((y,i)=>{const x=M.l+slot*i+(slot-bw)/2;const h=plotH*y.score;return(
+            <g key={y.year}>
+              <rect x={x} y={yOf(y.score)} width={bw} height={Math.max(1,h)} rx="3" fill="rgba(13,142,207,.75)" stroke="rgba(255,255,255,.25)" strokeWidth=".5" style={{cursor:"pointer"}}
+                onMouseEnter={e=>showTip(e,[y.year,`Avg ${Math.round(y.score*100)}% of rivals beaten`,`${y.n} scored competition${y.n>1?"s":""}`])}
+                onMouseLeave={()=>setTip(null)}/>
+              <text x={x+bw/2} y={CH-3} textAnchor="middle" fontSize="7" fill="#7fa0c0">{y.year}</text>
+            </g>);})}
+        </svg>);
+    }
+  }
+  return(
+    <div style={{position:"relative",width:"100%",height}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+        <span style={{fontSize:12.5,fontWeight:800,color:"#fff",letterSpacing:"-.01em"}}>Progress vs Rivals</span>
+        <span title={infoTxt} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:"50%",
+          border:"1px solid rgba(127,160,192,.6)",color:"#7fa0c0",fontSize:9,fontWeight:700,cursor:"help",fontStyle:"italic",fontFamily:"Georgia,serif"}}>i</span>
+      </div>
+      <div style={{textAlign:"center",fontSize:9,color:"#7fa0c0",lineHeight:1.35,margin:"2px 6px 5px"}}>Share of your top rivals you finished ahead of, per competition</div>
+      <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:4}}>{[chip("career","Career"),chip("year","By year")]}</div>
+      {body}
+      {tip&&(
+        <div style={{position:"absolute",left:tip.x,top:Math.max(headH,tip.y),transform:"translate(-50%,-100%)",pointerEvents:"none",zIndex:5,
+          background:"rgba(8,24,45,.94)",border:"1px solid rgba(120,160,210,.35)",borderRadius:8,padding:"6px 9px",maxWidth:200,boxShadow:"0 4px 14px rgba(0,0,0,.4)"}}>
+          {tip.lines.map((l,i)=><div key={i} style={{fontSize:i?9.5:10,fontWeight:i?500:700,color:i?"#a9c4de":"#fff",whiteSpace:i?"nowrap":"normal"}}>{l}</div>)}
+        </div>)}
+    </div>);
 }
 
 function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="competition",hostIso=null,rankShade=false,markersHostOnly=false}){
@@ -2694,6 +2963,482 @@ function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=fals
           {tip.name} · {tip.count} {countLabel}{tip.count!==1?'s':''}</div>)}
       {!mini&&!bare&&<div style={{position:'absolute',left:12,bottom:10,color:'#9fbdd9',fontSize:11,letterSpacing:0.3,pointerEvents:'none'}}>
         {nC} countr{nC!==1?'ies':'y'} · {total} {countLabel}{total!==1?'s':''} · scroll to zoom · drag to spin</div>}
+    </div>
+  );
+}
+
+/* ═══════════════ SPORT EXPLAINER (spm-) — per-class equipment hologram + course diagram ═══════════════
+   Config-driven via SPORT_MODELS: add a class entry and <SportShowcase clsId=…/> renders it with zero
+   component changes. Rendering is dependency-free pseudo-3D: [x,y,z] polys → rotate → perspective → SVG. */
+const SPM_TAU=Math.PI*2;
+const spmReducedMotion=()=>typeof window!=="undefined"&&!!window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* Shared rAF driver: one loop per component, paused when offscreen (IntersectionObserver) or tab hidden. */
+function useSpmLoop(hostRef,step,reduced){
+  const stepRef=React.useRef(step);stepRef.current=step;
+  React.useEffect(()=>{
+    if(reduced)return;
+    let raf=0,vis=true,last=performance.now();
+    const frame=now=>{raf=0;const dt=Math.min(64,now-last);last=now;stepRef.current(dt,now);sync();};
+    const sync=()=>{const should=vis&&!document.hidden;
+      if(should&&!raf)raf=requestAnimationFrame(frame);
+      else if(!should&&raf){cancelAnimationFrame(raf);raf=0;}};
+    const io=new IntersectionObserver(es=>{vis=!!(es[0]&&es[0].isIntersecting);if(vis)last=performance.now();sync();},{rootMargin:"90px"});
+    if(hostRef.current)io.observe(hostRef.current);
+    const onVis=()=>{if(!document.hidden)last=performance.now();sync();};
+    document.addEventListener("visibilitychange",onVis);
+    sync();
+    return()=>{io.disconnect();document.removeEventListener("visibilitychange",onVis);if(raf)cancelAnimationFrame(raf);};
+  },[reduced]);
+}
+
+/* 49er geometry in metres. Axes: x fore/aft (bow +), y up, z athwartships. Real class proportions:
+   hull 4.99 m, hull beam ~1.7 m flaring to 2.90 m across the wings, mast ~8.1 m, bowsprit (retracted),
+   square-top main 16.1 m² + jib 5.1 m². */
+function build49erGeometry(){
+  const polys=[];
+  const fill=(part,cls,pts)=>polys.push({part,cls,kind:"fill",pts});
+  const line=(part,cls,pts,w)=>polys.push({part,cls,kind:"line",pts,w});
+  // Smooth hull stations sampled from 49er lines: [x, halfBeamDeck, halfBeamBottom, yDeck, yBottom].
+  // Fine plumb bow, gentle sheer spring, flat run aft, slight rocker — dense stations keep curves soft.
+  const st=[
+    [ 2.50,0.02,0.01,0.55,0.40],
+    [ 2.12,0.15,0.07,0.51,0.22],
+    [ 1.62,0.32,0.17,0.48,0.11],
+    [ 1.06,0.48,0.29,0.46,0.045],
+    [ 0.46,0.62,0.41,0.445,0.015],
+    [-0.24,0.74,0.51,0.435,0.00],
+    [-0.94,0.81,0.57,0.43,0.00],
+    [-1.70,0.85,0.60,0.43,0.02],
+    [-2.49,0.84,0.56,0.44,0.06],
+  ];
+  for(let i=0;i<st.length-1;i++){
+    const[xa,da,ba,yda,yba]=st[i],[xb,db,bb,ydb,ybb]=st[i+1];
+    for(const s of[1,-1]){
+      fill("hull","hullSide",[[xa,yda,da*s],[xb,ydb,db*s],[xb,ybb,bb*s],[xa,yba,ba*s]]);
+      fill("hull","hullBottom",[[xa,yba,ba*s],[xb,ybb,bb*s],[xb,ybb,0],[xa,yba,0]]);
+      fill("hull","deck",[[xa,yda,da*s],[xb,ydb,db*s],[xb,ydb,0],[xa,yda,0]]);
+    }
+  }
+  for(const s of[1,-1]){ // gunwale + chine curves give the hull its lines
+    line("hull","edge",st.map(p=>[p[0],p[3],p[1]*s]),1.1);
+    line("hull","edge",st.map(p=>[p[0],p[4],p[2]*s]),0.7);
+  }
+  line("hull","edge",[[-2.49,0.44,0.84],[-2.49,0.06,0.56],[-2.49,0.06,-0.56],[-2.49,0.44,-0.84]],1); // open transom
+  for(const s of[1,-1]){ // wings/racks — rounded rim, long and clearly angled up outboard, trampoline hints
+    const rim=[[0.95,0.48,0.62*s],[0.58,0.56,1.17*s],[0.34,0.63,1.44*s],[0.00,0.70,1.56*s],[-1.55,0.73,1.58*s],[-2.04,0.73,1.54*s],[-2.27,0.68,1.39*s],[-2.35,0.58,1.10*s],[-2.35,0.51,0.85*s]];
+    fill("hull","wing",rim.concat([[-2.35,0.46,0.84*s],[0.95,0.46,0.62*s]]));
+    line("hull","wingEdge",rim,1.3);
+    line("hull","seam",[[0.30,0.48,0.68*s],[-0.60,0.71,1.56*s]],0.5);
+    line("hull","seam",[[-0.70,0.47,0.79*s],[-1.70,0.72,1.57*s]],0.5);
+  }
+  // daggerboard — straight parallel-edged board, raked slightly aft
+  fill("daggerboard","foil",[[0.62,0.06,0],[0.30,0.06,0],[0.16,-1.05,0],[0.48,-1.05,0]]);
+  fill("rudder","foil",[[-2.52,0.52,0],[-2.72,0.52,0],[-2.80,-0.42,0],[-2.87,-0.86,0],[-2.78,-0.97,0],[-2.66,-0.72,0],[-2.59,-0.18,0]]);
+  line("rudder","spar",[[-2.60,0.58,0],[-1.55,0.72,0]],1.5); // tiller
+  line("mast","mast",[[0.30,0.45,0],[0.26,2.20,0],[0.18,4.20,0],[0.05,6.40,0],[-0.12,8.55,0]],2.2);
+  line("mast","spar",[[0.30,0.85,0],[-1.70,0.94,0.45]],1.7); // boom, eased out to port (starboard tack)
+  for(const s of[1,-1]){ // standing rigging per the 49er owner's manual (Ovington):
+    // two spreader pairs — lower at the mast joint, upper at the hounds; CAP SHROUDS run
+    // masthead → over both spreader tips → chainplates; PRIMARY SHROUDS hounds → chainplates;
+    // D1 lowers to inner chainplates; twin trapeze wires from the hounds keyplates.
+    line("mast","spar",[[0.225,3.35,0],[0.17,3.37,0.48*s]],1.1);  // lower spreaders
+    line("mast","spar",[[0.115,5.55,0],[0.07,5.57,0.36*s]],1.1);  // upper spreaders
+    line(null,"wire",[[0.10,0.47,0.78*s],[0.17,3.37,0.48*s],[0.07,5.57,0.36*s],[-0.12,8.55,0]],0.8); // cap shroud
+    line(null,"wire",[[0.12,0.47,0.66*s],[0.16,5.60,0.02*s]],0.7);  // primary shroud
+    line(null,"wire",[[0.16,0.47,0.42*s],[0.225,3.35,0.03*s]],0.6); // D1 lower
+    line(null,"trap",[[0.16,5.60,0],[-0.60,0.71,1.56*s]],0.9);      // trapeze wire down to the wing rim
+  }
+  line(null,"spar",[[2.46,0.50,0],[3.35,0.54,0]],1.6);    // bowsprit, gennaker flying
+  line(null,"wire",[[2.42,0.52,0],[0.16,5.60,0]],0.8);    // forestay
+  // gennaker — 38 m² asymmetric kite flying entirely on the PORT side: tack on the bowsprit
+  // tip, head at the masthead, clew sheeted back beside the port shroud/chainplate.
+  const KL=[[3.35,0.55,0.00],[3.90,2.60,0.85],[3.45,5.10,1.15],[2.25,7.35,0.85],[-0.05,8.40,0.15]]; // flying luff
+  const KE=[[0.05,0.95,0.66],[0.80,3.10,0.95],[0.92,5.00,1.00],[0.55,6.90,0.62],[-0.05,8.40,0.15]]; // leech to the port clew
+  const KZ=[1.20,1.85,2.05,1.35,0.15];
+  const KM=KL.map((p,i)=>[(p[0]+KE[i][0])/2+0.30,(p[1]+KE[i][1])/2,KZ[i]]);                         // cambered middle
+  for(let i=0;i<4;i++){
+    fill("gennaker","kite",[KL[i],KL[i+1],KM[i+1],KM[i]]);
+    fill("gennaker","kite",[KM[i],KM[i+1],KE[i+1],KE[i]]);
+  }
+  line("gennaker","wire",KL,1.1);                                        // luff
+  line("gennaker","seam",KE,0.7);                                        // leech
+  for(let i=1;i<4;i++)line("gennaker","seam",[KL[i],KM[i],KE[i]],0.6);   // horizontal panel seams
+  line("gennaker","seam",[KL[0],[1.70,0.72,0.48],KE[0]],0.7);            // foot
+  // Sails are modelled as CAMBERED 3D SURFACES on STARBOARD TACK — every sail bellies out to
+  // PORT (+z). Each sail = luff/mid/leech curves at several heights, panelled into strips, so
+  // nothing is flat or mirror-symmetric about the centreline.
+  // mainsail — square top, roached leech, full-length battens
+  const ML=[[0.29,0.92,0],[0.25,2.20,0],[0.17,4.20,0],[0.05,6.40,0],[-0.10,8.45,0]];                  // luff on the mast
+  const ME=[[-1.68,0.95,0.45],[-1.85,2.30,0.56],[-1.72,4.40,0.50],[-1.40,6.50,0.34],[-0.92,8.22,0.12]]; // leech, eased to port
+  const MZ=[0.40,0.58,0.52,0.34,0.10];
+  const MM=ML.map((p,i)=>[(p[0]+ME[i][0])/2,(p[1]+ME[i][1])/2,MZ[i]]);                                 // cambered middle
+  for(let i=0;i<4;i++){
+    fill("mainsail","sail",[ML[i],ML[i+1],MM[i+1],MM[i]]);
+    fill("mainsail","sail",[MM[i],MM[i+1],ME[i+1],ME[i]]);
+  }
+  line("mainsail","seam",[ML[4],MM[4],ME[4]],1);                          // flat square head
+  line("mainsail","seam",ME,0.8);                                        // leech
+  for(let i=1;i<4;i++)line("mainsail","seam",[ML[i],MM[i],ME[i]],0.7);    // battens
+  line("mainsail","seam",[ML[0],MM[0],ME[0]],0.7);                       // foot
+  // jib — luff along the forestay, clew sheeted to port
+  const JL=[[2.30,0.62,0],[1.72,1.95,0],[1.16,3.10,0],[0.62,4.55,0]];
+  const JE=[[-0.42,0.85,0.34],[-0.25,2.00,0.30],[0.10,3.25,0.22],[0.62,4.55,0]];
+  const JZ=[0.40,0.37,0.23,0];
+  const JM=JL.map((p,i)=>[(p[0]+JE[i][0])/2,(p[1]+JE[i][1])/2,JZ[i]]);
+  for(let i=0;i<3;i++){
+    fill("jib","sail",[JL[i],JL[i+1],JM[i+1],JM[i]]);
+    fill("jib","sail",[JM[i],JM[i+1],JE[i+1],JE[i]]);
+  }
+  line("jib","seam",JE,0.7);                                             // leech
+  for(let i=1;i<3;i++)line("jib","seam",[JL[i],JM[i],JE[i]],0.6);        // seams
+  line("jib","seam",[JL[0],[0.95,0.70,0.20],JE[0]],0.6);                 // foot
+  return polys;
+}
+
+/* Rotate-Y (yaw) + rotate-X (fixed 12° camera tilt + user pitch), perspective-project, painter-sort. */
+function spmProjectAll(polys,yaw,pitchDeg){
+  const W=520,H=430,cx=W/2,cyc=H/2+4,D=17,F=15,S=48,YC=3.75,XC=0.6;
+  const pit=((12+pitchDeg)*Math.PI)/180;
+  const cyw=Math.cos(yaw),syw=Math.sin(yaw),cp=Math.cos(pit),sp=Math.sin(pit);
+  const out=[];
+  for(let i=0;i<polys.length;i++){
+    const P=polys[i],n=P.pts.length,cam=[];
+    let d="",zsum=0;
+    for(let k=0;k<n;k++){
+      const x0=P.pts[k][0]-XC,y0=P.pts[k][1]-YC,z0=P.pts[k][2];
+      const xr=x0*cyw+z0*syw,zr=-x0*syw+z0*cyw;
+      const y2=y0*cp-zr*sp,z2=y0*sp+zr*cp;
+      const f=(F/(D-z2))*S;
+      d+=(k?"L":"M")+(cx+xr*f).toFixed(1)+","+(cyc-y2*f).toFixed(1);
+      zsum+=z2;
+      if(k<3)cam.push([xr,y2,z2]);
+    }
+    if(P.kind==="fill")d+="Z";
+    let light=.5;
+    if(P.kind==="fill"&&cam.length===3){
+      const ux=cam[1][0]-cam[0][0],uy=cam[1][1]-cam[0][1],uz=cam[1][2]-cam[0][2];
+      const vx=cam[2][0]-cam[0][0],vy=cam[2][1]-cam[0][1],vz=cam[2][2]-cam[0][2];
+      const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+      light=Math.min(1,.18+.82*Math.abs(nz/(Math.hypot(nx,ny,nz)||1)));
+    }
+    out.push({i,d,part:P.part,cls:P.cls,kind:P.kind,w:P.w,depth:zsum/n,light});
+  }
+  out.sort((a,b)=>a.depth-b.depth);
+  return out;
+}
+
+const spmNavy=(t,a)=>{const m=(lo,hi)=>Math.round(lo+(hi-lo)*t);return"rgba("+m(15,74)+","+m(42,140)+","+m(74,205)+","+a+")";};
+/* Colours tuned for the app's LIGHT page background — the models render frameless. */
+function spmPaint(cls,light,hot){
+  switch(cls){
+    case"hullSide":return{fill:spmNavy(light,1),stroke:hot?"#0a84ff":"rgba(140,200,255,.4)",sw:hot?1.4:.7,fo:1};
+    case"hullBottom":return{fill:spmNavy(light*.55,1),stroke:"rgba(140,200,255,.25)",sw:.6,fo:1};
+    case"deck":return{fill:spmNavy(.25+light*.5,1),stroke:hot?"#0a84ff":"rgba(140,200,255,.3)",sw:hot?1.3:.6,fo:1};
+    case"wing":return{fill:spmNavy(light,.6),stroke:hot?"#0a84ff":"rgba(31,78,128,.6)",sw:hot?1.5:.9,fo:.5};
+    case"foil":return{fill:spmNavy(.3+light*.4,.9),stroke:hot?"#0a84ff":"rgba(31,78,128,.55)",sw:hot?1.6:.8,fo:.92};
+    // sails shade panel-by-panel with the surface normal (light) so the camber reads in 3D
+    case"sail":{const m=(lo,hi)=>Math.round(lo+(hi-lo)*light);return{fill:"rgb("+m(9,58)+","+m(38,120)+","+m(86,196)+")",stroke:hot?"#0a84ff":"rgba(13,35,60,.6)",sw:hot?1.5:.9,fo:hot?.62:.30+.22*light};}
+    case"kite":{const m=(lo,hi)=>Math.round(lo+(hi-lo)*light);return{fill:"rgb("+m(16,66)+","+m(54,132)+","+m(110,210)+")",stroke:hot?"#0a84ff":"rgba(13,35,60,.5)",sw:hot?1.4:.8,fo:hot?.55:.26+.20*light};}
+    default:return{fill:spmNavy(light,1),stroke:"rgba(140,200,255,.35)",sw:.7,fo:1};
+  }
+}
+function spmLinePaint(cls,hot){
+  if(hot)return{col:"#0a84ff",glow:"rgba(10,132,255,.35)",go:.8};
+  switch(cls){
+    case"mast":return{col:"rgba(19,49,78,.9)",glow:"rgba(10,132,255,.25)",go:.25};
+    case"spar":return{col:"rgba(19,49,78,.72)",glow:"rgba(10,132,255,.2)",go:.2};
+    case"wire":return{col:"rgba(31,78,128,.5)",glow:"rgba(10,132,255,.16)",go:.12};
+    case"trap":return{col:"rgba(10,132,255,.6)",glow:"rgba(10,132,255,.22)",go:.16};
+    case"seam":return{col:"rgba(31,78,128,.32)",glow:"rgba(10,132,255,.15)",go:0};
+    default:return{col:"rgba(150,200,245,.7)",glow:"rgba(10,132,255,.2)",go:.15};
+  }
+}
+
+/* Windward–leeward course model (520×430 viewBox) — RYA course "M": mark 1 to windward,
+   leeward gate 2s/2p, shared start/finish line at the bottom. Signal M2:
+   Start – 1 – 2s/2p – 1 – Finish. One boat sails the loop. */
+const SPM_COURSE_XY={wind:[260,26],windward:[260,64],gateL:[180,306],gateR:[340,306],sfA:[150,390],sfB:[370,390]};
+function spmSmooth(pts,iters){ // Chaikin corner-cutting — turns the waypoint polyline into a smooth track
+  let p=pts;
+  for(let n=0;n<iters;n++){
+    const q=[p[0]];
+    for(let i=0;i<p.length-1;i++){
+      const a=p[i],b=p[i+1];
+      q.push([a[0]*.75+b[0]*.25,a[1]*.75+b[1]*.25]);
+      q.push([a[0]*.25+b[0]*.75,a[1]*.25+b[1]*.75]);
+    }
+    q.push(p[p.length-1]);
+    p=q;
+  }
+  return p;
+}
+function spmResample(pts,n){
+  const d=[0];let tot=0;
+  for(let i=1;i<pts.length;i++){tot+=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);d.push(tot);}
+  const out=[];let j=0;
+  for(let k=0;k<n;k++){
+    const target=(tot*k)/(n-1);
+    while(j<pts.length-2&&d[j+1]<target)j++;
+    const seg=d[j+1]-d[j]||1,t=(target-d[j])/seg;
+    out.push([pts[j][0]+(pts[j+1][0]-pts[j][0])*t,pts[j][1]+(pts[j+1][1]-pts[j][1])*t]);
+  }
+  return out;
+}
+function spmBuildCourse(){
+  const pts=[];const push=(x,y)=>pts.push([x,y]);
+  // An efficient windward–leeward: tidy, even tacks and gybes worked up and down the
+  // middle of the course (no erratic short tacks); each mark is fully enclosed by its arc.
+  push(260,406);push(258,384);                                             // cross the start line
+  push(198,300);push(322,192);push(238,98);                                // beat 1 — two clean tacks
+  push(284,74);push(276,54);push(256,50);push(238,62);push(242,86);        // round mark 1 (mark inside the arc)
+  push(316,168);push(210,250);push(261,300);                               // run 1 — two gybes to the gate centre
+  push(236,314);push(214,330);push(182,332);push(158,314);push(166,290);push(192,282); // full loop around 2s
+  push(322,196);push(232,104);push(240,96);                                // beat 2 — two clean tacks
+  push(284,74);push(276,54);push(256,50);push(238,62);push(242,86);        // round mark 1 again
+  push(316,168);push(214,258);push(272,330);push(322,384);push(330,406);   // run 2 down the middle, across the line
+  const smooth=spmResample(spmSmooth(pts,3),320);
+  const n=smooth.length;
+  // Heading = the SMOOTH path's own tangent, averaged over a window so the boat turns
+  // gently and always points where it's actually going (nose leads, trail follows).
+  const heads=smooth.map((p,i)=>{
+    const a=smooth[Math.max(0,i-5)],b=smooth[Math.min(n-1,i+5)];
+    return Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI+90;
+  });
+  for(let i=1;i<n;i++){ // unwrap so rotation is continuous (no 360° flip at the wrap point)
+    while(heads[i]-heads[i-1]>180)heads[i]-=360;
+    while(heads[i]-heads[i-1]<-180)heads[i]+=360;
+  }
+  return{pts:smooth,heads};
+}
+function spmBoatAt(course,t){
+  const path=course.pts,n=path.length,f=Math.min(n-1.001,Math.max(0,t*(n-1)));
+  const i=Math.floor(f),fr=f-i,a=path[i],b=path[Math.min(n-1,i+1)];
+  const ang=course.heads
+    ?course.heads[i]+(course.heads[Math.min(n-1,i+1)]-course.heads[i])*fr // interpolate the smooth heading
+    :Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI+90;
+  return{x:a[0]+(b[0]-a[0])*fr,y:a[1]+(b[1]-a[1])*fr,
+    ang,idx:i,
+    op:t<.03?t/.03:t>.96?Math.max(0,(1-t)/.04):1};
+}
+
+const SPORT_MODELS={
+  "49er":{
+    equipment:{
+      name:"49er",
+      geometry:build49erGeometry,
+      parts:[
+        {id:"hull",name:"Hull",blurb:"Carries the crew and creates the platform; shaped to plane (skim) across the water at high speed."},
+        {id:"daggerboard",name:"Daggerboard",blurb:"The underwater fin that stops the boat slipping sideways and stabilises it, converting the sails' side-force into forward drive."},
+        {id:"rudder",name:"Rudder",blurb:"The steering blade at the back; small movements at 20+ knots make big course changes."},
+        {id:"mast",name:"Mast",blurb:"The 8-metre carbon spar that holds the sails up; bends to depower them in strong wind."},
+        {id:"mainsail",name:"Mainsail",blurb:"The engine. Its distinctive square top gives huge power; trimming it (via the mainsheet) controls the boat's speed and balance."},
+        {id:"jib",name:"Jib",blurb:"The front sail; drives the boat and steers airflow onto the mainsail, doubling its efficiency."},
+        {id:"gennaker",name:"Gennaker",blurb:"The 38 m² downwind sail flown from the bowsprit — it more than doubles the sail area and powers 20-knot-plus runs."},
+      ],
+    },
+    course:{
+      title:"How a race works",
+      loopSeconds:24,
+      explainer:[
+        "Course: Start – 1 – 2s/2p – 1 – Finish, tacking upwind and gybing downwind.",
+        "Average race: about 30 minutes.",
+        "Top speed: 24 knots (~44 km/h) — one of the fastest Olympic boats.",
+      ],
+      marks:[
+        {id:"wind",label:"Wind",desc:"The course is set so the first leg is straight into the wind."},
+        {id:"windward",label:"Mark 1 — windward",desc:"The top buoy. Boats beat upwind to it, round it, then turn downwind."},
+        {id:"gate",label:"Leeward gate (2s / 2p)",desc:"Two buoys at the bottom of the course — round either one, then head back upwind."},
+        {id:"startfinish",label:"Start & finish line",desc:"Races start and finish on the same line, between the committee vessels."},
+      ],
+    },
+  },
+};
+
+function EquipmentModel3D({cfg,onInfo}){
+  const geo=React.useMemo(()=>cfg.geometry(),[cfg]);
+  const[reduced]=React.useState(spmReducedMotion);
+  const stRef=React.useRef({yaw:-0.7,pitch:0,vyaw:0,drag:null,idleAt:-1e9,hover:null});
+  const[frame,setFrame]=React.useState(()=>spmProjectAll(geo,-0.7,0));
+  const[active,setActive]=React.useState(null);
+  const wrapRef=React.useRef(null);
+
+  useSpmLoop(wrapRef,(dt,now)=>{
+    const s=stRef.current;
+    if(!s.drag&&!s.hover){ // rotation pauses while a part is hovered/selected
+      if(s.vyaw){s.yaw+=s.vyaw*dt;s.vyaw*=Math.pow(0.93,dt/16.7);if(Math.abs(s.vyaw)<2e-5)s.vyaw=0;}
+      if(now-s.idleAt>3000)s.yaw+=(SPM_TAU/24000)*dt; // one revolution / 24 s
+    }
+    setFrame(spmProjectAll(geo,s.yaw,s.pitch));
+  },reduced);
+
+  const setPart=p=>{
+    stRef.current.hover=p;
+    setActive(p);
+    if(onInfo){const part=p?cfg.parts.find(x=>x.id===p):null;onInfo(part?{t:part.name,d:part.blurb}:null);}
+  };
+  const hoverAt=e=>{
+    const part=(e.target.dataset&&e.target.dataset.part)||null;
+    setPart(part);
+  };
+  const onDown=e=>{
+    stRef.current.drag={x:e.clientX,y:e.clientY,id:e.pointerId,claimed:false,moved:false,mt:performance.now()};
+  };
+  const onMove=e=>{
+    const s=stRef.current,d=s.drag;
+    if(d&&d.id===e.pointerId&&!reduced){
+      const dx=e.clientX-d.x,dy=e.clientY-d.y;
+      if(!d.claimed){
+        const ax=Math.abs(dx),ay=Math.abs(dy);
+        if(e.pointerType==="touch"){ // only claim horizontal-dominant gestures; let the page scroll otherwise
+          if(ax>8&&ax>ay*1.2){d.claimed=true;try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){/* noop */}}
+          else if(ay>12&&ay>ax){s.drag=null;return;}
+        }else if(ax>3||ay>3){
+          d.claimed=true;
+          // capture the pointer so dragging keeps working outside the model's bounds until release
+          try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){/* noop */}
+        }
+      }
+      if(d.claimed){ // full 360° freedom: yaw + unclamped pitch (trackball feel)
+        const now=performance.now(),mdt=Math.max(8,now-d.mt);d.mt=now;d.moved=true;
+        s.yaw+=dx*0.0065;s.vyaw=(dx*0.0065)/mdt;
+        s.pitch+=dy*0.32;
+        d.x=e.clientX;d.y=e.clientY;
+        setPart(null);
+        return;
+      }
+    }
+    if(e.pointerType!=="touch")hoverAt(e);
+  };
+  const onUp=e=>{
+    const s=stRef.current,d=s.drag;
+    if(d&&d.id===e.pointerId){
+      s.drag=null;s.idleAt=performance.now();
+      if(!d.moved){ // tap = select part; tap elsewhere dismisses
+        const part=(e.target.dataset&&e.target.dataset.part)||null;
+        setPart(part);
+      }
+    }
+  };
+  const onLeave=e=>{if(e.pointerType!=="touch"&&!stRef.current.drag)setPart(null);};
+
+  return(
+    <div ref={wrapRef} className="spm-holo">
+      <svg viewBox="0 0 520 430" style={{display:"block",width:"100%",cursor:reduced?"default":"grab",touchAction:"pan-y"}}
+        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={onLeave}>
+        {frame.map(p=>{
+          const hot=!!active&&p.part===active;
+          const dim=!!active&&!hot; // dim everything but the selected part so it pinpoints clearly
+          if(p.kind==="fill"){
+            const c=spmPaint(p.cls,p.light,hot);
+            return<path key={p.i} d={p.d} fill={c.fill} fillOpacity={c.fo} stroke={c.stroke} strokeWidth={c.sw}
+              strokeLinejoin="round" opacity={dim?0.16:1} data-part={p.part||undefined}/>;
+          }
+          const L=spmLinePaint(p.cls,hot);
+          return(<g key={p.i} opacity={dim?0.14:1}>
+            {(hot||L.go>0)&&<path d={p.d} fill="none" stroke={L.glow} strokeWidth={(p.w||1)*3.6} strokeLinecap="round" opacity={L.go}/>}
+            <path d={p.d} fill="none" stroke={L.col} strokeWidth={hot?(p.w||1)*1.6:(p.w||1)} strokeLinecap="round" data-part={p.part||undefined}/>
+          </g>);
+        })}
+        {frame.filter(p=>p.part&&p.kind==="line").map(p=>( // generous invisible hit paths so thin lines are hoverable
+          <path key={"h"+p.i} d={p.d} fill="none" stroke="#000" strokeOpacity="0" strokeWidth="15"
+            data-part={p.part} style={{pointerEvents:"stroke"}}/>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function CourseDiagram({cfg,onInfo}){
+  const[reduced]=React.useState(spmReducedMotion);
+  const course=React.useMemo(()=>spmBuildCourse(),[]);
+  const[clock,setClock]=React.useState(1600); // start a little into the lap so the boat is visible at once
+  const[mark,setMark]=React.useState(null);
+  const wrapRef=React.useRef(null);
+  useSpmLoop(wrapRef,dt=>setClock(c=>c+dt),reduced);
+  const T=(cfg.loopSeconds||24)*1000,XY=SPM_COURSE_XY;
+  const report=m=>{ // hover text goes to the shared bottom info line, never over the diagram
+    if(!onInfo)return;
+    if(m){const mk=(cfg.marks||[]).find(x=>x.id===m);onInfo(mk?{t:mk.label,d:mk.desc}:null);}
+    else onInfo({t:cfg.title,d:(cfg.explainer||[]).join(" ")});
+  };
+  const onMove=e=>{const m=(e.target.dataset&&e.target.dataset.mark)||null;if(m!==mark){setMark(m);report(m);}};
+  const hi=id=>mark===id;
+  const t=reduced?0.30:(clock/T)%1;
+  const s=spmBoatAt(course,t);
+  const back=Math.max(0,s.idx-72); // fading contrail over the last ~25% of track
+  const seg=(from,to)=>course.pts.slice(from,to+1).map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ");
+  const i1=back+Math.floor((s.idx-back)/3),i2=back+Math.floor(2*(s.idx-back)/3);
+  // committee vessels at both ends of the shared start/finish line
+  const rcBoat="M0,-7 C2,-4 2.6,-1 2.6,2 L2.6,6 L-2.6,6 L-2.6,2 C-2.6,-1 -2,-4 0,-7 Z";
+  return(
+    <div ref={wrapRef} className="spm-holo" onPointerEnter={()=>report(null)} onPointerLeave={()=>{setMark(null);if(onInfo)onInfo(null);}}>
+      <svg viewBox="0 0 520 430" style={{display:"block",width:"100%"}} onPointerMove={onMove}>
+        <g>
+          <text x={XY.wind[0]} y="16" textAnchor="middle" fill={hi("wind")?"#0a84ff":"#33425e"} fontSize="15" fontWeight="800" letterSpacing="2">WIND</text>
+          <path d="M260,22 L260,50 M251,41 L260,51 L269,41" stroke={hi("wind")?"#0a84ff":"rgba(19,49,78,.75)"} strokeWidth="2.4" fill="none" strokeLinecap="round"/>
+          <circle cx={XY.wind[0]} cy={XY.wind[1]+8} r="22" fill="transparent" data-mark="wind"/>
+        </g>
+        <g>
+          <line x1={XY.sfA[0]} y1={XY.sfA[1]} x2={XY.sfB[0]} y2={XY.sfB[1]}
+            stroke={hi("startfinish")?"#0a84ff":"rgba(6,99,196,.8)"} strokeWidth={hi("startfinish")?2.4:1.7} strokeDasharray="6 7"/>
+          <g transform={"translate("+XY.sfA[0]+","+XY.sfA[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
+          <g transform={"translate("+XY.sfB[0]+","+XY.sfB[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
+          <text x={(XY.sfA[0]+XY.sfB[0])/2} y={XY.sfA[1]+26} textAnchor="middle" fill={hi("startfinish")?"#0a84ff":"rgba(51,66,94,.85)"} fontSize="13.5" fontWeight="700" letterSpacing="1.5">START &amp; FINISH</text>
+          <line x1={XY.sfA[0]} y1={XY.sfA[1]} x2={XY.sfB[0]} y2={XY.sfB[1]} stroke="#000" strokeOpacity="0" strokeWidth="22" data-mark="startfinish"/>
+        </g>
+        {[["windward",XY.windward,"1",16,5],["gate",XY.gateL,"2s",-19,5],["gate",XY.gateR,"2p",19,5]].map(([id,xy,lab,dx,dy],k)=>(
+          <g key={k}>
+            <circle cx={xy[0]} cy={xy[1]} r="14" className="spm-halo" fill="rgba(10,132,255,.28)"/>
+            <circle cx={xy[0]} cy={xy[1]} r="7.5" fill={hi(id)?"#0663c4":"#0a78e8"} stroke="rgba(19,49,78,.5)" strokeWidth="1.2"/>
+            <text x={xy[0]+dx*1.5} y={xy[1]+dy+1} textAnchor="middle" fill={hi(id)?"#0a84ff":"rgba(51,66,94,.95)"} fontSize="18" fontWeight="800">{lab}</text>
+            <circle cx={xy[0]} cy={xy[1]} r="20" fill="transparent" data-mark={id}/>
+          </g>
+        ))}
+        <g opacity={s.op}>
+          {s.idx-back>4&&<g fill="none" strokeLinecap="round">
+            <polyline points={seg(back,i1)} stroke="rgba(10,132,255,.20)" strokeWidth="3"/>
+            <polyline points={seg(i1,i2)} stroke="rgba(10,132,255,.40)" strokeWidth="3"/>
+            <polyline points={seg(i2,s.idx)} stroke="rgba(10,132,255,.62)" strokeWidth="3.2"/>
+          </g>}
+          <g transform={"translate("+s.x.toFixed(1)+","+s.y.toFixed(1)+") rotate("+s.ang.toFixed(1)+") scale(1.78)"}>
+            {/* top-down 49er: fine bow, hull, wing flares */}
+            <path d="M0,-8.5 C2.4,-5.5 3.1,-2.5 3.1,0.5 L3.1,1.6 C5.3,1.9 5.3,5.6 3.1,5.9 L3.1,6.8 L-3.1,6.8 L-3.1,5.9 C-5.3,5.6 -5.3,1.9 -3.1,1.6 L-3.1,0.5 C-3.1,-2.5 -2.4,-5.5 0,-8.5 Z"
+              fill="rgba(9,111,214,.95)" stroke="rgba(13,35,60,.9)" strokeWidth=".9" strokeLinejoin="round"/>
+            <line x1="0" y1="-6.5" x2="0" y2="5.5" stroke="rgba(255,255,255,.85)" strokeWidth=".8"/>
+            <circle cx="0" cy="0.5" r="1.2" fill="rgba(255,255,255,.95)"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+/* The two models side by side + one shared info line underneath — hover text lands here,
+   at the very bottom, so nothing ever covers the diagrams. */
+function SpmDuo({cfg}){
+  const[info,setInfo]=React.useState(null);
+  return(
+    <div className="spm-duo">
+      <div className="spm-duorow">
+        <EquipmentModel3D cfg={cfg.equipment} onInfo={setInfo}/>
+        <CourseDiagram cfg={cfg.course} onInfo={setInfo}/>
+      </div>
+      <div className="spm-info">
+        {info
+          ?(<><b>{info.t}</b><span> — {info.d}</span></>)
+          :(<span className="spm-info-hint">Drag the boat to spin it · hover any part or course mark for details</span>)}
+      </div>
+    </div>
+  );
+}
+
+function SportShowcase({clsId}){
+  const cfg=SPORT_MODELS[clsId];
+  if(!cfg)return null;
+  return(
+    <div className="spm-sec">
+      <SpmDuo cfg={cfg}/>
     </div>
   );
 }
@@ -7215,6 +7960,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .hrk{font-family:'Barlow',sans-serif;font-weight:800;font-size:22px;width:58px;text-align:center;flex:none;color:var(--navy);}
     .hrk.p1{color:#a87d00;}.hrk.p2{color:#1f6fb2;}.hrk.p3{color:#b23a3a;}
     .hrk small{display:block;font-size:10px;color:var(--mut);font-weight:600;}
+    .oab{flex:none;display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:980px;
+      background:linear-gradient(135deg,rgba(200,146,11,.16),rgba(22,58,99,.08));
+      border:.5px solid rgba(200,146,11,.4);color:var(--gold);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 1px 2px rgba(0,0,0,.06);
+      backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+    .oab svg{flex:none;}
+    .oabv{font-size:12px;font-weight:700;color:var(--navy);white-space:nowrap;}
+    @media(max-width:430px){.oabv{display:none;}.oab{padding:5px 7px;gap:0;}}
     .rolechip{font-size:10px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:980px;text-transform:uppercase;font-family:'Barlow',sans-serif;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
     .rolechip.helm{color:#fff;background:var(--navy2);}.rolechip.crew{color:var(--navy2);background:var(--sky);}
     .miniraces{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;}
@@ -7513,6 +8266,35 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .liquidGlass-wrapper:hover{transform:scale(1.02) translateY(-1px);}
     .liquidGlass-wrapper:active{transform:scale(0.98);}
     .liquidGlass-wrapper:disabled{opacity:0.45;cursor:not-allowed;transform:none;}
+    /* ── Sport explainer (spm-): per-class equipment hologram + course diagram ── */
+    /* bottom margin reserves room for the absolutely-positioned .spm-info overlay
+       (up to a few wrapped lines of hover text) so it never overlaps the next
+       section ("Recent competitions" on the sailing home page). */
+    .spm-sec{margin:26px 0 92px}
+    /* class/competitions/portal/results pages: title/search/filters take 50%, the two
+       models take 50% on the same row. align-items:end bottom-aligns the models to the
+       header's last line — the reserved margin-bottom below the WHOLE GRID (not inside
+       either grid item) is what keeps the hover info clear of the content beneath,
+       without affecting that alignment or the row's height. */
+    .spm-classgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:end;margin-bottom:80px}
+    .spm-classhead{min-width:0}
+    @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}}
+    .spm-duo{position:relative;min-width:0}
+    .spm-duorow{display:flex;gap:0;justify-content:center;align-items:flex-start}
+    /* pull the two boats together — their outer whitespace overlaps, closing the empty gap */
+    .spm-duorow .spm-holo{flex:1 1 0;min-width:0;max-width:480px}
+    .spm-duorow .spm-holo:first-child{margin-right:-6%}
+    .spm-duorow .spm-holo:last-child{margin-left:-6%}
+    .spm-holo{position:relative} /* frameless — the models sit directly on the page */
+    /* absolutely placed OVERLAY below the row — out of flow, so it never shifts the
+       models or (on the grid pages) the header; callers reserve real space for it via
+       margin-bottom on their own container (.spm-classgrid above, .spm-sec below). */
+    .spm-info{position:absolute;top:100%;left:0;right:0;margin-top:6px;font-size:12.5px;line-height:1.45;color:var(--mut);text-align:left}
+    .spm-info b{color:var(--ink);font-weight:700}
+    .spm-info-hint{opacity:.75}
+    .spm-halo{transform-box:fill-box;transform-origin:center;animation:spmPulse 2.4s ease-out infinite}
+    @keyframes spmPulse{0%{transform:scale(.55);opacity:.75}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}
+    @media (prefers-reduced-motion:reduce){.spm-halo{animation:none;opacity:.35}}
   `}</style>
 
   {/* ── FLOATING TOP BAR (no frame; glass pills that hide on scroll-down) ── */}
@@ -7912,37 +8694,16 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <div className="home-hero">
       <div className="wrap">
         <h1 className="disp" style={{margin:0}}>Sailing</h1>
-        <p style={{marginTop:6,marginBottom:0}}>Results, athlete profiles and class standings for competitive sailing</p>
-        <div className="hero-srch" onClick={e=>e.stopPropagation()}>
-          <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
-          <input placeholder="Search athletes, competitions & clubs…" value={gSearch}
-            onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
-            onFocus={()=>setGSearchOpen(true)}
-            onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
-            onKeyDown={e=>{if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}}}/>
-          {gSearch&&<button className="mp-clear" onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={15}/></button>}
-          {!navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
-            <div className="hero-drop">
-              {gSearchResults.map((r,i)=>(
-                <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
-                  <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
-                    {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
-                  </div>
-                  <div><div className="gi-label">{r.label}</div><div className="gi-sub">{r.sub}</div></div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   )}
 
   {/* (Calendar is now a popup modal — see RACE CALENDAR MODAL below) */}
 
-  {/* ── HOME: breadth strip — class chips, recent competitions, featured athletes.
-      Quiet proof the catalog is deep; the two old grids (class buttons + HK/INT
-      host matrix) are gone — clubs are reached via search and Competitions. ── */}
+  {/* ── HOME: breadth strip — models up top, then the search + class chips +
+      recent competitions + featured athletes. Quiet proof the catalog is deep;
+      the two old grids (class buttons + HK/INT host matrix) are gone — clubs
+      are reached via search and Competitions. ── */}
   {!portal&&view.name==="portals"&&(()=>{
     const published=events.filter(ev=>ev.status!=="Draft");
     const recent=published.slice().sort((a,b)=>{
@@ -7958,7 +8719,30 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     }));
     return(
     <div className="wrap sec">
-      <div className="strip-chips">
+      <SportShowcase clsId="49er"/>
+      <p style={{margin:"0 0 8px",color:"var(--mut)",fontSize:15}}>Results, athlete profiles and class standings for competitive sailing</p>
+      <div className="hero-srch" style={{maxWidth:"none"}} onClick={e=>e.stopPropagation()}>
+        <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
+        <input placeholder="Search athletes, competitions & clubs…" value={gSearch}
+          onChange={e=>{setGSearch(e.target.value);setGSearchOpen(true);runGlobalSearch(e.target.value);}}
+          onFocus={()=>setGSearchOpen(true)}
+          onBlur={()=>setTimeout(()=>setGSearchOpen(false),150)}
+          onKeyDown={e=>{if(e.key==="Escape"){setGSearch("");setGSearchOpen(false);}if(e.key==="Enter"&&gSearchResults.length){execGSearch(gSearchResults[0]);}}}/>
+        {gSearch&&<button className="mp-clear" onClick={()=>{setGSearch("");setGSearchOpen(false);setGSearchResults([]);}}><X size={15}/></button>}
+        {!navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
+          <div className="hero-drop">
+            {gSearchResults.map((r,i)=>(
+              <div key={i} className="gsrch-item" onMouseDown={()=>execGSearch(r)}>
+                <div className="gi-icon" style={{background:r.type==="athlete"?"#e8f4ff":r.type==="event"?"#f0f4ff":r.type==="portal"?"var(--sky)":"#f0f8f0"}}>
+                  {r.type==="athlete"?<Users size={14} color="#1a5e8a"/>:r.type==="event"?<Anchor size={14} color="#1a3e8a"/>:r.type==="portal"?<Waves size={14} color="var(--navy)"/>:<ChevronRight size={14} color="#0a6b41"/>}
+                </div>
+                <div><div className="gi-label">{r.label}</div><div className="gi-sub">{r.sub}</div></div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="strip-chips" style={{marginTop:20}}>
         {CLASSES.map(c=>{
           const n=published.filter(e=>e.cls===c.id).length;
           return(
@@ -8029,45 +8813,57 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     });
     return(
     <div className="wrap sec">
-      <div className="page-head" style={{display:"flex",alignItems:"flex-end",gap:14,flexWrap:"wrap"}}>
-        <div style={{flex:"1 1 auto",minWidth:0}}>
-          <h1 className="page-title">{lens?`${classLabel(lens)} competitions`:"Competitions"}</h1>
-          <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{(lens||cLens)?"":" across all clubs and classes"}</p>
-        </div>
-        <button className="btn ghost" style={{fontSize:13,padding:"8px 14px",flex:"none"}} onClick={()=>openCalendar(null)}><Calendar size={15}/>Calendar</button>
-      </div>
-      <div className="toolbar" style={{marginBottom:12,display:"flex",gap:10,alignItems:"center"}}>
-        <div className="srch" style={{flex:1}}>
-          <Search size={16} color="#9fb2c8"/>
-          <input placeholder="Search competitions, classes & clubs…" value={compQ} onChange={e=>setCompQ(e.target.value)}/>
-        </div>
-      </div>
-      <div className="strip-chips" style={{margin:"0 0 14px"}}>
-        <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:undefined}))}>All</button>
-        {chipDefs.map(c=>{
-          const n=published.filter(e=>e.cls===c.id).length;
-          if(!n) return null;
-          return(
-            <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
-              <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
-            </button>
-          );
-        })}
-        <span className="lens-selwrap">
-          <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
-            <option value="">All countries</option>
-            {compCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
-          </select>
-          <ChevronRight size={13} className="lens-selchev"/>
-        </span>
-        <span className="lens-selwrap">
-          <select className="lens-select" value="" onChange={e=>{if(e.target.value)enterPortal(e.target.value);}}>
-            <option value="">By host…</option>
-            {navHosts.map(h=>(<option key={h.id} value={h.id}>{h.name}</option>))}
-          </select>
-          <ChevronRight size={13} className="lens-selchev"/>
-        </span>
-      </div>
+      {(()=>{
+        const head=(
+          <div className="page-head" style={{display:"flex",alignItems:"flex-end",gap:14,flexWrap:"wrap"}}>
+            <div style={{flex:"1 1 auto",minWidth:0}}>
+              <h1 className="page-title">{lens?`${classLabel(lens)} competitions`:"Competitions"}</h1>
+              <p className="page-sub">{inLens.length} competition{inLens.length!==1?"s":""}{(lens||cLens)?"":" across all clubs and classes"}</p>
+            </div>
+            <button className="btn ghost" style={{fontSize:13,padding:"8px 14px",flex:"none"}} onClick={()=>openCalendar(null)}><Calendar size={15}/>Calendar</button>
+          </div>);
+        const search=(
+          <div className="toolbar" style={{marginBottom:12,display:"flex",gap:10,alignItems:"center"}}>
+            <div className="srch" style={{flex:1}}>
+              <Search size={16} color="#9fb2c8"/>
+              <input placeholder="Search competitions, classes & clubs…" value={compQ} onChange={e=>setCompQ(e.target.value)}/>
+            </div>
+          </div>);
+        const chips=(
+          <div className="strip-chips" style={{margin:"0 0 14px"}}>
+            <button className={`lens-chip${!lens?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:undefined}))}>All</button>
+            {chipDefs.map(c=>{
+              const n=published.filter(e=>e.cls===c.id).length;
+              if(!n) return null;
+              return(
+                <button key={c.id} className={`lens-chip${lens===c.id?" on":""}`} onClick={()=>setView(v=>({...v,name:"competitions",cls:v.cls===c.id?undefined:c.id}))}>
+                  <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
+                </button>
+              );
+            })}
+            <span className="lens-selwrap">
+              <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
+                <option value="">All countries</option>
+                {compCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+              </select>
+              <ChevronRight size={13} className="lens-selchev"/>
+            </span>
+            <span className="lens-selwrap">
+              <select className="lens-select" value="" onChange={e=>{if(e.target.value)enterPortal(e.target.value);}}>
+                <option value="">By host…</option>
+                {navHosts.map(h=>(<option key={h.id} value={h.id}>{h.name}</option>))}
+              </select>
+              <ChevronRight size={13} className="lens-selchev"/>
+            </span>
+          </div>);
+        const cfg=lens?SPORT_MODELS[lens]:null;
+        if(!cfg) return(<>{head}{search}{chips}</>);
+        return( // class explainer: title + search + filters left, the two diagrams packed right on the same row
+          <div className="spm-classgrid">
+            <div className="spm-classhead">{head}{search}{chips}</div>
+            <SpmDuo cfg={cfg}/>
+          </div>);
+      })()}
       {evItems.map(item=>{
         if(item.type==='divider') return(
           <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
@@ -8453,58 +9249,75 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <>
       <div className="strip"><div className="wrap">
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
-        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
-          <div style={{minWidth:0,display:"flex",gap:18,alignItems:"center"}}>
-            {(()=>{
-              // Item 7: globe for BOTH association/club/federation portals AND class portals.
-              let hiso=null;
-              if(isClassPortal){
-                const top=Object.entries(hostCountryCounts).sort((a,b)=>b[1]-a[1])[0];
-                hiso=top?top[0]:null;
-              } else {
-                const hc=hostLocation(portal,events);
-                hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
-              }
-              if(!hiso) return null;
-              return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where they compete — click to expand" onClick={()=>setHostFootprintOpen(true)}>
-                <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={isClassPortal?null:hiso}/>
-              </div>);
-            })()}
-            <div style={{minWidth:0,alignSelf:"center"}}>
-            {/* Item 4: OWNER/role badge sits ABOVE the title, left-aligned. */}
-            {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
-              <div style={{marginBottom:8}}>
-                <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
-                  color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
-                  <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
-                </span>
+        {(()=>{
+          // Models render for any portal whose class has a SPORT_MODEL (e.g. the 49er class association).
+          const modelCfg=SPORT_MODELS[isClassPortal?portalCls:(host&&host.cls)]||null;
+          // Globe for BOTH association/club/federation portals AND class portals.
+          const globe=(()=>{
+            let hiso=null;
+            if(isClassPortal){
+              const top=Object.entries(hostCountryCounts).sort((a,b)=>b[1]-a[1])[0];
+              hiso=top?top[0]:null;
+            } else {
+              const hc=hostLocation(portal,events);
+              hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+            }
+            if(!hiso) return null;
+            return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where they compete — click to expand" onClick={()=>setHostFootprintOpen(true)}>
+              <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={isClassPortal?null:hiso}/>
+            </div>);
+          })();
+          // Actions moved directly BELOW the globe.
+          const actions=(
+            <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",width:150}}>
+              <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
+                <Users size={14} style={{flex:"none"}}/> Athletes
+              </MagneticItem>
+              <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
+                <Calendar size={14} style={{flex:"none"}}/> Calendar
+              </MagneticItem>
+              {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
+                <Trophy size={14} style={{flex:"none"}}/> Rankings
+              </MagneticItem>}
+              {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
+                <Settings size={14} style={{flex:"none"}}/> Edit page
+              </MagneticItem>}
+            </div>
+          );
+          const titleBlock=(
+            <div style={{minWidth:0,alignSelf:"flex-start"}}>
+              {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
+                <div style={{marginBottom:8}}>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
+                    color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
+                    <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
+                  </span>
+                </div>
+              )}
+              <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+                <h1 className="page-title">{portalName}</h1>
               </div>
-            )}
-            <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
-              <h1 className="page-title">{portalName}</h1>
+              <div className="pillbar" style={{marginTop:12}}>
+                <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
+                <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
+              </div>
             </div>
-            <div className="pillbar" style={{marginTop:12}}>
-              <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
-              <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
+          );
+          const head=(
+            <div style={{minWidth:0,display:"flex",gap:18,alignItems:"flex-start",flexWrap:"wrap"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:14,alignItems:"center",flex:"none"}}>
+                {globe}{actions}
+              </div>
+              {titleBlock}
             </div>
-            </div>
-          </div>
-          {/* ── In-portal pill buttons — Item 6: vertically centered against the globe/title block ── */}
-          <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",alignSelf:"center"}}>
-            <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
-              <Users size={14} style={{flex:"none"}}/> Athletes
-            </MagneticItem>
-            <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
-              <Calendar size={14} style={{flex:"none"}}/> Calendar
-            </MagneticItem>
-            {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
-              <Trophy size={14} style={{flex:"none"}}/> Rankings
-            </MagneticItem>}
-            {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
-              <Settings size={14} style={{flex:"none"}}/> Edit page
-            </MagneticItem>}
-          </div>
-        </div>
+          );
+          if(!modelCfg) return head;
+          return(
+            <div className="spm-classgrid">
+              <div className="spm-classhead">{head}</div>
+              <SpmDuo cfg={modelCfg}/>
+            </div>);
+        })()}
       </div></div>
       <div className="wrap sec" style={{paddingTop:0}}>
         {isPendingHostHere&&(
@@ -8684,7 +9497,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       )}
       {(()=>{
         const hostIso=IOC_ISO[ev.country]||(ev.country&&ev.country.length===2?ev.country.toUpperCase():"");
-        return(
+        const head=(
         <div style={{display:"flex",alignItems:"stretch",gap:16,marginBottom:16}}>
           {hostIso&&(
             <div onClick={()=>setRegattaFootprint(ev)} title="Who's racing — click to expand"
@@ -8739,6 +9552,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
           </div>
         </div>);
+        const spmCfg=SPORT_MODELS[ev.cls];
+        if(!spmCfg) return head; // 49er (and any modelled class) gets the explainer beside the header, 50/50
+        return(
+          <div className="spm-classgrid">
+            <div className="spm-classhead">{head}</div>
+            <SpmDuo cfg={spmCfg}/>
+          </div>);
       })()}
       {/* Revealable, sponsor-focused competition summary */}
       <div style={{marginBottom:16}}>
@@ -9184,7 +10004,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             {ag.events>0&&hasFootprint&&(
               <div className="globe-wrap" style={{flex:"0 0 260px",maxWidth:"100%"}}>
                 <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6}}>
-                  {[["footprint","Globe",Globe],["web","Web",WebIcon]].map(([k,lab,Ico])=>(
+                  {[["footprint","Globe",Globe],["web","Web",WebIcon],["progress","Progress",TrendingUp]].map(([k,lab,Ico])=>(
                     <button key={k} onClick={()=>setProfileTab(k)}
                       style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,letterSpacing:".02em",
                         border:"1px solid rgba(120,160,210,.3)",borderRadius:980,padding:"4px 12px",cursor:"pointer",transition:"all .2s ease",
@@ -9207,6 +10027,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       pointerEvents:profileTab==="web"?"auto":"none"}}>
                     {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})}/>}
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click a node to open ⤢</div>
+                  </div>
+                  <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
+                      opacity:profileTab==="progress"?1:0,transform:profileTab==="progress"?"scale(1)":"scale(.82)",
+                      pointerEvents:profileTab==="progress"?"auto":"none"}}>
+                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} height={220}/>}
                   </div>
                 </div>
                 {/* Caption sits below the globe (not over it) so it clears the sphere + glow. */}
@@ -9312,6 +10137,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   return<div key={j} className={`rc ${cls2}`}>{isCode(rc2)?rc2.slice(0,2):rc2}</div>;
                 })}</div>
               </div>
+              {(()=>{const oa=outstandingAchievementFor(h,name);return oa?(
+                <span className="oab" title={oa.title}>
+                  <Award size={13}/>
+                  <span className="oabv">{oa.divisionLabel}</span>
+                </span>):null;})()}
               {(()=>{const n=nuggetFor(h.ev.cls,h.ev.subclass);return n?<span className="cls" style={{background:n.color}}>{n.label}</span>:null;})()}
               <ChevronRight size={18} color="#9fb2c8"/>
             </div>);

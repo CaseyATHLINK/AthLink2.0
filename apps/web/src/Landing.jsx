@@ -1,7 +1,7 @@
-/* AthLink front-door landing. Self-styled (does NOT sit inside ThemeRoot, so the
-   Newsreader serif accents survive the .al-ds font override). Design tokens come
-   from @athlink/design-system tokens.css (:root). Sport-agnostic: the sport cards
-   are driven by the sports registry passed in as `sports`.
+/* AthLink front-door landing. Self-styled (does NOT sit inside ThemeRoot). All
+   type is Apple-native: SF Pro body + New York (ui-serif) accents. Design tokens
+   come from @athlink/design-system tokens.css (:root). Sport-agnostic: the sport
+   cards are driven by the sports registry passed in as `sports`.
    Layout (2026-07 redesign): search-first hero → partner belt → feature tabs
    (with live globe + athlete-web demos) → mission/vision + live stats → contact. */
 import React, { useState, useEffect, useRef } from "react";
@@ -12,8 +12,7 @@ import {
 } from "lucide-react";
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&display=swap');
-.al-landing{--c29:#E84855;--cilca:#2E78C8;--c49:#5FAF4E;--copt:#3D3D3D;--serif:'Newsreader',ui-serif,Georgia,serif;
+.al-landing{--c29:#E84855;--cilca:#2E78C8;--c49:#5FAF4E;--copt:#3D3D3D;--serif:'New York',ui-serif,Georgia,serif;
   font-family:var(--sans,-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif);
   font-optical-sizing:auto;
   color:var(--ink);-webkit-font-smoothing:antialiased;letter-spacing:-.01em;line-height:1.5;
@@ -70,7 +69,6 @@ const CSS = `
 .hs-row .sub{color:#9fc4ec;font-weight:500;font-size:12.5px;margin-left:auto;flex:none;}
 .hs-type{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:rgba(120,170,220,.16);color:#9fc4ec;flex:none;}
 .hs-empty{padding:14px 16px;color:#9fc4ec;font-size:13.5px;}
-.hero .sub2{font-family:var(--serif);font-weight:500;font-size:19px;line-height:1.45;margin:18px auto 0;background:linear-gradient(100deg,#d3e8ff,#8fbcff);-webkit-background-clip:text;background-clip:text;color:transparent;max-width:52ch;}
 .hero-portals{display:flex;gap:14px;justify-content:center;margin-top:34px;flex-wrap:wrap;}
 .pbtn{display:inline-flex;align-items:center;gap:10px;font:inherit;font-weight:800;font-size:16.5px;letter-spacing:-.02em;color:var(--navy);background:var(--mat-reg,rgba(255,255,255,.7));backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border:0;border-radius:980px;padding:13px 24px;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 12px 30px -14px rgba(0,0,0,.5);transition:transform .16s,box-shadow .16s;}
 .pbtn:hover{transform:translateY(-3px);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),0 22px 44px -18px rgba(0,0,0,.55);}
@@ -88,12 +86,12 @@ const CSS = `
 /* ── Partner conveyor belt ── */
 .beltsec{padding:56px 0 40px;}
 .beltwrap{overflow:hidden;margin-top:28px;-webkit-mask-image:linear-gradient(90deg,transparent,#000 10%,#000 90%,transparent);mask-image:linear-gradient(90deg,transparent,#000 10%,#000 90%,transparent);}
-.belt{display:flex;gap:18px;width:max-content;animation:al-belt 30s linear infinite;padding:4px 0 10px;}
+.belt{display:flex;align-items:center;gap:64px;width:max-content;animation:al-belt 30s linear infinite;padding:8px 32px 12px;}
 .beltwrap:hover .belt{animation-play-state:paused;}
 @keyframes al-belt{from{transform:translateX(-50%);}to{transform:translateX(0);}}
-.pchip{display:inline-flex;align-items:center;gap:13px;background:rgba(255,255,255,.55);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);border-radius:16px;padding:14px 24px;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.4),0 8px 22px -12px rgba(0,0,0,.18);flex:none;}
-.pchip img{height:36px;width:auto;display:block;filter:brightness(0) saturate(100%) invert(18%) sepia(34%) saturate(1710%) hue-rotate(184deg) brightness(94%) contrast(92%);opacity:.92;}
-.pchip span{font-weight:700;font-size:14.5px;color:var(--navy);white-space:nowrap;letter-spacing:-.01em;}
+/* Bare logos — no chips, no names. Recoloured to a single navy so every mark
+   sits in the palette (source PNGs have transparency, so the filter works). */
+.blogo{height:52px;width:auto;display:block;flex:none;filter:brightness(0) saturate(100%) invert(18%) sepia(34%) saturate(1710%) hue-rotate(184deg) brightness(94%) contrast(92%);opacity:.88;}
 
 /* ── Feature tabs + rows (no numbered frames) ── */
 .tabs{display:inline-flex;gap:4px;padding:5px;border-radius:980px;margin:34px auto 8px;background:rgba(255,255,255,.5);backdrop-filter:blur(28px) saturate(195%);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 4px 14px -8px rgba(0,0,0,.14);}
@@ -132,15 +130,15 @@ const CSS = `
 .stat .l{font-size:14px;color:var(--mut);margin-top:10px;font-weight:500;}
 
 .mission{text-align:center;}
-.mtext{font-size:27px;line-height:1.5;font-weight:400;color:#33425e;max-width:820px;margin:0 auto;letter-spacing:-.015em;text-align:center;}
-.em{font-family:var(--serif);font-style:normal;font-weight:500;font-size:1.14em;background:linear-gradient(100deg,var(--navy2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent;}
+.mtext{font-size:27px;line-height:1.5;font-weight:600;color:#2a3a56;max-width:820px;margin:0 auto;letter-spacing:-.015em;text-align:center;}
+.em{font-family:var(--serif);font-style:normal;font-weight:700;font-size:1.14em;background:linear-gradient(100deg,var(--navy2),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent;}
 .vision-wrap{max-width:920px;margin:0 auto;}
 .vision-tag{font-size:34px;font-weight:800;letter-spacing:-.03em;color:var(--navy);text-align:center;margin-bottom:26px;}
 
-/* ── Contact quotes ── */
-.quotes{display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:880px;margin:0 auto 44px;}
-.quote{text-align:left;background:rgba(255,255,255,.55);backdrop-filter:blur(26px) saturate(190%);-webkit-backdrop-filter:blur(26px) saturate(190%);border-radius:18px;padding:26px 26px 22px;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.4),0 12px 30px -16px rgba(0,0,0,.22);}
-.quote p{font-family:var(--serif);font-size:20px;line-height:1.45;color:var(--navy);letter-spacing:-.01em;}
+/* ── Contact quotes — frameless, body (sans) font ── */
+.quotes{display:grid;grid-template-columns:1fr 1fr;gap:44px;max-width:880px;margin:0 auto 44px;}
+.quote{text-align:left;padding:6px 4px;}
+.quote p{font-size:21px;line-height:1.45;font-weight:700;color:var(--navy);letter-spacing:-.02em;}
 .quote .who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mut);font-weight:700;margin-top:14px;}
 .contactw{max-width:760px;margin:0 auto;text-align:center;}
 
@@ -174,8 +172,7 @@ const CSS = `
 @media(max-width:900px){
   .hero h1{font-size:42px;} .sec-h{font-size:32px;} .mtext{font-size:22px;} .vision-tag{font-size:26px;}
   .frow,.frow.flip{grid-template-columns:1fr;gap:22px;} .frow.flip .ftext{order:1;} .frow.flip .fshot{order:2;}
-  .stats{grid-template-columns:1fr;max-width:340px;} .quotes{grid-template-columns:1fr;}
-  .hero .sub2{font-size:16.5px;}
+  .stats{grid-template-columns:1fr;max-width:340px;} .quotes{grid-template-columns:1fr;gap:26px;}
 }
 `;
 
@@ -392,27 +389,39 @@ function FeatureRow({ f, flip, demo }) {
   );
 }
 
-/* ── Hero search: debounced anon lookups across athletes, hosts, competitions ── */
+/* ── Hero search: near-instant anon lookups across athletes, hosts, competitions.
+   Fires from the FIRST character with a short debounce; every term's result is
+   cached for the session so retyping/backspacing is instant, and Enter can
+   await the same fetch instead of racing it. ── */
+const SEARCH_CACHE = new Map(); // term -> results[]
+async function fetchSuggestions(term) {
+  if (!term || !sbHeaders) return [];
+  if (SEARCH_CACHE.has(term)) return SEARCH_CACHE.get(term);
+  const enc = encodeURIComponent(`*${term}*`);
+  const [aths, hosts, evs] = await Promise.all([
+    sbRows(`athlete_usernames?select=username,display_name&or=(display_name.ilike.${enc},username.ilike.${enc})&limit=5`),
+    sbRows(`hosts?select=id,name,slug&name=ilike.${enc}&limit=3`),
+    sbRows(`events?select=id,name,date&name=ilike.${enc}&limit=3`),
+  ]);
+  const out = [];
+  (aths || []).forEach((a) => out.push({ type: "athlete", Icon: User, label: a.display_name || a.username, path: `/${a.username}` }));
+  (hosts || []).forEach((h) => out.push({ type: "host", Icon: Landmark, label: h.name, path: `/${h.slug || h.id}` }));
+  (evs || []).forEach((e) => out.push({ type: "competition", Icon: Flag, label: e.name, sub: e.date || "", path: `/event/${e.id}` }));
+  const res = out.slice(0, 9);
+  SEARCH_CACHE.set(term, res);
+  return res;
+}
 function useHeroSearch(q) {
   const [res, setRes] = useState(null); // null = idle, [] = no hits
   useEffect(() => {
     const term = q.trim();
-    if (term.length < 2 || !sbHeaders) { setRes(null); return; }
+    if (!term || !sbHeaders) { setRes(null); return; }
+    if (SEARCH_CACHE.has(term)) { setRes(SEARCH_CACHE.get(term)); return; }
     let dead = false;
     const t = setTimeout(async () => {
-      const enc = encodeURIComponent(`*${term}*`);
-      const [aths, hosts, evs] = await Promise.all([
-        sbRows(`athlete_usernames?select=username,display_name&or=(display_name.ilike.${enc},username.ilike.${enc})&limit=5`),
-        sbRows(`hosts?select=id,name,slug&name=ilike.${enc}&limit=3`),
-        sbRows(`events?select=id,name,date&name=ilike.${enc}&limit=3`),
-      ]);
-      if (dead) return;
-      const out = [];
-      (aths || []).forEach((a) => out.push({ type: "athlete", Icon: User, label: a.display_name || a.username, path: `/${a.username}` }));
-      (hosts || []).forEach((h) => out.push({ type: "host", Icon: Landmark, label: h.name, path: `/${h.slug || h.id}` }));
-      (evs || []).forEach((e) => out.push({ type: "competition", Icon: Flag, label: e.name, sub: e.date || "", path: `/event/${e.id}` }));
-      setRes(out.slice(0, 9));
-    }, 260);
+      const out = await fetchSuggestions(term);
+      if (!dead) setRes(out);
+    }, 90);
     return () => { dead = true; clearTimeout(t); };
   }, [q]);
   return res;
@@ -468,14 +477,21 @@ export default function Landing({ sports = [] }) {
 
   const rows = { hosts: HOSTS, athletes: ATHLETES, sponsors: SPONSORS }[tab];
   const goSailing = () => goPath("/sailing");
-  const onSearchKey = (e) => {
+  const onSearchKey = async (e) => {
     if (e.key === "Escape") { setQ(""); e.target.blur(); }
-    if (e.key === "Enter") { if (results && results.length) goPath(results[0].path); else goSailing(); }
+    if (e.key !== "Enter") return;
+    // Enter resolves suggestions for the CURRENT term (cache-backed, so instant
+    // when the dropdown already shows them) and opens the top match. Never reads
+    // the rendered results directly — they can still belong to the previous
+    // keystroke — and never races the debounce into the sailing home.
+    const term = q.trim();
+    if (term) {
+      const out = await fetchSuggestions(term);
+      if (out.length) { goPath(out[0].path); return; }
+    }
+    goSailing();
   };
-  const belt = [
-    { img: "/partners/rhkyc.png", name: "Royal Hong Kong Yacht Club" },
-    { img: "/partners/hksf.png", name: "Hong Kong Sailing Federation" },
-  ];
+  const belt = ["/partners/rhkyc.png", "/partners/hksf.png", "/partners/abc.png"];
   const beltRow = [...belt, ...belt, ...belt]; // one half of the loop
 
   return (
@@ -491,7 +507,7 @@ export default function Landing({ sports = [] }) {
         </div>
         <div className="tb-center">
           <nav className="tb-nav">
-            <a className="tb-link" href="#trusted">Trusted by</a>
+            <a className="tb-link" href="#trusted">Collaborators</a>
             <a className="tb-link" href="#ecosystem">Who it's for</a>
             <a className="tb-link" href="#mission">Mission</a>
             <a className="tb-link" href="#contact" onClick={openContact}>Contact</a>
@@ -535,7 +551,6 @@ export default function Landing({ sports = [] }) {
                 ))}
               </div>
             )}
-            <p className="sub2">find any athlete or results — every sailing competition, every profile — one search.</p>
           </div>
           <div className="hero-portals">
             <button className="pbtn" onClick={goSailing}>Sailing<span className="pill-live">Live</span><ArrowRight size={16} /></button>
@@ -544,16 +559,15 @@ export default function Landing({ sports = [] }) {
         </div>
       </header>
 
-      {/* TRUSTED BY THE BEST */}
+      {/* COLLABORATORS */}
       <section className="beltsec center" id="trusted">
         <div className="wrap">
-          <div className="seclabel">Trusted by the best</div>
-          <h2 className="sec-h center">The organizations that run the sport</h2>
+          <h2 className="sec-h center">Organizations we collaborate with</h2>
         </div>
         <div className="beltwrap" aria-hidden="true">
           <div className="belt">
-            {[...beltRow, ...beltRow].map((p, i) => (
-              <span className="pchip" key={i}><img src={p.img} alt="" /><span>{p.name}</span></span>
+            {[...beltRow, ...beltRow].map((src, i) => (
+              <img className="blogo" src={src} alt="" key={i} />
             ))}
           </div>
         </div>
@@ -631,7 +645,7 @@ export default function Landing({ sports = [] }) {
             </div>
             <div className="foot-links">
               <div className="foot-col"><h5>Portals</h5><a onClick={goSailing}>Sailing</a><span className="dead">Golf — coming soon</span></div>
-              <div className="foot-col"><h5>Platform</h5><a href="#trusted">Trusted by</a><a href="#ecosystem">Who it's for</a></div>
+              <div className="foot-col"><h5>Platform</h5><a href="#trusted">Collaborators</a><a href="#ecosystem">Who it's for</a></div>
               <div className="foot-col"><h5>Company</h5><a href="#mission">Mission</a><a onClick={openContact}>Contact</a></div>
             </div>
           </div>
