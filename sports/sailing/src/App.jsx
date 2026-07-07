@@ -8464,7 +8464,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .np-item{position:relative;}
     .np-drop{position:absolute;top:calc(100% + 10px);left:50%;transform:translateX(-50%) translateY(-6px);min-width:232px;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:12px;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:70;}
     .np-drop::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px;}
-    .np-item:hover .np-drop,.np-item:focus-within .np-drop{opacity:1;pointer-events:auto;transform:translateX(-50%);}
+    /* Hover-only reveal. :has(:focus-visible) keeps keyboard (Tab) access without
+       pinning on mouse-click — a mouse click never triggers :focus-visible, so the
+       dropdown closes the moment the pointer leaves (no click-out needed). */
+    .np-item:hover .np-drop,.np-item:has(:focus-visible) .np-drop{opacity:1;pointer-events:auto;transform:translateX(-50%);}
     .nd-label{margin:2px 4px 8px;font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);}
     .nd-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 2px 10px;}
     .nd-chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;font-weight:700;color:var(--navy);border:0;background:rgba(255,255,255,.6);border-radius:980px;padding:6px 12px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),0 1px 2px rgba(0,0,0,.06);transition:.14s;}
@@ -8825,7 +8828,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <button className="np-menubtn" title="Menu" aria-label="Menu" onClick={()=>setNavMenuOpen(o=>!o)}><Menu size={18}/></button>
               {/* Athletes — by class / by country / by host */}
               <div className="np-item">
-                <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
+                <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("athletes");}}>Athletes</button>
                 <div className="np-drop">
                   <p className="nd-label">By class</p>
                   <div className="nd-chips">
@@ -8848,7 +8851,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               {/* Competitions — by class / by country / by host */}
               <div className="np-item">
-                <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
+                <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("competitions");}}>Competitions</button>
                 <div className="np-drop">
                   <p className="nd-label">By class</p>
                   <div className="nd-chips">
@@ -8871,7 +8874,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               {/* Hosts — by type / by country */}
               <div className="np-item">
-                <button className={`np-link${navOn==="hosts"?" on":""}`} onClick={()=>goTop("hosts")}>Hosts</button>
+                <button className={`np-link${navOn==="hosts"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("hosts");}}>Hosts</button>
                 <div className="np-drop">
                   <p className="nd-label">By type</p>
                   {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
