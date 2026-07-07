@@ -9616,7 +9616,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
       <div className="wrap sec" style={{paddingTop:16}}>
         <div className="page-head">
-          <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
           <h1 className="page-title">Rankings</h1>
           <p className="page-sub">{comps.length} competition{comps.length!==1?"s":""} · {rankAthleteCount} athlete{rankAthleteCount!==1?"s":""} in the {clsShort} series</p>
         </div>
@@ -10176,7 +10175,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:16}}>
       <div className="page-head">
-        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
+        {/* Back only inside a host portal (drill-down); the global Athletes page is
+            top-level and gets no Back, matching Hosts/Competitions. */}
+        {portal&&<button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>}
         <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",width:"100%"}}>
           <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{lensPeople.length}</span></h1>
           {portal&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
