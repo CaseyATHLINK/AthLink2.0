@@ -8437,6 +8437,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .rc.g1{background:#fbe7a6;color:#7a5600;border:1.5px solid #c79a16;}
     .rc.g2{background:#bfe0fb;color:#0d5a96;border:1.5px solid #2a86d6;}
     .rc.g3{background:#fbcaca;color:#9a2222;border:1.5px solid #d65050;}
+    /* Compact miniraces for the Rankings cumulative cells: same .rc colour classes
+       as the profile, smaller, flowing into at most 2 rows (grow horizontally). */
+    .rank-mini{display:grid;grid-auto-flow:column;grid-template-rows:repeat(2,auto);gap:3px;justify-content:start;margin-top:0;}
+    .rank-mini .rc{width:17px;height:17px;border-radius:5px;font-size:9px;}
+    .rank-mini .rc.g1,.rank-mini .rc.g2,.rank-mini .rc.g3{border-width:1px;}
     /* Home */
     .home-hero{background:none;color:var(--ink);padding:8px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:36px;font-weight:800;margin:0 0 6px;}
@@ -9541,7 +9546,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const fleetN=ev.entries.length||sc.rows.length||1;
       compMeta[ev.id]={fleetN,dncVal:fleetN+1,raceCount};
       sc.rows.forEach(r=>{
-        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,pts:r.pts||[]};
+        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,pts:r.pts||[],discardSet:r.discardSet};
         if(dh){
           const hk=canonName(r.helm||""),ck=canonName(r.crew||"");
           const key=[hk,ck].filter(Boolean).sort().join("|")||hk||ck;if(!key) return;
@@ -9705,9 +9710,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <tr>
                   <th style={{width:48}}>Rank</th>
                   <th className="l">{dh?"Team":"Athlete"}</th>
+                  <th>Div</th>
                   {comps.map((c,i)=><th key={c.id} title={c.name} style={{maxWidth:130}}><div style={{maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",margin:"0 auto"}}>{c.name}</div></th>)}
                   <th>Total</th>
-                  <th>Div</th>
                 </tr>
               </thead>
               <tbody>
@@ -9724,21 +9729,38 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                           </div>
                           :<span className="namelink" onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
                       </td>
+                      <td style={{whiteSpace:"nowrap"}}>
+                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
+                        {r.division&&<Nug>{r.division}</Nug>}
+                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
+                      </td>
                       {comps.map(c=>{
                         const pc=r.perComp[c.id];const pcell=r.per[c.id];
-                        const shown=rankMode==="position"?(pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–")):pcell.contrib;
                         const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
+                        // Cumulative mode: show the actual per-race results inline as compact
+                        // nuggets (same .rc colour classes as the profile miniraces), flowing
+                        // into at most 2 rows. Absent athletes keep the italic "DNC".
+                        if(rankMode==="cumulative"){
+                          return <td key={c.id} style={{textAlign:"center"}}>
+                            {pcell.dnc
+                              ?<span style={{color:"var(--mut)",fontSize:12,fontStyle:"italic"}}>DNC</span>
+                              :<button onClick={()=>pc&&toggleRankCell(ek)} title="Tap for race detail"
+                                 style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",borderRadius:8,padding:3,cursor:pc?"pointer":"default"}}>
+                                 <div className="miniraces rank-mini">{(pc.races||[]).map((rc2,j)=>{
+                                   const cls2=isCode(rc2)?"c":pc.discardSet?.has(j)?"d":rc2===1?"g1":rc2===2?"g2":rc2===3?"g3":"";
+                                   return<div key={j} className={`rc ${cls2}`}>{isCode(rc2)?rc2.slice(0,2):rc2}</div>;
+                                 })}</div>
+                               </button>}
+                          </td>;
+                        }
+                        // Position mode: unchanged — the regatta placing (or DNC value).
+                        const shown=pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–");
                         return <td key={c.id}>
                           <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this competition (entries+1)":"Tap for race detail"}
                             style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:pcell.dnc?"var(--mut)":"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:pc?"pointer":"default",fontSize:13,fontStyle:pcell.dnc?"italic":"normal"}}>{shown}{pcell.dnc?" DNC":""}</button>
                         </td>;
                       })}
                       <td style={{fontWeight:800}}>{r.total}</td>
-                      <td style={{whiteSpace:"nowrap"}}>
-                        {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
-                        {r.division&&<Nug>{r.division}</Nug>}
-                        {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
-                      </td>
                     </tr>
                     {expanded.map(c=>{
                       const pc=r.perComp[c.id];
