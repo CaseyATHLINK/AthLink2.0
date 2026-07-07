@@ -22,8 +22,12 @@ Beachhead: Hong Kong class associations (29er, ILCA, Optimist, 49er).
 - Frontend: React 18, single-file `src/App.jsx` (~7,100+ lines), Vite
 - Backend: Python serverless `api/parse_pdf.py` + `api/ai_filter.py`
 - DB/Auth: Supabase (Postgres + GoTrue), project ref `ylzoburtpibbgqdggjty`
-- AI: Anthropic `claude-haiku-4-5` — PDF parsing, flag-nationality reading,
-  athlete overviews, hover summaries, smart filters
+- AI (parser v3, 2026-07): **Gemini is the universal primary** for EVERY AI task
+  (search suggestions, overviews, hover blurbs, flag/nat reads, photo/scan vision,
+  date/country enrichment) via ONE paid key `Gemini_API_Key_Universal`. **Anthropic
+  Sonnet 5 (`claude-sonnet-5`) is the ONE fallback** — fires only on a Gemini
+  error. No Haiku anywhere; Kimi/DeepSeek/Cerebras retired from default routes.
+  Per-task model map + key resolution live in `api/llm.py` (see below).
 - Hosting: Vercel Hobby (60s function ceiling — never exceed in parse_pdf.py)
 - Repo: CaseyATHLINK/AthLink2.0
 
@@ -47,10 +51,22 @@ ventures, the Obsidian vault, cross-cutting planning.
 ## Env vars (.env.local — never commit)
 - VITE_SUPABASE_URL — base URL only, no trailing /rest/v1/
 - VITE_SUPABASE_ANON_KEY
-- ANTHROPIC_API_KEY
-- GEMINI_API_KEY — vision + nat reads ("parser" key, Google AI Studio)
-- GEMINI_VISION_MODEL / GEMINI_NAT_MODEL — optional overrides (default gemini-3.5-flash)
-- KIMI_API_KEY — text-task router (llm.py)
+- **`Gemini_API_Key_Universal`** — the ONE paid Gemini key for EVERY AI task
+  (exact mixed-case name; set in Vercel Production + Preview). Resolved centrally
+  via `llm._gemini_key()`, which falls back to the legacy **`GEMINI_API_KEY`** so
+  local `.env.local` keeps working. Every Gemini call in api/*.py resolves through
+  that one helper.
+- **`ANTHROPIC_API_KEY`** — universal FALLBACK only (Sonnet 5). Fires when Gemini
+  errors/rate-limits. AI mode works with just the Gemini key; Anthropic isn't
+  required for a deploy.
+- Model overrides (env, no code change): `FILTER_MODEL`, `OVERVIEW_MODEL`,
+  `HOVER_MODEL`, `NAT_MODEL` (legacy `GEMINI_NAT_MODEL`), `VISION_MODEL` (legacy
+  `GEMINI_VISION_MODEL`), `ENRICH_MODEL`, and `ANTHROPIC_FALLBACK_MODEL`
+  (default `claude-sonnet-5`).
+- RETIRED (deactivated / no longer routed to): the old free Gemini keys
+  (`parser` …7qyQ, `flag-reading` …18vw, `athlink2.0` …Etaw), `KIMI_API_KEY`,
+  DeepSeek and Cerebras. The `openai`-compatible caller stays in llm.py so a
+  provider can be re-added purely via env, but no task routes to them by default.
 - VERCEL_OIDC_TOKEN (pulled automatically via vercel env pull)
 
 ## Validation — run after every App.jsx edit
@@ -294,13 +310,20 @@ Table: athlete_claims.
   excel-print-pdf, club-custom-xlsx, pya-events. Deferred to AI/vision by
   design: worldsailing-resultscentre, hubsail + Dragon multi-crew (big boat,
   out of scope), cn-games-book, ioda-word-notice, all zero-text scans.
-- AI routing (api/llm.py): vision/photos → Gemini (gemini-3.5-flash,
-  GEMINI_VISION_MODEL override); text fallback → Kimi; Anthropic Haiku 4.5 is
-  the universal fallback. Images now go Gemini-first — bake-off 2026-07-04:
-  Gemini 30s vs Kimi 48s at equal accuracy, and Kimi silently truncates long
-  tables + can't ingest PDFs. Gemini calls walk a model LADDER
-  (3.5-flash → 3-flash-preview → 2.5-flash) on quota-429s because the free
-  tier caps each model per day; consider paid billing on the Gemini key.
+- AI routing (api/llm.py) — parser v3, 2026-07: **Gemini-primary / Sonnet-5
+  fallback for ALL tasks.** `ROUTES` per-task map (provider always `gemini`, key
+  via `_gemini_key()`):
+    · `filter` (search suggestions) → `gemini-3.1-flash-lite` (benchmarked 0.92s)
+    · `overview` / `hover` → `gemini-3.1-flash-lite`
+    · `nat` (flag/nat vision) → `gemini-3-flash`
+    · `vision` (photo/scan parse) → `gemini-3-flash`
+    · `enrich` (date/country) → `gemini-3-flash` + Google Search grounding
+    · fallback (all) → `claude-sonnet-5` via ANTHROPIC_API_KEY (never Haiku)
+  Each model is env-overridable (see env matrix). `parse_pdf.py` prefers a direct
+  Gemini `_gemini_parse` when rules fail (faster/cheaper than the Anthropic agent
+  loop); the agent loop is Anthropic-only fallback when there's no Gemini key.
+  `_gemini_parse` itself falls back to Sonnet on a Gemini error. `enrich.py` uses
+  Gemini + `google_search` grounding, Sonnet web_search as fallback.
 - Tall screenshots (h>2400 and h>1.8w, e.g. full-page web captures) are parsed
   in ~800px horizontal bands served through the SAME ?count=1 / ?page=N
   chunking the client already uses for PDFs (a dense band ≈ 1.4s/row of vision
@@ -325,6 +348,14 @@ Table: athlete_claims.
 - Test loop: /opt/anaconda3/bin/python3 tools/test_parser.py --diff — one
   fixture per family in tools/fixtures/ (17 fixtures incl. xlsx/blw/html);
   regenerate baselines deliberately, never blind-accept.
+- WHOLE-CORPUS regression harness (parser v3): /opt/anaconda3/bin/python3
+  tools/corpus_test.py [--update|--diff] — runs the rule parser over EVERY file
+  in "Results to parse" + the extracted Email 7/8/9 zips, recording family,
+  per-fleet counts, confidence, wall-time and correctness smells (suspicious dup
+  ranks, ragged races, missing sails, name pollution). Snapshots in
+  tools/corpus_baseline/ are the regression contract. Current: 77 rule / 21
+  vision-by-design / 4 images / 3 deferred-to-vision (Palma+SOF Sailti glyph,
+  Hebe clubspot). Scoreboard + limitations: docs/parser-v3-results.md.
 
 ## Known gotchas
 - TDZ is the primary white-screen vector — mandatory check after every edit
