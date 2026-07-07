@@ -6075,6 +6075,13 @@ export default function AthLinkMVP(){
   const[profileSuggestions,setProfileSuggestions]=useState([]);
   const[profileSugLoading,setProfileSugLoading]=useState(false);
   const[profileSugTimer,setProfileSugTimer]=useState(null);
+  // Fast-suggestion plumbing (§5c): cancel the in-flight request on every new
+  // keystroke (AbortController) so a slow earlier query never overwrites a newer
+  // one, and cache completed suggestions per query so backspacing is instant.
+  const evSugAbortRef=React.useRef(null);
+  const evSugCacheRef=React.useRef(new Map());
+  const profileSugAbortRef=React.useRef(null);
+  const profileSugCacheRef=React.useRef(new Map());
   // Global search
   const[gSearch,setGSearch]=useState("");
   // Calendar
@@ -6706,6 +6713,12 @@ Query: "${qq}"`,
   /* ── AI suggestions (debounced) ─────────────────────────── */
   const fetchEvSuggestions=async(q)=>{
     if(!q.trim()||q.length<3){setEvSuggestions([]);return;}
+    const key=q.trim().toLowerCase();
+    // Cache hit → instant, no network (backspacing to a prior prefix is free).
+    if(evSugCacheRef.current.has(key)){setEvSuggestions(evSugCacheRef.current.get(key));setEvSugLoading(false);return;}
+    // Cancel any in-flight request so a slower older one can't clobber this.
+    if(evSugAbortRef.current)evSugAbortRef.current.abort();
+    const ctrl=new AbortController();evSugAbortRef.current=ctrl;
     setEvSugLoading(true);
     try{
       const eventCtx=classEvents.slice(0,5).map(e=>`"${e.name}" (${scoreEvent(e).fleet} boats)`).join(", ");
@@ -6714,34 +6727,44 @@ Return ONLY a JSON array of 4 strings (no markdown). Each string is a complete n
 Context: portal=${host?.name||"unknown"}, recent events: ${eventCtx}
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        signal:ctrl.signal,
         body:JSON.stringify({task:"filter",prompt,max_tokens:200})});
       const data=await res.json();
       if(data.ok){
         const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
         const arr=JSON.parse(clean);
-        setEvSuggestions(Array.isArray(arr)?arr.slice(0,4):[]);
+        const out=Array.isArray(arr)?arr.slice(0,4):[];
+        evSugCacheRef.current.set(key,out);
+        setEvSuggestions(out);
       }
-    }catch{setEvSuggestions([]);}
-    finally{setEvSugLoading(false);}
+    }catch(e){if(e?.name==="AbortError")return;setEvSuggestions([]);}
+    finally{if(evSugAbortRef.current===ctrl){evSugAbortRef.current=null;setEvSugLoading(false);}}
   };
 
   const fetchProfileSuggestions=async(q)=>{
     if(!q.trim()||q.length<3){setProfileSuggestions([]);return;}
+    const key=q.trim().toLowerCase();
+    if(profileSugCacheRef.current.has(key)){setProfileSuggestions(profileSugCacheRef.current.get(key));setProfileSugLoading(false);return;}
+    if(profileSugAbortRef.current)profileSugAbortRef.current.abort();
+    const ctrl=new AbortController();profileSugAbortRef.current=ctrl;
     setProfileSugLoading(true);
     try{
       const prompt=`Suggest 4 short sailing result filter queries for an athlete profile.
 Return ONLY a JSON array of 4 strings. Each is a complete filter query.
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        signal:ctrl.signal,
         body:JSON.stringify({task:"filter",prompt,max_tokens:150})});
       const data=await res.json();
       if(data.ok){
         const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
         const arr=JSON.parse(clean);
-        setProfileSuggestions(Array.isArray(arr)?arr.slice(0,4):[]);
+        const out=Array.isArray(arr)?arr.slice(0,4):[];
+        profileSugCacheRef.current.set(key,out);
+        setProfileSuggestions(out);
       }
-    }catch{setProfileSuggestions([]);}
-    finally{setProfileSugLoading(false);}
+    }catch(e){if(e?.name==="AbortError")return;setProfileSuggestions([]);}
+    finally{if(profileSugAbortRef.current===ctrl){profileSugAbortRef.current=null;setProfileSugLoading(false);}}
   };
 
   /* ── Global search ───────────────────────────────────────── */
@@ -9375,7 +9398,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 onChange={e=>{
                   setEvFilter(e.target.value);
                   clearTimeout(evSugTimer);
-                  setEvSugTimer(setTimeout(()=>fetchEvSuggestions(e.target.value),500));
+                  setEvSugTimer(setTimeout(()=>fetchEvSuggestions(e.target.value),200));
                 }}
                 onKeyDown={e=>{
                   if(e.key==="Enter"){setEvSuggestions([]);runEvFilter();}
@@ -10059,7 +10082,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 onChange={e=>{
                   setProfileFilter(e.target.value);
                   clearTimeout(profileSugTimer);
-                  setProfileSugTimer(setTimeout(()=>fetchProfileSuggestions(e.target.value),500));
+                  setProfileSugTimer(setTimeout(()=>fetchProfileSuggestions(e.target.value),200));
                 }}
                 onKeyDown={e=>{
                   if(e.key==="Enter"){setProfileSuggestions([]);runProfileFilter();}
