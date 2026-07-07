@@ -2968,7 +2968,33 @@ function InfoHint({text}){
    enlarged view a chip row overlays a rival's rating curve (dashed, no band)
    for direct comparison; clicking a dot opens a per-competition sidebar with
    the athlete's result and the rival cohort who sailed that same competition. */
-const PROGRESS_RIVAL_HINT="Skill rating is computed from every official result — beating higher-rated athletes in stronger fleets moves it most. The shaded band shows uncertainty: it widens when an athlete races rarely. Official results are never altered.";
+const PROGRESS_RIVAL_HINT="Think of this as a skill score, like a chess rating. Every athlete starts at 1200. Beat athletes rated above you and your score climbs; finish behind athletes rated below you and it drops — winning against stronger fleets counts for more. The shaded area shows how confident the score is: it's wide when someone competes rarely, and tightens the more they compete. Placings come straight from the official results and are never altered.";
+// Monotone cubic (Fritsch–Carlson) path through EXACTLY the given points — curves
+// the segments without ever overshooting a neighbouring point (the honesty
+// constraint). points=[[x,y],…] → "M…C…" string. <3 points → straight segments.
+// Declared at module scope, above ProgressChart, so it's defined before use (no TDZ).
+function monoPath(points){
+  const n=points.length;
+  if(n<2)return n?`M${points[0][0]},${points[0][1]}`:"";
+  if(n<3)return `M${points.map(p=>`${p[0]},${p[1]}`).join("L")}`;
+  const xs=points.map(p=>p[0]), ys=points.map(p=>p[1]);
+  const dx=[],dy=[],slope=[];
+  for(let i=0;i<n-1;i++){const h=xs[i+1]-xs[i];dx[i]=h;dy[i]=ys[i+1]-ys[i];slope[i]=h!==0?dy[i]/h:0;}
+  const m=new Array(n);
+  m[0]=slope[0]; m[n-1]=slope[n-2];
+  for(let i=1;i<n-1;i++){
+    if(slope[i-1]*slope[i]<=0)m[i]=0;
+    else{const w1=2*dx[i]+dx[i-1], w2=dx[i]+2*dx[i-1];m[i]=(w1+w2)/(w1/slope[i-1]+w2/slope[i]);}
+  }
+  let d=`M${xs[0]},${ys[0]}`;
+  for(let i=0;i<n-1;i++){
+    const h=dx[i];
+    const c1x=xs[i]+h/3,     c1y=ys[i]+m[i]*h/3;
+    const c2x=xs[i+1]-h/3,   c2y=ys[i+1]-m[i+1]*h/3;
+    d+=`C${c1x},${c1y} ${c2x},${c2y} ${xs[i+1]},${ys[i+1]}`;
+  }
+  return d;
+}
 function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=260,enlarged=false,onOpenEvent,onPick,onSelectionChange,deselectKey=0}){
   const [tip,setTip]=React.useState(null);       // {x,y,lines:[..]}  (inline hover)
   const [selPt,setSelPt]=React.useState(null);   // selected competition index (enlarged sidebar)
@@ -2995,9 +3021,11 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
   const S=w/260;                                             // scales the line / dot geometry with the chart width
   const glowId="pgGlow"+Math.round(w), softId="pgSoft"+Math.round(w);
   const AX=9.5;                                              // axis label size — fixed, matching the Rating/Competition legend
-  const titleBlock=enlarged?24:0, captionBlock=enlarged?26:0, legendBlock=enlarged?20:0, chipBlock=enlarged?30:0;
+  // Title removed (popup chrome already titles the view); its old 24px allowance
+  // is folded into plot breathing room rather than being reclaimed as blank space.
+  const titleBlock=0, captionBlock=enlarged?26:0, legendBlock=enlarged?30:0, chipBlock=enlarged?30:0;
   const CH=Math.max(70,height-titleBlock-captionBlock-legendBlock-chipBlock-6);
-  const M={l:34,r:11,t:9,b:16};                             // fixed gutters — axis labels are a fixed size, so margins don't scale
+  const M=enlarged?{l:52,r:20,t:16,b:28}:{l:40,r:12,t:10,b:18}; // mode-dependent gutters so nothing hugs the borders
   const plotW=w-M.l-M.r, plotH=CH-M.t-M.b;
   const showTip=(e,lines)=>{const host=e.currentTarget.ownerSVGElement.parentElement.getBoundingClientRect();const r=e.currentTarget.getBoundingClientRect();
     setTip({x:Math.min(Math.max(r.left-host.left+r.width/2,60),host.width-60),y:r.top-host.top,lines});};
@@ -3035,12 +3063,16 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
     const xForTs=ts=>M.l+plotW*(ts-t0)/span;
     const xOf=p=>Math.min(Math.max(xForTs(tsOf(p)),M.l),w-M.r);
     const nY=y1-y0+1, every=nY>12?3:nY>7?2:1;
-    // Rating line + uncertainty band (band = actual points only, never interpolated in gaps)
-    const linePts=pts.map(p=>`${xOf(p)},${yOf(p.r)}`).join(" ");
-    const bandUp=pts.map(p=>`${xOf(p)},${yOf(p.r+p.rd)}`);
-    const bandLo=pts.map(p=>`${xOf(p)},${yOf(p.r-p.rd)}`).reverse();
-    const bandPath=`M${bandUp.join("L")}L${bandLo.join("L")}Z`;
-    const overlayLine=oShow&&oShow.length?oShow.map(p=>`${xOf(p)},${yOf(p.r)}`).join(" "):null;
+    // Rating line + uncertainty band (band = actual points only, never interpolated in gaps).
+    // Monotone-cubic curves pass EXACTLY through every point — no value smoothing.
+    const lineXY=pts.map(p=>[xOf(p),yOf(p.r)]);
+    const linePath=monoPath(lineXY);
+    // Band: upper edge L→R, then lower edge R→L, one closed path. monoPath emits an
+    // "M…" prefix; strip the second one and prepend an "L" so both edges join cleanly.
+    const bandUpPath=monoPath(pts.map(p=>[xOf(p),yOf(p.r+p.rd)]));
+    const bandLoPath=monoPath(pts.map(p=>[xOf(p),yOf(p.r-p.rd)]).reverse());
+    const bandPath=`${bandUpPath}L${bandLoPath.slice(1)}Z`;
+    const overlayPath=oShow&&oShow.length?monoPath(oShow.map(p=>[xOf(p),yOf(p.r)])):null;
     body=(
       <svg width="100%" height={CH} viewBox={`0 0 ${w} ${CH}`} style={{display:"block"}}>
         <defs>
@@ -3052,11 +3084,19 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
             <feGaussianBlur stdDeviation={3.4*S}/>
           </filter>
         </defs>
+        {/* faint horizontal gridlines at each y tick, under everything */}
+        {ticks.map(v=>
+          <line key={"g"+v} x1={M.l} y1={yOf(v)} x2={w-M.r} y2={yOf(v)} stroke="rgba(220,236,248,.06)" strokeWidth={S}/>)}
         {/* y axis: skill-rating ticks at round values */}
-        <text transform={`rotate(-90 10 ${M.t+plotH/2})`} x={10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fill="#7fa0c0">Skill rating</text>
+        <text transform={`rotate(-90 ${enlarged?14:10} ${M.t+plotH/2})`} x={enlarged?14:10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fill="#7fa0c0">Skill rating</text>
         {ticks.map(v=>
           <text key={v} x={M.l-4} y={yOf(v)+3} textAnchor="end" fontSize={AX} fill="#7fa0c0">{v}</text>)}
         <line x1={M.l} y1={M.t+plotH} x2={w-M.r} y2={M.t+plotH} stroke="rgba(220,236,248,.18)" strokeWidth={S}/>
+        {/* start·1200 anchor: dashed reference line only when 1200 sits in-domain */}
+        {1200>=lo&&1200<=hi&&(<g>
+          <line x1={M.l} y1={yOf(1200)} x2={w-M.r} y2={yOf(1200)} stroke="rgba(220,236,248,.25)" strokeWidth={S} strokeDasharray="3 3"/>
+          <text x={w-M.r} y={yOf(1200)-3} textAnchor="end" fontSize={8.5} fill="#7fa0c0">start · 1200</text>
+        </g>)}
         {/* x axis: a gridline + label per year (thinned if the window is wide) */}
         {Array.from({length:nY},(_,i)=>y0+i).map((Y,idx)=>{
           const gx=xForTs(Date.UTC(Y,0,1));
@@ -3064,42 +3104,41 @@ function ProgressChart({name,events,history,selYears=null,yrKey="",height=220,w=
           const show=(idx%every===0)||Y===y1;
           return(<g key={Y}>
             {Y>y0&&<line x1={gx} y1={M.t} x2={gx} y2={M.t+plotH} stroke="rgba(220,236,248,.07)" strokeWidth={S}/>}
-            {show&&<text x={cx} y={CH-4} textAnchor="middle" fontSize={AX} fill="#7fa0c0">{Y}</text>}
+            {show&&<text x={cx} y={CH-(enlarged?8:4)} textAnchor="middle" fontSize={AX} fill="#7fa0c0">{Y}</text>}
           </g>);
         })}
         {/* uncertainty band, under everything */}
         <path d={bandPath} fill="rgba(52,169,230,.13)" stroke="none"/>
         {/* rival overlay: dashed muted line, no band, no dots, no glow */}
-        {overlayLine&&<polyline points={overlayLine} fill="none" stroke="#8fa8c4" strokeWidth={1.6*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${5*S} ${4*S}`}/>}
+        {overlayPath&&<path d={overlayPath} fill="none" stroke="#8fa8c4" strokeWidth={1.6*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${5*S} ${4*S}`}/>}
         {/* the rating line: always shown, with a slow soft glow gliding left → right */}
-        <polyline points={linePts} fill="none" stroke="#34a9e6" strokeWidth={2.1*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
-        <polyline className="pg-pulse" pathLength="1" points={linePts} fill="none" stroke="#a9e0ff" strokeWidth={3.4*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
+        <path d={linePath} fill="none" stroke="#34a9e6" strokeWidth={2.1*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
+        <path className="pg-pulse" pathLength="1" d={linePath} fill="none" stroke="#a9e0ff" strokeWidth={3.4*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
         {/* per-competition dots ringed in their boat-class colour */}
         {pts.map((p,i)=>{const on=enlarged&&selPt===i;const cc=classColor(p.cls);return(
-          <circle key={i} cx={xOf(p)} cy={yOf(p.r)} r={(on?4.6:3)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?2:1.6)*S} style={{cursor:"pointer"}}
+          <circle key={i} cx={xOf(p)} cy={yOf(p.r)} r={(on?4.6:2.4)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?2:1.4)*S} style={{cursor:"pointer"}}
             onClick={enlarged?()=>setSelPt(i===selPt?null:i):undefined}
             onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Rating ${Math.round(p.r)} (${fmtDelta(p.delta)})`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
             onMouseLeave={enlarged?undefined:()=>setTip(null)}/>);})}
       </svg>);
   }
   const chartCol=(
-    <div style={{position:"relative",display:"flex",flexDirection:"column",width:"100%",height}}>
-      {enlarged&&<div style={{flex:"none",textAlign:"center",fontSize:15.5,fontWeight:800,color:"#fff",letterSpacing:"-.01em"}}>Progress</div>}
+    <div style={{position:"relative",display:"flex",flexDirection:"column",width:"100%",height,paddingBottom:enlarged?6:0,boxSizing:"border-box"}}>
       {enlarged&&<div style={{flex:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:6,color:"#9fbdd9",fontSize:13,lineHeight:1.35,margin:"3px 12px 6px"}}>
         <span>How {name}'s skill rating has developed over time.</span>
         <InfoHint text={PROGRESS_RIVAL_HINT}/>
       </div>}
       {enlarged&&cohort5&&cohort5.rivals.length>0&&(
         <div style={{flex:"none",display:"flex",alignItems:"center",gap:8,justifyContent:"center",flexWrap:"wrap",margin:"0 12px 6px"}}>
-          <span style={{fontSize:11,fontWeight:700,color:"#7fa0c0",letterSpacing:".02em"}}>Compare:</span>
+          <span style={{fontSize:11,fontWeight:700,color:"#7fa0c0",letterSpacing:".02em"}}>Compare with rival:</span>
           {cohort5.rivals.map(r=>{const active=rivalKey===r.key;const cc=classColor(modeOfCountMap(cohort5.clsCount.get(r.key)));return(
-            <button key={r.key} onClick={()=>setRivalKey(active?null:r.key)}
+            <button key={r.key} onClick={()=>setRivalKey(active?null:r.key)} title={`Overlay ${r.name}'s rating line`}
               style={{display:"inline-flex",alignItems:"center",gap:6,border:"1px solid "+(active?"var(--accent)":"rgba(120,160,210,.32)"),background:active?"var(--accent)":"rgba(120,160,210,.1)",
                 color:active?"#fff":"#cfe0f2",borderRadius:980,padding:"3px 11px",fontSize:11.5,fontWeight:700,cursor:"pointer",lineHeight:1.2}}>
               <span style={{width:8,height:8,borderRadius:"50%",background:cc,flex:"none"}}/>{r.name}</button>);})}
         </div>)}
       {body}
-      {enlarged&&<div style={{flex:"none",display:"flex",gap:16,justifyContent:"center",alignItems:"center",marginTop:6,flexWrap:"wrap"}}>
+      {enlarged&&<div style={{flex:"none",display:"flex",gap:16,justifyContent:"center",alignItems:"center",marginTop:10,flexWrap:"wrap"}}>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Rating</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:9,height:9,borderRadius:"50%",background:"#fff",boxShadow:"0 0 0 1.5px var(--accent)"}}/>Competition</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:9,borderRadius:3,background:"rgba(52,169,230,.25)"}}/>Uncertainty</span>
