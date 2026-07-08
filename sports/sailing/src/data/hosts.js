@@ -279,3 +279,49 @@ export function mockProbe(url){
 
 // Host display name for an id (used by attribution UI).
 export const assocName=id=>hostById(id)?.name||id;
+
+/* ── Event ↔ host-country derivation (moved from App.jsx, reorg step 4) ──
+   assocFlag + SCOPE_COUNTRY are module-internal; the rest are re-imported
+   by App.jsx. Depend only on hostById + FEDERATIONS above. Verbatim. */
+const assocFlag=scope=>scope==="HK"?"🇭🇰":"";
+// scope → governing country code (extend as more countries are added)
+const SCOPE_COUNTRY={HK:"HKG"};
+// The country an event is "hosted in": its own country code, else its owner's scope country.
+export const eventCountryCode=ev=>{
+  if(ev.country) return String(ev.country).toUpperCase();
+  return SCOPE_COUNTRY[hostById(ev.owner)?.scope]||"";
+};
+// Federations that govern an event (auto-collaborators): owner is a host in the
+// federation's country, OR the event's host country matches the federation's.
+export const governingFeds=ev=>{
+  const ownerCountry=SCOPE_COUNTRY[hostById(ev.owner)?.scope];
+  const cc=eventCountryCode(ev);
+  return FEDERATIONS.filter(f=>(ownerCountry&&ownerCountry===f.country)||(cc&&cc===f.country));
+};
+// All hosts that own/co-own an event, INCLUDING auto-collaborating federations.
+export const eventAssocs=ev=>[...new Set([ev.owner,...(ev.collabs||[]),...governingFeds(ev).map(f=>f.id)].filter(Boolean))];
+
+// Dedup fingerprint: normalised name + date + class + sorted sail-number set.
+// Two imports of the same regatta (by different hosts) collide here so we can
+// link them instead of creating duplicates.
+export const eventFingerprint=ev=>{
+  const norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+  const sails=[...new Set((ev.entries||[]).map(e=>norm(e.sail)).filter(Boolean))].sort();
+  return [norm(ev.name),norm(ev.date),norm(ev.cls||ev.class),sails.join(",")].join("|");
+};
+// Where a host's globe is oriented (IOC code): its explicitly-set country, else
+// the most common country across the events it owns/co-owns. Used ONLY for the
+// "where they compete" globe/footprint and overridable form prefills — NEVER for
+// a flag next to the host's name. A host with no explicit country and no events
+// has no orientation (null); we never assume one from `scope` (no default HKG).
+export const hostLocation=(hostId,evList)=>{
+  const h=hostById(hostId);
+  if(h?.country) return String(h.country).toUpperCase();
+  const counts={};
+  (evList||[]).forEach(ev=>{
+    if(!eventAssocs(ev).includes(hostId)&&ev.owner!==hostId) return;
+    const cc=eventCountryCode(ev); if(cc) counts[cc]=(counts[cc]||0)+1;
+  });
+  const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+  return top?top[0]:null;
+};

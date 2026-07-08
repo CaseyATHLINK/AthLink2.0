@@ -8,6 +8,7 @@
 import { dateKey } from "../util/date.js";
 import { canonName, pascalSlug } from "../util/name.js";
 import { genderCatOf } from "../util/gender.js";
+import { IOC_ISO } from "../util/flag.js";
 
 // ── Per-athlete attribute memory (gender, birth year, recent class) ──────────
 // Single pass over all events. For each athlete (by canonName), we remember:
@@ -86,3 +87,65 @@ export function applyAthleteUsernames(rows){
 }
 export const usernameForName=(name)=>ATHLETE_USERNAMES.byKey.get(uNameKey(name))||pascalSlug(name);
 export const nameForUsername=(u)=>ATHLETE_USERNAMES.byUser.get(String(u||"").toLowerCase())||null;
+
+/* ── Athlete-derivation helpers + seed metadata (moved from App.jsx, reorg
+   step 4). META is a small hand-seeded name→nationality table; the three
+   builders derive nationality / birth-year / home-country from event
+   entries. Verbatim. */
+export const META={
+  "Bunyamin Klongsamoot":{nat:"THA"},"Kan Kachachuen":{nat:"THA"},
+  "Chatree Makmul":{nat:"THA"},"Manintorn Leelas":{nat:"THA"},
+  "Mihiro Okada":{nat:"JPN"},"Iwao Yasuda":{nat:"JPN"},
+  "Yuto Tsutsumi":{nat:"JPN"},"Taishi Goto":{nat:"JPN"},
+};
+
+export function athleteNat(name,evList){
+  const counts={};
+  for(const ev of evList){
+    const e=ev.entries.find(x=>x.helm===name||x.crew===name);
+    if(e?.nat){counts[e.nat]=(counts[e.nat]||0)+1;}
+  }
+  if(!Object.keys(counts).length) return META[name]?.nat||"";
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+}
+
+// Most-frequently-seen birth year for an athlete (as helm or crew), or null.
+export function athleteBirthYear(name,evList){
+  const counts={};
+  for(const ev of (evList||[])){
+    for(const e of (ev.entries||[])){
+      let by=null;
+      if(e.helm===name) by=e.birth_year;
+      else if(e.crew===name) by=e.crew_birth_year;
+      if(by){counts[by]=(counts[by]||0)+1;}
+    }
+  }
+  const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+  return top?parseInt(top[0]):null;
+}
+
+// Build name -> home ISO-A2 (most frequent nationality seen anywhere in the data)
+export function buildHomeCountry(evList){
+  const tally={};
+  for(const ev of evList){
+    for(const e of (ev.entries||[])){
+      const ioc=e.nat||""; if(!ioc) continue;
+      const iso=IOC_ISO[ioc]||""; if(!iso) continue;
+      for(const nm of [e.helm,e.crew]){
+        if(!nm) continue;
+        (tally[nm]||(tally[nm]={}));
+        tally[nm][iso]=(tally[nm][iso]||0)+1;
+      }
+    }
+  }
+  // seed with META nationality (weak weight) so known athletes still resolve
+  for(const nm in META){
+    const iso=IOC_ISO[META[nm]?.nat||""]||""; if(!iso) continue;
+    (tally[nm]||(tally[nm]={})); if(!tally[nm][iso]) tally[nm][iso]=0.5;
+  }
+  const home={};
+  for(const nm in tally){
+    home[nm]=Object.entries(tally[nm]).sort((a,b)=>b[1]-a[1])[0][0];
+  }
+  return home;
+}
