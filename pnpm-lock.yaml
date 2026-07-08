@@ -61,6 +61,8 @@ importers:
         specifier: ^18
         version: 18.3.1
 
+  packages/features/rating: {}
+
   packages/sport-kit: {}
 
   sports/_template:
@@ -107,6 +109,9 @@ importers:
       '@athlink/design-system':
         specifier: workspace:*
         version: link:../../packages/design-system
+      '@athlink/rating':
+        specifier: workspace:*
+        version: link:../../packages/features/rating
       '@athlink/sport-kit':
         specifier: workspace:*
         version: link:../../packages/sport-kit
