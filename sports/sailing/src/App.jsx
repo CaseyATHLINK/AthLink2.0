@@ -10,6 +10,8 @@ import {
 import { makeRatingEngine } from "@athlink/rating";
 import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, authSignUp, authSignIn, authUser } from "@athlink/core";
 import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
+import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
+import { canonName, eventKey, ordinalOf, initials } from "./util/name.js";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
    NEVER_DISCARD: cannot be dropped even if it would improve the score
@@ -34,50 +36,6 @@ const CODE_WEIGHT={
 
 const isCode=c=>typeof c==="string";
 const isPenaltyCode=c=>isCode(c)&&CODE_WEIGHT[c]!==undefined&&CODE_WEIGHT[c]===1;
-
-/* ── IOC → ISO flag ───────────────────────────────────────────────────── */
-const IOC_ISO={
-  AFG:'AF',ALB:'AL',ALG:'DZ',AND:'AD',ANG:'AO',ANT:'AG',ARG:'AR',ARM:'AM',
-  ARU:'AW',ASA:'AS',AUS:'AU',AUT:'AT',AZE:'AZ',BAH:'BS',BAN:'BD',BAR:'BB',
-  BDI:'BI',BEL:'BE',BEN:'BJ',BER:'BM',BHU:'BT',BIH:'BA',BIZ:'BZ',BLR:'BY',
-  BOL:'BO',BOT:'BW',BRA:'BR',BRN:'BH',BRU:'BN',BUL:'BG',BUR:'BF',CAF:'CF',
-  CAM:'KH',CAN:'CA',CAY:'KY',CGO:'CG',CHA:'TD',CHI:'CL',CHN:'CN',CIV:'CI',
-  CMR:'CM',COD:'CD',COK:'CK',COL:'CO',COM:'KM',CPV:'CV',CRC:'CR',CRO:'HR',
-  CUB:'CU',CYP:'CY',CZE:'CZ',DEN:'DK',DJI:'DJ',DMA:'DM',DOM:'DO',ECU:'EC',
-  EGY:'EG',ERI:'ER',ESA:'SV',ESP:'ES',EST:'EE',ETH:'ET',FIJ:'FJ',FIN:'FI',
-  FRA:'FR',FSM:'FM',GAB:'GA',GAM:'GM',GBR:'GB',GBS:'GW',GEO:'GE',GEQ:'GQ',
-  GER:'DE',GHA:'GH',GRE:'GR',GRN:'GD',GUA:'GT',GUI:'GN',GUM:'GU',GUY:'GY',
-  HAI:'HT',HKG:'HK',HON:'HN',HUN:'HU',INA:'ID',IND:'IN',IRI:'IR',IRL:'IE',
-  IRQ:'IQ',ISL:'IS',ISR:'IL',ISV:'VI',ITA:'IT',IVB:'VG',JAM:'JM',JOR:'JO',
-  JPN:'JP',KAZ:'KZ',KEN:'KE',KGZ:'KG',KIR:'KI',KOR:'KR',KOS:'XK',KSA:'SA',
-  KUW:'KW',LAO:'LA',LAT:'LV',LBA:'LY',LBR:'LR',LCA:'LC',LES:'LS',LIB:'LB',
-  LIE:'LI',LTU:'LT',LUX:'LU',MAD:'MG',MAR:'MA',MAS:'MY',MAW:'MW',MDA:'MD',
-  MDV:'MV',MEX:'MX',MGL:'MN',MHL:'MH',MKD:'MK',MLI:'ML',MLT:'MT',MNE:'ME',
-  MON:'MC',MOZ:'MZ',MRI:'MU',MTN:'MR',MYA:'MM',NAM:'NA',NCA:'NI',NED:'NL',
-  NEP:'NP',NGR:'NG',NIG:'NE',NOR:'NO',NRU:'NR',NZL:'NZ',OMA:'OM',PAK:'PK',
-  PAN:'PA',PAR:'PY',PER:'PE',PHI:'PH',PLE:'PS',PLW:'PW',PNG:'PG',POL:'PL',
-  POR:'PT',PRK:'KP',PUR:'PR',QAT:'QA',ROC:'TW',RSA:'ZA',ROU:'RO',RUS:'RU',
-  RWA:'RW',SAM:'WS',SEN:'SN',SEY:'SC',SGP:'SG',SKN:'KN',SLE:'SL',SLO:'SI',
-  SMR:'SM',SOL:'SB',SOM:'SO',SRB:'RS',SRI:'LK',SSD:'SS',STP:'ST',SUD:'SD',
-  SUI:'CH',SUR:'SR',SVK:'SK',SWE:'SE',SWZ:'SZ',SYR:'SY',TAN:'TZ',TGA:'TO',
-  THA:'TH',TJK:'TJ',TKM:'TM',TLS:'TL',TOG:'TG',TPE:'TW',TTO:'TT',TUN:'TN',
-  TUR:'TR',TUV:'TV',UAE:'AE',UGA:'UG',UKR:'UA',URU:'UY',USA:'US',UZB:'UZ',
-  VAN:'VU',VEN:'VE',VIE:'VN',VIN:'VC',YEM:'YE',ZAM:'ZM',ZIM:'ZW',
-};
-function isoFlag(iso){
-  try{
-    if(!iso||iso.length!==2) return '';
-    const a=iso.toUpperCase();
-    if(!/^[A-Z]{2}$/.test(a)) return '';
-    return [...a].map(c=>String.fromCodePoint(0x1F1E6+c.charCodeAt(0)-65)).join('');
-  }catch{return '';}
-}
-function iocFlag(code){
-  if(!code) return '';
-  const iso=IOC_ISO[code.toUpperCase()];
-  if(!iso) return '';
-  return [...iso].map(c=>String.fromCodePoint(0x1F1E6+c.charCodeAt(0)-65)).join('');
-}
 
 /* ── Shared display helpers ───────────────────────────────────────────────
    CountryTag: flag + code shown together (global standard).
@@ -1060,19 +1018,6 @@ function scorePreview(ev){
   return scoreEvent(clean);
 }
 
-// ── Canonical name key — collapses case, accents, hyphens, punctuation & word
-//    order. Two names sharing a canon key are treated as the SAME athlete.
-function canonName(nm){
-  let s=(nm||"").toLowerCase();
-  s=s.normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-  s=s.replace(/ø/g,"o").replace(/ł/g,"l").replace(/đ/g,"d").replace(/ß/g,"ss").replace(/æ/g,"ae").replace(/œ/g,"oe").replace(/þ/g,"th");
-  s=s.replace(/-/g," ").replace(/[^a-z0-9\s]/g," ");
-  return s.trim().split(/\s+/).filter(Boolean).sort().join(" ");
-}
-// Stable identity for an event (to detect duplicate imports of the same comp).
-function eventKey(ev){
-  return `${(ev.name||"").trim().toLowerCase()}|${(ev.date||"").trim()}|${ev.cls||""}|${ev.subclass||""}`;
-}
 
 function aggregate(name,evList){
   const history=[];let wins=0,podiums=0,best=Infinity;
@@ -1166,7 +1111,6 @@ function resolvedEntryGender(e,doublehanded){
    overall position (3rd overall but 1st Under-18). Derived strictly from the
    official overall order — we only filter and count, never re-rank. */
 const MIN_DIVISION_SIZE=4; // a division needs at least this many entries to count (tunable)
-function ordinalOf(n){const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
 function divisionDisplayName(code){
   if(!code) return "";
   const m=String(code).match(/^U(\d{1,2})$/i); if(m) return "Under-"+m[1];
@@ -1275,7 +1219,6 @@ const avatarColor=name=>{
   let h=0;for(let i=0;i<name.length;i++) h=name.charCodeAt(i)+((h<<5)-h);
   return c[Math.abs(h)%c.length];
 };
-const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
 
 /* ── Supabase + Auth (GoTrue) plumbing lives in @athlink/core (single source of
    truth); App.jsx imports it above and no longer redefines SB_URL/SB_KEY/sbH/
