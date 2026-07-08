@@ -4,7 +4,7 @@
    only by these inputs). Verbatim from App.jsx. */
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { Calendar, ChevronRight } from "lucide-react";
+import { Calendar, ChevronRight, Search } from "lucide-react";
 import { MON } from "../util/date.js";
 import { iocFlag, IOC_ISO } from "../util/flag.js";
 import { classColor, classLabel, SUBCLASSES } from "../util/class.js";
@@ -405,4 +405,70 @@ export function SubclassHover({cls,value,onChange,classBtn,active}){
       )}
     </div>
   );
+}
+
+/* ── Searchable host attribution combobox ──────────────────────────────
+   value = host id (attribute to a host on AthLink) or null (nothing /
+   Other host). The "Other host — not listed" row carries sentinel
+   HOST_OTHER; picking it sets _orgHost to null and reveals the free-text
+   organizer-name input (rendered here, only in that case).
+   onChange(id|null) writes _orgHost. orgName/onOrgName drive _orgName. */
+export const HOST_OTHER="__other__";
+export function HostPicker({hosts,value,onChange,orgName,onOrgName}){
+  const[open,setOpen]=React.useState(false);
+  const[q,setQ]=React.useState("");
+  const[other,setOther]=React.useState(false);
+  const sel=hosts.find(h=>h.id===value);
+  const filtered=q?hosts.filter(h=>(h.name||"").toLowerCase().includes(q.toLowerCase())):hosts;
+  const ref=React.useRef();
+  React.useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+  // keep cosmetic "other" flag in sync if a real host gets selected elsewhere
+  React.useEffect(()=>{if(value)setOther(false);},[value]);
+  // Selecting the Other-host sentinel: clear the real host id, mark "other",
+  // and drop any previously attributed host name. A real host clears _orgName.
+  const pick=id=>{
+    if(id===HOST_OTHER){setOther(true);onChange(null);}
+    else{setOther(false);onChange(id);onOrgName("");}
+    setOpen(false);setQ("");
+  };
+  return(<>
+    <div style={{position:"relative",flex:"1 1 180px",minWidth:180}} ref={ref}>
+      <div onClick={()=>setOpen(o=>!o)} style={{border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",fontSize:12.5,background:"var(--card)",color:"var(--ink)",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"}}>
+        {sel?<span>{sel.name}</span>:other?<span>Other host — not listed</span>:<span style={{color:"var(--mut)"}}>Select host</span>}
+        <ChevronRight size={12} style={{marginLeft:"auto",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s",flex:"none"}}/>
+      </div>
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:90,background:"var(--card)",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.2)",maxHeight:240,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+          <div style={{padding:"8px 10px",borderBottom:"1px solid var(--line)"}}>
+            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search hosts..." style={{width:"100%",border:0,outline:0,font:"inherit",fontSize:12.5,color:"var(--ink)",background:"transparent"}}/>
+          </div>
+          <div style={{overflowY:"auto",flex:1}}>
+            <div onClick={()=>pick(HOST_OTHER)}
+              style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:600,color:"var(--navy)",borderBottom:"1px solid var(--line)",background:other&&!value?"var(--sky)":"transparent",transition:".1s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+              onMouseLeave={e=>e.currentTarget.style.background=other&&!value?"var(--sky)":"transparent"}>
+              Other host — not listed
+            </div>
+            {filtered.map(h=>(
+              <div key={h.id} onClick={()=>pick(h.id)}
+                style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,color:"var(--ink)",background:h.id===value?"var(--sky)":"transparent",transition:".1s"}}
+                onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+                onMouseLeave={e=>e.currentTarget.style.background=h.id===value?"var(--sky)":"transparent"}>
+                {h.name}
+              </div>
+            ))}
+            {!filtered.length&&<div style={{padding:"8px 12px",fontSize:12,color:"var(--mut)"}}>No matching hosts</div>}
+          </div>
+        </div>
+      )}
+    </div>
+    {other&&!value&&(
+      <input placeholder="…or type the organizer's name" value={orgName||""}
+        onChange={e=>onOrgName(e.target.value)}
+        style={{flex:"1 1 180px",minWidth:160,padding:"7px 9px",borderRadius:8,border:"1px solid var(--line)",background:"var(--card)",color:"var(--ink)",fontSize:12.5}}/>
+    )}
+  </>);
 }

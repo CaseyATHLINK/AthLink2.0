@@ -230,3 +230,15 @@ export function WebIcon({size=12}){
     <path d="M16.5 12 L15.18 15.18 L12 16.5 L8.82 15.18 L7.5 12 L8.82 8.82 L12 7.5 L15.18 8.82 Z"/>
   </svg>);
 }
+
+export class ErrorBoundary extends React.Component{
+  constructor(props){super(props);this.state={err:false};}
+  static getDerivedStateFromError(){return{err:true};}
+  componentDidCatch(e,info){console.error("Globe/render error caught:",e,info);}
+  componentDidUpdate(prev){if(prev.resetKey!==this.props.resetKey&&this.state.err)this.setState({err:false});}
+  render(){
+    if(this.state.err) return this.props.fallback||(
+      <div style={{padding:16,color:"#9fbdd9",fontSize:13,textAlign:"center"}}>Couldn't render this view.</div>);
+    return this.props.children;
+  }
+}
