@@ -5,8 +5,9 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { BadgeCheck, CheckCircle, ChevronRight, Clock, LayoutGrid, Loader2, Pencil, Plus, Search, Trash2, Trophy, Upload, Users, X } from "lucide-react";
-import { canonName, initials } from "../util/name.js";
+import { canonName, initials, avatarColor } from "../util/name.js";
 import { nuggetFor } from "../util/class.js";
+import { ATHLETE_ATTRS, usernameForName } from "../data/athletes.js";
 import { hostRest } from "../data/hosts.js";
 import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeleteProfile, fetchProfileNames } from "../data/profiles.js";
 import { aggregate } from "../data/scoring.js";

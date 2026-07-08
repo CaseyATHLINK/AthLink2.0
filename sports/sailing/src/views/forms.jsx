@@ -4,11 +4,11 @@
    only by these inputs). Verbatim from App.jsx. */
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { Calendar, ChevronRight, Search } from "lucide-react";
+import { Calendar, ChevronRight, Search, X } from "lucide-react";
 import { MON } from "../util/date.js";
 import { iocFlag, IOC_ISO } from "../util/flag.js";
 import { classColor, classLabel, SUBCLASSES } from "../util/class.js";
-import { ASSOCIATIONS, CLUBS } from "../data/hosts.js";
+import { ASSOCIATIONS, CLUBS, assocName } from "../data/hosts.js";
 
 // Compact inline nationality input: type an IOC code (e.g. HKG); once valid it
 // confirms with the flag + country name. Suggests matches as you type.

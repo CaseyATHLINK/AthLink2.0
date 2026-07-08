@@ -276,3 +276,6 @@ export function mockProbe(url){
     parseable:isPdf||isHtml,
     content_type:isPdf?"application/pdf":"text/html",bytes:isPdf?48213:31002};
 }
+
+// Host display name for an id (used by attribution UI).
+export const assocName=id=>hostById(id)?.name||id;

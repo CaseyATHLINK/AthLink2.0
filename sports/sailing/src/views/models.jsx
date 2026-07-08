@@ -5,7 +5,7 @@
    Verbatim from App.jsx. */
 
 import React from "react";
-import { classLabel } from "../util/class.js";
+import { classLabel, CLASS_COLOR } from "../util/class.js";
 
 /* ═══════════════ SPORT EXPLAINER (spm-) — per-class equipment hologram + course diagram ═══════════════
    Config-driven via SPORT_MODELS: add a class entry and <SportShowcase clsId=…/> renders it with zero

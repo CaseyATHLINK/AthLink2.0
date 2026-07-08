@@ -1,5 +1,5 @@
 # AthLink 2.0 — Claude Code context
-_Last updated: 3 July 2026_
+_Last updated: 9 July 2026_
 
 ## ⛔ File-write policy — READ FIRST (non-negotiable)
 - **All code and file writes happen in this repo (`~/Desktop/AthLink2.0`).**
@@ -19,7 +19,12 @@ byproduct. PDF is always ground truth — never re-rank or recalculate results.
 Beachhead: Hong Kong class associations (29er, ILCA, Optimist, 49er).
 
 ## Stack
-- Frontend: React 18, single-file `src/App.jsx` (~7,100+ lines), Vite
+- Frontend: React 18, Vite. The sailing app was decomposed (reorg step 4, done
+  2026-07-09) from one ~13k-line file into `sports/sailing/src/{util,data,views}/`
+  + shared `packages/features/*`; `App.jsx` (~6.8k lines) is now imports + a few
+  module helpers + the stateful `AthLinkMVP` shell. **See `sports/sailing/src/README.md`
+  for the module map and the rules for changing this code — read it before editing
+  sailing frontend, especially the "views never import App.jsx" rule.**
 - Backend: Python serverless `api/sailing/parse_pdf.py` + `api/ai_filter.py`
 - DB/Auth: Supabase (Postgres + GoTrue), project ref `ylzoburtpibbgqdggjty`
 - AI (parser v3, 2026-07): **Gemini is the universal primary** for EVERY AI task
@@ -69,13 +74,16 @@ ventures, the Obsidian vault, cross-cutting planning.
   provider can be re-added purely via env, but no task routes to them by default.
 - VERCEL_OIDC_TOKEN (pulled automatically via vercel env pull)
 
-## Validation — run after every App.jsx edit
+## Validation — run after every frontend edit
 ```bash
-# esbuild syntax check (pnpm layout: binary lives under node_modules/.pnpm)
-./node_modules/.pnpm/node_modules/.bin/esbuild sports/sailing/src/App.jsx \
-  --loader:.jsx=jsx --bundle \
-  --external:react --external:react-dom --external:lucide-react \
-  --external:recharts --format=esm --outfile=/dev/null
+# 1. Build = the authoritative syntax/bundle check (App.jsx now imports util/data/
+#    views + @athlink/* workspace pkgs, so bundle the whole app, not one file):
+pnpm --filter @athlink/web build
+
+# 2. Static safety net — REQUIRED after moving code between modules. The build does
+#    NOT error on a free identifier (→ runtime ReferenceError) or an import of a
+#    non-exported name (→ silently undefined). This @babel-based checker does:
+node tools/check-modules.mjs        # no-undef + import-resolution over every sailing module
 
 # Python syntax check (after parse_pdf.py edits)
 python3 -c "import ast; ast.parse(open('api/sailing/parse_pdf.py').read())"
@@ -83,9 +91,10 @@ python3 -c "import ast; ast.parse(open('api/sailing/parse_pdf.py').read())"
 # on Casey's machine that is /opt/anaconda3/bin/python3:
 # /opt/anaconda3/bin/python3 tools/test_parser.py --diff
 ```
-Both must pass before committing. TDZ is the primary white-screen crash
-vector — esbuild won't catch const/let used before declaration. Manual
-review required after every JSX edit, especially new useEffect hooks.
+All must pass before committing. TDZ is the primary white-screen crash vector —
+the build won't catch const/let used before declaration. Manual review required
+after every JSX edit, especially new useEffect hooks. (A single-file esbuild check
+still works for a quick App.jsx-only syntax pass but no longer covers the imports.)
 
 ## Pre-push test gate — run before EVERY push to Vercel
 Push = production (athlink.win), so test on localhost first. Use the
@@ -177,7 +186,7 @@ Audited against live DB 2026-06-25 — see migrations/README.md for full notes.
 - migrations/0099_cleanup_duplicate_policies.sql — OPTIONAL dedupe of redundant RLS policies
 
 ### Host logos (crop + background-removal at upload)
-A host — federation, club, OR class association (an association is just a class-locked host, so its logo IS its "class logo"; no separate subsystem) — can upload a logo in the Edit page. The uploader lets the user square-crop/centre the image (pan + zoom, `LogoCropper`), then the background is removed ONCE at save time KEEPING the logo's original colours (`removeLogoBackground`: samples the 4 corners for the bg colour, drops pixels within tolerance to transparent with a feathered edge — never a render-time CSS filter), and the transparent PNG is stored in `host-logos` with its URL saved to `hosts.logo_url`. Renders in two places: the directory card + fed→association sub-cards (bottom-right, 60px, full colour) and the portal header (right of the title, close to it, 128px, vertically aligned to the globe; globe left, title middle, action buttons far right). Synthetic `class:*` portals have no host row → no logo. Helpers `removeLogoBackground` + `uploadHostLogo` (module scope near uploadAthleteMedia); `LogoCropper` + UI in HostEditModal (onUploadLogo prop = uploads a processed Blob, gated to canManage); threaded through applyDbHosts + saveHost.
+A host — federation, club, OR class association (an association is just a class-locked host, so its logo IS its "class logo"; no separate subsystem) — can upload a logo in the Edit page. The uploader lets the user square-crop/centre the image (pan + zoom, `LogoCropper`), then the background is removed ONCE at save time KEEPING the logo's original colours (`removeLogoBackground`: samples the 4 corners for the bg colour, drops pixels within tolerance to transparent with a feathered edge — never a render-time CSS filter), and the transparent PNG is stored in `host-logos` with its URL saved to `hosts.logo_url`. Renders in two places: the directory card + fed→association sub-cards (bottom-right, 60px, full colour) and the portal header (right of the title, close to it, 128px, vertically aligned to the globe; globe left, title middle, action buttons far right). Synthetic `class:*` portals have no host row → no logo. Helpers `removeLogoBackground` + `uploadHostLogo` (in `sports/sailing/src/data/hosts.js`); `LogoCropper` + UI in `HostEditModal` (both in `sports/sailing/src/views/host.jsx`; onUploadLogo prop = uploads a processed Blob, gated to canManage); threaded through applyDbHosts + saveHost.
 Already applied (CLAUDE.md previously mislabelled these "pending"):
 profiles.username, host_invites.short_code, event provenance columns,
 country column on hosts AND events — all live.
@@ -203,8 +212,11 @@ resolution priority: reserved word > host > athlete.
 
 ## Rating engine (Glicko-lite, client-side) — added 2026-07-08
 One global skill rating per athlete (NOT per-class) — R (start 1200) + uncertainty
-RD (∈ [60,350]). Module scope in `sports/sailing/src/App.jsx`, ~line 2281, just
-above `computeRivalCohort`. Constants block: `RATING_START/RD_START/RD_MIN/RD_MAX/
+RD (∈ [60,350]). **Now lives in the universal package `@athlink/rating`**
+(`packages/features/rating/src/index.js`); sailing binds it in
+`sports/sailing/src/views/charts.jsx` via
+`makeRatingEngine({scoreEvent,canonName,dateKey,monthsBetween})`, and `AthleteWeb`/
+`ProgressChart` (same file) are its only consumers. Constants block: `RATING_START/RD_START/RD_MIN/RD_MAX/
 RATING_SCALE/K_BASE/RD_DECAY_C/RD_EVENT_SHRINK/CLS_SWITCH_RD_BUMP`. One update per
 event, chronological dateKey order (stable tie-break on event id); undated/Draft/
 unscoreable events are never rated. Each event is multiplayer Elo from a
@@ -226,8 +238,9 @@ class (capped 350), and shrinks ×0.97 per rated event (floored 60).
   prox^BETA × ratingProx^GAMMA × activity`, where `ratingProx=exp(-|ΔR|/200)`
   comes straight from this engine (neutral 0.5 if either athlete is unrated).
 - **Consumers**: `AthleteWeb` (node distance from focal via d3 `forceRadial`) and
-  `ProgressChart` (the skill-rating curve + uncertainty band) both read through
-  `getAthleteRatings`/`computeRivalCohort` — no separate rating logic lives there.
+  `ProgressChart` (the skill-rating curve + uncertainty band) — both in
+  `views/charts.jsx` — read through `getAthleteRatings`/`computeRivalCohort` (the
+  engine returned by `makeRatingEngine`); no separate rating logic lives there.
 
 ## Public usernames (URL identity) — migration 0007
 Two namespaces share the root path, so usernames are unique case-insensitively
@@ -237,9 +250,11 @@ still the FK everywhere). Default athlete username = FirstnameLastname
 (`athlink_pascal`), numbered on clash by first appearance; assigned to every new
 athlete by the `ensure_athlete_username` trigger. This is DISTINCT from
 `profiles.username` (the lowercase account/login handle).
-- Frontend: `ATHLETE_USERNAMES` module registry (loaded from athlete_usernames
-  before events); `usernameForName`/`nameForUsername`/`hostSlug`/`hostBySlug`
-  drive stateToPath/pathToState. Falls back to PascalCase(name) if unloaded.
+- Frontend: `ATHLETE_USERNAMES` module registry + `applyAthleteUsernames`/
+  `usernameForName`/`nameForUsername` now live in `sports/sailing/src/data/athletes.js`
+  (loaded from athlete_usernames before events); `hostSlug`/`hostBySlug` (in App.jsx)
+  + those drive stateToPath/pathToState. Falls back to PascalCase(name) if unloaded.
+  App.jsx mutates `ATHLETE_USERNAMES.byKey`/`.byUser` in place (live binding) on edit.
 - Editing: verified owner/admin only. Athlete → AthleteEditModal "Profile link"
   field → `saveAthleteUsername`. Host → HostEditModal "Portal link" → `saveHostSlug`.
   Both validate [A-Za-z0-9]{3,30}, block reserved routes, check availability
@@ -276,6 +291,11 @@ athlete by the `ensure_athlete_username` trigger. This is DISTINCT from
 Multi-step SignInModal: credentials → role pick → details.
 Google OAuth via Supabase redirect; new users route into onboarding.
 Under-16: guardian-email approval only, never ID verification.
+**Extracted to `@athlink/auth`** (`packages/features/auth`, reorg step 3, done
+2026-07-09): `makeSignInModal(deps)` factory + `fetchProfile`/`upsertProfile`/
+`authGoogleOAuth`. Sailing binds it in `sports/sailing/src/views/auth.jsx`
+(`export const SignInModal = makeSignInModal({…13 sailing deps}))`); to add auth to
+another sport, provide that sport's pickers/host-helpers to the same factory.
 
 ## Host trust
 Roles: Owner + Editor. Editor can do everything except remove/demote Owner.
@@ -287,7 +307,9 @@ Invite links: 7-day expiry, single-use.
 Tables: host_members, host_invites, host_audit.
 
 ## Custom boat classes
-Global runtime registry: CUSTOM_CLASSES (let, module-level).
+Global runtime registry: CUSTOM_CLASSES (`export let`, in
+`sports/sailing/src/util/class.js`; set via `setCustomClassRegistry`, read via live
+binding — `classLabel`/`classColor`/`customClassById` also there).
 Any verified host can create a custom class via the "+ Other class" dropdown
 in the import preview and in Add-a-host.
 Dedup via canonical key (normalised lowercase, strip punctuation).
@@ -443,10 +465,11 @@ never auto-apply; keys server-side; 45s provider bound under the 60s ceiling).
   the owner's verified `host_members` row (`hosts` has no verified column). Unverified
   hosts see a disabled "Ready to import — pending verification" button (selection
   still saves); dev view (Ctrl/Cmd+Shift+D) bypasses it like every other gate.
-- **MOCK_RESEARCH** (const, module scope in src/App.jsx, DEFAULT false) — stubs
-  research/probe/parse for localhost smoke tests (the research_host + probe
-  endpoints are NEW, so they 404 on localhost until pushed to a Vercel preview).
-  Must stay false in commits.
+- **MOCK_RESEARCH** (const in `sports/sailing/src/data/hosts.js`, DEFAULT false;
+  `mockResearchIdentity`/`mockResearchCompetitions`/`mockParse`/`mockProbe` live
+  there too) — stubs research/probe/parse for localhost smoke tests (the
+  research_host + probe endpoints are NEW, so they 404 on localhost until pushed to a
+  Vercel preview). Must stay false in commits.
 
 ## Known gotchas
 - TDZ is the primary white-screen vector — mandatory check after every edit
