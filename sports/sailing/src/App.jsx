@@ -6941,6 +6941,23 @@ export default function AthLinkMVP(){
     return prevRow[n];
   };
   const regCount=nm=>{const t=canonName(nm);return events.filter(ev=>ev.entries.some(e=>canonName(e.helm)===t||canonName(e.crew)===t)).length;};
+  // O(1) lookup version of regCount, precomputed once per `events` change. The manual-merge
+  // search box was calling regCount() — an O(events) scan — inside a sort comparator on every
+  // keystroke, which for a broad query (matching hundreds of names) froze the input for seconds.
+  const regCountMap=useMemo(()=>{
+    const m=new Map();
+    for(const ev of events){
+      const seen=new Set();
+      for(const e of ev.entries){
+        [e.helm,e.crew].forEach(nm=>{
+          if(!nm) return;const t=canonName(nm);if(seen.has(t)) return;seen.add(t);
+          m.set(t,(m.get(t)||0)+1);
+        });
+      }
+    }
+    return m;
+  },[events]);
+  const regCountFast=nm=>regCountMap.get(canonName(nm))||0;
   // Exact raw-name count — used to choose the merge primary so the most-used
   // first/last name ORDER wins (regCount is order-blind because it uses canon).
   const rawNameCount=nm=>events.filter(ev=>ev.entries.some(e=>e.helm===nm||e.crew===nm)).length;
@@ -6999,14 +7016,17 @@ export default function AthLinkMVP(){
   })();},[]);
   // True if a name competes in the given class (canonical match).
   const nameInClass=(nm,clsId)=>{const t=canonName(nm);return events.some(e=>e.cls===clsId&&e.entries.some(en=>canonName(en.helm)===t||canonName(en.crew)===t));};
+  // Cards mid exit-animation: stay rendered (still matched by dismissedDups2) so the
+  // fade/collapse can play instead of the list just snapping the next card into place.
+  const[exitingDups,setExitingDups]=useState(new Set());
   const visibleDupGroups=useMemo(()=>{
     const dupClsId=isClassPortal?portalCls:(assoc?.cls||null); // class scope of the current portal, if any
-    let g=dupGroups.filter(x=>!dismissedDups2.has(x.key));
+    let g=dupGroups.filter(x=>!dismissedDups2.has(x.key)||exitingDups.has(x.key));
     // Within a class-scoped portal, only show duplicates whose athletes belong to THAT class.
     if(dupClsId) g=g.filter(x=>x.names.some(nm=>nameInClass(nm,dupClsId)));
     if(myAssoc) g=g.filter(x=>x.names.some(nm=>athleteHostAssocs(nm).has(myAssoc)));
     return g;
-  },[dupGroups,dismissedDups2,myAssoc,events,portal,isClassPortal,portalCls]);
+  },[dupGroups,dismissedDups2,exitingDups,myAssoc,events,portal,isClassPortal,portalCls]);
 
   // Manual merge — lets an admin pick ANY two profiles the auto-detector missed
   // (e.g. "Chris Lam" vs "Christopher Lam" when names diverge too far) and merge
@@ -7015,6 +7035,16 @@ export default function AthLinkMVP(){
   const[mmB,setMmB]=useState(null);
   const[mmActive,setMmActive]=useState(null); // which slot the picker is filling: "a"|"b"|null
   const[mmQ,setMmQ]=useState("");
+  // Which flagged duplicate-review cards have had their merge direction flipped
+  // by clicking the "merge into" arrow (default direction is g.names[0] ← g.names[last]).
+  const[flippedDups,setFlippedDups]=useState(new Set());
+  const dismissDupCard=(key,after)=>{
+    setExitingDups(prev=>new Set(prev).add(key));
+    after();
+    setTimeout(()=>{
+      setExitingDups(prev=>{const s=new Set(prev);s.delete(key);return s;});
+    },380);
+  };
   const doManualMerge=async()=>{
     if(!mmA||!mmB||canonName(mmA)===canonName(mmB)) return;
     await mergeAthletes(mmA,mmB);
@@ -7088,6 +7118,77 @@ export default function AthLinkMVP(){
   },[view.name,athLimit,filter,q]);
   const evLoc=ev=>[ev.country].filter(Boolean).join(" · ");
   const manualReady=!!mf.rows.filter(r=>r.helm.trim()).length;
+  // Memoized so this (up to several hundred cards, each with a backdrop-filter blur) only
+  // rebuilds when the underlying data/filters actually change — not on every unrelated
+  // re-render (e.g. the floating top bar toggling on scroll), which was the "flashing" the
+  // athlete thumbnails did while scrolling: the whole grid was being torn down and rebuilt
+  // on every scroll-driven state update.
+  const athleteGridContent=useMemo(()=>{
+    if(filter==="duplicates") return null;
+    const evScope=isGlobal?events:classEvents;
+    const qlc=q.trim().toLowerCase();
+    const shown=lensPeople
+      .filter(p=>true)
+      .filter(p=>{
+        if(athleteSmart){
+          try{ if(!athleteSmart.fn(athleteSummaryFor(p.name,evScope))) return false; }catch{}
+        } else if(qlc){
+          // live substring match on name OR country while no smart filter is set
+          const nat=athleteNat(p.name,evScope);
+          const cname=(GLOBE_NAMES[IOC_ISO[nat]]||nat||"").toLowerCase();
+          if(!p.name.toLowerCase().includes(qlc)&&!cname.includes(qlc)) return false;
+        }
+        return true;
+      });
+    // group by nationality, country groups alphabetical, names alphabetical within
+    const byCountry={};
+    shown.forEach(p=>{
+      const nat=statOf(p.name).nat;
+      const key=nat||"ZZZ";
+      if(!byCountry[key])byCountry[key]={nat,cname:GLOBE_NAMES[IOC_ISO[nat]]||nat||"Unknown",people:[]};
+      byCountry[key].people.push(p);
+    });
+    const groups=Object.values(byCountry).sort((a,b)=>a.cname.localeCompare(b.cname));
+    groups.forEach(g=>g.people.sort((a,b)=>a.name.localeCompare(b.name)));
+    if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No athletes match.</p>;
+    let gi=0,rendered=0;                       // cap total cards rendered for fast paint
+    const out=[];
+    for(const g of groups){
+      if(rendered>=athLimit) break;
+      const slice=g.people.slice(0,Math.max(0,athLimit-rendered));rendered+=slice.length;
+      out.push(
+      <div key={g.cname} style={{marginBottom:22}}>
+        <div className="cgroup-head" style={{display:"flex",alignItems:"center",gap:9,margin:"4px 0 11px"}}>
+          <span style={{fontSize:18}}>{g.nat?iocFlag(g.nat):""}</span>
+          <span style={{fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:15,color:"var(--navy)"}}>{g.cname}</span>
+          <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{g.people.length}</span>
+          <div style={{flex:1,height:1,background:"var(--line)"}}/>
+        </div>
+        <div className="agrid">
+          {slice.map(p=>{
+            const st=statOf(p.name);
+            const nat=st.nat;
+            // Boat-class nugget = most-recent competition's class (ILCA 6 etc. if subclass present)
+            const nug=st.recentCls?nuggetFor(st.recentCls,st.recentSub):null;
+            return(<div className="acard" key={p.name} style={{animationDelay:`${(Math.min(gi++,40))*12}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
+              <div className="achead">
+                <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
+                <div style={{minWidth:0,flex:1}}>
+                  <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {p.name}</div>
+                </div>
+              </div>
+              <div className="acstat">
+                <div><b>{st.events}</b>competitions</div><div><b>{st.best?"#"+st.best:"—"}</b>best</div>
+                {nug&&<span className="cls" style={{background:nug.color,fontSize:9.5,marginLeft:"auto"}}>{nug.label}</span>}
+              </div>
+            </div>);
+          })}
+        </div>
+      </div>);
+    }
+    out.push(<div key="__sentinel" ref={athSentinelRef} style={{height:1}}/>);
+    return out;
+  },[filter,isGlobal,events,classEvents,q,lensPeople,athleteSmart,cardStats,athLimit]);
 
   /* ── navigation ───────────────────────────────────────────── */
   // ── Navigation with universal history ───────────────────────
@@ -7123,14 +7224,20 @@ export default function AthLinkMVP(){
   const hostCountries=[...new Set(navHosts.map(h=>h.loc).filter(Boolean))]
     .sort((a,b)=>(GLOBE_NAMES[IOC_ISO[a]]||a).localeCompare(GLOBE_NAMES[IOC_ISO[b]]||b));
   // Floating top bar: hide on scroll-down, reveal on scroll-up. Reset to shown on page change.
+  // rAF-throttled — raw scroll events can fire many times per frame (esp. trackpad/momentum
+  // scroll), and each one was triggering a full re-render of the whole page (incl. the
+  // multi-hundred-card athlete grid, each with an expensive backdrop-filter blur), which is
+  // what showed up as the thumbnails "flashing on and off" while scrolling.
   useEffect(()=>{
-    let lastY=window.scrollY;
-    const onScroll=()=>{
+    let lastY=window.scrollY,ticking=false;
+    const apply=()=>{
+      ticking=false;
       const y=window.scrollY;
       if(y>lastY+6&&y>90){setBarHidden(true);setNavSearchOpen(false);setNavMenuOpen(false);}
       else if(y<lastY-6){setBarHidden(false);}
       lastY=y;
     };
+    const onScroll=()=>{ if(!ticking){ticking=true;requestAnimationFrame(apply);} };
     window.addEventListener("scroll",onScroll,{passive:true});
     return()=>window.removeEventListener("scroll",onScroll);
   },[]);
@@ -8624,7 +8731,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .divtag.junior{color:#0a6b41;background:#d4f0e0;}
     .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px;font:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
     .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px;}
-    .acard{background:rgba(255,255,255,0.80);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border:0;border-radius:16px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);}
+    .acard{background:rgba(255,255,255,0.80);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border:0;border-radius:16px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);
+      /* Skip layout/paint for off-screen cards — with hundreds of cards each running an
+         expensive backdrop-filter blur, the browser was repainting all of them on every
+         scroll frame even the ones nowhere near the viewport, which is what caused the
+         visible flashing while scrolling up/down. */
+      content-visibility:auto;contain-intrinsic-size:auto 128px;}
     .acard:hover{transform:translateY(-4px) scale(1.015);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.92),0 20px 40px -18px rgba(0,0,0,.28);}
     .achead{display:flex;align-items:center;gap:11px;margin-bottom:12px;}
     .achead>.av{flex:none;}
@@ -9096,6 +9208,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       .acard:active,.strip-card:active,.class-card:active,.ev:active,.histrow:active,
       .strip-chip:active,.lens-chip:active,.cal-cls-mini:active,.filter-chip:active{transform:scale(.98);transition:transform .08s;}
     }
+
+    /* ── duplicate-review card: swift exit on Merge/Don't merge instead of an abrupt jump ── */
+    .dup-card{max-height:2000px;opacity:1;transform:scale(1) translateY(0);overflow:hidden;
+      transition:opacity .22s ease,transform .22s ease,max-height .26s ease .1s,margin-bottom .26s ease .1s,padding .26s ease .1s;}
+    .dup-card-exit{opacity:0;transform:scale(.97) translateY(-4px);max-height:0;margin-bottom:0;padding-top:0;padding-bottom:0;}
+    .dup-flip{border-radius:8px;transition:background .15s,transform .12s;}
+    .dup-flip:hover{background:var(--sky);}
+    .dup-flip:active{transform:scale(.92);}
 
     @media (max-width:700px){
       /* ── §1 safe areas ── */
@@ -10743,12 +10863,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                           const other=slot==="a"?mmB:mmA;
                           const matches=[...new Set(allPeople.map(p=>p.name).filter(Boolean))]
                             .filter(nm=>nm.toLowerCase().includes(dq)&&nm!==other)
-                            .sort((x,y)=>regCount(y)-regCount(x)).slice(0,8);
+                            .sort((x,y)=>regCountFast(y)-regCountFast(x)).slice(0,8);
                           if(!matches.length) return <div className="gsrch-item" style={{cursor:"default"}}><div className="gi-sub">No matches</div></div>;
                           return matches.map(nm=>(
                             <div key={nm} className="gsrch-item" onMouseDown={()=>{slot==="a"?setMmA(nm):setMmB(nm);setMmActive(null);setMmQ("");}}>
                               <div className="av" style={{background:avatarColor(nm),width:26,height:26,fontSize:10}}>{initials(nm)}</div>
-                              <div style={{minWidth:0}}><div className="gi-label">{nm}</div><div className="gi-sub">{regCount(nm)} competitions</div></div>
+                              <div style={{minWidth:0}}><div className="gi-label">{nm}</div><div className="gi-sub">{regCountFast(nm)} competitions</div></div>
                             </div>
                           ));
                         })()}
@@ -10792,10 +10912,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             };
             return shown.map((g)=>{
               const key=g.key;
-              const primary=g.names[0];
-              const other=g.names[g.names.length-1];
+              const flipped=flippedDups.has(key);
+              const orderedNames=flipped?[...g.names].reverse():g.names;
+              const primary=orderedNames[0];
+              const other=orderedNames[orderedNames.length-1];
+              const exiting=exitingDups.has(key);
               return(
-                <div key={key} style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:"16px",marginBottom:14}}>
+                <div key={key} className={exiting?"dup-card dup-card-exit":"dup-card"}
+                  style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:"16px",marginBottom:14}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
                     <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",
                       color:"#b8860b",background:"#fdf6e3",borderRadius:6,padding:"3px 9px"}}>
@@ -10804,17 +10928,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                     <MiniCard name={primary}/>
-                    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,flex:"none"}}>
+                    <button className="dup-flip" title="Swap merge direction"
+                      style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,flex:"none",background:"none",border:"none",cursor:"pointer",padding:4}}
+                      onClick={()=>setFlippedDups(prev=>{const s=new Set(prev);s.has(key)?s.delete(key):s.add(key);return s;})}>
                       <ArrowLeft size={22} color="var(--accent)"/>
                       <span style={{fontSize:10,color:"var(--mut)",fontWeight:600,whiteSpace:"nowrap"}}>merge into</span>
-                    </div>
+                    </button>
                     <MiniCard name={other} dim/>
                   </div>
                   <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
                     <button className="btn ghost" style={{fontSize:13,padding:"6px 14px"}}
-                      onClick={()=>{setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);}}>Don't merge</button>
+                      onClick={()=>dismissDupCard(key,()=>{setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);})}>Don't merge</button>
                     <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"6px 14px"}}
-                      onClick={()=>{mergeGroup(g.names);setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);}}>
+                      onClick={()=>dismissDupCard(key,()=>{mergeGroup(orderedNames);setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);})}>
                       <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Users size={14}/>Merge</div>
                     </button>
                   </div>
@@ -10824,71 +10950,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           })()}
         </div>
       )}
-      {filter!=="duplicates"&&(()=>{
-        const evScope=isGlobal?events:classEvents;
-        const qlc=q.trim().toLowerCase();
-        const shown=lensPeople
-          .filter(p=>true)
-          .filter(p=>{
-            if(athleteSmart){
-              try{ if(!athleteSmart.fn(athleteSummaryFor(p.name,evScope))) return false; }catch{}
-            } else if(qlc){
-              // live substring match on name OR country while no smart filter is set
-              const nat=athleteNat(p.name,evScope);
-              const cname=(GLOBE_NAMES[IOC_ISO[nat]]||nat||"").toLowerCase();
-              if(!p.name.toLowerCase().includes(qlc)&&!cname.includes(qlc)) return false;
-            }
-            return true;
-          });
-        // group by nationality, country groups alphabetical, names alphabetical within
-        const byCountry={};
-        shown.forEach(p=>{
-          const nat=statOf(p.name).nat;
-          const key=nat||"ZZZ";
-          if(!byCountry[key])byCountry[key]={nat,cname:GLOBE_NAMES[IOC_ISO[nat]]||nat||"Unknown",people:[]};
-          byCountry[key].people.push(p);
-        });
-        const groups=Object.values(byCountry).sort((a,b)=>a.cname.localeCompare(b.cname));
-        groups.forEach(g=>g.people.sort((a,b)=>a.name.localeCompare(b.name)));
-        if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No athletes match.</p>;
-        let gi=0,rendered=0;                       // cap total cards rendered for fast paint
-        const out=[];
-        for(const g of groups){
-          if(rendered>=athLimit) break;
-          const slice=g.people.slice(0,Math.max(0,athLimit-rendered));rendered+=slice.length;
-          out.push(
-          <div key={g.cname} style={{marginBottom:22}}>
-            <div className="cgroup-head" style={{display:"flex",alignItems:"center",gap:9,margin:"4px 0 11px"}}>
-              <span style={{fontSize:18}}>{g.nat?iocFlag(g.nat):""}</span>
-              <span style={{fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:15,color:"var(--navy)"}}>{g.cname}</span>
-              <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{g.people.length}</span>
-              <div style={{flex:1,height:1,background:"var(--line)"}}/>
-            </div>
-            <div className="agrid">
-              {slice.map(p=>{
-                const st=statOf(p.name);
-                const nat=st.nat;
-                // Boat-class nugget = most-recent competition's class (ILCA 6 etc. if subclass present)
-                const nug=st.recentCls?nuggetFor(st.recentCls,st.recentSub):null;
-                return(<div className="acard" key={p.name} style={{animationDelay:`${(Math.min(gi++,40))*12}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
-                  <div className="achead">
-                    <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
-                    <div style={{minWidth:0,flex:1}}>
-                      <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {p.name}</div>
-                    </div>
-                  </div>
-                  <div className="acstat">
-                    <div><b>{st.events}</b>competitions</div><div><b>{st.best?"#"+st.best:"—"}</b>best</div>
-                    {nug&&<span className="cls" style={{background:nug.color,fontSize:9.5,marginLeft:"auto"}}>{nug.label}</span>}
-                  </div>
-                </div>);
-              })}
-            </div>
-          </div>);
-        }
-        out.push(<div key="__sentinel" ref={athSentinelRef} style={{height:1}}/>);
-        return out;
-      })()}
+      {filter!=="duplicates"&&athleteGridContent}
     </div>
   )}
 
