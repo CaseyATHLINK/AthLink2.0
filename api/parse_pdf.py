@@ -4449,9 +4449,11 @@ def _parse_html_string(html_text: str) -> dict:
 
 _ALLOWED_FETCH_SCHEMES = ('http://', 'https://')
 
-def fetch_url_bytes(url: str):
+def fetch_url_bytes(url: str, timeout: int = 45):
     """Fetch a results URL server-side (the browser can't, due to CORS).
-    Returns (content_bytes, content_type). Raises ValueError on problems."""
+    Returns (content_bytes, content_type). Raises ValueError on problems.
+    `timeout` is the socket timeout in seconds — the discovery probe passes a
+    short bound (~10s) so a slow/dead link fails fast."""
     if urlopen is None:
         raise ValueError("URL fetching is not available in this environment.")
     u = (url or '').strip()
@@ -4462,7 +4464,7 @@ def fetch_url_bytes(url: str):
         "Accept": "text/html,application/xhtml+xml,application/pdf,*/*",
     }, method="GET")
     try:
-        with urlopen(req, timeout=45) as resp:
+        with urlopen(req, timeout=timeout) as resp:
             ctype = (resp.headers.get('Content-Type') or '').lower()
             data = resp.read(20 * 1024 * 1024)   # cap 20 MB
     except Exception as exc:
@@ -4520,6 +4522,69 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
             raise
     # PDF or other bytes
     return parse_pdf_bytes(data, mode=mode)
+
+
+# Input types the parser can accept without a matched rule family: PDFs, images
+# and HTML go to the AI/vision route; xlsx/csv have a grid rule parser. A
+# document is "parseable" for the discovery probe if it matched a known family
+# OR its input type is one of these.
+_PROBE_PARSEABLE_TYPES = ('pdf-text', 'pdf-scanned', 'image', 'html', 'xlsx', 'csv')
+
+
+def _probe_detect(data: bytes, ctype: str) -> tuple:
+    """Cheap format sniff for the probe — NO result parsing, NO AI.
+
+    Returns (family, input_type). For HTML/PDF we extract just enough text for
+    detect_format's signatures to fire (HTML: decode; PDF: first few pages);
+    everything else classifies from magic bytes with empty text."""
+    mime = _detect_mime(data)
+    is_html = ('html' in (ctype or '')) or (mime == 'text/html')
+    low, meta = '', {}
+    if is_html and 'pdf' not in (ctype or ''):
+        try:
+            low = _decode_html_bytes(data).lower()
+        except Exception:
+            low = ''
+    elif data[:4] == b'%PDF':
+        # Light text extract (first 3 pages) so family signatures can match.
+        try:
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                meta = dict(pdf.metadata or {})
+                meta['_page_count'] = len(pdf.pages)
+                low = '\n'.join((p.extract_text() or '')
+                                for p in pdf.pages[:3]).lower()
+        except Exception:
+            low = ''
+    try:
+        family, input_type, _conf = detect_format(data, low, meta)
+    except Exception:
+        family, input_type = 'unknown', ('html' if is_html else 'pdf-text')
+    return family, input_type
+
+
+def probe_url(url: str) -> dict:
+    """Discovery probe: is a competition URL reachable + likely parseable?
+
+    Fetch (bounded ~10s) + sniff + classify only. NEVER parses, NEVER calls AI,
+    and NEVER hard-fails — an unreachable/unfetchable link returns
+    {ok:True, reachable:False} with HTTP 200 (the caller decides UX). Shape:
+      {ok, reachable, family, parseable, content_type, bytes}
+    """
+    try:
+        data, ctype = fetch_url_bytes(url, timeout=10)
+    except Exception:
+        return {"ok": True, "reachable": False}
+    family, input_type = _probe_detect(data, ctype)
+    parseable = (family != 'unknown') or (input_type in _PROBE_PARSEABLE_TYPES)
+    return {
+        "ok": True,
+        "reachable": True,
+        "family": family,
+        "input_type": input_type,
+        "parseable": bool(parseable),
+        "content_type": (ctype or '').split(';')[0].strip() or None,
+        "bytes": len(data),
+    }
 
 
 def _pdf_page_count(file_bytes: bytes) -> int:
@@ -5102,6 +5167,11 @@ class handler(BaseHTTPRequestHandler):
             if 'application/json' in ctype:
                 payload = json.loads(body.decode('utf-8', errors='replace') or '{}')
                 url = (payload.get('url') or '').strip()
+                # Discovery probe: {probe:true, url} → fetch+sniff only (no parse/AI).
+                if payload.get('probe'):
+                    if not url:
+                        return self._respond(200, {'ok':True, 'reachable':False})
+                    return self._respond(200, probe_url(url))
                 jmode = (payload.get('mode') or mode or 'ai').lower()
                 if jmode not in ('rule', 'ai'):
                     jmode = 'ai'

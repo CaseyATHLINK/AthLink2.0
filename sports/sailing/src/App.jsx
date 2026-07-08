@@ -314,6 +314,7 @@ function applyDbHosts(rows){
     ...(r.cls?{cls:r.cls}:{}), ...(r.country?{country:r.country}:{}),
     ...(r.slug?{slug:r.slug}:{}),
     ...(r.logo_url?{logo_url:r.logo_url}:{}),          // recolored host/association logo (bucket url)
+    ...(r.dossier?{dossier:r.dossier}:{}),             // host auto-grab research dossier (migration 0012)
   }));
   // DB rows are the source of truth: defaults seed first, DB overwrites on id clash.
   // (Seeded once via hosts_seed_migration.sql; defaults remain only as an
@@ -4740,6 +4741,30 @@ function mockResearchIdentity(name,kind,countryHint){
     ],
     sources:["https://example.org"]};
 }
+// Mirrors research_host.py competitions-mode: a longer list, each with a `kind`.
+function mockResearchCompetitions(name,kind,countryHint){
+  const c=(countryHint&&countryHint.length===3?countryHint:"HKG").toUpperCase();
+  const cls=["ILCA","Optimist","29er","49er"];
+  const comps=[];
+  for(let y=2025;y>=2021;y--){
+    cls.slice(0,3).forEach((cl,i)=>comps.push({
+      name:`${c} ${cl} Championship ${y}`,year:y,class:cl,
+      url:(y%2===0)?`https://example.org/${cl.toLowerCase()}-${y}.pdf`:(i===2?null:`https://example.org/${cl.toLowerCase()}-${y}.htm`),
+      kind:(y%2===0)?"pdf":"html"}));
+  }
+  return {ok:true,mode:"competitions",found:true,official_name:name.trim(),
+    website:"https://example.org",country:c,competitions:comps,sources:["https://example.org"]};
+}
+// Mirrors the /api/parse_pdf probe response.
+function mockProbe(url){
+  if(!url) return {ok:true,reachable:false};
+  const isPdf=/\.pdf(\?|$)/i.test(url), isHtml=/\.html?(\?|$)/i.test(url);
+  return {ok:true,reachable:true,
+    family:isPdf?"sailwave":isHtml?"sailwave-html-native":"unknown",
+    input_type:isPdf?"pdf-text":isHtml?"html":"pdf-text",
+    parseable:isPdf||isHtml,
+    content_type:isPdf?"application/pdf":"text/html",bytes:isPdf?48213:31002};
+}
 
 function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[],federations=[],onCreateHost,onClaimHost,pendingInviteToken=null}){
   /* ── mode: "signin" | "signup" ── */
@@ -6654,11 +6679,238 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Host auto-grab — competition discovery + bulk-import view
+   ───────────────────────────────────────────────────────────────────────
+   Opened from the portal (header pill / post-signup CTA). Extends the host's
+   dossier with competitions-mode research, probes each URL for parseability,
+   dedups against events already on AthLink, and lets a verified host select
+   past competitions to bulk-import. Import itself (Phase C) runs through
+   onImport. Selection + needs-review persist into hosts.dossier via onSaveDossier.
+   ═══════════════════════════════════════════════════════════════════════ */
+const _hg_norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+const hgCompKey=c=>`${_hg_norm(c.name)}|${c.year||""}|${c.class?canonClass(c.class):""}`;
+// Simple bounded promise pool — runs `tasks` (thunks) at most `conc` at a time.
+async function hgRunPool(tasks,conc){
+  let i=0;
+  const run=async()=>{ while(i<tasks.length){ const idx=i++; try{await tasks[idx]();}catch{} } };
+  await Promise.all(Array.from({length:Math.min(conc,tasks.length)},run));
+}
+function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier,onClaimEvent,onImport,needsReview=[],onOpenReview,onClose}){
+  const dossier=host?.dossier||{};
+  const[comps,setComps]=React.useState(()=>[...(dossier.competitions||[])]);
+  const[probes,setProbes]=React.useState({});       // compKey → 'loading' | probe result
+  const[extending,setExtending]=React.useState(false);
+  const[selected,setSelected]=React.useState(()=>new Set(dossier.pending_import||[]));
+  const firstSave=React.useRef(true);
+
+  // Match a discovered competition against events already on AthLink (fuzzy name
+  // + year from dateKey + class). Conservative: a class disagreement rejects the
+  // match, so at worst a true dup shows as importable (fingerprint dedup at
+  // import time is the backstop) rather than being wrongly hidden.
+  const matchedEventFor=React.useCallback((c)=>{
+    const cn=_hg_norm(c.name); if(!cn) return null;
+    const cy=c.year?String(c.year):""; const cc=c.class?canonClass(c.class):"";
+    return events.find(ev=>{
+      const en=_hg_norm(ev.name); if(!en) return false;
+      const nameHit=en===cn||(cn.length>=6&&(en.includes(cn)||cn.includes(en)));
+      if(!nameHit) return false;
+      const ey=(dateKey(ev.date)||"").slice(0,4);
+      if(cy&&ey&&cy!==ey) return false;
+      const ec=ev.cls?canonClass(ev.cls):"";
+      if(cc&&ec&&cc!==ec) return false;
+      return true;
+    })||null;
+  },[events]);
+
+  // On open: extend the dossier via competitions-mode research (once, if short),
+  // then probe every URL (max 3 concurrent). Everything is best-effort.
+  React.useEffect(()=>{ let cancelled=false;
+    (async()=>{
+      let list=[...(dossier.competitions||[])];
+      if(list.length<20){
+        setExtending(true);
+        try{
+          let d;
+          if(MOCK_RESEARCH) d=mockResearchCompetitions(host.name,host.type,host.country);
+          else{
+            const r=await fetch("/api/research_host",{method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({name:host.name,type:host.type,
+                country_hint:(host.country||"").length===3?host.country:"",mode:"competitions"})});
+            d=await r.json();
+          }
+          if(d&&d.ok&&Array.isArray(d.competitions)){
+            const seen=new Set(list.map(hgCompKey));
+            d.competitions.forEach(c=>{ const k=hgCompKey(c); if(!seen.has(k)){ seen.add(k); list.push(c); } });
+          }
+        }catch{ /* best-effort */ }
+        if(!cancelled) setExtending(false);
+      }
+      if(cancelled) return;
+      setComps(list);
+      const tasks=list.filter(c=>c.url&&!matchedEventFor(c)).map(c=>async()=>{
+        const k=hgCompKey(c);
+        setProbes(p=>({...p,[k]:'loading'}));
+        let res;
+        try{
+          if(MOCK_RESEARCH) res=mockProbe(c.url);
+          else{ const r=await fetch("/api/parse_pdf",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({probe:true,url:c.url})}); res=await r.json(); }
+        }catch{ res={ok:true,reachable:false}; }
+        if(!cancelled) setProbes(p=>({...p,[k]:res}));
+      });
+      await hgRunPool(tasks,3);
+    })();
+    return ()=>{cancelled=true;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // Persist selection + extended list into hosts.dossier (debounced; skip mount).
+  React.useEffect(()=>{
+    if(firstSave.current){ firstSave.current=false; return; }
+    const t=setTimeout(()=>{
+      onSaveDossier?.({...dossier,competitions:comps,pending_import:[...selected]});
+    },700);
+    return ()=>clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[selected,comps]);
+
+  const statusOf=(c)=>{
+    const ev=matchedEventFor(c);
+    if(ev) return {kind:"claim",ev};
+    if(!c.url) return {kind:"needfile"};
+    const pr=probes[hgCompKey(c)];
+    if(pr==='loading'||pr===undefined) return {kind:"checking"};
+    if(pr.reachable===false) return {kind:"needfile"};
+    if(pr.parseable===false) return {kind:"unsupported"};
+    return {kind:"ready"};
+  };
+  const readyKeys=comps.filter(c=>statusOf(c).kind==="ready").map(hgCompKey);
+  const selReady=readyKeys.filter(k=>selected.has(k));
+  const allReadySelected=readyKeys.length>0&&selReady.length===readyKeys.length;
+  const toggle=(k)=>setSelected(prev=>{ const n=new Set(prev); n.has(k)?n.delete(k):n.add(k); return n; });
+  const toggleAll=()=>setSelected(prev=>{
+    if(allReadySelected){ const n=new Set(prev); readyKeys.forEach(k=>n.delete(k)); return n; }
+    const n=new Set(prev); readyKeys.forEach(k=>n.add(k)); return n;
+  });
+  const startImport=()=>{
+    const rows=comps.filter(c=>statusOf(c).kind==="ready"&&selected.has(hgCompKey(c)));
+    if(rows.length) onImport?.(rows);
+  };
+
+  // Group by year desc; undated last.
+  const groups=React.useMemo(()=>{
+    const m=new Map();
+    comps.forEach(c=>{ const y=c.year||0; if(!m.has(y)) m.set(y,[]); m.get(y).push(c); });
+    return [...m.entries()].sort((a,b)=>b[0]-a[0]);
+  },[comps]);
+
+  const badge=(st)=>{
+    if(st.kind==="claim") return <span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:11,fontWeight:600,color:"var(--accent)"}}><BadgeCheck size={13}/>Already on AthLink</span>;
+    if(st.kind==="checking") return <span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:11,color:"var(--mut)"}}><Loader2 size={12} className="spin"/>Checking…</span>;
+    if(st.kind==="needfile") return <span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:11,color:"var(--mut)"}} title="No reachable results file — upload the PDF via Import."><FileText size={12}/>Needs the file</span>;
+    if(st.kind==="unsupported") return <span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:11,color:"var(--mut)"}}><AlertCircle size={12}/>Unsupported format</span>;
+    return <span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:11,fontWeight:600,color:"#2e9e5b"}}><CheckCircle size={12}/>Ready to import</span>;
+  };
+  const domainOf=u=>{ try{ return new URL(u).hostname.replace(/^www\./,""); }catch{ return ""; } };
+
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:120,background:"rgba(12,24,44,.5)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",
+      display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"5vh 16px 40px",overflowY:"auto"}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"min(760px,100%)",background:"var(--paper)",borderRadius:20,border:"1px solid var(--line)",
+        boxShadow:"0 30px 80px rgba(12,24,44,.35)",overflow:"hidden"}}>
+        {/* Header */}
+        <div style={{background:"linear-gradient(180deg,var(--navy2),var(--navy))",color:"#fff",padding:"18px 20px",position:"relative"}}>
+          <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:14,right:14,width:30,height:30,borderRadius:"50%",border:0,
+            background:"rgba(255,255,255,.16)",color:"#fff",cursor:"pointer",display:"grid",placeItems:"center"}}><X size={16}/></button>
+          <p style={{fontSize:11,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",opacity:.85,margin:0}}>Here's what we found</p>
+          <h3 style={{margin:"3px 0 0",fontSize:20,fontWeight:800}}>Import {host?.name}'s past results</h3>
+          <p style={{margin:"6px 0 0",fontSize:12.5,opacity:.9,lineHeight:1.45}}>We researched the web for competitions you've run. Pick the ones to bring onto AthLink — each is checked for whether we can read its results.</p>
+        </div>
+
+        {needsReview.length>0&&(
+          <button onClick={onOpenReview} style={{width:"100%",textAlign:"left",border:0,borderBottom:"1px solid var(--line)",cursor:"pointer",
+            background:"rgba(200,146,11,.09)",padding:"11px 20px",fontSize:12.5,color:"#8a6400",display:"flex",alignItems:"center",gap:8}}>
+            <AlertCircle size={15}/><b>{needsReview.length}</b> parse{needsReview.length>1?"s":""} need your review<ChevronRight size={14} style={{marginLeft:"auto"}}/>
+          </button>
+        )}
+
+        {/* Select-all + count */}
+        <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 20px",borderBottom:"1px solid var(--line)"}}>
+          <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"var(--ink)",cursor:readyKeys.length?"pointer":"default",opacity:readyKeys.length?1:.5}}>
+            <input type="checkbox" checked={allReadySelected} disabled={!readyKeys.length} onChange={toggleAll}/>
+            Select all ready ({readyKeys.length})
+          </label>
+          {extending&&<span style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,color:"var(--mut)"}}><Loader2 size={13} className="spin"/>Finding more…</span>}
+        </div>
+
+        {/* Rows grouped by year */}
+        <div style={{maxHeight:"52vh",overflowY:"auto",padding:"4px 0"}}>
+          {comps.length===0&&!extending&&(
+            <p style={{textAlign:"center",color:"var(--mut)",fontSize:13,padding:"36px 20px"}}>No past competitions found yet.</p>
+          )}
+          {groups.map(([year,rows])=>(
+            <div key={year}>
+              <p style={{fontSize:11,fontWeight:800,letterSpacing:".05em",color:"var(--mut)",padding:"10px 20px 4px",margin:0}}>{year||"Undated"}</p>
+              {rows.map((c,i)=>{
+                const k=hgCompKey(c); const st=statusOf(c); const on=selected.has(k);
+                const selectable=st.kind==="ready";
+                return(
+                  <div key={k+i} style={{display:"flex",alignItems:"center",gap:11,padding:"9px 20px",borderTop:"1px solid var(--line)"}}>
+                    <input type="checkbox" checked={on&&selectable} disabled={!selectable} onChange={()=>toggle(k)}
+                      style={{flex:"none",cursor:selectable?"pointer":"not-allowed"}}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                        <span style={{fontSize:13.5,fontWeight:600,color:"var(--navy)",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</span>
+                        {c.class&&<span style={{fontSize:10.5,fontWeight:600,padding:"1px 7px",borderRadius:980,color:classColor(c.class),background:classColorA(c.class,.12),border:`1px solid ${classColorA(c.class,.3)}`}}>{classLabel(c.class)}</span>}
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:9,margin:"3px 0 0",fontSize:11,color:"var(--mut)"}}>
+                        {c.url&&<a href={c.url} target="_blank" rel="noreferrer noopener" style={{color:"var(--mut)",textDecoration:"none",display:"inline-flex",alignItems:"center",gap:4,maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          <img alt="" width={12} height={12} src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domainOf(c.url))}&sz=32`} onError={e=>{e.currentTarget.style.display="none";}}/>{domainOf(c.url)}</a>}
+                        {badge(st)}
+                      </div>
+                    </div>
+                    {st.kind==="claim"&&(
+                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",flex:"none"}} onClick={()=>onClaimEvent?.(st.ev)}>Claim it</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+
+        {/* Footer / import bar */}
+        <div style={{borderTop:"1px solid var(--line)",padding:"14px 20px",background:"rgba(255,255,255,.6)"}}>
+          {!canImport?(
+            <div>
+              <button className="btn cta" disabled style={{width:"100%",justifyContent:"center",opacity:.55,cursor:"not-allowed"}}>
+                <Clock size={15}/>Ready to import — pending verification
+              </button>
+              <p style={{fontSize:11.5,color:"var(--mut)",textAlign:"center",margin:"8px 0 0",lineHeight:1.45}}>
+                An AthLink admin verifies new hosts before bulk imports go live. Your selection is saved{devMode?" (dev view bypasses this gate)":""}.
+              </p>
+            </div>
+          ):(
+            <button className="btn cta liquidGlass-wrapper" disabled={!selReady.length} onClick={startImport}
+              style={{width:"100%",justifyContent:"center",...(selReady.length?{}:{opacity:.55,cursor:"not-allowed"})}}>
+              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+              <div className="liquidGlass-text"><Upload size={16}/>Import {selReady.length} selected</div>
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
   const[initialLoading,setInitialLoading]=useState(true); // true until the first Supabase load settles (drives the branded splash)
   const[showDevProfiles,setShowDevProfiles]=useState(false);    // dev-only all-profiles panel
   const[showHostEdit,setShowHostEdit]=useState(false);          // host portal edit modal
+  const[showDiscovery,setShowDiscovery]=useState(false);        // host auto-grab: import-past-results view
+  const[discoveryReview,setDiscoveryReview]=useState(false);    // Phase C: open needs-review section
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
   const reloadHosts=async()=>{
     const rows=await sbGet("hosts?select=*");
@@ -6811,7 +7063,8 @@ export default function AthLinkMVP(){
     // Update local registry immediately (optimistic).
     const h=hostById(hostId);
     if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country;
-      if("logo_url"in patch){ if(patch.logo_url) h.logo_url=patch.logo_url; else delete h.logo_url; } }
+      if("logo_url"in patch){ if(patch.logo_url) h.logo_url=patch.logo_url; else delete h.logo_url; }
+      if("dossier"in patch){ if(patch.dossier) h.dossier=patch.dossier; else delete h.dossier; } }
     setHostsVersion(v=>v+1);
     // Persist. PATCH alone silently no-ops if the row was never inserted
     // (the 11 defaults aren't in the hosts table until seeded), so UPSERT:
@@ -6822,10 +7075,16 @@ export default function AthLinkMVP(){
       if(!hit&&h){
         const row={id:h.id,type:h.type,scope:h.scope||"HK",name:h.name,
           ...(h.cls?{cls:h.cls}:{}),...(h.country?{country:h.country}:{}),
-          ...(h.logo_url?{logo_url:h.logo_url}:{})};
+          ...(h.logo_url?{logo_url:h.logo_url}:{}),
+          ...(h.dossier?{dossier:h.dossier}:{})};
         await sbPost("hosts",row);
       }
     }catch(e){console.error("saveHost persist",e);}
+  };
+  // Host auto-grab: bulk-import selected discovered competitions.
+  // Phase C replaces this with the client-driven parse→confidence-gate→save queue.
+  const importDiscoveredCompetitions=(rows,hostObj)=>{
+    console.log("[host-autograb] import requested:",rows.length,"competitions for",hostObj?.name);
   };
   // ── Save a username to the user's profile (unique, lowercase, alnum + underscore) ──
   const saveUsername=async()=>{
@@ -10293,6 +10552,22 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       onClose={()=>setShowHostEdit(false)}/>
     );
   })()}
+  {/* Host auto-grab: competition discovery + bulk-import view */}
+  {showDiscovery&&portal&&!isClassPortal&&hostById(portal)&&(
+    <HostDiscoveryModal host={hostById(portal)} events={events} auth={auth}
+      canImport={canManageMembers} devMode={devMode}
+      onSaveDossier={(dossier)=>saveHost(portal,{dossier})}
+      onClaimEvent={async(ev)=>{
+        if(!auth?.user?.id) return;
+        try{
+          await createEventClaim(ev.id,portal,auth.user.id,"",auth.token);
+          setClaimNote({name:ev.name,status:"pending"}); setTimeout(()=>setClaimNote(null),6000);
+          await reloadEventClaims();
+        }catch(e){ console.error("discovery event claim",e); }
+      }}
+      onImport={(rows)=>importDiscoveredCompetitions(rows,hostById(portal))}
+      onClose={()=>setShowDiscovery(false)}/>
+  )}
   {pendingHostNotice&&(
     <div className="notice"><div className="ico"><Clock size={18}/></div>
       <div><b>Setup complete — pending approval</b>
@@ -10992,6 +11267,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
                 <Settings size={14} style={{flex:"none"}}/> Edit page
               </MagneticItem>}
+              {/* Host auto-grab: import past results (any member of a host with a dossier; dev too) */}
+              {!isClassPortal&&host?.dossier&&(canManageMembers||!!myPortalMembership)&&<MagneticItem className="portal-pill" onClick={()=>{setDiscoveryReview(false);setShowDiscovery(true);}} strength={0.28}>
+                <Upload size={14} style={{flex:"none"}}/> Import past results
+              </MagneticItem>}
             </div>
           );
           // Left column mirrors the global-class-page layout: title pinned at the very top,
@@ -11035,6 +11314,20 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
           </div>
         )}
+        {/* Host auto-grab: post-signup "see what we found" CTA (host confirmed research at signup) */}
+        {!isClassPortal&&host?.dossier&&(canManageMembers||!!myPortalMembership)&&(()=>{
+          const nComp=(host.dossier.competitions||[]).length;
+          return(
+            <div style={{display:"flex",alignItems:"center",gap:12,background:"rgba(13,142,207,.08)",border:"1px solid rgba(13,142,207,.28)",borderRadius:14,padding:"14px 18px",marginBottom:18}}>
+              <Sparkles size={20} color="var(--accent)" style={{flex:"none"}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,color:"var(--navy)",fontSize:14}}>We found {nComp>0?`${nComp} past ${nComp===1?"competition":"competitions"}`:"your organisation"} on the web</div>
+                <div style={{fontSize:13,color:"var(--mut)",marginTop:2,lineHeight:1.5}}>Review what AthLink discovered and import the results in a few clicks.</div>
+              </div>
+              <button className="btn cta" style={{flex:"none",whiteSpace:"nowrap"}} onClick={()=>{setDiscoveryReview(false);setShowDiscovery(true);}}>See what we found <ChevronRight size={15}/></button>
+            </div>
+          );
+        })()}
         {fed&&(()=>{
           const feAssoc=ASSOCIATIONS.filter(a=>a.scope===fed.scope);
           if(!feAssoc.length) return null;
