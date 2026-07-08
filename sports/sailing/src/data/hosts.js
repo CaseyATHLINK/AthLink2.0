@@ -211,3 +211,68 @@ export function dropPendingCustomClass(canonical){
 export const fetchInviteByShortCode=(code,tok)=>hostRest(`host_invites?short_code=eq.${encodeURIComponent(code.toUpperCase())}&select=*`,{},tok);
 // Mark invite used (single-use enforcement)
 export const markInviteUsed=(token,userId,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}`,{method:"PATCH",body:JSON.stringify({used_at:new Date().toISOString(),used_by:userId})},tok);
+
+/* ── Host auto-grab: localhost mock ───────────────────────────────────────────
+   /api/research_host and the /api/sailing/parse_pdf probe are NEW endpoints — they only
+   exist on a Vercel preview deploy, so on localhost:5173 they 404. Flip
+   MOCK_RESEARCH to true to smoke-test the signup research card + discovery view
+   WITHOUT a deploy. It MUST default to false — with it false, real calls hit the
+   live endpoints. mockResearchIdentity(name,kind,countryHint) mirrors the
+   research_host.py identity-mode response shape exactly. */
+export const MOCK_RESEARCH=false;
+export function mockResearchIdentity(name,kind,countryHint){
+  const nm=(name||"").trim();
+  const c=(countryHint&&countryHint.length===3?countryHint:"HKG").toUpperCase();
+  return {ok:true,mode:"identity",found:true,
+    official_name:nm||"Sample Sailing Club",
+    acronym:(nm||"SSC").split(/\s+/).map(w=>w[0]||"").join("").toUpperCase().slice(0,5),
+    website:"https://example.org",country:c,
+    classes:kind==="association"?["ILCA"]:["ILCA","Optimist","29er"],
+    blurb:`${nm||"The organisation"} organises sailing competitions.`,
+    competitions:[
+      {name:`${c} National Championship 2025`,year:2025,class:"ILCA",url:"https://example.org/nats-2025.pdf"},
+      {name:`${c} Youth Series 2024`,year:2024,class:"Optimist",url:"https://example.org/youth-2024.htm"},
+      {name:`${c} Winter Regatta 2024`,year:2024,class:"29er",url:null},
+    ],
+    sources:["https://example.org"]};
+}
+// Mirrors research_host.py competitions-mode: a longer list, each with a `kind`.
+export function mockResearchCompetitions(name,kind,countryHint,site){
+  const c=(countryHint&&countryHint.length===3?countryHint:"HKG").toUpperCase();
+  const cls=["ILCA","Optimist","29er","49er"];
+  // Derive a domain from the seed site (if any) so different pasted sites yield
+  // distinguishable mock competitions + URLs.
+  let dom="example.org";
+  try{ if(site) dom=new URL(/^https?:\/\//i.test(site)?site:("https://"+site)).hostname.replace(/^www\./,""); }catch{}
+  const comps=[];
+  for(let y=2025;y>=2021;y--){
+    cls.slice(0,3).forEach((cl,i)=>comps.push({
+      name:`${c} ${cl} Championship ${y}`,year:y,class:cl,
+      url:(y%2===0)?`https://${dom}/${cl.toLowerCase()}-${y}.pdf`:(i===2?null:`https://${dom}/${cl.toLowerCase()}-${y}.htm`),
+      kind:(y%2===0)?"pdf":"html"}));
+  }
+  return {ok:true,mode:"competitions",found:true,official_name:name.trim(),
+    website:`https://${dom}`,country:c,competitions:comps,sources:[`https://${dom}`]};
+}
+// Mirrors a /api/sailing/parse_pdf {url} parse response (single-fleet). The 29er rows come
+// back low-confidence so the smoke test exercises the needs-review path too.
+export function mockParse(row){
+  const low=/29er/i.test(row?.name||row?.class||"");
+  return {ok:true,name:row?.name||"Competition",date:row?.year?`01/06/${row.year}`:"",multi:false,
+    entries:[{helm:"Alpha Sailor",crew:"",sail:"101",nat:"HKG",pdf_rank:1,races:[1]},
+             {helm:"Bravo Sailor",crew:"",sail:"102",nat:"RSA",pdf_rank:2,races:[2]},
+             {helm:"Charlie Sailor",crew:"",sail:"103",nat:"GBR",pdf_rank:3,races:[3]}],
+    discards:1,ai_parsed:false,detected_class:row?.class||"",detected_host:"",
+    low_confidence:low,confidence:low?0.4:0.9,
+    confidence_reasons:low?["only 3 entries parsed (rows likely dropped)"]:["looks clean"]};
+}
+// Mirrors the /api/sailing/parse_pdf probe response.
+export function mockProbe(url){
+  if(!url) return {ok:true,reachable:false};
+  const isPdf=/\.pdf(\?|$)/i.test(url), isHtml=/\.html?(\?|$)/i.test(url);
+  return {ok:true,reachable:true,
+    family:isPdf?"sailwave":isHtml?"sailwave-html-native":"unknown",
+    input_type:isPdf?"pdf-text":isHtml?"html":"pdf-text",
+    parseable:isPdf||isHtml,
+    content_type:isPdf?"application/pdf":"text/html",bytes:isPdf?48213:31002};
+}
