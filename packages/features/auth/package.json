@@ -1,0 +1,16 @@
+{
+  "name": "@athlink/auth",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.jsx",
+  "exports": {
+    ".": "./src/index.jsx"
+  },
+  "dependencies": {
+    "@athlink/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "lucide-react": "*"
+  }
+}
