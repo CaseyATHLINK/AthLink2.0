@@ -4746,18 +4746,22 @@ function mockResearchIdentity(name,kind,countryHint){
     sources:["https://example.org"]};
 }
 // Mirrors research_host.py competitions-mode: a longer list, each with a `kind`.
-function mockResearchCompetitions(name,kind,countryHint){
+function mockResearchCompetitions(name,kind,countryHint,site){
   const c=(countryHint&&countryHint.length===3?countryHint:"HKG").toUpperCase();
   const cls=["ILCA","Optimist","29er","49er"];
+  // Derive a domain from the seed site (if any) so different pasted sites yield
+  // distinguishable mock competitions + URLs.
+  let dom="example.org";
+  try{ if(site) dom=new URL(/^https?:\/\//i.test(site)?site:("https://"+site)).hostname.replace(/^www\./,""); }catch{}
   const comps=[];
   for(let y=2025;y>=2021;y--){
     cls.slice(0,3).forEach((cl,i)=>comps.push({
       name:`${c} ${cl} Championship ${y}`,year:y,class:cl,
-      url:(y%2===0)?`https://example.org/${cl.toLowerCase()}-${y}.pdf`:(i===2?null:`https://example.org/${cl.toLowerCase()}-${y}.htm`),
+      url:(y%2===0)?`https://${dom}/${cl.toLowerCase()}-${y}.pdf`:(i===2?null:`https://${dom}/${cl.toLowerCase()}-${y}.htm`),
       kind:(y%2===0)?"pdf":"html"}));
   }
   return {ok:true,mode:"competitions",found:true,official_name:name.trim(),
-    website:"https://example.org",country:c,competitions:comps,sources:["https://example.org"]};
+    website:`https://${dom}`,country:c,competitions:comps,sources:[`https://${dom}`]};
 }
 // Mirrors a /api/parse_pdf {url} parse response (single-fleet). The 29er rows come
 // back low-confidence so the smoke test exercises the needs-review path too.
@@ -6557,7 +6561,6 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
   const[tab,setTab]=React.useState("details");
   const[name,setName]=React.useState(host?.name||"");
   const[country,setCountry]=React.useState(host?.country||"");
-  const[website,setWebsite]=React.useState(host?.dossier?.identity?.website||"");  // official results site (auto-grab)
   const[slug,setSlug]=React.useState(host?.slug||pascalSlug(host?.name||""));
   const[slugErr,setSlugErr]=React.useState("");
   const[busy,setBusy]=React.useState(false);
@@ -6597,15 +6600,6 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
     setBusy(true); setSlugErr("");
     const patch={name:name.trim()||host.name,country:(country||"").toUpperCase()||null};
     if((logo||null)!==(host?.logo_url||null)) patch.logo_url=logo||null;  // only when changed
-    // Host website (auto-grab source). When it changes, merge into
-    // dossier.identity.website AND reset grab_dismissed so the "We found your
-    // organisation" offer returns to scan the new site.
-    const curSite=host?.dossier?.identity?.website||"";
-    const newSite=website.trim();
-    if(newSite!==curSite){
-      const base=host?.dossier||{};
-      patch.dossier={...base,identity:{...(base.identity||{}),website:newSite||null},grab_dismissed:false};
-    }
     await onSave(patch);
     // Public slug (URL). Saved separately so a "taken" clash can be reported.
     if(onSaveSlug&&(slug||"").trim()&&slug.trim()!==(host?.slug||pascalSlug(host?.name||""))){
@@ -6688,13 +6682,6 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
                     {iso&&<span style={{position:"absolute",right:18,top:"50%",transform:"translateY(-50%)",fontSize:17,pointerEvents:"none"}}>{iocFlag(country)}</span>}
                   </div>
                 </div>
-                <div style={{marginTop:14}}>
-                  <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Host website <span style={{fontWeight:400}}>(optional)</span></label>
-                  <input value={website} onChange={e=>setWebsite(e.target.value)} type="url" inputMode="url" placeholder="e.g. sailing.org.hk" style={barStyle}/>
-                  <div style={{fontSize:11.5,color:"var(--mut)",margin:"6px 2px 0",lineHeight:1.45,display:"flex",alignItems:"center",gap:6}}>
-                    <Sparkles size={12} style={{flex:"none",color:"var(--accent)"}}/>Your official results site — we can help scrape old competitions from here.
-                  </div>
-                </div>
                 <div style={{display:"flex",gap:10,marginTop:"auto",paddingTop:18}}>
                   <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={onClose}>Cancel</button>
                   <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
@@ -6731,7 +6718,7 @@ async function hgRunPool(tasks,conc){
   await Promise.all(Array.from({length:Math.min(conc,tasks.length)},run));
 }
 function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier,onClaimEvent,onImport,
-    importStatuses={},importSummary=null,needsReview=[],openReviewInitially=false,onReviewItem,onClose}){
+    seedSites=null,importStatuses={},importSummary=null,needsReview=[],openReviewInitially=false,onReviewItem,onClose}){
   const dossier=host?.dossier||{};
   const[comps,setComps]=React.useState(()=>[...(dossier.competitions||[])]);
   const[probes,setProbes]=React.useState({});       // compKey → 'loading' | probe result
@@ -6760,28 +6747,36 @@ function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier
     })||null;
   },[events]);
 
-  // On open: extend the dossier via competitions-mode research (once, if short),
-  // then probe every URL (max 3 concurrent). Everything is best-effort.
+  // On open: extend the dossier via competitions-mode research, then probe every
+  // URL (max 3 concurrent). Everything is best-effort. When opened from the
+  // "Scrape website" tab, research each pasted site (seedSites); otherwise research
+  // once by host name (+ any stored website).
   React.useEffect(()=>{ let cancelled=false;
     (async()=>{
       let list=[...(dossier.competitions||[])];
-      if(list.length<20){
+      const sites=(seedSites&&seedSites.length)
+        ? seedSites
+        : (list.length<20 ? [host.dossier?.identity?.website||""] : []);
+      if(sites.length){
         setExtending(true);
-        try{
-          let d;
-          if(MOCK_RESEARCH) d=mockResearchCompetitions(host.name,host.type,host.country);
-          else{
-            const r=await fetch("/api/research_host",{method:"POST",headers:{"Content-Type":"application/json"},
-              body:JSON.stringify({name:host.name,type:host.type,
-                country_hint:(host.country||"").length===3?host.country:"",
-                website:host.dossier?.identity?.website||"",mode:"competitions"})});
-            d=await r.json();
-          }
-          if(d&&d.ok&&Array.isArray(d.competitions)){
-            const seen=new Set(list.map(hgCompKey));
-            d.competitions.forEach(c=>{ const k=hgCompKey(c); if(!seen.has(k)){ seen.add(k); list.push(c); } });
-          }
-        }catch{ /* best-effort */ }
+        const cc=async(website)=>{
+          try{
+            let d;
+            if(MOCK_RESEARCH) d=mockResearchCompetitions(host.name,host.type,host.country,website);
+            else{
+              const r=await fetch("/api/research_host",{method:"POST",headers:{"Content-Type":"application/json"},
+                body:JSON.stringify({name:host.name,type:host.type,
+                  country_hint:(host.country||"").length===3?host.country:"",
+                  website:website||"",mode:"competitions"})});
+              d=await r.json();
+            }
+            if(d&&d.ok&&Array.isArray(d.competitions)){
+              const seen=new Set(list.map(hgCompKey));
+              d.competitions.forEach(c=>{ const k=hgCompKey(c); if(!seen.has(k)){ seen.add(k); list.push(c); } });
+            }
+          }catch{ /* best-effort */ }
+        };
+        await hgRunPool(sites.map(s=>()=>cc(s)),3);
         if(!cancelled) setExtending(false);
       }
       if(cancelled) return;
@@ -6806,6 +6801,7 @@ function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier
   // Persist selection + extended list into hosts.dossier (debounced; skip mount).
   React.useEffect(()=>{
     if(firstSave.current){ firstSave.current=false; return; }
+    if(MOCK_RESEARCH) return;   // smoke test: never write mock data to a real host
     const t=setTimeout(()=>{
       onSaveDossier?.({...dossier,competitions:comps,pending_import:[...selected]});
     },700);
@@ -6855,7 +6851,8 @@ function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier
     const map={
       queued:{t:"Queued",c:"var(--mut)",ic:<Clock size={12}/>},
       fetching:{t:"Fetching…",c:"var(--mut)",ic:<Loader2 size={12} className="spin"/>},
-      parsing:{t:"Parsing…",c:"var(--mut)",ic:<Loader2 size={12} className="spin"/>},
+      parsing:{t:"Reading…",c:"var(--mut)",ic:<Loader2 size={12} className="spin"/>},
+      parsed:{t:"Ready to review",c:"#2e9e5b",ic:<CheckCircle size={12}/>},
       imported:{t:"Imported",c:"#2e9e5b",ic:<CheckCircle size={12}/>},
       exists:{t:"Already existed",c:"var(--mut)",ic:<BadgeCheck size={12}/>},
       needsreview:{t:"Needs review",c:"#8a6400",ic:<AlertCircle size={12}/>},
@@ -6973,7 +6970,7 @@ function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier
             <button className="btn cta liquidGlass-wrapper" disabled={!selReady.length||running} onClick={startImport}
               style={{width:"100%",justifyContent:"center",...(selReady.length&&!running?{}:{opacity:.55,cursor:"not-allowed"})}}>
               <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
-              <div className="liquidGlass-text">{running?<><Loader2 size={16} className="spin"/>Importing…</>:<><Upload size={16}/>Import {selReady.length} selected</>}</div>
+              <div className="liquidGlass-text">{running?<><Loader2 size={16} className="spin"/>Reading results…</>:<><Upload size={16}/>Import {selReady.length} selected</>}</div>
             </button>
           )}
         </div>
@@ -6991,6 +6988,8 @@ export default function AthLinkMVP(){
   const[showDiscovery,setShowDiscovery]=useState(false);        // host auto-grab: import-past-results view
   const[discoveryReview,setDiscoveryReview]=useState(false);    // open discovery straight into needs-review
   const[discoveryImport,setDiscoveryImport]=useState(null);     // {statuses:{key:st}, done, total, running}
+  const[discoverySeed,setDiscoverySeed]=useState(null);         // scrape-tab: [urls] to research; null = research by host name
+  const[scrapeText,setScrapeText]=useState("");                 // "Scrape website" import tab: pasted URLs
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
   const reloadHosts=async()=>{
     const rows=await sbGet("hosts?select=*");
@@ -7170,98 +7169,67 @@ export default function AthLinkMVP(){
     if(base.grab_dismissed) return;
     saveHost(hostId,{dossier:{...base,grab_dismissed:true}});
   };
-  // Host auto-grab: build + persist ONE discovered event with host provenance.
-  // Mirrors importPreview's fingerprint/dedup contract but is self-organized by
-  // construction (the host imports its OWN past results): owner=hostId,
-  // owner_confirmed=true, imported_by=hostId, organizer_name from the dossier,
-  // sources=[url]. A fingerprint dup (intra-batch via seenFps OR already on
-  // AthLink) is skipped and reported as "exists" — never a duplicate row.
-  const commitDiscoveredEvent=async(previewEv,hostId,orgName,url,seenFps)=>{
-    const ev={...previewEv,status:"Final",
-      cls:previewEv.cls||assoc?.cls||"29er",
-      subclass:previewEv.subclass||null,
-      owner:hostId, owner_confirmed:true, imported_by:hostId,
-      organizer_name:orgName||null, collabs:[],
-      venue:previewEv.venue||"",
-      country:(previewEv.venue||"").toUpperCase()||previewEv.country||"",
-      date:previewEv.date||"",
-      doublehanded:(previewEv.entries||[]).some(e=>e.crew&&String(e.crew).trim()),
-    };
-    ev.entries=(ev.entries||[]).map(e=>({...e,races:(e.races||[]).filter(r=>r!==null&&r!==undefined&&r!=="")}));
-    delete ev._orgMode; delete ev._orgHost; delete ev._orgName;
-    ev.fingerprint=eventFingerprint(ev);
-    ev.sources=[...new Set([url,hostId].filter(Boolean))];
-    const fpSails=(ev.fingerprint||"").split("|")[3];
-    if(fpSails&&(seenFps.has(ev.fingerprint)||events.some(x=>x.id!==ev.id&&eventFingerprint(x)===ev.fingerprint)))
-      return "exists";
-    if(fpSails) seenFps.add(ev.fingerprint);
-    setEvents(p=>[ev,...p.filter(x=>x.id!==ev.id)]);
-    if(MOCK_RESEARCH) return "imported";   // smoke test: no live DB write
-    const saved=await saveEventToDb(ev);
-    if(saved?.[0]?.id){ const realId=saved[0].id; setEvents(p=>p.map(x=>x.id===ev.id?{...x,id:realId}:x)); }
-    return "imported";
+  // Host auto-grab: open one OR MORE parsed results in the STANDARD import
+  // preview/publish modal (identical to drag-drop). The host reviews and publishes
+  // each — nothing is auto-committed, so there are no silent imports and no
+  // duplicates (importPreview's fingerprint dedup guards publish).
+  const openPreviewsInImport=(entries)=>{
+    const ok=(entries||[]).filter(e=>e&&e.previewEv);
+    if(!ok.length) return;
+    setShowDiscovery(false); setDiscoveryImport(null);
+    resetImport(); setTab("ai"); setImportStep("preview");
+    setPending(ok);
+    setActivePending(0);
+    setPreviewEv(ok[0].previewEv);
+    setMf(f=>({...f,subclass:ok[0].subclass||null,collabs:ok[0].collabs||[]}));
+    setOpen(true);
   };
-  // Bulk-import the selected discovered competitions through a client-side pool
-  // (max 2 concurrent — Hobby-friendly). Each row: parse via the URL path →
-  // confidence gate → high-confidence imports commit directly with provenance;
-  // low-confidence / parse errors land in the needs-review queue. Progress is
-  // published to discoveryImport so the modal can show per-row chips; on finish
-  // the dossier's pending_import (minus completed) + needs_review are persisted.
+  // Bulk "import": parse each selected discovered competition (small pool, live
+  // per-row status in the discovery modal), then route ALL parseable results into
+  // the preview/publish modal so the host reviews + publishes each. If everything
+  // fails, the discovery modal stays open showing the failures.
   const importDiscoveredCompetitions=async(rows,hostObj)=>{
-    if(!rows?.length||!hostObj) return;
-    const hostId=hostObj.id;
-    const orgName=hostObj.dossier?.identity?.official_name||hostObj.name||null;
+    if(!rows?.length) return;
     const total=rows.length;
     const statuses={}; rows.forEach(r=>{statuses[hgCompKey(r)]="queued";});
     let done=0;
-    const seenFps=new Set();
-    const newReview=[];
     setDiscoveryImport({statuses:{...statuses},done:0,total,running:true});
     const setStatus=(k,s)=>{ statuses[k]=s; setDiscoveryImport(d=>({...(d||{}),statuses:{...statuses}})); };
     const bump=()=>{ done++; setDiscoveryImport(d=>({...(d||{}),done,statuses:{...statuses}})); };
+    const entries=[];
+    const build=(data,row)=>{
+      const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+      // Carry the source URL so importPreview records it as a source on publish.
+      const withUrl=pv=>{ pv.sources=[...new Set([...(pv.sources||[]),row.url].filter(Boolean))]; return pv; };
+      if(data.multi&&Array.isArray(data.fleets)&&data.fleets.length){
+        const gid="fg_grab_"+stamp, gdisc=Math.max(...data.fleets.map(f=>f.discards||1));
+        data.fleets.forEach((fl,fi)=>entries.push({id:gid+"_f"+fi,
+          name:`${data.name||row.name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+          previewEv:withUrl(previewFromData(data.name||row.name,data.date||"",fl,!!data.ai_parsed,data.detected_class||row.class||"",data.detected_host||hostObj?.name||"")),
+          subclass:null,collabs:[],fleetGroupId:gid,fleetGroupBaseName:data.name||row.name,fleetGroupDiscards:gdisc}));
+      }else{
+        entries.push({id:"grab_"+stamp,name:data.name||row.name,status:"ok",error:null,
+          previewEv:withUrl(previewFromData(data.name||row.name,data.date||"",{name:"",entries:data.entries||[],discards:data.discards},!!data.ai_parsed,data.detected_class||row.class||"",data.detected_host||hostObj?.name||"")),
+          subclass:null,collabs:[]});
+      }
+    };
     const worker=async(row)=>{
       const k=hgCompKey(row);
       try{
-        setStatus(k,"fetching");
+        setStatus(k,"parsing");
         const data=MOCK_RESEARCH?mockParse(row):await parseLink(row.url,"ai");
         if(!data||!data.ok){ setStatus(k,"failed"); bump(); return; }
-        setStatus(k,"parsing");
-        const fleets=data.multi&&Array.isArray(data.fleets)?data.fleets:[{name:"",entries:data.entries||[],discards:data.discards}];
-        const previews=fleets.map(f=>previewFromData(data.name||row.name,data.date||"",f,!!data.ai_parsed,data.detected_class||row.class||"",data.detected_host||hostObj.name));
-        if(data.low_confidence){
-          previews.forEach((pv,i)=>newReview.push({key:k+(i?("#"+i):""),name:pv.name,url:row.url,year:row.year||null,
-            reasons:data.confidence_reasons||[],previewEv:pv}));
-          setStatus(k,"needsreview"); bump(); return;
-        }
-        let imported=0,existed=0;
-        for(const pv of previews){
-          const r=await commitDiscoveredEvent(pv,hostId,orgName,row.url,seenFps);
-          if(r==="imported") imported++; else if(r==="exists") existed++;
-        }
-        setStatus(k,imported>0?"imported":(existed>0?"exists":"failed")); bump();
-      }catch(e){ console.error("[host-autograb] import row failed",e); setStatus(k,"failed"); bump(); }
+        build(data,row); setStatus(k,"parsed"); bump();
+      }catch(e){ console.error("[host-autograb] parse failed",e); setStatus(k,"failed"); bump(); }
     };
     await hgRunPool(rows.map(r=>()=>worker(r)),2);
-    // Persist: drop completed rows from pending_import; append new needs-review.
-    const cur=hostById(hostId)?.dossier||hostObj.dossier||{};
-    const doneKinds=new Set(["imported","exists","needsreview"]);
-    const remaining=(cur.pending_import||[]).filter(kk=>!doneKinds.has(statuses[kk]));
-    const mergedReview=[...(cur.needs_review||[]),
-      ...newReview.filter(nr=>!(cur.needs_review||[]).some(x=>x.key===nr.key))];
-    saveHost(hostId,{dossier:{...cur,pending_import:remaining,needs_review:mergedReview}});
     setDiscoveryImport(d=>({...(d||{}),running:false}));
+    if(entries.length) openPreviewsInImport(entries);   // → review + publish
   };
-  // Open a needs-review parse in the standard import preview modal, pre-loaded.
+  // Back-compat entry (needs-review item → preview). Delegates to the shared helper.
   const openReviewInImport=(item)=>{
     if(!item?.previewEv) return;
-    setShowDiscovery(false);
-    resetImport(); setTab("preview"); setImportStep("preview");
-    setPending([{id:"nr_"+Date.now(),name:item.name||"Competition",status:"ok",error:null,
-      previewEv:item.previewEv,subclass:null,collabs:[]}]);
-    setActivePending(0);
-    setPreviewEv(item.previewEv);
-    setMf(f=>({...f,subclass:null,collabs:[]}));
-    setOpen(true);
+    openPreviewsInImport([{id:"nr_"+Date.now(),name:item.name||"Competition",status:"ok",error:null,previewEv:item.previewEv,subclass:null,collabs:[]}]);
   };
   // ── Save a username to the user's profile (unique, lowercase, alnum + underscore) ──
   const saveUsername=async()=>{
@@ -10758,12 +10726,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         }catch(e){ console.error("discovery event claim",e); }
       }}
       onImport={(rows)=>importDiscoveredCompetitions(rows,hostById(portal))}
+      seedSites={discoverySeed}
       importStatuses={discoveryImport?.statuses||{}}
       importSummary={discoveryImport}
       needsReview={hostById(portal)?.dossier?.needs_review||[]}
       openReviewInitially={discoveryReview}
       onReviewItem={openReviewInImport}
-      onClose={()=>{setShowDiscovery(false);setDiscoveryImport(null);}}/>
+      onClose={()=>{setShowDiscovery(false);setDiscoveryImport(null);setDiscoverySeed(null);}}/>
   )}
   {pendingHostNotice&&(
     <div className="notice"><div className="ico"><Clock size={18}/></div>
@@ -11526,7 +11495,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <div style={{fontWeight:700,color:"var(--navy)",fontSize:14}}>We found {nComp>0?`${nComp} past ${nComp===1?"competition":"competitions"}`:"your organisation"} on the web</div>
                 <div style={{fontSize:13,color:"var(--mut)",marginTop:2,lineHeight:1.5}}>Let AthLink pull your past competitions from the web — no manual entry. Set or change the site we scrape in <b>Edit page → Host website</b>.</div>
               </div>
-              <button className="btn cta" style={{flex:"none",whiteSpace:"nowrap"}} onClick={()=>{setDiscoveryReview(false);setShowDiscovery(true);dismissHostGrab();}}>See what we found <ChevronRight size={15}/></button>
+              <button className="btn cta" style={{flex:"none",whiteSpace:"nowrap"}} onClick={()=>{setDiscoverySeed(null);setDiscoveryReview(false);setShowDiscovery(true);dismissHostGrab();}}>See what we found <ChevronRight size={15}/></button>
               <button className="x" title="Dismiss" style={{flex:"none"}} onClick={()=>dismissHostGrab()}><X size={15}/></button>
             </div>
           );
@@ -12401,13 +12370,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           <div className="mtabs">
             <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI parser</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
+            {portal&&!isClassPortal&&host&&<button className={tab==="scrape"?"on":""} onClick={()=>setTab("scrape")}><Globe size={15}/>Scrape website</button>}
           </div>
-          {(()=>{const dropMode=tab==="rule"?"rule":"ai";const dropActive=tab!=="manual"&&dragDepth>0&&!pdfLoading;return(
+          {(()=>{const fileTab=(tab==="ai"||tab==="rule");const dropMode=tab==="rule"?"rule":"ai";const dropActive=fileTab&&dragDepth>0&&!pdfLoading;return(
           <div className="mbody" style={{position:"relative"}}
-            onDragEnter={tab!=="manual"?onDragEnter:undefined}
-            onDragOver={tab!=="manual"?onDragOver:undefined}
-            onDragLeave={tab!=="manual"?onDragLeave:undefined}
-            onDrop={tab!=="manual"?(e=>onDropFiles(e,dropMode)):undefined}>
+            onDragEnter={fileTab?onDragEnter:undefined}
+            onDragOver={fileTab?onDragOver:undefined}
+            onDragLeave={fileTab?onDragLeave:undefined}
+            onDrop={fileTab?(e=>onDropFiles(e,dropMode)):undefined}>
             {dropActive&&(
               <div style={{position:"absolute",inset:10,zIndex:60,borderRadius:14,border:"2px dashed var(--accent)",
                 background:"var(--sky)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
@@ -12451,6 +12421,27 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0",lineHeight:1.5}}>Parsing the page's source is usually more accurate than a PDF. The link is fetched on our server (your browser can't, due to cross-origin rules).</p>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
+            </>)}
+            {tab==="scrape"&&(<>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Paste the web pages that hold your results — <strong style={{color:"var(--ink)"}}>one link per line</strong>. AthLink scrapes each site for the competitions you've run, checks which it can read, and lets you pick and publish them. Great for a results archive or a club's regatta page.</p>
+              <textarea value={scrapeText} onChange={e=>setScrapeText(e.target.value)}
+                placeholder={"https://www.mysailingclub.org/results\nhttps://www.regattanetwork.com/club/1234\nhttps://…"}
+                rows={5} spellCheck={false}
+                style={{width:"100%",boxSizing:"border-box",border:"1px solid var(--line)",borderRadius:10,padding:"11px 13px",font:"inherit",fontSize:13,lineHeight:1.6,resize:"vertical",outline:"none",background:"#fff",color:"var(--ink)"}}
+                onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginTop:12}}>
+                <button className="btn cta liquidGlass-wrapper" disabled={!scrapeText.trim()}
+                  onClick={()=>{
+                    const urls=[...new Set(scrapeText.split(/[\s,]+/).map(s=>s.trim()).filter(u=>u&&(/^https?:\/\//i.test(u)||/\.[a-z]{2,}/i.test(u))))];
+                    if(!urls.length) return;
+                    closeImport(); setDiscoverySeed(urls); setDiscoveryReview(false); setShowDiscovery(true);
+                  }}
+                  style={{...(scrapeText.trim()?{}:{opacity:.55,cursor:"not-allowed"})}}>
+                  <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                  <div className="liquidGlass-text"><Globe size={16}/>Find results</div>
+                </button>
+                <span style={{fontSize:12,color:"var(--mut)"}}>We fetch each page on our server — your browser can't (cross-origin).</span>
+              </div>
             </>)}
             {(tab==="rule"||tab==="ai")&&(pdfLoading||parseLog.length>0)&&(
               <div style={{marginTop:16,border:"1px solid var(--line)",borderRadius:11,background:"#f7fafd",padding:"13px 15px"}}>

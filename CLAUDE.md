@@ -422,21 +422,23 @@ never auto-apply; keys server-side; 45s provider bound under the 60s ceiling).
   into the `createHostFromSignup` hosts insert. Phase B: `HostDiscoveryModal`
   extends the dossier via competitions-mode research, probes each URL (3-concurrent
   pool), fuzzy-dedups vs `events` (name + year via dateKey + class) — matches →
-  "Already on AthLink" + Claim it (event_claims). **Entry (all hosts):** a
+  "Already on AthLink" + Claim it (event_claims). **Two entries:** (1) a
   dismissible "We found your organisation on the web" banner on every host page
-  (managers/members only) — clicking "See what we found" opens discovery AND sets
-  `dossier.grab_dismissed` (persisted) so it disappears; a "×" dismisses without
-  opening. The scraped site is set in Edit page → **Host website** (stored at
-  `dossier.identity.website`); changing it resets `grab_dismissed` so the offer
-  returns for the new site. `dismissHostGrab()` in AthLinkMVP persists the flag.
-  (The old portal-header "Import past results" pill was removed; the needs-review
-  badge stays.) Phase C: bulk import queue (2-concurrent pool → parse
-  via URL path → `validate.py` confidence gate → high-confidence commit with
-  provenance `owner=hostId, owner_confirmed=true, imported_by=hostId,
-  organizer_name` from dossier, `sources=[url]`, `eventFingerprint` dedup;
-  low-confidence/parse-error → `dossier.needs_review`, opened in the STANDARD
-  import preview modal pre-loaded). Selection + needs_review persist to
-  `hosts.dossier` via saveHost.
+  (managers/members only) — clicking "See what we found" opens discovery (research
+  by host name) AND sets `dossier.grab_dismissed` (persisted) so it disappears; a
+  "×" dismisses without opening. `dismissHostGrab()` persists the flag. (2) a
+  **"Scrape website" tab** inside the "Import a competition" modal — paste multiple
+  site URLs (one per line) → "Find results" opens discovery seeded with those sites
+  (`seedSites` prop → competitions-mode research per site). (The old portal-header
+  "Import past results" pill and the Edit-page "Host website" field were removed.)
+  Phase C: **"Import N selected" does NOT auto-commit** — it parses each selected
+  competition (2-concurrent pool, live per-row status) via the URL path, then routes
+  ALL parseable results into the STANDARD import preview/publish modal
+  (`openPreviewsInImport` → `pending` tabs) so the host reviews + publishes each,
+  exactly like drag-drop. Publish-time `eventFingerprint` dedup prevents duplicates;
+  the source URL rides on `previewEv.sources`. (Earlier auto-commit +
+  confidence-gate + needs_review path was removed — it caused silent imports,
+  a frozen modal, and duplicate rows on repeat clicks.)
 - **Verified gate**: bulk import is gated on the host being verified — realized via
   the owner's verified `host_members` row (`hosts` has no verified column). Unverified
   hosts see a disabled "Ready to import — pending verification" button (selection
