@@ -4,7 +4,9 @@
    deps. Verbatim from App.jsx. */
 
 import { dateKey } from "../util/date.js";
-import { canonName, eventKey } from "../util/name.js";
+import { canonName, eventKey, ordinalOf } from "../util/name.js";
+import { genderCatOf } from "../util/gender.js";
+import { resolvedEntryGender } from "./athletes.js";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
    NEVER_DISCARD: cannot be dropped even if it would improve the score
@@ -128,4 +130,59 @@ export function aggregate(name,evList){
   // misreads that, which previously left history[0] = wrong "most recent").
   history.sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date)));
   return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
+}
+
+/* ── Outstanding-achievement (division podium) detection (moved from App.jsx,
+   reorg step 4). MIN_DIVISION_SIZE + divisionDisplayName are module-internal;
+   only outstandingAchievementFor is re-imported by App.jsx. Verbatim. */
+const MIN_DIVISION_SIZE=4; // a division needs at least this many entries to count (tunable)
+function divisionDisplayName(code){
+  if(!code) return "";
+  const m=String(code).match(/^U(\d{1,2})$/i); if(m) return "Under-"+m[1];
+  if(code==="Jr") return "Junior";
+  if(code==="Mst") return "Masters";
+  if(code==="F") return "Female";
+  if(code==="M") return "Male";
+  if(code==="Mix") return "Mixed";
+  return String(code); // unknown code: show as-is, never guess
+}
+// h = an ag.history row. Returns {rank, divisionLabel, label, title} | null.
+// Two independent axes: age category and gender. One badge per row — best
+// division rank wins, tie prefers category; runner-up goes in the tooltip.
+export function outstandingAchievementFor(h,athleteName){
+  const ev=h?.ev, entries=ev?.entries;
+  if(!entries||entries.length<MIN_DIVISION_SIZE) return null;
+  const overall=h.row?.rank;
+  if(!(overall>=1)) return null;
+  const target=canonName(athleteName);
+  const own=entries.find(e=>canonName(e.helm)===target||canonName(e.crew)===target);
+  if(!own) return null;
+  const dh=!!ev.doublehanded;
+  const ownCat=genderCatOf(own).category;
+  const ownGen=resolvedEntryGender(own,dh);
+  const axes=[];
+  if(ownCat) axes.push({axis:"category",code:ownCat,of:e=>genderCatOf(e).category});
+  if(ownGen) axes.push({axis:"gender",code:ownGen,of:e=>resolvedEntryGender(e,dh)});
+  if(!axes.length) return null;
+  // Official overall order: scoreEvent rows are sorted by official rank (PDF
+  // ground truth first); unranked rows keep their official array order.
+  let rows;
+  try{rows=scoreEvent(ev).rows;}catch{return null;}
+  const isOwn=r=>r.helm===own.helm&&r.crew===own.crew&&r.sail===own.sail;
+  const hits=[];
+  for(const {axis,code,of} of axes){
+    const div=rows.filter(r=>of(r)===code);
+    if(div.length<MIN_DIVISION_SIZE||div.length>=rows.length) continue; // must be a strict, real subset
+    const pos=div.findIndex(isOwn)+1;
+    if(pos<1||pos>3) continue;          // division podium only
+    if(pos>=overall) continue;          // must beat the overall rank chip
+    hits.push({axis,code,rank:pos});
+  }
+  if(!hits.length) return null;
+  hits.sort((a,b)=>a.rank-b.rank||(a.axis==="category"?-1:1)); // best rank; tie → age category
+  const best=hits[0], second=hits[1];
+  const divisionLabel=`${ordinalOf(best.rank)} ${divisionDisplayName(best.code)}`;
+  const label=`Outstanding Achievement: ${divisionLabel}`;
+  const title=second?`${label} · also ${ordinalOf(second.rank)} ${divisionDisplayName(second.code)}`:label;
+  return{rank:best.rank,divisionLabel,label,title};
 }

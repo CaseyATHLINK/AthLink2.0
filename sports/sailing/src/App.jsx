@@ -16,7 +16,7 @@ import { DIV_COLOR, DIV_LABEL, parseDiv, divTokens, divToString, normGender, nor
 import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender, ATHLETE_USERNAMES, applyAthleteUsernames, usernameForName, nameForUsername, META, athleteNat, athleteBirthYear, buildHomeCountry } from "./data/athletes.js";
 import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, assocName, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed, MOCK_RESEARCH, mockResearchIdentity, mockResearchCompetitions, mockParse, mockProbe, eventCountryCode, governingFeds, eventAssocs, eventFingerprint, hostLocation } from "./data/hosts.js";
 import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeleteProfile, fetchProfileNames, fetchAllClaims, createClaim, decideClaim, profileNameKey, fetchAllAthleteProfiles, upsertAthleteProfile, uploadAthletePhoto, uploadAthleteMedia, fetchAllEventClaims, createEventClaim, decideEventClaim } from "./data/profiles.js";
-import { isCode, scoreEvent, scorePreview, aggregate } from "./data/scoring.js";
+import { isCode, scoreEvent, scorePreview, aggregate, outstandingAchievementFor } from "./data/scoring.js";
 import { parseHtml } from "./data/parse-html.js";
 import { dbToApp, saveEventToDb, updateEventStatus, fetchDupDismissals, saveDupDismissals } from "./data/events.js";
 import { CountryTag, ConfirmModal, VerifyBadge, DivisionToggle, ClassPicker, HostClassPills, LiquidBackground, MagneticItem, ResultNuggets, WebIcon, ErrorBoundary } from "./views/atoms.jsx";
@@ -165,57 +165,6 @@ const cleanAISummary=(t)=>{
    A result can be excellent *within a division* yet buried by a mediocre
    overall position (3rd overall but 1st Under-18). Derived strictly from the
    official overall order — we only filter and count, never re-rank. */
-const MIN_DIVISION_SIZE=4; // a division needs at least this many entries to count (tunable)
-function divisionDisplayName(code){
-  if(!code) return "";
-  const m=String(code).match(/^U(\d{1,2})$/i); if(m) return "Under-"+m[1];
-  if(code==="Jr") return "Junior";
-  if(code==="Mst") return "Masters";
-  if(code==="F") return "Female";
-  if(code==="M") return "Male";
-  if(code==="Mix") return "Mixed";
-  return String(code); // unknown code: show as-is, never guess
-}
-// h = an ag.history row. Returns {rank, divisionLabel, label, title} | null.
-// Two independent axes: age category and gender. One badge per row — best
-// division rank wins, tie prefers category; runner-up goes in the tooltip.
-function outstandingAchievementFor(h,athleteName){
-  const ev=h?.ev, entries=ev?.entries;
-  if(!entries||entries.length<MIN_DIVISION_SIZE) return null;
-  const overall=h.row?.rank;
-  if(!(overall>=1)) return null;
-  const target=canonName(athleteName);
-  const own=entries.find(e=>canonName(e.helm)===target||canonName(e.crew)===target);
-  if(!own) return null;
-  const dh=!!ev.doublehanded;
-  const ownCat=genderCatOf(own).category;
-  const ownGen=resolvedEntryGender(own,dh);
-  const axes=[];
-  if(ownCat) axes.push({axis:"category",code:ownCat,of:e=>genderCatOf(e).category});
-  if(ownGen) axes.push({axis:"gender",code:ownGen,of:e=>resolvedEntryGender(e,dh)});
-  if(!axes.length) return null;
-  // Official overall order: scoreEvent rows are sorted by official rank (PDF
-  // ground truth first); unranked rows keep their official array order.
-  let rows;
-  try{rows=scoreEvent(ev).rows;}catch{return null;}
-  const isOwn=r=>r.helm===own.helm&&r.crew===own.crew&&r.sail===own.sail;
-  const hits=[];
-  for(const {axis,code,of} of axes){
-    const div=rows.filter(r=>of(r)===code);
-    if(div.length<MIN_DIVISION_SIZE||div.length>=rows.length) continue; // must be a strict, real subset
-    const pos=div.findIndex(isOwn)+1;
-    if(pos<1||pos>3) continue;          // division podium only
-    if(pos>=overall) continue;          // must beat the overall rank chip
-    hits.push({axis,code,rank:pos});
-  }
-  if(!hits.length) return null;
-  hits.sort((a,b)=>a.rank-b.rank||(a.axis==="category"?-1:1)); // best rank; tie → age category
-  const best=hits[0], second=hits[1];
-  const divisionLabel=`${ordinalOf(best.rank)} ${divisionDisplayName(best.code)}`;
-  const label=`Outstanding Achievement: ${divisionLabel}`;
-  const title=second?`${label} · also ${ordinalOf(second.rank)} ${divisionDisplayName(second.code)}`:label;
-  return{rank:best.rank,divisionLabel,label,title};
-}
 
 // Derive athlete's primary nationality from their result history
 
