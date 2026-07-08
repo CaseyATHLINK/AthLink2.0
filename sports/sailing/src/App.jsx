@@ -13,6 +13,7 @@ import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
 import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
 import { canonName, eventKey, ordinalOf, initials } from "./util/name.js";
 import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry } from "./util/class.js";
+import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById } from "./data/hosts.js";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
    NEVER_DISCARD: cannot be dropped even if it would improve the score
@@ -178,69 +179,6 @@ let IMPORT_DRAFT=null;
 
 
 
-// ── Associations: each portal is one association ──
-// ── Hosts (associations, clubs, federations) ────────────────────────────────
-// Hosts own/co-own events. Three types:
-//   association — locked to one boat class (has `cls`)
-//   club        — any class (no `cls`)
-//   federation  — governing body of a country; auto-collaborates on every event
-//                 hosted in its country (`country`), across all classes.
-// These DEFAULT_* arrays are the always-present seeds; hosts added via dev mode
-// are stored in Supabase (`hosts` table) and merged in at runtime.
-const DEFAULT_ASSOCIATIONS=[
-  {id:"hk-29er",     type:"association", scope:"HK",  cls:"29er",     name:"Hong Kong 29er Class Association"},
-  {id:"hk-ilca",     type:"association", scope:"HK",  cls:"ilca",     name:"Hong Kong ILCA"},
-  {id:"hk-optimist", type:"association", scope:"HK",  cls:"optimist", name:"Hong Kong Optimist Dinghy Association"},
-  {id:"int-29er",    type:"association", scope:"INT", cls:"29er",     name:"International 29er Class Association"},
-  {id:"int-ilca",    type:"association", scope:"INT", cls:"ilca",     name:"International Laser Class Association"},
-  {id:"int-optimist",type:"association", scope:"INT", cls:"optimist", name:"International Optimist Dinghy Association"},
-  {id:"int-49er",    type:"association", scope:"INT", cls:"49er",     name:"International 49er Class Association"},
-];
-const DEFAULT_CLUBS=[
-  {id:"rhkyc", type:"club", scope:"HK", name:"Royal Hong Kong Yacht Club"},
-];
-const DEFAULT_FEDERATIONS=[
-  {id:"hksf", type:"federation", scope:"HK", country:"HKG", name:"Hong Kong Sailing Federation"},
-];
-// Mutable runtime registries (defaults + DB-added). Rebuilt by applyDbHosts.
-let ASSOCIATIONS=[...DEFAULT_ASSOCIATIONS];
-let CLUBS=[...DEFAULT_CLUBS];
-let FEDERATIONS=[...DEFAULT_FEDERATIONS];
-// Merge DB host rows on top of the defaults (by id; defaults always win on id clash).
-function applyDbHosts(rows){
-  const norm=t=>(rows||[]).filter(r=>r.type===t).map(r=>({
-    id:r.id, type:r.type, scope:r.scope||"HK", name:r.name,
-    ...(r.cls?{cls:r.cls}:{}), ...(r.country?{country:r.country}:{}),
-    ...(r.slug?{slug:r.slug}:{}),
-    ...(r.logo_url?{logo_url:r.logo_url}:{}),          // recolored host/association logo (bucket url)
-    ...(r.dossier?{dossier:r.dossier}:{}),             // host auto-grab research dossier (migration 0012)
-  }));
-  // DB rows are the source of truth: defaults seed first, DB overwrites on id clash.
-  // (Seeded once via hosts_seed_migration.sql; defaults remain only as an
-  //  emergency fallback if the hosts table is empty / unreachable.)
-  const merge=(defs,extra)=>{const m=new Map();[...defs,...extra].forEach(h=>m.set(h.id,h));return[...m.values()];};
-  ASSOCIATIONS=merge(DEFAULT_ASSOCIATIONS,norm("association"));
-  CLUBS=merge(DEFAULT_CLUBS,norm("club"));
-  FEDERATIONS=merge(DEFAULT_FEDERATIONS,norm("federation"));
-}
-// Optimistically add a single host to the runtime registry (before/while it
-// persists to the DB) so its portal appears immediately.
-function addHostLocal(h){
-  const arr=h.type==="association"?ASSOCIATIONS:h.type==="club"?CLUBS:FEDERATIONS;
-  if(!arr.some(x=>x.id===h.id)) arr.unshift(h);
-}
-function removeHostLocal(id){
-  ASSOCIATIONS=ASSOCIATIONS.filter(a=>a.id!==id);
-  CLUBS=CLUBS.filter(c=>c.id!==id);
-  FEDERATIONS=FEDERATIONS.filter(f=>f.id!==id);
-}
-const assocById=id=>ASSOCIATIONS.find(a=>a.id===id);
-const clubById=id=>CLUBS.find(c=>c.id===id);
-const fedById=id=>FEDERATIONS.find(f=>f.id===id);
-const isClubId=id=>!!clubById(id);
-const isFedId=id=>!!fedById(id);
-// Resolve any host id (association, club OR federation) to its record / name.
-const hostById=id=>assocById(id)||clubById(id)||fedById(id)||null;
 
 /* ── Clean-URL slugs & path <-> state mapping ─────────────────────────────
    Fully-flat scheme so links read cleanly and share well:
