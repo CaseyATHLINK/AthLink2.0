@@ -4,10 +4,11 @@ _Last updated: 9 July 2026 (reorg step 4 complete)._
 
 The sailing app used to be one ~13k-line `App.jsx`. It is now decomposed into
 `util/` + `data/` + `views/` (mirroring `sports/golf/src/`), plus shared feature
-packages under `packages/`. `App.jsx` (~6.8k lines) is now **imports + a few
-module-scope helpers + the stateful `AthLinkMVP` shell** (`export default`, starts
-~line 656). Everything above `AthLinkMVP` that was a standalone module-level
-component or pure helper has been extracted.
+packages under `packages/`. `App.jsx` (~6.3k lines) is now **imports + the
+app-shell helpers (URL routing `stateToPath`/`pathToState`, form scaffolding) +
+the stateful `AthLinkMVP` component** (`export default`). Every standalone
+module-level component and every relocatable pure/data helper above it has been
+extracted; what remains is genuinely shell-level (mirrors golf's `Portal.jsx`).
 
 ## Where things live
 
@@ -18,10 +19,12 @@ component or pure helper has been extracted.
 | | `flag.js` | `IOC_ISO`, `isoFlag`, `iocFlag` |
 | | `class.js` | boat-class registry (`CLASSES`, `CLASS_COLOR`, `CUSTOM_CLASSES`…), `SUBCLASSES`, `nuggetFor`, `classLabel`/`classColor`/`classColorA`, `classFromFleetName` |
 | | `gender.js` | division/gender parsing (`parseDiv`, `normGender`, `genderCatOf`, `DIV_COLOR`…) |
-| **data/** (Supabase access + registries) | `hosts.js` | host registries + REST (`ASSOCIATIONS`/`CLUBS`/`FEDERATIONS`, `hostById`, `assocName`, `hostRest`, invites/audit, logo upload, custom-class fetch, **host-research mocks** `MOCK_RESEARCH`/`mockResearch*`) |
+| **data/** (Supabase access + registries) | `hosts.js` | host registries + REST (`ASSOCIATIONS`/`CLUBS`/`FEDERATIONS`, `hostById`, `assocName`, `hostRest`, invites/audit, logo upload, custom-class fetch, **host-research mocks** `MOCK_RESEARCH`/`mockResearch*`) + event↔host-country derivation (`eventCountryCode`, `governingFeds`, `eventAssocs`, `eventFingerprint`, `hostLocation`) |
+| | `events.js` | Supabase event read/write: `dbToApp` (row→app-event mapper), `saveEventToDb`, `updateEventStatus`, duplicate-dismissal persistence (`fetchDupDismissals`/`saveDupDismissals`) |
+| | `parse-html.js` | Sailwave HTML results parser (`parseHtml`; helpers + `SCORE_CODES_SET` internal) — pure browser-side parse into the event shape |
 | | `profiles.js` | athlete/dev profile + claims REST (`fetchAllProfiles`, `upsertAthleteProfile`, `uploadAthletePhoto`…) |
-| | `athletes.js` | athlete-derived registries: `ATHLETE_ATTRS` (+`buildAthleteAttrs`) and the **username registry** (`ATHLETE_USERNAMES`, `applyAthleteUsernames`, `usernameForName`, `nameForUsername`) |
-| | `scoring.js` | net/discard engine (`scoreEvent`, `scorePreview`, `isCode`) + `aggregate` (career history) |
+| | `athletes.js` | athlete-derived registries: `ATHLETE_ATTRS` (+`buildAthleteAttrs`), the **username registry** (`ATHLETE_USERNAMES`, `applyAthleteUsernames`, `usernameForName`, `nameForUsername`), `META` seed table + `athleteNat`/`athleteBirthYear`/`buildHomeCountry` |
+| | `scoring.js` | net/discard engine (`scoreEvent`, `scorePreview`, `isCode`) + `aggregate` (career history) + `outstandingAchievementFor` (division-podium detection) |
 | **views/** (presentational; `../util`, `../data`, sibling views only) | `atoms.jsx` | leaf components (`CountryTag`, `ConfirmModal`, `VerifyBadge`, `ErrorBoundary`, `WebIcon`, `LiquidBackground`…) |
 | | `forms.jsx` | inputs/pickers (`NatInput`, `DateField`, `CustomClassPicker`, `CollabPicker`, `CountrySelect`, `SubclassHover`, `HostPicker`) + `COUNTRIES` |
 | | `calendar.jsx` | `CalendarBody` |
