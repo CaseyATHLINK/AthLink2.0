@@ -5,6 +5,8 @@
    happens INSIDE this module, so App.jsx only reads + calls (its setHostsVersion
    useState still drives re-renders; behaviour unchanged). Verbatim from App.jsx. */
 
+import { SB_URL, SB_KEY, authHeaders } from "@athlink/core";
+
 // ── Associations: each portal is one association ──
 // ── Hosts (associations, clubs, federations) ────────────────────────────────
 // Hosts own/co-own events. Three types:
@@ -68,3 +70,23 @@ export const isClubId=id=>!!clubById(id);
 export const isFedId=id=>!!fedById(id);
 // Resolve any host id (association, club OR federation) to its record / name.
 export const hostById=id=>assocById(id)||clubById(id)||fedById(id)||null;
+
+/* ── Host trust REST (host_members / host_invites / host_audit) ── */
+export async function hostRest(path,opts={},tok){
+  if(!SB_URL||!SB_KEY) return null;
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${path}`,{
+      ...opts,
+      headers:{...authHeaders(tok),"Prefer":opts.method&&opts.method!=="GET"?"return=representation":undefined,...(opts.headers||{})},
+    });
+    if(!r.ok){console.error("hostRest error",r.status,await r.text().catch(()=>""));return null;}
+    const txt=await r.text(); return txt?JSON.parse(txt):[];
+  }catch(e){console.error("hostRest network error",e);return null;}
+}
+// All membership rows for a host (active + pending), newest first.
+export const fetchHostMembers=(hostId,tok)=>hostRest(`host_members?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.asc`,{},tok);
+// Every membership for the current user (to compute their editable hosts).
+export const fetchMyMemberships=(userId,tok)=>hostRest(`host_members?user_id=eq.${userId}&select=*`,{},tok);
+export const fetchHostInvites=(hostId,tok)=>hostRest(`host_invites?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.desc`,{},tok);
+export const fetchHostAudit=(hostId,tok)=>hostRest(`host_audit?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=ts.desc&limit=50`,{},tok);
+export const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}&select=*`,{},tok);

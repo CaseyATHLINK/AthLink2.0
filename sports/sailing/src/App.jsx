@@ -13,7 +13,7 @@ import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
 import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
 import { canonName, eventKey, ordinalOf, initials } from "./util/name.js";
 import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry } from "./util/class.js";
-import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById } from "./data/hosts.js";
+import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken } from "./data/hosts.js";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
    NEVER_DISCARD: cannot be dropped even if it would improve the score
@@ -1160,26 +1160,6 @@ function authGoogleOAuth(){
   window.location.href=`${SB_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectTo}`;
 }
 
-/* ── Host trust (host_members / host_invites / host_audit) ────────────────────
-   All calls are token-scoped (RLS enforced). Helpers return parsed rows or null. */
-async function hostRest(path,opts={},tok){
-  if(!SB_URL||!SB_KEY) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/${path}`,{
-      ...opts,
-      headers:{...authHeaders(tok),"Prefer":opts.method&&opts.method!=="GET"?"return=representation":undefined,...(opts.headers||{})},
-    });
-    if(!r.ok){console.error("hostRest error",r.status,await r.text().catch(()=>""));return null;}
-    const txt=await r.text(); return txt?JSON.parse(txt):[];
-  }catch(e){console.error("hostRest network error",e);return null;}
-}
-// All membership rows for a host (active + pending), newest first.
-const fetchHostMembers=(hostId,tok)=>hostRest(`host_members?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.asc`,{},tok);
-// Every membership for the current user (to compute their editable hosts).
-const fetchMyMemberships=(userId,tok)=>hostRest(`host_members?user_id=eq.${userId}&select=*`,{},tok);
-const fetchHostInvites=(hostId,tok)=>hostRest(`host_invites?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.desc`,{},tok);
-const fetchHostAudit=(hostId,tok)=>hostRest(`host_audit?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=ts.desc&limit=50`,{},tok);
-const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}&select=*`,{},tok);
 // Dev: every UNVERIFIED membership across all hosts (pending-approval queue).
 const fetchUnverifiedMembers=(tok)=>hostRest("host_members?verified=eq.false&select=*&order=created_at.desc",{},tok);
 // Dev: every profile row (for the all-profiles cleanup panel). Requires the
