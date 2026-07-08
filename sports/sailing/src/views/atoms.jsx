@@ -220,3 +220,13 @@ export function ResultNuggets({entry,size="md",doublehanded=false}){
     {category&&<span style={{background:"#0f8a7e",color:"#fff",borderRadius:980,fontSize:fs,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:pad,letterSpacing:".02em",boxShadow:"inset 0 1px 0 rgba(255,255,255,.45),0 1px 2px rgba(0,0,0,.12)"}} title={"Age category: "+category}>{category}</span>}
   </span>;
 }
+
+/* Spider-web icon (lucide has none) — radial spokes + two octagon rings. */
+export function WebIcon({size=12}){
+  return(<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{flex:"none"}}>
+    <path d="M12 3.5 L12 20.5 M3.5 12 L20.5 12 M6 6 L18 18 M18 6 L6 18"/>
+    <path d="M20 12 L17.66 17.66 L12 20 L6.34 17.66 L4 12 L6.34 6.34 L12 4 L17.66 6.34 Z"/>
+    <path d="M16.5 12 L15.18 15.18 L12 16.5 L8.82 15.18 L7.5 12 L8.82 8.82 L12 7.5 L15.18 8.82 Z"/>
+  </svg>);
+}
