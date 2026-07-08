@@ -484,19 +484,24 @@ const hostLocation=(hostId,evList)=>{
   return top?top[0]:null;
 };
 
-// ── Sub-classes (per-event) for ILCA and Optimist ──
-// ILCA: 3 rigs, varying shades of blue (ILCA 7 darkest → ILCA 4 lightest).
-// Optimist: 3 fleets, ranked high→low performance, black → grey.
+// ── Sub-classes (per-event) for ILCA, Optimist and 49er ──
+// ILCA: 3 rigs, varying shades of red (ILCA 7 darkest → ILCA 4 lightest), matching the ILCA logo red.
+// Optimist: 3 fleets, ranked high→low performance, black → grey (top fleet matches the Optimist logo black).
+// 49er: 2 fleets that race separately — 49er (men, green) and 49er FX (women, blue, matching the 49er FX logo).
 const SUBCLASSES={
   ilca:[
-    {id:"ilca7", label:"ILCA 7", color:"#16456e"},
-    {id:"ilca6", label:"ILCA 6", color:"#2E78C8"},
-    {id:"ilca4", label:"ILCA 4", color:"#6db3ef"},
+    {id:"ilca7", label:"ILCA 7", color:"#8E1519"},
+    {id:"ilca6", label:"ILCA 6", color:"#E2231A"},
+    {id:"ilca4", label:"ILCA 4", color:"#F2867F"},
   ],
   optimist:[
-    {id:"opti",       label:"Optimist",              short:"OPTI",       color:"#2b2b2b"},
+    {id:"opti",       label:"Optimist",              short:"OPTI",       color:"#000000"},
     {id:"opti-int",   label:"Optimist Intermediate", short:"OPTI Inter", color:"#6b6b6b"},
     {id:"opti-green", label:"Optimist Green",        short:"OPTI Green", color:"#a3a3a3"},
+  ],
+  "49er":[
+    {id:"49er",    label:"49er",    short:"49er",    color:"#5FAF4E"},
+    {id:"49er-fx", label:"49er FX", short:"49er FX", color:"#1B87C9"},
   ],
 };
 const subById=(cls,id)=>(SUBCLASSES[cls]||[]).find(s=>s.id===id);
@@ -511,10 +516,10 @@ const nuggetFor=(cls,subclass)=>{
 // Global class colour coding (used by calendar circles)
 // Canonical class colours (refer to them by these names):
 //   29er  -> "29er red"      (#E84855)
-//   ILCA  -> "ILCA blue"     (#2E78C8, lightened so it's distinct from Optimist black)
-//   Optimist -> "Optimist black" (#3D3D3D)
-//   49er  -> "49er green"    (#5FAF4E)
-const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#2E78C8","optimist":"#3D3D3D"};
+//   ILCA  -> "ILCA red"      (#E2231A, matches the ILCA logo red; sub-rigs are dark→light shades of it)
+//   Optimist -> "Optimist black" (#000000, matches the Optimist logo; lower fleets fade to grey)
+//   49er  -> "49er green"    (#5FAF4E); women's sub-fleet "49er FX" -> "49er FX blue" (#1B87C9, matches the 49er FX logo)
+const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#E2231A","optimist":"#000000"};
 const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||customClassById(cls)?.color||"#5b6b80";
 // Class colour at a given alpha (for translucent buttons that go solid on hover).
 const classColorA=(cls,a)=>{
@@ -523,7 +528,7 @@ const classColorA=(cls,a)=>{
   return `rgba(${r},${g},${b},${a})`;
 };
 
-// Sub-class picker (ILCA 4/6/7, Optimist fleets) — only shown for ILCA/Optimist events.
+// Sub-class picker (ILCA 4/6/7, Optimist fleets, 49er / 49er FX) — shown for any class with SUBCLASSES.
 // Hover-reveal: renders the parent class button; when the class has SUBCLASSES and is
 // selected (or hovered/focused), a pill row of subclass options is revealed inline just
 // below the button. Picking one selects it and collapses the reveal; mouse-out closes
@@ -3446,6 +3451,53 @@ function useSpmLoop(hostRef,step,reduced){
   },[reduced]);
 }
 
+/* ── Shared boat-geometry helpers ────────────────────────────────────────────────────────────────
+   spmHull — loft a ROUNDED hull from stations [x, halfBeam, gunwaleY, keelY]: each cross-section runs
+     keel→gunwale on a quarter-cosine so the bottom is flat-ish, the bilge rounds softly and the topsides
+     rise (no hard boxy chine). Adds a deck cap + gunwale/keel lines; `caps` closes blunt pram ends.
+   spmSail — cambered sail surface from a luff curve + a leech curve (same length) + per-height camber.
+     A PIN/POINTED head falls out automatically when the top luff & leech points coincide; a square/fat
+     head when they differ. Bellies to PORT (+z) on starboard tack, like the original 49er sails.
+   spmBounds/spmFit — normalise any class to a common on-screen size: every boat is displayed at the
+     49er's height regardless of real length (this is a display, so relative sizing doesn't matter). */
+function spmHull(fill,line,stations,opts){
+  opts=opts||{};
+  // profile = [zFrac,yFrac] from keel(0,0) → gunwale(1,1). Default = smooth quarter-cosine (rounded bilge);
+  // pass a boxy profile (flat bottom, hard chine, vertical sides) for a pram like the Optimist.
+  const P=opts.profile||[[0,0],[0.454,0.109],[0.760,0.351],[0.941,0.661],[1,1]];
+  const sect=st=>P.map(pf=>[st[0],st[3]+(st[2]-st[3])*pf[1],st[1]*pf[0]]);
+  const prof=stations.map(sect);
+  for(let i=0;i<prof.length-1;i++){const A=prof[i],B=prof[i+1];
+    for(const s of[1,-1])for(let k=0;k<P.length-1;k++)
+      fill("hull",k<2?"hullBottom":"hullSide",[[A[k][0],A[k][1],A[k][2]*s],[B[k][0],B[k][1],B[k][2]*s],[B[k+1][0],B[k+1][1],B[k+1][2]*s],[A[k+1][0],A[k+1][1],A[k+1][2]*s]]);
+  }
+  for(let i=0;i<stations.length-1;i++){const a=stations[i],b=stations[i+1];
+    fill("hull","deck",[[a[0],a[2],a[1]],[b[0],b[2],b[1]],[b[0],b[2],-b[1]],[a[0],a[2],-a[1]]]);}
+  if(opts.caps)for(const p of[prof[0],prof[prof.length-1]])
+    fill("hull","hullSide",p.map(q=>[q[0],q[1],q[2]]).concat(p.slice().reverse().map(q=>[q[0],q[1],-q[2]])));
+  for(const s of[1,-1])line("hull","edge",stations.map(st=>[st[0],st[2],st[1]*s]),1.1);
+  line("hull","edge",stations.map(st=>[st[0],st[3],0]),0.6);
+  if(opts.chine!=null)for(const s of[1,-1])line("hull","edge",stations.map((st,i)=>{const p=prof[i][opts.chine];return[p[0],p[1],p[2]*s];}),0.6);
+}
+function spmSail(fill,line,part,luff,leech,camz){
+  const n=luff.length,mid=luff.map((p,i)=>[(p[0]+leech[i][0])/2,(p[1]+leech[i][1])/2,camz[i]]);
+  for(let i=0;i<n-1;i++){
+    fill(part,"sail",[luff[i],luff[i+1],mid[i+1],mid[i]]);
+    fill(part,"sail",[mid[i],mid[i+1],leech[i+1],leech[i]]);
+  }
+  line(part,"seam",leech,0.7);                                    // leech (the roach curve)
+  for(let i=1;i<n-1;i++)line(part,"seam",[luff[i],mid[i],leech[i]],0.6); // battens
+  line(part,"seam",[luff[0],mid[0],leech[0]],0.6);               // foot
+  line(part,"seam",[luff[n-1],mid[n-1],leech[n-1]],0.7);         // head (degenerate → invisible on a pin head)
+}
+function spmBounds(polys){let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(const p of polys)for(const q of p.pts){if(q[0]<x0)x0=q[0];if(q[0]>x1)x1=q[0];if(q[1]<y0)y0=q[1];if(q[1]>y1)y1=q[1];}
+  return{x0,x1,y0,y1,cx:(x0+x1)/2,cy:(y0+y1)/2,h:y1-y0};}
+function spmFit(polys,target){
+  const b=spmBounds(polys),k=target.h/b.h;                        // uniform scale so this boat fills the target height
+  return polys.map(p=>({...p,pts:p.pts.map(q=>[target.cx+(q[0]-b.cx)*k,target.cy+(q[1]-b.cy)*k,q[2]*k])}));
+}
+
 /* 49er geometry in metres. Axes: x fore/aft (bow +), y up, z athwartships. Real class proportions:
    hull 4.99 m, hull beam ~1.7 m flaring to 2.90 m across the wings, mast ~8.1 m, bowsprit (retracted),
    square-top main 16.1 m² + jib 5.1 m². */
@@ -3453,32 +3505,19 @@ function build49erGeometry(){
   const polys=[];
   const fill=(part,cls,pts)=>polys.push({part,cls,kind:"fill",pts});
   const line=(part,cls,pts,w)=>polys.push({part,cls,kind:"line",pts,w});
-  // Smooth hull stations sampled from 49er lines: [x, halfBeamDeck, halfBeamBottom, yDeck, yBottom].
-  // Fine plumb bow, gentle sheer spring, flat run aft, slight rocker — dense stations keep curves soft.
-  const st=[
-    [ 2.50,0.02,0.01,0.55,0.40],
-    [ 2.12,0.15,0.07,0.51,0.22],
-    [ 1.62,0.32,0.17,0.48,0.11],
-    [ 1.06,0.48,0.29,0.46,0.045],
-    [ 0.46,0.62,0.41,0.445,0.015],
-    [-0.24,0.74,0.51,0.435,0.00],
-    [-0.94,0.81,0.57,0.43,0.00],
-    [-1.70,0.85,0.60,0.43,0.02],
-    [-2.49,0.84,0.56,0.44,0.06],
-  ];
-  for(let i=0;i<st.length-1;i++){
-    const[xa,da,ba,yda,yba]=st[i],[xb,db,bb,ydb,ybb]=st[i+1];
-    for(const s of[1,-1]){
-      fill("hull","hullSide",[[xa,yda,da*s],[xb,ydb,db*s],[xb,ybb,bb*s],[xa,yba,ba*s]]);
-      fill("hull","hullBottom",[[xa,yba,ba*s],[xb,ybb,bb*s],[xb,ybb,0],[xa,yba,0]]);
-      fill("hull","deck",[[xa,yda,da*s],[xb,ydb,db*s],[xb,ydb,0],[xa,yda,0]]);
-    }
-  }
-  for(const s of[1,-1]){ // gunwale + chine curves give the hull its lines
-    line("hull","edge",st.map(p=>[p[0],p[3],p[1]*s]),1.1);
-    line("hull","edge",st.map(p=>[p[0],p[4],p[2]*s]),0.7);
-  }
-  line("hull","edge",[[-2.49,0.44,0.84],[-2.49,0.06,0.56],[-2.49,0.06,-0.56],[-2.49,0.44,-0.84]],1); // open transom
+  // Rounded hull — flat-ish bottom, soft bilges, low topsides. Stations [x, halfBeam, gunwaleY, keelY].
+  spmHull(fill,line,[
+    [ 2.50,0.03,0.50,0.32],
+    [ 2.05,0.22,0.47,0.17],
+    [ 1.45,0.42,0.45,0.10],
+    [ 0.75,0.62,0.44,0.075],
+    [ 0.00,0.78,0.435,0.065],
+    [-0.80,0.85,0.43,0.065],
+    [-1.62,0.86,0.43,0.085],
+    [-2.25,0.80,0.435,0.12],
+    [-2.49,0.66,0.45,0.17],
+  ]);
+  line("hull","edge",[[-2.49,0.45,0.66],[-2.49,0.17,0.36],[-2.49,0.17,-0.36],[-2.49,0.45,-0.66]],1); // open transom
   for(const s of[1,-1]){ // wings/racks — rounded rim, long and clearly angled up outboard, trampoline hints
     const rim=[[0.95,0.48,0.62*s],[0.58,0.56,1.17*s],[0.34,0.63,1.44*s],[0.00,0.70,1.56*s],[-1.55,0.73,1.58*s],[-2.04,0.73,1.54*s],[-2.27,0.68,1.39*s],[-2.35,0.58,1.10*s],[-2.35,0.51,0.85*s]];
     fill("hull","wing",rim.concat([[-2.35,0.46,0.84*s],[0.95,0.46,0.62*s]]));
@@ -3550,6 +3589,152 @@ function build49erGeometry(){
   return polys;
 }
 
+/* 29er geometry in metres — the 49er's little sister. hull 4.45 m, beam 1.77 m (NO wings/racks),
+   fractional mast ~6.25 m, semi square-top main 8.7 m² + jib 3.7 m², asymmetric gennaker ~17 m² on a
+   retractable bowsprit, open transom, plumb bow, SINGLE trapeze. Same axes/technique as build49erGeometry. */
+function build29erGeometry(){
+  const polys=[];
+  const fill=(part,cls,pts)=>polys.push({part,cls,kind:"fill",pts});
+  const line=(part,cls,pts,w)=>polys.push({part,cls,kind:"line",pts,w});
+  // Rounded hull — the 49er's narrower sister: fine plumb bow, NO wings, low topsides, flat-ish bottom.
+  spmHull(fill,line,[
+    [ 2.22,0.03,0.46,0.27],
+    [ 1.82,0.20,0.44,0.15],
+    [ 1.28,0.40,0.42,0.09],
+    [ 0.66,0.58,0.41,0.06],
+    [ 0.00,0.72,0.405,0.05],
+    [-0.72,0.79,0.40,0.05],
+    [-1.52,0.80,0.40,0.07],
+    [-2.10,0.73,0.405,0.11],
+    [-2.23,0.58,0.42,0.15],
+  ]);
+  line("hull","edge",[[-2.23,0.42,0.58],[-2.23,0.15,0.32],[-2.23,0.15,-0.32],[-2.23,0.42,-0.58]],1); // open transom
+  fill("daggerboard","foil",[[0.55,0.05,0],[0.26,0.05,0],[0.14,-1.02,0],[0.42,-1.02,0]]);
+  fill("rudder","foil",[[-2.26,0.46,0],[-2.44,0.46,0],[-2.52,-0.42,0],[-2.58,-0.82,0],[-2.50,-0.92,0],[-2.40,-0.68,0],[-2.34,-0.18,0]]);
+  line("rudder","spar",[[-2.34,0.52,0],[-1.42,0.62,0]],1.5); // tiller
+  line("mast","mast",[[0.26,0.40,0],[0.22,2.10,0],[0.12,4.10,0],[-0.02,6.42,0]],2.1);
+  line("mast","spar",[[0.26,0.80,0],[-1.55,0.88,0.42]],1.6); // boom, eased to port (starboard tack)
+  line(null,"wire",[[2.16,0.46,0],[0.08,4.55,0]],0.7);                      // forestay
+  for(const s of[1,-1])line(null,"wire",[[0.04,0.42,0.60*s],[0.10,4.55,0.02*s]],0.6); // shrouds (stayed rig)
+  // SINGLE trapeze wire — the crew flies outboard off it (vs the 49er's twin trap + wings)
+  line("trapeze","trap",[[0.10,4.55,0],[-0.30,0.42,-0.82]],1.6);
+  line("trapeze","trap",[[-0.36,0.58,-0.76],[-0.24,0.58,-0.88]],2.4);       // trapeze handle
+  line(null,"spar",[[2.16,0.44,0],[2.95,0.48,0]],1.5);                      // retractable bowsprit
+  // gennaker ~17 m² asymmetric kite, flying to PORT (+z) — big and powerful
+  const KL=[[2.95,0.50,0.00],[3.40,2.05,0.75],[3.05,4.10,1.00],[1.95,5.90,0.72],[-0.04,6.35,0.12]];
+  const KE=[[0.04,0.86,0.58],[0.70,2.55,0.84],[0.80,4.05,0.86],[0.46,5.50,0.52],[-0.04,6.35,0.12]];
+  const KZ=[1.05,1.62,1.78,1.14,0.12];
+  const KM=KL.map((p,i)=>[(p[0]+KE[i][0])/2+0.28,(p[1]+KE[i][1])/2,KZ[i]]);
+  for(let i=0;i<4;i++){
+    fill("gennaker","kite",[KL[i],KL[i+1],KM[i+1],KM[i]]);
+    fill("gennaker","kite",[KM[i],KM[i+1],KE[i+1],KE[i]]);
+  }
+  line("gennaker","wire",KL,1.0);
+  line("gennaker","seam",KE,0.6);
+  for(let i=1;i<4;i++)line("gennaker","seam",[KL[i],KM[i],KE[i]],0.5);
+  line("gennaker","seam",[KL[0],[1.55,0.62,0.42],KE[0]],0.6);
+  // mainsail — PIN-HEAD main with a big roached leech + battens (NOT a square top): luff & leech meet at the head
+  const head=[-0.06,6.42,0.02];
+  spmSail(fill,line,"mainsail",
+    [[0.24,0.82,0],[0.20,2.15,0],[0.12,3.75,0],[0.02,5.25,0],head],
+    [[-1.52,0.90,0.42],[-1.74,2.45,0.54],[-1.60,4.10,0.48],[-1.06,5.45,0.30],head],
+    [0.40,0.56,0.50,0.32,0.04]);
+  // jib — 3.7 m², luff on the forestay, clew to port; pin head where luff meets leech
+  spmSail(fill,line,"jib",
+    [[2.10,0.54,0],[1.55,1.75,0],[1.02,2.85,0],[0.50,4.10,0]],
+    [[-0.34,0.78,0.30],[-0.16,1.90,0.26],[0.14,3.00,0.18],[0.50,4.10,0]],
+    [0.34,0.32,0.20,0]);
+  return polys;
+}
+
+/* ILCA (Laser) geometry — the Olympic single-hander. hull 4.19 m, beam 1.39 m, low freeboard, UNSTAYED
+   two-piece mast ~5.5 m with gentle aft rake, single 7.06 m² sail with a SLEEVED luff that wraps the mast.
+   NO forestay, NO shrouds, NO spreaders — the absence of rigging wires is the identifying feature. */
+function buildIlcaGeometry(){
+  const polys=[];
+  const fill=(part,cls,pts)=>polys.push({part,cls,kind:"fill",pts});
+  const line=(part,cls,pts,w)=>polys.push({part,cls,kind:"line",pts,w});
+  // Low, rounded, legendary one-design hull — narrow, soft bilges, low freeboard, small cockpit.
+  spmHull(fill,line,[
+    [ 2.09,0.03,0.35,0.20],
+    [ 1.72,0.16,0.34,0.11],
+    [ 1.22,0.34,0.335,0.055],
+    [ 0.64,0.50,0.33,0.03],
+    [ 0.02,0.62,0.33,0.02],
+    [-0.60,0.67,0.33,0.02],
+    [-1.24,0.66,0.335,0.035],
+    [-1.80,0.56,0.345,0.07],
+    [-2.10,0.42,0.36,0.12],
+  ]);
+  line("hull","edge",[[-2.10,0.36,0.42],[-2.10,0.12,0.24],[-2.10,0.12,-0.24],[-2.10,0.36,-0.42]],0.9); // small transom
+  fill("daggerboard","foil",[[0.42,0.05,0],[0.14,0.05,0],[0.04,-1.02,0],[0.30,-1.02,0]]);
+  line("daggerboard","spar",[[0.28,0.34,0],[0.22,0.62,0]],2.2);            // daggerboard handle above deck
+  fill("rudder","foil",[[-2.12,0.38,0],[-2.30,0.38,0],[-2.36,-0.48,0],[-2.30,-0.84,0],[-2.22,-0.88,0],[-2.16,-0.52,0],[-2.12,-0.10,0]]);
+  line("rudder","spar",[[-2.20,0.44,0],[-1.30,0.56,0]],1.6);              // aluminium tiller
+  line("rudder","spar",[[-1.30,0.56,0],[0.12,0.94,0.36]],1.1);            // long tiller EXTENSION — steer while hiking
+  // free-standing two-piece mast with gentle aft rake/bend — NO stays hold it up
+  line("mast","mast",[[0.12,0.33,0],[0.06,2.10,0],[-0.03,4.00,0],[-0.16,5.88,0]],2.3);
+  line("boom","spar",[[0.14,0.66,0],[-1.86,0.74,0.42]],1.7);              // boom
+  line("boom","spar",[[0.06,0.34,0],[-0.58,0.66,0.14]],1.3);              // vang/kicker strut holds the boom down
+  // mainsail — the ONLY sail: PIN-HEAD triangular sail, sleeve luff wraps the curved mast, roach + battens
+  const head=[-0.17,5.88,0.02];
+  spmSail(fill,line,"mainsail",
+    [[0.12,0.68,0],[0.05,2.10,0],[-0.04,3.75,0],[-0.13,5.00,0],head],
+    [[-1.84,0.80,0.42],[-2.02,2.40,0.56],[-1.80,4.05,0.48],[-1.20,5.05,0.30],head],
+    [0.44,0.60,0.52,0.32,0.04]);
+  return polys;
+}
+
+/* Optimist geometry — the world's biggest junior class. hull 2.36 m × 1.12 m, flat BLUNT pram bow (the
+   silhouette), single 3.3 m² FOUR-SIDED sprit sail, unstayed mast ~2.3 m, a diagonal SPRIT spar from the
+   mast base to the sail's peak, boom along the foot, flat rocker, big open cockpit with air bags. Modelled
+   visibly SMALL and boxy — same camera, honest scale, so it looks tiny and charming next to a 49er. */
+function buildOptimistGeometry(){
+  const polys=[];
+  const fill=(part,cls,pts)=>polys.push({part,cls,kind:"fill",pts});
+  const line=(part,cls,pts,w)=>polys.push({part,cls,kind:"line",pts,w});
+  // BOXY pram hull — flat bottom, hard chine, near-vertical topsides, wide FLAT blunt bow; capped ends.
+  spmHull(fill,line,[
+    [ 1.15,0.36,0.30,0.08],   // wide flat bow transom
+    [ 0.88,0.46,0.295,0.04],
+    [ 0.44,0.54,0.29,0.015],
+    [ 0.00,0.56,0.285,0.00],
+    [-0.48,0.56,0.285,0.00],
+    [-0.88,0.52,0.29,0.03],
+    [-1.18,0.44,0.30,0.07],   // stern transom
+  ],{profile:[[0,0],[0.7,0],[0.95,0.08],[1,0.45],[1,1]],caps:true,chine:3});
+  // three buoyancy air bags in the big open cockpit (7th part, like the 49er's seven)
+  fill("buoyancy","wing",[[0.84,0.31,0.28],[0.44,0.31,0.28],[0.44,0.35,0.10],[0.84,0.35,0.10]]);      // bow bag
+  fill("buoyancy","wing",[[0.20,0.30,0.44],[-0.54,0.30,0.44],[-0.54,0.34,0.28],[0.20,0.34,0.28]]);    // port side bag
+  fill("buoyancy","wing",[[0.20,0.30,-0.44],[-0.54,0.30,-0.44],[-0.54,0.34,-0.28],[0.20,0.34,-0.28]]); // starboard side bag
+  // big rectangular daggerboard, amidships-forward
+  fill("daggerboard","foil",[[0.22,0.05,0],[-0.08,0.05,0],[-0.10,-0.92,0],[0.20,-0.92,0]]);
+  line("daggerboard","spar",[[0.20,0.29,0],[0.20,0.53,0]],2.2);            // handle above deck
+  fill("rudder","foil",[[-1.20,0.27,0],[-1.36,0.27,0],[-1.40,-0.60,0],[-1.34,-0.80,0],[-1.28,-0.76,0],[-1.24,-0.38,0],[-1.20,-0.03,0]]);
+  line("rudder","spar",[[-1.26,0.33,0],[-0.52,0.43,0]],1.5);              // tiller
+  // unstayed mast ~2.3 m, stepped well forward (the sprit + boom are the hoverable spars)
+  line(null,"mast",[[0.58,0.29,0],[0.56,1.25,0],[0.54,2.28,0]],2.0);
+  // FIVE-SIDED sprit MAINSAIL: tack + throat on the mast, PEAK held up-and-aft, a roached leech, clew on the
+  // boom. The SPRIT runs from MIDWAY up the mast to the peak (top corner) — the defining spar of this rig.
+  const Tk=[0.56,0.52,0],Th=[0.54,1.92,0],Pk=[-0.80,2.12,0.15],Lr=[-1.18,1.22,0.30],Cl=[-1.06,0.60,0.38];
+  line("sprit","spar",[[0.55,1.25,0],Pk],1.7);                            // sprit: mid-mast → peak
+  line("boom","spar",[Tk,Cl],1.6);                                        // boom along the foot
+  line("boom","wire",[[-0.50,0.58,0.20],[-0.50,1.00,0.10]],0.7);          // bridle mainsheet hint
+  // sail surface: columns mast(luff) → mid → leech(clew → roach → peak), rows foot → mid → head; port camber
+  const C0=[Tk,[0.55,1.22,0],Th];                                         // luff on the mast
+  const C2=[Cl,Lr,Pk];                                                    // leech: clew → roach bulge → peak
+  const C1=C0.map((p,i)=>{const q=C2[i];return[(p[0]+q[0])/2,(p[1]+q[1])/2,[0.50,0.60,0.34][i]];}); // cambered middle
+  const cols=[C0,C1,C2];
+  for(let c=0;c<2;c++)for(let r=0;r<2;r++)
+    fill("spritsail","sail",[cols[c][r],cols[c+1][r],cols[c+1][r+1],cols[c][r+1]]);
+  line("spritsail","seam",[C0[0],C1[0],C2[0]],0.7);                        // foot
+  line("spritsail","seam",[C0[2],C1[2],C2[2]],0.8);                        // head (throat → peak)
+  line("spritsail","seam",C2,0.8);                                        // roached leech (peak → roach → clew)
+  line("spritsail","seam",C0,0.7);                                        // luff (sleeve on the mast)
+  line("spritsail","seam",[C1[0],C1[1],C1[2]],0.5);                       // mid seam
+  return polys;
+}
+
 /* Rotate-Y (yaw) + rotate-X (fixed 12° camera tilt + user pitch), perspective-project, painter-sort. */
 function spmProjectAll(polys,yaw,pitchDeg){
   const W=520,H=430,cx=W/2,cyc=H/2+4,D=17,F=15,S=48,YC=3.75,XC=0.6;
@@ -3609,10 +3794,21 @@ function spmLinePaint(cls,hot){
   }
 }
 
-/* Windward–leeward course model (520×430 viewBox) — RYA course "M": mark 1 to windward,
-   leeward gate 2s/2p, shared start/finish line at the bottom. Signal M2:
-   Start – 1 – 2s/2p – 1 – Finish. One boat sails the loop. */
-const SPM_COURSE_XY={wind:[260,26],windward:[260,64],gateL:[180,306],gateR:[340,306],sfA:[150,390],sfB:[370,390]};
+/* Course models live in each class's SPORT_MODELS[*].course config (520×430 viewBox, wind from the
+   top): layout{windXY,dots,lines} + a raw waypoints polyline + a sprite key. CourseDiagram is generic —
+   it smooths the waypoints, animates one boat around them, and draws the marks/lines from the config.
+   Top-down hull sprites (bow points up, −y): shared vocabulary so class identity comes from shape, not
+   from forking the component. Each = {scale, hull path, optional centreline spine + deck dot}. */
+const SPM_SPRITES={
+  // skiff — the winged 49er hull (wing flares = the ±5.3 bulges). Kept byte-for-byte from the original.
+  skiff:{scale:1.78,hull:"M0,-8.5 C2.4,-5.5 3.1,-2.5 3.1,0.5 L3.1,1.6 C5.3,1.9 5.3,5.6 3.1,5.9 L3.1,6.8 L-3.1,6.8 L-3.1,5.9 C-5.3,5.6 -5.3,1.9 -3.1,1.6 L-3.1,0.5 C-3.1,-2.5 -2.4,-5.5 0,-8.5 Z",spine:[[0,-6.5],[0,5.5]],dot:[0,0.5,1.2]},
+  // slim skiff — the 29er: same fine bow, NO wing bulges, narrower gunwale, open transom.
+  skiffSlim:{scale:1.7,hull:"M0,-8.4 C2.1,-5.4 2.7,-2.4 2.7,0.6 L2.7,6.7 L-2.7,6.7 L-2.7,0.6 C-2.7,-2.4 -2.1,-5.4 0,-8.4 Z",spine:[[0,-6.4],[0,5.4]],dot:[0,0.5,1.1]},
+  // dinghy — the ILCA: slim, sharply pointed bow, gently rounded small transom, no wings.
+  dinghy:{scale:1.55,hull:"M0,-8 C1.7,-4.8 2.2,-1.8 2.2,1.2 L2,6.2 C2,6.9 -2,6.9 -2,6.2 L-2.2,1.2 C-2.2,-1.8 -1.7,-4.8 0,-8 Z",spine:[[0,-6],[0,5]],dot:[0,0.6,1]},
+  // pram — the Optimist: short, boxy, FLAT blunt bow (top edge), rounded stern; visibly the smallest.
+  pram:{scale:1.35,hull:"M-2.2,-4.4 Q-2.5,-4.7 -2,-4.7 L2,-4.7 Q2.5,-4.7 2.2,-4.4 L2.5,3.9 Q2.5,4.9 0,5 Q-2.5,4.9 -2.5,3.9 Z",spine:[[0,-3.8],[0,4]],dot:[0,0.2,1]},
+};
 function spmSmooth(pts,iters){ // Chaikin corner-cutting — turns the waypoint polyline into a smooth track
   let p=pts;
   for(let n=0;n<iters;n++){
@@ -3639,18 +3835,10 @@ function spmResample(pts,n){
   }
   return out;
 }
-function spmBuildCourse(){
-  const pts=[];const push=(x,y)=>pts.push([x,y]);
-  // An efficient windward–leeward: tidy, even tacks and gybes worked up and down the
-  // middle of the course (no erratic short tacks); each mark is fully enclosed by its arc.
-  push(260,406);push(258,384);                                             // cross the start line
-  push(198,300);push(322,192);push(238,98);                                // beat 1 — two clean tacks
-  push(284,74);push(276,54);push(256,50);push(238,62);push(242,86);        // round mark 1 (mark inside the arc)
-  push(316,168);push(210,250);push(261,300);                               // run 1 — two gybes to the gate centre
-  push(236,314);push(214,330);push(182,332);push(158,314);push(166,290);push(192,282); // full loop around 2s
-  push(322,196);push(232,104);push(240,96);                                // beat 2 — two clean tacks
-  push(284,74);push(276,54);push(256,50);push(238,62);push(242,86);        // round mark 1 again
-  push(316,168);push(214,258);push(272,330);push(322,384);push(330,406);   // run 2 down the middle, across the line
+function spmBuildCourse(waypoints){
+  // waypoints: the class's raw polyline (from SPORT_MODELS[*].course.waypoints). Same pipeline for every
+  // class — Chaikin ×3 smooth → resample 320 → windowed tangent headings → unwrapped rotation.
+  const pts=waypoints||[];
   const smooth=spmResample(spmSmooth(pts,3),320);
   const n=smooth.length;
   // Heading = the SMOOTH path's own tangent, averaged over a window so the boat turns
@@ -3676,6 +3864,25 @@ function spmBoatAt(course,t){
     op:t<.03?t/.03:t>.96?Math.max(0,(1-t)/.04):1};
 }
 
+/* Mark-rounding waypoint helpers — every rounding leaves the mark to PORT (mark on the boat's LEFT), as a
+   tight arc, NEVER a full loop. spmLee = leeward hairpin (run down → beat up): enter west, under the mark,
+   exit east (CCW). spmWin = windward hairpin (beat up → run down): enter east, over the top, exit west (CCW).
+   spmRnd = a gentler <180° rounding (reach / gate / finish) — it sits the boat on the mark's starboard side
+   so the mark stays to port. All in the 520×430 course space, wind from the top. Spread into `waypoints`. */
+const spmLee=(mx,my)=>[[mx-7,my-13],[mx-9,my+5],[mx,my+13],[mx+9,my+5],[mx+7,my-14]];
+const spmWin=(mx,my)=>[[mx+7,my+13],[mx+9,my-5],[mx,my-13],[mx-9,my-5],[mx-7,my+13]];
+const spmRnd=(prev,M,next,R)=>{
+  const n=v=>{const d=Math.hypot(v[0],v[1])||1;return[v[0]/d,v[1]/d];};
+  const di=n([M[0]-prev[0],M[1]-prev[1]]),dO=n([next[0]-M[0],next[1]-M[1]]);
+  const b=[di[0]+dO[0],di[1]+dO[1]],bl=Math.hypot(b[0],b[1]);
+  const st=bl<0.35?[-di[1],di[0]]:[-b[1]/bl,b[0]/bl];   // starboard of travel → boat sits here, mark to port
+  R=R||15;const ax=M[0]+R*st[0],ay=M[1]+R*st[1];
+  return[[ax-di[0]*R,ay-di[1]*R],[ax,ay],[ax+dO[0]*R,ay+dO[1]*R]];
+};
+
+/* Display all classes at the SAME on-screen size (the 49er's) regardless of real-world length — this is
+   a display, so relative sizing doesn't matter. spmFit scales each boat to the 49er's bounding height. */
+const SPM_FIT_TARGET=spmBounds(build49erGeometry());
 const SPORT_MODELS={
   "49er":{
     equipment:{
@@ -3705,11 +3912,172 @@ const SPORT_MODELS={
         {id:"gate",label:"Leeward gate (2s / 2p)",desc:"Two buoys at the bottom of the course — round either one, then head back upwind."},
         {id:"startfinish",label:"Start & finish line",desc:"Races start and finish on the same line, between the committee vessels."},
       ],
+      sprite:"skiff",
+      layout:{
+        windXY:[260,26],
+        dots:[
+          {id:"windward",label:"1",xy:[260,64],ldx:16,ldy:5},
+          {id:"gate",label:"2s",xy:[180,306],ldx:-19,ldy:5},
+          {id:"gate",label:"2p",xy:[340,306],ldx:19,ldy:5},
+        ],
+        lines:[{id:"startfinish",label:"START & FINISH",a:[150,390],b:[370,390]}],
+      },
+      // Every mark rounded to PORT (mark on the boat's LEFT): windward mark 1 with a tight CCW turn, leeward
+      // gate 2s with a CCW turn under the mark — no full loops.
+      waypoints:[[258,394],[258,374],[228,318],[292,220],[258,120],[272,84],...spmWin(260,64),[235,150],[195,255],[176,290],...spmLee(180,306),[210,210],[258,120],[272,84],...spmWin(260,64),[250,150],[295,255],[318,350],[320,384],[315,404]],
+    },
+  },
+
+  "29er":{
+    equipment:{
+      name:"29er",
+      geometry:()=>spmFit(build29erGeometry(),SPM_FIT_TARGET),
+      parts:[
+        {id:"hull",name:"Hull",blurb:"Planing skiff hull with no racks — the two crew hike from the gunwale to keep it flat."},
+        {id:"mainsail",name:"Mainsail",blurb:"The engine: a semi square-top main that powers the boat both upwind and down."},
+        {id:"jib",name:"Jib",blurb:"The front sail; it feeds clean airflow onto the main and helps the boat point higher."},
+        {id:"gennaker",name:"Gennaker",blurb:"The ~17 m² asymmetric kite, flown from a retractable bowsprit for fast planing runs."},
+        {id:"trapeze",name:"Trapeze",blurb:"A single wire the crew clips onto and hangs right out over the water to hold the boat flat."},
+        {id:"daggerboard",name:"Daggerboard",blurb:"The underwater fin that stops the boat sliding sideways and turns side-force into drive."},
+        {id:"rudder",name:"Rudder",blurb:"The steering blade at the stern; tiny inputs at speed swing the bow fast."},
+      ],
+    },
+    course:{
+      title:"How a race works",
+      loopSeconds:24,
+      explainer:[
+        "Course L2: Start – 1 – 2s/2p – 1 – 2p – Finish — windward/leeward with a leeward gate, then a short reach to a separate finish.",
+        "Average race: about 30 minutes.",
+        "Sailed by two; the crew flies on a single trapeze (not the 49er's twin).",
+        "Top speed: 15+ knots.",
+      ],
+      marks:[
+        {id:"wind",label:"Wind",desc:"The course is set so the first leg is straight into the wind."},
+        {id:"windward",label:"Mark 1 — windward",desc:"The top buoy. Boats beat upwind to it, round it, then turn back downwind."},
+        {id:"gate",label:"Leeward gate (2s / 2p)",desc:"Two buoys at the bottom — round either, then either beat back up or peel off to finish."},
+        {id:"start",label:"Start line",desc:"The fleet starts together on this line at the bottom of the course."},
+        {id:"finish",label:"Reaching finish",desc:"On the last lap, boats reach across from the port gate mark (2p) to a separate finish line off to the side."},
+      ],
+      sprite:"skiffSlim",
+      layout:{
+        windXY:[260,26],
+        dots:[
+          {id:"windward",label:"1",xy:[260,60],ldx:16,ldy:5},
+          {id:"gate",label:"2s",xy:[210,300],ldx:-19,ldy:5},
+          {id:"gate",label:"2p",xy:[300,300],ldx:19,ldy:5},
+        ],
+        lines:[
+          {id:"start",label:"START",a:[195,400],b:[315,400]},
+          {id:"finish",label:"FINISH",a:[372,344],b:[430,366]},
+        ],
+      },
+      // Every mark rounded to PORT (mark on the LEFT). The final 2p rounding is a tight CCW turn with 2p on
+      // the left, then a straight reach to the finish — no full loop around the mark.
+      waypoints:[[253,396],[254,376],[228,318],[288,222],[256,120],[270,84],...spmWin(260,60),[232,150],[210,255],[204,288],...spmLee(210,300),[232,210],[250,120],[268,84],...spmWin(260,60),[264,150],[296,245],[300,285],...spmRnd([300,285],[300,300],[402,352],16),[402,352]],
+    },
+  },
+
+  "ilca":{
+    equipment:{
+      name:"ILCA",
+      geometry:()=>spmFit(buildIlcaGeometry(),SPM_FIT_TARGET),
+      parts:[
+        {id:"hull",name:"Hull",blurb:"The low, simple, one-design hull raced identically the world over — pure athlete against athlete."},
+        {id:"mainsail",name:"Mainsail",blurb:"The only sail; its sleeved luff slides straight over the mast, so there is no forestay at all."},
+        {id:"mast",name:"Mast",blurb:"A free-standing two-piece spar held up by nothing — no stays, no shrouds, no spreaders."},
+        {id:"boom",name:"Boom",blurb:"Held down by the vang (kicker) strut; together they flatten the sail to depower it in a breeze."},
+        {id:"daggerboard",name:"Daggerboard",blurb:"The fin that grips the water; its handle stands above deck so the athlete can trim its depth."},
+        {id:"rudder",name:"Rudder",blurb:"Steered by a long tiller extension the athlete holds while hiking flat out over the side."},
+      ],
+    },
+    course:{
+      title:"How a race works",
+      loopSeconds:27,
+      explainer:[
+        "Trapezoid course — outer loop O: Start – 1 – 2 – 3s/3p – 2 – 3s/3p – Finish (the inner loop I drops the extra lap).",
+        "Average race: about 45–50 minutes.",
+        "One athlete, hiking hard — no crew, no trapeze.",
+        "The world's most-sailed Olympic single-hander.",
+      ],
+      marks:[
+        {id:"wind",label:"Wind",desc:"The course is set so the first leg is a beat straight into the wind."},
+        {id:"windward",label:"Mark 1 — windward",desc:"Top-right corner of the trapezoid; boats beat up to it, then reach off across the top."},
+        {id:"offset",label:"Mark 2 — reaching mark",desc:"Top-left corner. The leg from 1 to 2 is a fast ~60° reach across the top of the course."},
+        {id:"gate",label:"Leeward gate (3s / 3p)",desc:"Bottom-left gate. Round either mark; on the inner loop (I) boats finish sooner instead of lapping again."},
+        {id:"start",label:"Start line",desc:"Set in the lower middle of the trapezoid; the fleet starts together here."},
+        {id:"finish",label:"Finish line",desc:"A separate line off to the side, reached on a short leg after the final gate rounding."},
+      ],
+      sprite:"dinghy",
+      layout:{
+        windXY:[280,26],
+        dots:[
+          {id:"windward",label:"1",xy:[350,70],ldx:16,ldy:5},
+          {id:"offset",label:"2",xy:[150,110],ldx:-18,ldy:5},
+          {id:"gate",label:"3s",xy:[150,315],ldx:-18,ldy:5},
+          {id:"gate",label:"3p",xy:[208,300],ldx:18,ldy:5},
+        ],
+        lines:[
+          {id:"start",label:"START",a:[218,392],b:[318,392]},
+          {id:"finish",label:"FINISH",a:[380,296],b:[432,320]},
+        ],
+      },
+      // Every mark rounded to PORT (mark on the LEFT). Mark 2 (both roundings) and gate mark 3p are tight CCW
+      // turns with the mark on the left — no full loops.
+      waypoints:[[268,388],[266,368],[320,290],[250,200],[330,120],[350,88],...spmRnd([350,88],[350,70],[150,110],15),[300,90],[210,105],...spmRnd([210,105],[150,110],[150,315],15),[150,205],[147,290],...spmLee(150,315),[155,230],[150,140],[150,120],...spmWin(150,110),[158,205],[196,285],[201,287],...spmRnd([201,287],[208,300],[404,308],16),[300,308],[404,308]],
+    },
+  },
+
+  "optimist":{
+    equipment:{
+      name:"Optimist",
+      geometry:()=>spmFit(buildOptimistGeometry(),SPM_FIT_TARGET),
+      parts:[
+        {id:"hull",name:"Hull",blurb:"The flat-bowed pram box, about 2.3 m long — small, stable and almost unsinkable."},
+        {id:"spritsail",name:"Mainsail",blurb:"A five-sided sprit-rigged mainsail, unique among these classes; the whole rig packs inside the little hull."},
+        {id:"sprit",name:"Sprit",blurb:"The diagonal spar that pushes the sail's top peak up and out, giving the sail its shape."},
+        {id:"boom",name:"Boom",blurb:"Runs along the foot of the sail; a bridle spreads the mainsheet load across it."},
+        {id:"daggerboard",name:"Daggerboard",blurb:"A big rectangular blade that stops the little boat slipping sideways."},
+        {id:"rudder",name:"Rudder",blurb:"The steering blade at the stern, worked by a short tiller."},
+        {id:"buoyancy",name:"Buoyancy bags",blurb:"Three air bags fill the open cockpit so the boat floats high even when swamped."},
+      ],
+    },
+    course:{
+      title:"How a race works",
+      loopSeconds:28,
+      explainer:[
+        "IODA trapezoid: Start – 1 – 2 – 3 – Finish — two upwind legs, one reach and one long run.",
+        "About 45-minute races; the first beat is nearly half the race.",
+        "The boat almost every Olympic athlete started in.",
+      ],
+      marks:[
+        {id:"wind",label:"Wind",desc:"The course is set so the first leg is a long beat straight into the wind."},
+        {id:"windward",label:"Mark 1 — windward",desc:"Top-right corner; the long first beat to it is nearly half the whole race."},
+        {id:"offset",label:"Mark 2 — reaching mark",desc:"Top-left corner. The single reach of the course runs across the top from 1 to 2."},
+        {id:"leeward",label:"Mark 3 — leeward gate (3a/3b)",desc:"Bottom-left, reached by the long downwind run; boats round it, then beat the short final leg up to the finish."},
+        {id:"start",label:"Start line",desc:"The fleet starts here at the bottom-right and beats up the right-hand side to mark 1."},
+        {id:"finish",label:"Finish line",desc:"Set up by mark 2 (IODA course): the final short beat from mark 3 crosses the finish near the top-left."},
+      ],
+      sprite:"pram",
+      layout:{
+        windXY:[335,26],
+        dots:[
+          {id:"windward",label:"1",xy:[355,70],ldx:16,ldy:5},
+          {id:"offset",label:"2",xy:[150,120],ldx:-18,ldy:5},
+          {id:"leeward",label:"3",xy:[152,355],ldx:-18,ldy:5},
+        ],
+        lines:[
+          {id:"start",label:"START",a:[298,378],b:[390,366]},
+          {id:"finish",label:"FINISH",a:[95,150],b:[178,138]},
+        ],
+      },
+      // IODA course (Rajt-1-2-3a/3b-Cél): Start bottom-right → beat to 1 (top-right) → reach to 2 (top-left)
+      // → run to 3 (bottom-left) → beat to finish (by mark 2). Every mark rounded to PORT (mark on the left).
+      waypoints:[[342,372],[338,352],[330,300],[362,215],[338,120],[352,88],...spmRnd([352,88],[355,70],[150,120],15),[300,88],[210,112],...spmRnd([210,112],[150,120],[152,355],15),[150,205],[150,300],[147,343],...spmLee(152,355),[175,270],[150,190],[132,150]],
     },
   },
 };
 
-function EquipmentModel3D({cfg,onInfo}){
+function EquipmentModel3D({cfg,onInfo,onActive}){
   const geo=React.useMemo(()=>cfg.geometry(),[cfg]);
   const[reduced]=React.useState(spmReducedMotion);
   const stRef=React.useRef({yaw:-0.7,pitch:0,vyaw:0,drag:null,idleAt:-1e9,hover:null});
@@ -3729,6 +4097,7 @@ function EquipmentModel3D({cfg,onInfo}){
   const setPart=p=>{
     stRef.current.hover=p;
     setActive(p);
+    if(onActive)onActive(p); // let a parent (e.g. the home rotator) pause while a part is selected
     if(onInfo){const part=p?cfg.parts.find(x=>x.id===p):null;onInfo(part?{t:part.name,d:part.blurb}:null);}
   };
   const hoverAt=e=>{
@@ -3805,12 +4174,12 @@ function EquipmentModel3D({cfg,onInfo}){
 
 function CourseDiagram({cfg,onInfo}){
   const[reduced]=React.useState(spmReducedMotion);
-  const course=React.useMemo(()=>spmBuildCourse(),[]);
+  const course=React.useMemo(()=>spmBuildCourse(cfg.waypoints),[cfg]);
   const[clock,setClock]=React.useState(1600); // start a little into the lap so the boat is visible at once
   const[mark,setMark]=React.useState(null);
   const wrapRef=React.useRef(null);
   useSpmLoop(wrapRef,dt=>setClock(c=>c+dt),reduced);
-  const T=(cfg.loopSeconds||24)*1000,XY=SPM_COURSE_XY;
+  const T=(cfg.loopSeconds||24)*1000,L=cfg.layout||{};
   const report=m=>{ // hover text goes to the shared bottom info line, never over the diagram
     if(!onInfo)return;
     if(m){const mk=(cfg.marks||[]).find(x=>x.id===m);onInfo(mk?{t:mk.label,d:mk.desc}:null);}
@@ -3823,30 +4192,35 @@ function CourseDiagram({cfg,onInfo}){
   const back=Math.max(0,s.idx-72); // fading contrail over the last ~25% of track
   const seg=(from,to)=>course.pts.slice(from,to+1).map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ");
   const i1=back+Math.floor((s.idx-back)/3),i2=back+Math.floor(2*(s.idx-back)/3);
-  // committee vessels at both ends of the shared start/finish line
+  // committee vessels sit at both ends of every start / finish line
   const rcBoat="M0,-7 C2,-4 2.6,-1 2.6,2 L2.6,6 L-2.6,6 L-2.6,2 C-2.6,-1 -2,-4 0,-7 Z";
+  const wx=(L.windXY&&L.windXY[0])||260,wy=(L.windXY&&L.windXY[1])||26;
+  const sp=SPM_SPRITES[cfg.sprite]||SPM_SPRITES.skiff; // top-down hull for this class
   return(
     <div ref={wrapRef} className="spm-holo" onPointerEnter={()=>report(null)} onPointerLeave={()=>{setMark(null);if(onInfo)onInfo(null);}}>
       <svg viewBox="0 0 520 430" style={{display:"block",width:"100%"}} onPointerMove={onMove}>
         <g>
-          <text x={XY.wind[0]} y="16" textAnchor="middle" fill={hi("wind")?"#0a84ff":"#33425e"} fontSize="15" fontWeight="800" letterSpacing="2">WIND</text>
-          <path d="M260,22 L260,50 M251,41 L260,51 L269,41" stroke={hi("wind")?"#0a84ff":"rgba(19,49,78,.75)"} strokeWidth="2.4" fill="none" strokeLinecap="round"/>
-          <circle cx={XY.wind[0]} cy={XY.wind[1]+8} r="22" fill="transparent" data-mark="wind"/>
+          <text x={wx} y="16" textAnchor="middle" fill={hi("wind")?"#0a84ff":"#33425e"} fontSize="15" fontWeight="800" letterSpacing="2">WIND</text>
+          <path d={`M${wx},22 L${wx},50 M${wx-9},41 L${wx},51 L${wx+9},41`} stroke={hi("wind")?"#0a84ff":"rgba(19,49,78,.75)"} strokeWidth="2.4" fill="none" strokeLinecap="round"/>
+          <circle cx={wx} cy={wy+8} r="22" fill="transparent" data-mark="wind"/>
         </g>
-        <g>
-          <line x1={XY.sfA[0]} y1={XY.sfA[1]} x2={XY.sfB[0]} y2={XY.sfB[1]}
-            stroke={hi("startfinish")?"#0a84ff":"rgba(6,99,196,.8)"} strokeWidth={hi("startfinish")?2.4:1.7} strokeDasharray="6 7"/>
-          <g transform={"translate("+XY.sfA[0]+","+XY.sfA[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
-          <g transform={"translate("+XY.sfB[0]+","+XY.sfB[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
-          <text x={(XY.sfA[0]+XY.sfB[0])/2} y={XY.sfA[1]+26} textAnchor="middle" fill={hi("startfinish")?"#0a84ff":"rgba(51,66,94,.85)"} fontSize="13.5" fontWeight="700" letterSpacing="1.5">START &amp; FINISH</text>
-          <line x1={XY.sfA[0]} y1={XY.sfA[1]} x2={XY.sfB[0]} y2={XY.sfB[1]} stroke="#000" strokeOpacity="0" strokeWidth="22" data-mark="startfinish"/>
-        </g>
-        {[["windward",XY.windward,"1",16,5],["gate",XY.gateL,"2s",-19,5],["gate",XY.gateR,"2p",19,5]].map(([id,xy,lab,dx,dy],k)=>(
-          <g key={k}>
-            <circle cx={xy[0]} cy={xy[1]} r="14" className="spm-halo" fill="rgba(10,132,255,.28)"/>
-            <circle cx={xy[0]} cy={xy[1]} r="7.5" fill={hi(id)?"#0663c4":"#0a78e8"} stroke="rgba(19,49,78,.5)" strokeWidth="1.2"/>
-            <text x={xy[0]+dx*1.5} y={xy[1]+dy+1} textAnchor="middle" fill={hi(id)?"#0a84ff":"rgba(51,66,94,.95)"} fontSize="18" fontWeight="800">{lab}</text>
-            <circle cx={xy[0]} cy={xy[1]} r="20" fill="transparent" data-mark={id}/>
+        {(L.lines||[]).map((ln,k)=>{ // start / finish line(s): dashed, committee glyph each end, label below
+          const mid=(ln.a[0]+ln.b[0])/2,ly=Math.max(ln.a[1],ln.b[1])+26;
+          return(<g key={"ln"+k}>
+            <line x1={ln.a[0]} y1={ln.a[1]} x2={ln.b[0]} y2={ln.b[1]}
+              stroke={hi(ln.id)?"#0a84ff":"rgba(6,99,196,.8)"} strokeWidth={hi(ln.id)?2.4:1.7} strokeDasharray="6 7"/>
+            <g transform={"translate("+ln.a[0]+","+ln.a[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
+            <g transform={"translate("+ln.b[0]+","+ln.b[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
+            <text x={mid} y={ly} textAnchor="middle" fill={hi(ln.id)?"#0a84ff":"rgba(51,66,94,.85)"} fontSize="13.5" fontWeight="700" letterSpacing="1.5">{ln.label}</text>
+            <line x1={ln.a[0]} y1={ln.a[1]} x2={ln.b[0]} y2={ln.b[1]} stroke="#000" strokeOpacity="0" strokeWidth="22" data-mark={ln.id}/>
+          </g>);
+        })}
+        {(L.dots||[]).map((d,k)=>( // rounding marks (a gate = two dots sharing one id)
+          <g key={"dot"+k}>
+            <circle cx={d.xy[0]} cy={d.xy[1]} r="14" className="spm-halo" fill="rgba(10,132,255,.28)"/>
+            <circle cx={d.xy[0]} cy={d.xy[1]} r="7.5" fill={hi(d.id)?"#0663c4":"#0a78e8"} stroke="rgba(19,49,78,.5)" strokeWidth="1.2"/>
+            <text x={d.xy[0]+(d.ldx||0)*1.5} y={d.xy[1]+(d.ldy||0)+1} textAnchor="middle" fill={hi(d.id)?"#0a84ff":"rgba(51,66,94,.95)"} fontSize="18" fontWeight="800">{d.label}</text>
+            <circle cx={d.xy[0]} cy={d.xy[1]} r="20" fill="transparent" data-mark={d.id}/>
           </g>
         ))}
         <g opacity={s.op}>
@@ -3855,12 +4229,10 @@ function CourseDiagram({cfg,onInfo}){
             <polyline points={seg(i1,i2)} stroke="rgba(10,132,255,.40)" strokeWidth="3"/>
             <polyline points={seg(i2,s.idx)} stroke="rgba(10,132,255,.62)" strokeWidth="3.2"/>
           </g>}
-          <g transform={"translate("+s.x.toFixed(1)+","+s.y.toFixed(1)+") rotate("+s.ang.toFixed(1)+") scale(1.78)"}>
-            {/* top-down 49er: fine bow, hull, wing flares */}
-            <path d="M0,-8.5 C2.4,-5.5 3.1,-2.5 3.1,0.5 L3.1,1.6 C5.3,1.9 5.3,5.6 3.1,5.9 L3.1,6.8 L-3.1,6.8 L-3.1,5.9 C-5.3,5.6 -5.3,1.9 -3.1,1.6 L-3.1,0.5 C-3.1,-2.5 -2.4,-5.5 0,-8.5 Z"
-              fill="rgba(9,111,214,.95)" stroke="rgba(13,35,60,.9)" strokeWidth=".9" strokeLinejoin="round"/>
-            <line x1="0" y1="-6.5" x2="0" y2="5.5" stroke="rgba(255,255,255,.85)" strokeWidth=".8"/>
-            <circle cx="0" cy="0.5" r="1.2" fill="rgba(255,255,255,.95)"/>
+          <g transform={"translate("+s.x.toFixed(1)+","+s.y.toFixed(1)+") rotate("+s.ang.toFixed(1)+") scale("+sp.scale+")"}>
+            <path d={sp.hull} fill="rgba(9,111,214,.95)" stroke="rgba(13,35,60,.9)" strokeWidth=".9" strokeLinejoin="round"/>
+            {sp.spine&&<line x1={sp.spine[0][0]} y1={sp.spine[0][1]} x2={sp.spine[1][0]} y2={sp.spine[1][1]} stroke="rgba(255,255,255,.85)" strokeWidth=".8"/>}
+            {sp.dot&&<circle cx={sp.dot[0]} cy={sp.dot[1]} r={sp.dot[2]} fill="rgba(255,255,255,.95)"/>}
           </g>
         </g>
       </svg>
@@ -3870,12 +4242,12 @@ function CourseDiagram({cfg,onInfo}){
 
 /* The two models side by side + one shared info line underneath — hover text lands here,
    at the very bottom, so nothing ever covers the diagrams. */
-function SpmDuo({cfg,compact}){
+function SpmDuo({cfg,compact,onActive}){
   const[info,setInfo]=React.useState(null);
   return(
     <div className={`spm-duo${compact?" spm-duo--home":""}`}>
       <div className={`spm-duorow${compact?" spm-duorow--home":""}`}>
-        <EquipmentModel3D cfg={cfg.equipment} onInfo={setInfo}/>
+        <EquipmentModel3D cfg={cfg.equipment} onInfo={setInfo} onActive={onActive}/>
         <CourseDiagram cfg={cfg.course} onInfo={setInfo}/>
       </div>
       <div className="spm-info">
@@ -3887,12 +4259,74 @@ function SpmDuo({cfg,compact}){
   );
 }
 
-function SportShowcase({clsId,compact}){
+function SportShowcase({clsId,compact,onActive}){
   const cfg=SPORT_MODELS[clsId];
   if(!cfg)return null;
   return(
     <div className={`spm-sec${compact?" spm-sec--home":""}`}>
-      <SpmDuo cfg={cfg} compact={compact}/>
+      <SpmDuo cfg={cfg} compact={compact} onActive={onActive}/>
+    </div>
+  );
+}
+
+/* Home-page rotation: cycle 49er → 29er → ILCA → Optimist, one class every 5 s, with a soft crossfade.
+   Only ONE model is mounted at a time (no hidden models left animating). Rotation pauses while the user
+   is interacting (pointer over either model, mid-drag, or a part selected), while the tab is hidden, and
+   under prefers-reduced-motion — resuming 5 s after interaction ends. Class portals do NOT use this;
+   they render a fixed SpmDuo. Defined AFTER SportShowcase + its data deps (SPORT_MODELS, classLabel,
+   CLASS_COLOR) so there is no temporal-dead-zone reference. */
+const SPM_ROTATION=["49er","29er","ilca","optimist"];
+function HomeShowcaseRotator(){
+  const[reduced]=React.useState(spmReducedMotion);
+  const[idx,setIdx]=React.useState(0);
+  const[fade,setFade]=React.useState(1);
+  const stRef=React.useRef({interacting:false,partSel:false,lastAt:-1e9,fadeTimer:0});
+  const idxRef=React.useRef(0);idxRef.current=idx;
+  // paused while: reduced motion, tab hidden, pointer interacting, a part selected, or <5 s since the last touch
+  const busy=()=>{const s=stRef.current;return reduced||(typeof document!=="undefined"&&document.hidden)||s.interacting||s.partSel||(performance.now()-s.lastAt<5000);};
+  const goTo=React.useCallback(n=>{ // fade out → swap class → fade in (~300 ms opacity crossfade)
+    setFade(0);
+    stRef.current.fadeTimer=window.setTimeout(()=>{setIdx(n);setFade(1);},300);
+  },[]);
+  React.useEffect(()=>{
+    if(reduced)return;
+    // advance once the current class's boat finishes its lap (loopSeconds ≈ 20-28 s), not on a fixed 5 s tick
+    let alive=true,timer=0;
+    const lap=i=>{const c=SPORT_MODELS[SPM_ROTATION[i]];return((c&&c.course&&c.course.loopSeconds)||22)*1000;};
+    const tick=()=>{
+      if(!alive)return;
+      if(busy()){timer=window.setTimeout(tick,1600);return;} // paused (hover/drag/hidden) → recheck soon
+      const next=(idxRef.current+1)%SPM_ROTATION.length;
+      goTo(next);
+      timer=window.setTimeout(tick,lap(next));
+    };
+    timer=window.setTimeout(tick,lap(idxRef.current));
+    return()=>{alive=false;if(timer)window.clearTimeout(timer);if(stRef.current.fadeTimer)window.clearTimeout(stRef.current.fadeTimer);};
+  },[reduced,goTo]);
+  const mark=()=>{stRef.current.lastAt=performance.now();};
+  const onEnter=()=>{stRef.current.interacting=true;mark();};
+  const onLeave=()=>{stRef.current.interacting=false;mark();};
+  const onDown=()=>{stRef.current.interacting=true;mark();};
+  const onActive=p=>{stRef.current.partSel=!!p;if(p)mark();};
+  const jump=k=>{mark();if(k!==idxRef.current)goTo(k);}; // pip click = jump + counts as interaction
+  const cur=SPM_ROTATION[idx];
+  return(
+    <div className="spm-rotator"
+      onPointerEnter={onEnter} onPointerLeave={onLeave}
+      onPointerDown={onDown} onPointerUp={mark} onPointerCancel={onLeave} onPointerMove={mark}>
+      <div className="spm-rotbar">
+        <span className="spm-rotlabel">{classLabel(cur)}</span>
+        <span className="spm-rotpips">
+          {SPM_ROTATION.map((c,k)=>(
+            <button key={c} type="button" className={"spm-rotpip"+(k===idx?" on":"")}
+              style={k===idx?{background:CLASS_COLOR[c]||"var(--accent)",borderColor:CLASS_COLOR[c]||"var(--accent)"}:undefined}
+              onClick={()=>jump(k)} aria-label={classLabel(c)} title={classLabel(c)}/>
+          ))}
+        </span>
+      </div>
+      <div className="spm-rotstage" style={{opacity:fade}}>
+        <SportShowcase key={cur} clsId={cur} compact onActive={onActive}/>
+      </div>
     </div>
   );
 }
@@ -9187,6 +9621,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .spm-halo{transform-box:fill-box;transform-origin:center;animation:spmPulse 2.4s ease-out infinite}
     @keyframes spmPulse{0%{transform:scale(.55);opacity:.75}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}
     @media (prefers-reduced-motion:reduce){.spm-halo{animation:none;opacity:.35}}
+    /* ── Home class rotation (spm-rot): crossfading model carousel + label + class pips ── */
+    .spm-rotator{position:relative}
+    .spm-rotstage{transition:opacity .3s ease}
+    .spm-rotbar{display:flex;align-items:center;justify-content:center;gap:12px;margin:0 0 6px;position:relative;z-index:2}
+    .spm-rotlabel{font-size:12.5px;font-weight:700;letter-spacing:.04em;color:var(--ink);min-width:52px;text-align:right}
+    .spm-rotpips{display:inline-flex;align-items:center;gap:8px}
+    .spm-rotpip{width:9px;height:9px;padding:0;border-radius:50%;border:1.5px solid rgba(31,78,128,.4);background:rgba(31,78,128,.18);cursor:pointer;transition:transform .2s ease,background .2s ease,border-color .2s ease}
+    .spm-rotpip:hover{transform:scale(1.25)}
+    .spm-rotpip.on{transform:scale(1.15)}
+    @media (prefers-reduced-motion:reduce){.spm-rotstage,.spm-rotpip{transition:none}}
+    @media(max-width:700px){.spm-rotbar{margin:0 0 2px}}
 
     /* ══════════ MOBILE OPTIMIZATION (≤700px unless noted) ══════════
        Additive layer only — desktop (≥701px) must render pixel-identical.
@@ -9791,7 +10236,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     }));
     return(
     <div className="wrap sec">
-      <SportShowcase clsId="49er" compact/>
+      <HomeShowcaseRotator/>
       <p style={{margin:"0 0 8px",color:"var(--mut)",fontSize:15}}>Results, athlete profiles and class standings for competitive sailing</p>
       <div className="hero-srch" style={{maxWidth:"none"}} onClick={e=>e.stopPropagation()}>
         <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
@@ -11643,7 +12088,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             {/* ── Two-column: boat classes (left) · organiser controls (right) ── */}
             <div style={{display:"flex",gap:20,flexWrap:"wrap",alignItems:"flex-start",marginBottom:10}}>
               {/* LEFT — per-result class selector (reshapes the table). Subclass options
-                  (ILCA/Optimist) are revealed on hover/focus of the parent class button. */}
+                  (ILCA/Optimist/49er) are revealed on hover/focus of the parent class button. */}
               <div style={{flex:"1 1 300px",minWidth:260}}>
                 <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class{classLocked&&<span style={{fontWeight:500,opacity:.7}}> — fixed to {assoc.name}'s class</span>}</label>
                 <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>

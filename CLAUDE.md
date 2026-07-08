@@ -138,7 +138,8 @@ construction instead of by remembering a rule.
 --sky:   #dcecf8   --paper: #f3f7fb   --ink:    #14213a
 
 --mut:   #5b6b80   --line:  #d9e3ef   --gold:   #c8920b
-Class colours: 29er #E84855 · ILCA #2E78C8 · 49er #5FAF4E · Optimist #3D3D3D
+Class colours: 29er #E84855 · ILCA #E2231A · 49er #5FAF4E · Optimist #000000
+Sub-classes: ILCA 7/6/4 #8E1519/#E2231A/#F2867F · Optimist/Inter/Green #000000/#6b6b6b/#a3a3a3 · 49er (men) #5FAF4E / 49er FX (women) #1B87C9
 Custom classes: muted navy-palette tones only (--navy2, --mut, --accent).
 No aggressive highlight colours.
 Typography: SF Pro — Apple's system font — everywhere: headings, body, AND the
