@@ -4715,6 +4715,32 @@ function HostPicker({hosts,value,onChange,orgName,onOrgName}){
    Google OAuth:  redirect → on return, check profile → if none → Step 2+3
    Guardian path: athlete under 16 → guardian email collected → pending note
    ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Host auto-grab: localhost mock ───────────────────────────────────────────
+   /api/research_host and the /api/parse_pdf probe are NEW endpoints — they only
+   exist on a Vercel preview deploy, so on localhost:5173 they 404. Flip
+   MOCK_RESEARCH to true to smoke-test the signup research card + discovery view
+   WITHOUT a deploy. It MUST default to false — with it false, real calls hit the
+   live endpoints. mockResearchIdentity(name,kind,countryHint) mirrors the
+   research_host.py identity-mode response shape exactly. */
+const MOCK_RESEARCH=false;
+function mockResearchIdentity(name,kind,countryHint){
+  const nm=(name||"").trim();
+  const c=(countryHint&&countryHint.length===3?countryHint:"HKG").toUpperCase();
+  return {ok:true,mode:"identity",found:true,
+    official_name:nm||"Sample Sailing Club",
+    acronym:(nm||"SSC").split(/\s+/).map(w=>w[0]||"").join("").toUpperCase().slice(0,5),
+    website:"https://example.org",country:c,
+    classes:kind==="association"?["ILCA"]:["ILCA","Optimist","29er"],
+    blurb:`${nm||"The organisation"} organises sailing competitions.`,
+    competitions:[
+      {name:`${c} National Championship 2025`,year:2025,class:"ILCA",url:"https://example.org/nats-2025.pdf"},
+      {name:`${c} Youth Series 2024`,year:2024,class:"Optimist",url:"https://example.org/youth-2024.htm"},
+      {name:`${c} Winter Regatta 2024`,year:2024,class:"29er",url:null},
+    ],
+    sources:["https://example.org"]};
+}
+
 function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[],federations=[],onCreateHost,onClaimHost,pendingInviteToken=null}){
   /* ── mode: "signin" | "signup" ── */
   // If arriving from Google OAuth with no profile yet, jump straight to role-pick
@@ -4740,6 +4766,13 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
   const[newHostScope,setNewHostScope]=React.useState("HK");     // HK | INT
   const[classId,setClassId]=React.useState("29er");             // association only
   const[hostCountry,setHostCountry]=React.useState("HKG");      // federation only
+  /* step 4 — host auto-grab ("Is this you?" research card) */
+  const[research,setResearch]=React.useState(null);             // shaped identity dossier (found) or null
+  const[researching,setResearching]=React.useState(false);      // lookup in flight
+  const[researchDismissed,setResearchDismissed]=React.useState(false); // "Not us" → permanent for this signup
+  const[confirmedDossier,setConfirmedDossier]=React.useState(null);    // stashed on "Yes, that's us"
+  const researchedNameRef=React.useRef("");                     // last name we fired a lookup for (refire guard)
+  const researchAbortRef=React.useRef(null);                    // AbortController → ignore stale responses
   /* shared */
   const[busy,setBusy]=React.useState(false);
   const[err,setErr]=React.useState("");
@@ -4784,6 +4817,65 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
   const step1Valid=mode==="signin"?(email.trim()&&pw):(email.trim()&&pw.length>=8);
   const step3Valid=firstName.trim()&&lastName.trim()&&(role==="athlete"?(isMinor?guardianEmail.trim():true):true);
   const step4Valid=addingNew?newHostName.trim():!!selectedHostId;
+
+  /* ── host auto-grab: best-effort web research → "Is this you?" card ──
+     Fires ONE lookup per distinct name (guarded by researchedNameRef, exactly
+     like the preview enrichment effect's item._enriched guard), on 800ms
+     typing-stop debounce OR name-field blur. Stale responses are ignored via an
+     AbortController. Signup NEVER blocks on this — every failure is silent. */
+  const runResearch=(raw)=>{
+    const nm=(raw||"").trim();
+    if(!addingNew||researchDismissed||nm.length<4) return;
+    if(researchedNameRef.current===nm) return;          // already looked up this exact name
+    researchedNameRef.current=nm;
+    setConfirmedDossier(null);                           // name changed → prior confirmation is stale
+    try{researchAbortRef.current?.abort();}catch{}       // drop any in-flight lookup
+    const ac=new AbortController(); researchAbortRef.current=ac;
+    setResearching(true); setResearch(null);
+    (async()=>{
+      try{
+        let d;
+        if(MOCK_RESEARCH){ d=mockResearchIdentity(nm,hostKind,hostCountry); }
+        else{
+          const r=await fetch("/api/research_host",{method:"POST",
+            headers:{"Content-Type":"application/json"},signal:ac.signal,
+            body:JSON.stringify({name:nm,type:hostKind,
+              country_hint:hostKind==="federation"?hostCountry:"",mode:"identity"})});
+          d=await r.json();
+        }
+        if(ac.signal.aborted) return;                    // superseded by a newer name
+        setResearch(d&&d.ok&&d.found?d:null);            // only show a confident hit
+      }catch(e){ if(e?.name!=="AbortError") setResearch(null); }  // silent — never break signup
+      finally{ if(!ac.signal.aborted) setResearching(false); }
+    })();
+  };
+  React.useEffect(()=>{
+    if(!addingNew||researchDismissed) return;
+    const nm=newHostName.trim();
+    if(nm.length<4){ setResearch(null); researchedNameRef.current=""; return; }
+    if(researchedNameRef.current===nm) return;
+    const t=setTimeout(()=>runResearch(nm),800);
+    return ()=>clearTimeout(t);
+  },[newHostName,addingNew,researchDismissed,hostKind]);
+  // "Yes, that's us" → stash the dossier for the hosts insert + pre-fill fields.
+  const acceptResearch=()=>{
+    if(!research) return;
+    setConfirmedDossier({
+      identity:{official_name:research.official_name||null,acronym:research.acronym||null,
+        website:research.website||null,country:research.country||null,
+        classes:research.classes||[],blurb:research.blurb||null},
+      competitions:research.competitions||[],
+      sources:research.sources||[],
+      fetched_at:new Date().toISOString(),
+      confirmed:true,
+    });
+    if(research.country){
+      if(hostKind==="federation") setHostCountry(research.country);
+      if(research.country!=="HKG") setNewHostScope("INT");   // non-HK org ⇒ International region
+    }
+  };
+  // "Not us" → dismiss permanently for this signup; everything stays manual.
+  const dismissResearch=()=>{ setResearchDismissed(true); setResearch(null); setConfirmedDossier(null); };
 
   /* ── apply invite code (step 4 fast-path) ── */
   const applyInviteCode=async()=>{
@@ -4890,6 +4982,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
           type:hostKind,scope:newHostScope,name:newHostName.trim(),
           cls:hostKind==="association"?classId:null,
           country:hostKind==="federation"?(hostCountry||"HKG").toUpperCase():null,
+          dossier:confirmedDossier||null,   // host auto-grab: confirmed "Is this you?" research
         },tok);
         if(!created?.id) throw new Error("Couldn't create the host page.");
         hostId=created.id;
@@ -5246,7 +5339,73 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
                 <Label>{hostKind==="club"?"Club":hostKind==="federation"?"Federation":"Association"} name</Label>
                 <input style={FW()} placeholder={hostKind==="club"?"e.g. Aberdeen Boat Club":"Name"} value={newHostName}
                   onChange={e=>setNewHostName(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"}
+                  onBlur={e=>{e.target.style.boxShadow="none";runResearch(e.target.value);}}/>
+                {/* ── Host auto-grab: "Looking you up…" shimmer ── */}
+                {researching&&!research&&!confirmedDossier&&(
+                  <p className="hostResearchShimmer" style={{fontSize:12,color:"var(--mut)",margin:"8px 2px 0",display:"flex",alignItems:"center",gap:7}}>
+                    <Search size={12}/>Looking you up…
+                  </p>
+                )}
+                {/* ── Host auto-grab: "Is this you?" card ── */}
+                {research&&!confirmedDossier&&(
+                  <div className="liquidGlass-wrapper" style={{marginTop:10,borderRadius:16,overflow:"hidden",border:"1px solid var(--line)"}}>
+                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                    <div style={{position:"relative",padding:"14px 15px"}}>
+                      <p style={{fontSize:11,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"var(--accent)",margin:"0 0 9px"}}>Is this you?</p>
+                      <div style={{display:"flex",alignItems:"flex-start",gap:11}}>
+                        {research.website&&(
+                          <img alt="" width={30} height={30} style={{borderRadius:8,flex:"none",marginTop:1,background:"rgba(255,255,255,.6)"}}
+                            src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent((research.website||"").replace(/^https?:\/\//,"").split("/")[0])}&sz=64`}
+                            onError={e=>{e.currentTarget.style.display="none";}}/>
+                        )}
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:"flex",alignItems:"baseline",gap:7,flexWrap:"wrap"}}>
+                            <span style={{fontWeight:700,fontSize:14.5,color:"var(--navy)"}}>{research.official_name||newHostName.trim()}</span>
+                            {research.acronym&&<span style={{fontSize:12,color:"var(--mut)"}}>({research.acronym})</span>}
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",margin:"5px 0 0",fontSize:12,color:"var(--mut)"}}>
+                            {research.country&&<span style={{display:"inline-flex",alignItems:"center",gap:4}}>{iocFlag(research.country)}<b style={{color:"var(--navy)",fontWeight:600}}>{research.country}</b></span>}
+                            {research.website&&<a href={research.website} target="_blank" rel="noreferrer noopener" onClick={e=>e.stopPropagation()} style={{color:"var(--accent)",textDecoration:"none",maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{(research.website||"").replace(/^https?:\/\//,"").replace(/\/$/,"")}</a>}
+                          </div>
+                          {!!(research.classes&&research.classes.length)&&(
+                            <div style={{display:"flex",flexWrap:"wrap",gap:6,margin:"9px 0 0"}}>
+                              {research.classes.slice(0,6).map((c,i)=>(
+                                <span key={i} style={{fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:980,color:classColor(c),background:classColorA(c,.12),border:`1px solid ${classColorA(c,.3)}`}}>{classLabel(c)}</span>
+                              ))}
+                            </div>
+                          )}
+                          {research.blurb&&<p style={{fontSize:12.5,color:"var(--ink)",lineHeight:1.45,margin:"10px 0 0"}}>{research.blurb}</p>}
+                          {!!(research.competitions&&research.competitions.length)&&(
+                            <div style={{margin:"10px 0 0"}}>
+                              <p style={{fontSize:10.5,fontWeight:700,letterSpacing:".05em",textTransform:"uppercase",color:"var(--mut)",margin:"0 0 4px"}}>Recent competitions</p>
+                              {research.competitions.slice(0,3).map((c,i)=>(
+                                <p key={i} style={{fontSize:12,color:"var(--mut)",margin:"2px 0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                  {c.name}{c.year?<span style={{opacity:.7}}> · {c.year}</span>:null}
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:8,margin:"13px 0 0"}}>
+                        <button type="button" className="btn cta" style={{flex:1,justifyContent:"center",fontSize:13}} onClick={acceptResearch}>
+                          <CheckCircle size={14}/>Yes, that's us
+                        </button>
+                        <button type="button" className="btn ghost" style={{justifyContent:"center",fontSize:13}} onClick={dismissResearch}>Not us</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {/* ── Host auto-grab: confirmed banner ── */}
+                {confirmedDossier&&(
+                  <div style={{marginTop:10,display:"flex",alignItems:"center",gap:9,padding:"10px 13px",borderRadius:12,
+                    background:"rgba(45,120,200,.07)",border:"1px solid rgba(45,120,200,.2)",fontSize:12.5,color:"var(--navy)"}}>
+                    <CheckCircle size={15} color="var(--accent)" style={{flex:"none"}}/>
+                    <span style={{flex:1,minWidth:0}}>Using <b>{confirmedDossier.identity.official_name||newHostName.trim()}</b>{confirmedDossier.identity.country?` · ${confirmedDossier.identity.country}`:""}. You can import their past results after signing up.</span>
+                    <button type="button" className="cal-back" style={{color:"var(--mut)",flex:"none"}} onClick={()=>{setConfirmedDossier(null);researchedNameRef.current="";}}>Undo</button>
+                  </div>
+                )}
               </div>
               <div>
                 <Label>Region</Label>
@@ -6709,7 +6868,10 @@ export default function AthLinkMVP(){
     const id=slug+"-"+Math.random().toString(36).slice(2,6);
     const payload={id,type:spec.type,scope:spec.scope||"HK",name,
       cls:spec.type==="association"?spec.cls:null,
-      country:spec.type==="federation"?(spec.country||"HKG").toUpperCase():null};
+      country:spec.type==="federation"?(spec.country||"HKG").toUpperCase():null,
+      // Host auto-grab: persist the confirmed "Is this you?" dossier (migration 0012).
+      // Column is nullable; a signup that skipped/dismissed research just omits it.
+      ...(spec.dossier?{dossier:spec.dossier}:{})};
     // Persist to DB (use the user's token so RLS allows it if configured), then registry.
     try{ await sbPost("hosts",payload); }catch(e){ console.error("createHostFromSignup",e); }
     addHostLocal({id,type:spec.type,scope:spec.scope||"HK",name,
@@ -9480,6 +9642,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .scorecell .scode{font-size:8px;font-weight:800;color:#e74c3c;letter-spacing:.04em;text-transform:uppercase;}
 
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
+    /* Host auto-grab: subtle "Looking you up…" text shimmer (no spinner). */
+    .hostResearchShimmer{animation:hostResearchShimmer 1.3s ease-in-out infinite;}
+    @keyframes hostResearchShimmer{0%,100%{opacity:.5;}50%{opacity:1;}}
     /* Calendar — Apple Calendar style */
     .cal-modal{background:rgba(252,253,255,0.88);backdrop-filter:blur(56px) saturate(210%);-webkit-backdrop-filter:blur(56px) saturate(210%);width:100%;max-width:1020px;border-radius:22px;overflow:hidden;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 40px 90px -28px rgba(0,0,0,.45),0 0 0 .5px rgba(60,60,67,.08);animation:rise .3s both;max-height:92vh;display:flex;flex-direction:column;}
     .cal-head{background:linear-gradient(135deg,rgba(31,78,128,.78),rgba(19,49,78,.84));backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;padding:14px 20px;display:flex;align-items:flex-start;gap:10px;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);}

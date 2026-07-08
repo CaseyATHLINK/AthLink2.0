@@ -9,6 +9,9 @@
     },
     "api/enrich.py": {
       "maxDuration": 60
+    },
+    "api/research_host.py": {
+      "maxDuration": 60
     }
   },
   "rewrites": [

@@ -85,6 +85,9 @@ ROUTES = {
     "enrich":   {"provider": "gemini", "base_url": GEMINI_BASE,
                  "model": "gemini-3-flash", "model_env": "ENRICH_MODEL",
                  "grounding": True},
+    "research": {"provider": "gemini", "base_url": GEMINI_BASE,
+                 "model": "gemini-3-flash", "model_env": "RESEARCH_MODEL",
+                 "grounding": True},
 }
 
 
