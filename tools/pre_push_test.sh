@@ -116,7 +116,7 @@ fi
 # hits the LIVE Vercel parser, so the harness is the authoritative local test.
 # ---------------------------------------------------------------------------
 if [ "$BACK" -eq 1 ]; then
-  for f in api/parse_pdf.py api/validate.py api/completeness.py api/ai_filter.py; do
+  for f in api/sailing/parse_pdf.py api/sailing/validate.py api/sailing/completeness.py api/_shared/llm.py api/ai_filter.py api/enrich.py api/research_host.py; do
     [ -f "$f" ] || continue
     if python3 -c "import ast; ast.parse(open('$f').read())" 2>/dev/null; then
       add "PASS  ${f##*/} syntax ok"

@@ -20,14 +20,14 @@ Beachhead: Hong Kong class associations (29er, ILCA, Optimist, 49er).
 
 ## Stack
 - Frontend: React 18, single-file `src/App.jsx` (~7,100+ lines), Vite
-- Backend: Python serverless `api/parse_pdf.py` + `api/ai_filter.py`
+- Backend: Python serverless `api/sailing/parse_pdf.py` + `api/ai_filter.py`
 - DB/Auth: Supabase (Postgres + GoTrue), project ref `ylzoburtpibbgqdggjty`
 - AI (parser v3, 2026-07): **Gemini is the universal primary** for EVERY AI task
   (search suggestions, overviews, hover blurbs, flag/nat reads, photo/scan vision,
   date/country enrichment) via ONE paid key `Gemini_API_Key_Universal`. **Anthropic
   Sonnet 5 (`claude-sonnet-5`) is the ONE fallback** — fires only on a Gemini
   error. No Haiku anywhere; Kimi/DeepSeek/Cerebras retired from default routes.
-  Per-task model map + key resolution live in `api/llm.py` (see below).
+  Per-task model map + key resolution live in `api/_shared/llm.py` (see below).
 - Hosting: Vercel Hobby (60s function ceiling — never exceed in parse_pdf.py)
 - Repo: CaseyATHLINK/AthLink2.0
 
@@ -78,7 +78,7 @@ ventures, the Obsidian vault, cross-cutting planning.
   --external:recharts --format=esm --outfile=/dev/null
 
 # Python syntax check (after parse_pdf.py edits)
-python3 -c "import ast; ast.parse(open('api/parse_pdf.py').read())"
+python3 -c "import ast; ast.parse(open('api/sailing/parse_pdf.py').read())"
 # NOTE: the parser test harness needs a python3 with pdfplumber+openpyxl —
 # on Casey's machine that is /opt/anaconda3/bin/python3:
 # /opt/anaconda3/bin/python3 tools/test_parser.py --diff
@@ -92,7 +92,7 @@ Push = production (athlink.win), so test on localhost first. Use the
 `athlink-tester` subagent (`.claude/agents/athlink-tester.md`) before any push;
 it auto-detects frontend vs backend changes and runs:
 - Frontend (`src/App.jsx`): esbuild check + TDZ review + localhost:5173 render.
-- Backend (`api/parse_pdf.py`, `api/validate.py`): `python3 -c "import ast..."`
+- Backend (`api/sailing/parse_pdf.py`, `api/sailing/validate.py`): `python3 -c "import ast..."`
   syntax check + `python3 tools/test_parser.py --diff` vs `tools/baseline/`.
 Reports a single PASS/FAIL. Note: the dev proxy sends `/api` to the LIVE Vercel
 parser, so parser changes are NOT visible on localhost until pushed — the
@@ -329,7 +329,7 @@ Table: athlete_claims.
    2026-07-08) — built and validated on its branch, not yet merged to main;
    see the "Rating engine" section above.
 
-## Parser rules (api/parse_pdf.py) — v2, July 2026
+## Parser rules (api/sailing/parse_pdf.py) — v2, July 2026
 - Pipeline: detect → route → parse → normalise. `detect_format()` +
   `FORMAT_REGISTRY` (ordered family list; signature fn + extractor per family).
   Every result carries a `detected_format` {family, input_type, confidence}
@@ -345,7 +345,7 @@ Table: athlete_claims.
   excel-print-pdf, club-custom-xlsx, pya-events. Deferred to AI/vision by
   design: worldsailing-resultscentre, hubsail + Dragon multi-crew (big boat,
   out of scope), cn-games-book, ioda-word-notice, all zero-text scans.
-- AI routing (api/llm.py) — parser v3, 2026-07: **Gemini-primary / Sonnet-5
+- AI routing (api/_shared/llm.py) — parser v3, 2026-07: **Gemini-primary / Sonnet-5
   fallback for ALL tasks.** `ROUTES` per-task map (provider always `gemini`, key
   via `_gemini_key()`):
     · `filter` (search suggestions) → `gemini-3.1-flash-lite` (benchmarked 0.92s)
@@ -410,7 +410,7 @@ never auto-apply; keys server-side; 45s provider bound under the 60s ceiling).
   env `RESEARCH_MODEL`). Registered in vercel.json (maxDuration 60). Pure
   name+type → dossier out — no DB access, so an admin "run for any host" UI can
   call it later unchanged.
-- **Probe mode** (in api/parse_pdf.py) — POST `{probe:true, url}` → fetch (bounded
+- **Probe mode** (in api/sailing/parse_pdf.py) — POST `{probe:true, url}` → fetch (bounded
   ~10s) + sniff + `detect_format` ONLY (NO parse, NO AI). Returns `{ok, reachable,
   family, parseable, content_type, bytes}`; unreachable → `{ok:true,
   reachable:false}` (never hard-fails). `parseable` = matched family OR input type

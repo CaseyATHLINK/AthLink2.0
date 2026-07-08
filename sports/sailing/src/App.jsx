@@ -3479,26 +3479,30 @@ function buildOptimistGeometry(){
   line("daggerboard","spar",[[0.20,0.29,0],[0.20,0.53,0]],2.2);            // handle above deck
   fill("rudder","foil",[[-1.20,0.27,0],[-1.36,0.27,0],[-1.40,-0.60,0],[-1.34,-0.80,0],[-1.28,-0.76,0],[-1.24,-0.38,0],[-1.20,-0.03,0]]);
   line("rudder","spar",[[-1.26,0.33,0],[-0.52,0.43,0]],1.5);              // tiller
-  // unstayed mast ~2.3 m, stepped well forward (the sprit + boom are the hoverable spars)
-  line(null,"mast",[[0.58,0.29,0],[0.56,1.25,0],[0.54,2.28,0]],2.0);
-  // FIVE-SIDED sprit MAINSAIL: tack + throat on the mast, PEAK held up-and-aft, a roached leech, clew on the
-  // boom. The SPRIT runs from MIDWAY up the mast to the peak (top corner) — the defining spar of this rig.
-  const Tk=[0.56,0.52,0],Th=[0.54,1.92,0],Pk=[-0.80,2.12,0.15],Lr=[-1.18,1.22,0.30],Cl=[-1.06,0.60,0.38];
-  line("sprit","spar",[[0.55,1.25,0],Pk],1.7);                            // sprit: mid-mast → peak
+  // unstayed mast ~2.0 m, stepped well forward (the sprit + boom are the hoverable spars)
+  line(null,"mast",[[0.58,0.29,0],[0.56,1.10,0],[0.54,1.90,0]],2.0);
+  // FOUR-SIDED sprit MAINSAIL, per the official Optimist sail plan — corners TACK (bottom-front, on the mast),
+  // THROAT (top of the luff on the mast), PEAK (the HIGH top corner, aft, held aloft by the sprit) and CLEW
+  // (bottom-aft on the boom). Edges LUFF, HEAD (throat→peak), LEECH (the long peak→clew edge), FOOT. The SPRIT
+  // runs from MID-MAST up to the PEAK. Rendered as a bilinear cambered quad (u: luff→leech, v: foot→head).
+  const Tk=[0.55,0.50,0],Th=[0.52,1.82,0],Pk=[-0.08,2.55,0.08],Cl=[-1.05,0.48,0.34];
+  line("sprit","spar",[[0.53,1.26,0],Pk],1.7);                            // sprit: mid-mast → peak (top corner)
   line("boom","spar",[Tk,Cl],1.6);                                        // boom along the foot
-  line("boom","wire",[[-0.50,0.58,0.20],[-0.50,1.00,0.10]],0.7);          // bridle mainsheet hint
-  // sail surface: columns mast(luff) → mid → leech(clew → roach → peak), rows foot → mid → head; port camber
-  const C0=[Tk,[0.55,1.22,0],Th];                                         // luff on the mast
-  const C2=[Cl,Lr,Pk];                                                    // leech: clew → roach bulge → peak
-  const C1=C0.map((p,i)=>{const q=C2[i];return[(p[0]+q[0])/2,(p[1]+q[1])/2,[0.50,0.60,0.34][i]];}); // cambered middle
-  const cols=[C0,C1,C2];
-  for(let c=0;c<2;c++)for(let r=0;r<2;r++)
-    fill("spritsail","sail",[cols[c][r],cols[c+1][r],cols[c+1][r+1],cols[c][r+1]]);
-  line("spritsail","seam",[C0[0],C1[0],C2[0]],0.7);                        // foot
-  line("spritsail","seam",[C0[2],C1[2],C2[2]],0.8);                        // head (throat → peak)
-  line("spritsail","seam",C2,0.8);                                        // roached leech (peak → roach → clew)
-  line("spritsail","seam",C0,0.7);                                        // luff (sleeve on the mast)
-  line("spritsail","seam",[C1[0],C1[1],C1[2]],0.5);                       // mid seam
+  line("boom","wire",[[-0.48,0.50,0.18],[-0.48,0.92,0.10]],0.7);          // bridle mainsheet hint
+  const sp=(u,v)=>{const w=[(1-u)*(1-v),(1-u)*v,u*v,u*(1-v)],C=[Tk,Th,Pk,Cl];
+    return[w[0]*C[0][0]+w[1]*C[1][0]+w[2]*C[2][0]+w[3]*C[3][0],
+           w[0]*C[0][1]+w[1]*C[1][1]+w[2]*C[2][1]+w[3]*C[3][1],
+           w[0]*C[0][2]+w[1]*C[1][2]+w[2]*C[2][2]+w[3]*C[3][2]+Math.sin(Math.PI*u)*Math.sin(Math.PI*v)*0.40];};
+  const NU=3,NV=3;
+  for(let i=0;i<NU;i++)for(let j=0;j<NV;j++)
+    fill("spritsail","sail",[sp(i/NU,j/NV),sp((i+1)/NU,j/NV),sp((i+1)/NU,(j+1)/NV),sp(i/NU,(j+1)/NV)]);
+  const arc=fn=>{const a=[];for(let k=0;k<=5;k++)a.push(fn(k/5));return a;};
+  line("spritsail","seam",arc(t=>sp(0,t)),0.7);                          // luff (tack → throat, on the mast)
+  line("spritsail","seam",arc(t=>sp(t,1)),0.8);                          // head (throat → peak)
+  line("spritsail","seam",arc(t=>sp(1,1-t)),0.8);                        // leech (peak → clew) — the long edge
+  line("spritsail","seam",arc(t=>sp(t,0)),0.7);                          // foot (tack → clew)
+  line("spritsail","seam",arc(t=>sp(0.5,t)),0.5);                        // mid seam
+  line("spritsail","seam",arc(t=>sp(t,0.5)),0.5);                        // mid batten
   return polys;
 }
 
@@ -3646,6 +3650,9 @@ const spmRnd=(prev,M,next,R)=>{
   R=R||15;const ax=M[0]+R*st[0],ay=M[1]+R*st[1];
   return[[ax-di[0]*R,ay-di[1]*R],[ax,ay],[ax+dO[0]*R,ay+dO[1]*R]];
 };
+/* Gate rounding — sail DOWN BETWEEN the two gate marks first, cross the gate line between them, then round
+   the RIGHT-hand mark (rx) to PORT (mark on the LEFT), up its outside. lx/rx = gate marks' x, my = gate y. */
+const spmGate=(lx,rx,my)=>{const ent=(lx+3*rx)/4;return[[ent,my-16],[ent+3,my+5],[rx-2,my+13],[rx+11,my+6],[rx+7,my-13]];};
 
 /* Display all classes at the SAME on-screen size (the 49er's) regardless of real-world length — this is
    a display, so relative sizing doesn't matter. spmFit scales each boat to the 49er's bounding height. */
@@ -3691,7 +3698,7 @@ const SPORT_MODELS={
       },
       // Every mark rounded to PORT (mark on the boat's LEFT): windward mark 1 with a tight CCW turn, leeward
       // gate 2s with a CCW turn under the mark — no full loops.
-      waypoints:[[258,394],[258,374],[228,318],[292,220],[258,120],[272,84],...spmWin(260,64),[235,150],[195,255],[176,290],...spmLee(180,306),[210,210],[258,120],[272,84],...spmWin(260,64),[250,150],[295,255],[318,350],[320,384],[315,404]],
+      waypoints:[[258,394],[258,374],[210,332],[304,244],[214,166],[292,104],[272,88],...spmWin(260,64),[286,150],[224,214],[292,272],[300,294],...spmGate(180,340,306),[302,236],[218,166],[290,104],[272,88],...spmWin(260,64),[286,150],[228,236],[302,330],[304,380],[300,406]],
     },
   },
 
@@ -3735,12 +3742,12 @@ const SPORT_MODELS={
         ],
         lines:[
           {id:"start",label:"START",a:[195,400],b:[315,400]},
-          {id:"finish",label:"FINISH",a:[372,344],b:[430,366]},
+          {id:"finish",label:"FINISH",a:[389,376],b:[416,330]},
         ],
       },
       // Every mark rounded to PORT (mark on the LEFT). The final 2p rounding is a tight CCW turn with 2p on
       // the left, then a straight reach to the finish — no full loop around the mark.
-      waypoints:[[253,396],[254,376],[228,318],[288,222],[256,120],[270,84],...spmWin(260,60),[232,150],[210,255],[204,288],...spmLee(210,300),[232,210],[250,120],[268,84],...spmWin(260,60),[264,150],[296,245],[300,285],...spmRnd([300,285],[300,300],[402,352],16),[402,352]],
+      waypoints:[[255,396],[254,376],[208,332],[300,242],[212,164],[288,104],[270,86],...spmWin(260,60),[286,150],[222,214],[286,270],[277,292],...spmGate(210,300,300),[300,234],[216,164],[288,104],[270,86],...spmWin(260,60),[284,150],[230,232],[300,280],...spmRnd([300,280],[300,300],[402,352],16),[402,352]],
     },
   },
 
@@ -3785,12 +3792,12 @@ const SPORT_MODELS={
         ],
         lines:[
           {id:"start",label:"START",a:[218,392],b:[318,392]},
-          {id:"finish",label:"FINISH",a:[380,296],b:[432,320]},
+          {id:"finish",label:"FINISH",a:[404,280],b:[411,336]},
         ],
       },
       // Every mark rounded to PORT (mark on the LEFT). Mark 2 (both roundings) and gate mark 3p are tight CCW
       // turns with the mark on the left — no full loops.
-      waypoints:[[268,388],[266,368],[320,290],[250,200],[330,120],[350,88],...spmRnd([350,88],[350,70],[150,110],15),[300,90],[210,105],...spmRnd([210,105],[150,110],[150,315],15),[150,205],[147,290],...spmLee(150,315),[155,230],[150,140],[150,120],...spmWin(150,110),[158,205],[196,285],[201,287],...spmRnd([201,287],[208,300],[404,308],16),[300,308],[404,308]],
+      waypoints:[[268,388],[266,368],[326,296],[236,208],[336,126],[352,90],...spmRnd([352,90],[350,70],[150,110],15),[300,90],[210,106],...spmRnd([210,106],[150,110],[178,300],15),[176,190],[188,286],...spmGate(150,208,305),[176,235],[150,150],[150,118],...spmWin(150,110),[176,190],[190,286],...spmGate(150,208,305),[280,306],[406,306]],
     },
   },
 
@@ -3834,12 +3841,12 @@ const SPORT_MODELS={
         ],
         lines:[
           {id:"start",label:"START",a:[298,378],b:[390,366]},
-          {id:"finish",label:"FINISH",a:[95,150],b:[178,138]},
+          {id:"finish",label:"FINISH",a:[108,122],b:[162,122]},
         ],
       },
       // IODA course (Rajt-1-2-3a/3b-Cél): Start bottom-right → beat to 1 (top-right) → reach to 2 (top-left)
       // → run to 3 (bottom-left) → beat to finish (by mark 2). Every mark rounded to PORT (mark on the left).
-      waypoints:[[342,372],[338,352],[330,300],[362,215],[338,120],[352,88],...spmRnd([352,88],[355,70],[150,120],15),[300,88],[210,112],...spmRnd([210,112],[150,120],[152,355],15),[150,205],[150,300],[147,343],...spmLee(152,355),[175,270],[150,190],[132,150]],
+      waypoints:[[342,372],[338,352],[304,298],[374,206],[318,118],[352,88],...spmRnd([352,88],[355,70],[150,120],15),[300,88],[210,114],...spmRnd([210,114],[150,120],[150,300],15),[150,200],[151,300],[147,343],...spmLee(152,355),[186,272],[130,206],[150,168],[134,140],[134,116]],
     },
   },
 };
@@ -4488,7 +4495,7 @@ function HostPicker({hosts,value,onChange,orgName,onOrgName}){
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* ── Host auto-grab: localhost mock ───────────────────────────────────────────
-   /api/research_host and the /api/parse_pdf probe are NEW endpoints — they only
+   /api/research_host and the /api/sailing/parse_pdf probe are NEW endpoints — they only
    exist on a Vercel preview deploy, so on localhost:5173 they 404. Flip
    MOCK_RESEARCH to true to smoke-test the signup research card + discovery view
    WITHOUT a deploy. It MUST default to false — with it false, real calls hit the
@@ -4529,7 +4536,7 @@ function mockResearchCompetitions(name,kind,countryHint,site){
   return {ok:true,mode:"competitions",found:true,official_name:name.trim(),
     website:`https://${dom}`,country:c,competitions:comps,sources:[`https://${dom}`]};
 }
-// Mirrors a /api/parse_pdf {url} parse response (single-fleet). The 29er rows come
+// Mirrors a /api/sailing/parse_pdf {url} parse response (single-fleet). The 29er rows come
 // back low-confidence so the smoke test exercises the needs-review path too.
 function mockParse(row){
   const low=/29er/i.test(row?.name||row?.class||"");
@@ -4541,7 +4548,7 @@ function mockParse(row){
     low_confidence:low,confidence:low?0.4:0.9,
     confidence_reasons:low?["only 3 entries parsed (rows likely dropped)"]:["looks clean"]};
 }
-// Mirrors the /api/parse_pdf probe response.
+// Mirrors the /api/sailing/parse_pdf probe response.
 function mockProbe(url){
   if(!url) return {ok:true,reachable:false};
   const isPdf=/\.pdf(\?|$)/i.test(url), isHtml=/\.html?(\?|$)/i.test(url);
@@ -6553,7 +6560,7 @@ function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier
         let res;
         try{
           if(MOCK_RESEARCH) res=mockProbe(c.url);
-          else{ const r=await fetch("/api/parse_pdf",{method:"POST",headers:{"Content-Type":"application/json"},
+          else{ const r=await fetch("/api/sailing/parse_pdf",{method:"POST",headers:{"Content-Type":"application/json"},
             body:JSON.stringify({probe:true,url:c.url})}); res=await r.json(); }
         }catch{ res={ok:true,reachable:false}; }
         if(!cancelled) setProbes(p=>({...p,[k]:res}));
@@ -8694,7 +8701,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // send everything there first. For HTML, fall back to the in-browser parser
     // only if the server is unreachable or can't read the page.
     try{
-      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const res=await fetch(`/api/sailing/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const data=await res.json();
       if(data.ok) return data;
       if(!isHtml){
@@ -8746,7 +8753,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // 1) page count (instant, server-side via pypdf)
     let pageCount=1;
     try{
-      const cres=await fetch(`/api/parse_pdf?count=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const cres=await fetch(`/api/sailing/parse_pdf?count=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const cdata=await cres.json();
       if(cdata.ok&&cdata.page_count) pageCount=Math.max(1,cdata.page_count|0);
     }catch{ /* fall back to a single whole-file AI call below */ }
@@ -8769,7 +8776,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const pageResults=new Array(pageCount).fill(null);
     const pageErrors=[];
     const fetchPage=async(pi)=>{
-      const r=await fetch(`/api/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const r=await fetch(`/api/sailing/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       return r.json();
     };
     let doneP=0;
@@ -8854,7 +8861,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // Fetch + parse a live results link server-side (browser can't, due to CORS).
   const parseLink=async(url,mode="ai")=>{
     try{
-      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,mode})});
+      const res=await fetch(`/api/sailing/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,mode})});
       const data=await res.json();
       if(!data.ok) return{ok:false,error:data.error||"Could not parse that link."};
       return data;
@@ -8972,7 +8979,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       if(data.ok&&data.nat_from_flags&&isPdf){
         try{
           setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading nationalities from flags…"]}:l));
-          const nr=await fetch(`/api/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
+          const nr=await fetch(`/api/sailing/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
           const nd=await nr.json();
           if(nd.ok&&nd.nats&&Object.keys(nd.nats).length){
             const norm=v=>String(v||"").replace(/\s+/g,"").toLowerCase();

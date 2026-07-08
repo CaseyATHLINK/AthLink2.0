@@ -30,8 +30,8 @@ def _load(name, rel):
     return m
 
 
-pp = _load("parse_pdf", os.path.join("api", "parse_pdf.py"))
-comp = _load("completeness", os.path.join("api", "completeness.py"))
+pp = _load("parse_pdf", os.path.join("api", "sailing", "parse_pdf.py"))
+comp = _load("completeness", os.path.join("api", "sailing", "completeness.py"))
 
 PARSEABLE = {".pdf", ".html", ".htm", ".xlsx", ".xls", ".csv", ".blw"}
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".gif"}

@@ -18,10 +18,12 @@ pattern from llm.py (no SDK) to stay under the 60s ceiling.
 from http.server import BaseHTTPRequestHandler
 import json, os, sys
 
-# Sibling import (same pattern parse_pdf.py / ai_filter.py use).
-_API_DIR = os.path.dirname(os.path.abspath(__file__))
-if _API_DIR not in sys.path:
-    sys.path.insert(0, _API_DIR)
+# Shared LLM router now lives in api/_shared/llm.py; put it on sys.path (the dir
+# is force-bundled per-function via vercel.json includeFiles). Same idiom in
+# ai_filter.py / research_host.py.
+_SHARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_DIR)
 from llm import (_post_json, LLMError, anthropic_text, ANTHROPIC_URL,
                  call_gemini, gemini_text, _gemini_key, route as _llm_route,
                  _anthropic_fallback_model)
