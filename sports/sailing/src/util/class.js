@@ -46,3 +46,42 @@ export const classColorA=(cls,a)=>{
   const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
   return `rgba(${r},${g},${b},${a})`;
 };
+
+// ── Sub-classes (per-event) for ILCA, Optimist and 49er ──
+// ILCA: 3 rigs, varying shades of red (ILCA 7 darkest → ILCA 4 lightest), matching the ILCA logo red.
+// Optimist: 3 fleets, ranked high→low performance, black → grey (top fleet matches the Optimist logo black).
+// 49er: 2 fleets that race separately — 49er (men, green) and 49er FX (women, blue, matching the 49er FX logo).
+export const SUBCLASSES={
+  ilca:[
+    {id:"ilca7", label:"ILCA 7", color:"#8E1519"},
+    {id:"ilca6", label:"ILCA 6", color:"#E2231A"},
+    {id:"ilca4", label:"ILCA 4", color:"#F2867F"},
+  ],
+  optimist:[
+    {id:"opti",       label:"Optimist",              short:"OPTI",       color:"#000000"},
+    {id:"opti-int",   label:"Optimist Intermediate", short:"OPTI Inter", color:"#6b6b6b"},
+    {id:"opti-green", label:"Optimist Green",        short:"OPTI Green", color:"#a3a3a3"},
+  ],
+  "49er":[
+    {id:"49er",    label:"49er",    short:"49er",    color:"#5FAF4E"},
+    {id:"49er-fx", label:"49er FX", short:"49er FX", color:"#1B87C9"},
+  ],
+};
+export const subById=(cls,id)=>(SUBCLASSES[cls]||[]).find(s=>s.id===id);
+// Nugget label + colour for an event (subclass overrides base class)
+export const nuggetFor=(cls,subclass)=>{
+  const s=subById(cls,subclass);
+  if(s) return{label:s.short||s.label,full:s.label,color:s.color};
+  const c=CLASSES.find(c=>c.id===cls)||customClassById(cls);
+  return{label:classLabel(cls),full:c?.full||classLabel(cls),color:classColor(cls)};
+};
+
+// Infer a boat class id from a fleet/competition label (for multi-class imports).
+export function classFromFleetName(name){
+  const s=String(name||"").toLowerCase();
+  if(/49er/.test(s)) return "49er";
+  if(/29er/.test(s)) return "29er";
+  if(/\bilca\b|laser/.test(s)) return "ilca";
+  if(/opti/.test(s)) return "optimist";
+  return null;
+}

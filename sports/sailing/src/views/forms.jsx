@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Calendar, ChevronRight } from "lucide-react";
 import { MON } from "../util/date.js";
 import { iocFlag, IOC_ISO } from "../util/flag.js";
-import { classColor, classLabel } from "../util/class.js";
+import { classColor, classLabel, SUBCLASSES } from "../util/class.js";
 import { ASSOCIATIONS, CLUBS } from "../data/hosts.js";
 
 // Compact inline nationality input: type an IOC code (e.g. HKG); once valid it
@@ -364,6 +364,43 @@ export function CountrySelect({value,onChange,placeholder="Select country...",in
               </div>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Sub-class picker (ILCA 4/6/7, Optimist fleets, 49er / 49er FX) — shown for any class with SUBCLASSES.
+// Hover-reveal: renders the parent class button; when the class has SUBCLASSES and is
+// selected (or hovered/focused), a pill row of subclass options is revealed inline just
+// below the button. Picking one selects it and collapses the reveal; mouse-out closes
+// after ~200ms (cancelled on re-enter) so users can travel into the popover. Keeps the
+// same onChange contract as the old SubclassPicker (writes mf.subclass) so publish is
+// untouched. `classBtn` is the already-styled parent-class button element.
+export function SubclassHover({cls,value,onChange,classBtn,active}){
+  const opts=SUBCLASSES[cls];
+  const[hover,setHover]=React.useState(false);
+  const timer=React.useRef(null);
+  if(!opts) return classBtn;   // no subclasses → just the plain class button
+  const open=active&&(hover||!!value);   // reveal only for the active class row
+  const enter=()=>{if(timer.current){clearTimeout(timer.current);timer.current=null;}setHover(true);};
+  const leave=()=>{if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setHover(false),200);};
+  return(
+    <div style={{position:"relative",display:"inline-block"}}
+      onMouseEnter={enter} onMouseLeave={leave} onFocusCapture={enter} onBlurCapture={leave}>
+      {classBtn}
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 5px)",left:0,zIndex:95,display:"inline-flex",gap:6,flexWrap:"wrap",
+          background:"var(--card)",border:"1px solid var(--line)",borderRadius:9,padding:"7px 8px",
+          boxShadow:"0 12px 30px -10px rgba(0,0,0,.22)",whiteSpace:"nowrap"}}>
+          {opts.map(s=>{
+            const on=value===s.id;
+            return <button key={s.id} type="button"
+              onClick={()=>{onChange(on?null:s.id);if(timer.current)clearTimeout(timer.current);setHover(false);}}
+              style={{border:"1px solid "+(on?s.color:"var(--line)"),background:on?s.color:"transparent",
+                color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
+                padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{s.label}</button>;
+          })}
         </div>
       )}
     </div>

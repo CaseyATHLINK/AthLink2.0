@@ -12,14 +12,14 @@ import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sb
 import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
 import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
 import { canonName, eventKey, ordinalOf, initials } from "./util/name.js";
-import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry } from "./util/class.js";
+import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry, SUBCLASSES, nuggetFor, classFromFleetName } from "./util/class.js";
 import { DIV_COLOR, DIV_LABEL, parseDiv, divTokens, divToString, normGender, normCategory, genderCatOf, GENDER_COLOR } from "./util/gender.js";
 import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender } from "./data/athletes.js";
 import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed } from "./data/hosts.js";
 import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeleteProfile, fetchProfileNames, fetchAllClaims, createClaim, decideClaim, profileNameKey, fetchAllAthleteProfiles, upsertAthleteProfile, uploadAthletePhoto, uploadAthleteMedia, fetchAllEventClaims, createEventClaim, decideEventClaim } from "./data/profiles.js";
 import { isCode, scoreEvent, scorePreview } from "./data/scoring.js";
 import { CountryTag, ConfirmModal, VerifyBadge, DivisionToggle, ClassPicker, HostClassPills, LiquidBackground, MagneticItem, ResultNuggets } from "./views/atoms.jsx";
-import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect } from "./views/forms.jsx";
+import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect, SubclassHover } from "./views/forms.jsx";
 import { CalendarBody } from "./views/calendar.jsx";
 
 
@@ -188,34 +188,6 @@ const hostLocation=(hostId,evList)=>{
   return top?top[0]:null;
 };
 
-// ── Sub-classes (per-event) for ILCA, Optimist and 49er ──
-// ILCA: 3 rigs, varying shades of red (ILCA 7 darkest → ILCA 4 lightest), matching the ILCA logo red.
-// Optimist: 3 fleets, ranked high→low performance, black → grey (top fleet matches the Optimist logo black).
-// 49er: 2 fleets that race separately — 49er (men, green) and 49er FX (women, blue, matching the 49er FX logo).
-const SUBCLASSES={
-  ilca:[
-    {id:"ilca7", label:"ILCA 7", color:"#8E1519"},
-    {id:"ilca6", label:"ILCA 6", color:"#E2231A"},
-    {id:"ilca4", label:"ILCA 4", color:"#F2867F"},
-  ],
-  optimist:[
-    {id:"opti",       label:"Optimist",              short:"OPTI",       color:"#000000"},
-    {id:"opti-int",   label:"Optimist Intermediate", short:"OPTI Inter", color:"#6b6b6b"},
-    {id:"opti-green", label:"Optimist Green",        short:"OPTI Green", color:"#a3a3a3"},
-  ],
-  "49er":[
-    {id:"49er",    label:"49er",    short:"49er",    color:"#5FAF4E"},
-    {id:"49er-fx", label:"49er FX", short:"49er FX", color:"#1B87C9"},
-  ],
-};
-const subById=(cls,id)=>(SUBCLASSES[cls]||[]).find(s=>s.id===id);
-// Nugget label + colour for an event (subclass overrides base class)
-const nuggetFor=(cls,subclass)=>{
-  const s=subById(cls,subclass);
-  if(s) return{label:s.short||s.label,full:s.label,color:s.color};
-  const c=CLASSES.find(c=>c.id===cls)||customClassById(cls);
-  return{label:classLabel(cls),full:c?.full||classLabel(cls),color:classColor(cls)};
-};
 
 // Global class colour coding (used by calendar circles)
 // Canonical class colours (refer to them by these names):
@@ -226,42 +198,6 @@ const nuggetFor=(cls,subclass)=>{
 // Class colour at a given alpha (for translucent buttons that go solid on hover).
 
 
-// Sub-class picker (ILCA 4/6/7, Optimist fleets, 49er / 49er FX) — shown for any class with SUBCLASSES.
-// Hover-reveal: renders the parent class button; when the class has SUBCLASSES and is
-// selected (or hovered/focused), a pill row of subclass options is revealed inline just
-// below the button. Picking one selects it and collapses the reveal; mouse-out closes
-// after ~200ms (cancelled on re-enter) so users can travel into the popover. Keeps the
-// same onChange contract as the old SubclassPicker (writes mf.subclass) so publish is
-// untouched. `classBtn` is the already-styled parent-class button element.
-function SubclassHover({cls,value,onChange,classBtn,active}){
-  const opts=SUBCLASSES[cls];
-  const[hover,setHover]=React.useState(false);
-  const timer=React.useRef(null);
-  if(!opts) return classBtn;   // no subclasses → just the plain class button
-  const open=active&&(hover||!!value);   // reveal only for the active class row
-  const enter=()=>{if(timer.current){clearTimeout(timer.current);timer.current=null;}setHover(true);};
-  const leave=()=>{if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setHover(false),200);};
-  return(
-    <div style={{position:"relative",display:"inline-block"}}
-      onMouseEnter={enter} onMouseLeave={leave} onFocusCapture={enter} onBlurCapture={leave}>
-      {classBtn}
-      {open&&(
-        <div style={{position:"absolute",top:"calc(100% + 5px)",left:0,zIndex:95,display:"inline-flex",gap:6,flexWrap:"wrap",
-          background:"var(--card)",border:"1px solid var(--line)",borderRadius:9,padding:"7px 8px",
-          boxShadow:"0 12px 30px -10px rgba(0,0,0,.22)",whiteSpace:"nowrap"}}>
-          {opts.map(s=>{
-            const on=value===s.id;
-            return <button key={s.id} type="button"
-              onClick={()=>{onChange(on?null:s.id);if(timer.current)clearTimeout(timer.current);setHover(false);}}
-              style={{border:"1px solid "+(on?s.color:"var(--line)"),background:on?s.color:"transparent",
-                color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
-                padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{s.label}</button>;
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 
 
@@ -269,15 +205,6 @@ function SubclassHover({cls,value,onChange,classBtn,active}){
 
 
 
-// Infer a boat class id from a fleet/competition label (for multi-class imports).
-function classFromFleetName(name){
-  const s=String(name||"").toLowerCase();
-  if(/49er/.test(s)) return "49er";
-  if(/29er/.test(s)) return "29er";
-  if(/\bilca\b|laser/.test(s)) return "ilca";
-  if(/opti/.test(s)) return "optimist";
-  return null;
-}
 
 // Strip stray markdown / leading heading / duplicated name from AI summaries
 const cleanAISummary=(t)=>{
