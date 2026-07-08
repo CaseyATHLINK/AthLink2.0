@@ -6,7 +6,7 @@
    useMemo([events]) still drives re-renders. Verbatim from App.jsx. */
 
 import { dateKey } from "../util/date.js";
-import { canonName } from "../util/name.js";
+import { canonName, pascalSlug } from "../util/name.js";
 import { genderCatOf } from "../util/gender.js";
 
 // ── Per-athlete attribute memory (gender, birth year, recent class) ──────────
@@ -67,3 +67,22 @@ export function resolvedEntryGender(e,doublehanded){
   // Solo (or no crew): prefer the person's remembered gender, else stated.
   return rememberedGender(e.helm)||stated||null;
 }
+
+/* ── Public athlete usernames (name_key ⇄ username) ───────────────────────
+   Loaded from the athlete_usernames table; default is FirstnameLastname. The
+   registry is module-level mutable state: readers use the ESM live binding,
+   applyAthleteUsernames() reassigns it (module-internal), and App.jsx mutates
+   the maps in place for optimistic username edits. Falls back to
+   PascalCase(name) for any not-yet-loaded name so URLs work without the table. */
+const uNameKey=(s)=>String(s||"").trim().toLowerCase();
+export let ATHLETE_USERNAMES={byKey:new Map(),byUser:new Map()};
+export function applyAthleteUsernames(rows){
+  const byKey=new Map(),byUser=new Map();
+  (rows||[]).forEach(r=>{ if(!r||!r.username) return;
+    byKey.set(r.name_key,r.username);
+    byUser.set(String(r.username).toLowerCase(),r.display_name||r.name_key);
+  });
+  ATHLETE_USERNAMES={byKey,byUser};
+}
+export const usernameForName=(name)=>ATHLETE_USERNAMES.byKey.get(uNameKey(name))||pascalSlug(name);
+export const nameForUsername=(u)=>ATHLETE_USERNAMES.byUser.get(String(u||"").toLowerCase())||null;

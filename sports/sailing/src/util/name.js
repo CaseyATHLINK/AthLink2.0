@@ -21,3 +21,10 @@ export const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
 
 export const pascalSlug=(s)=>String(s||"").replace(/[^A-Za-z0-9]+/g," ").trim()
   .split(/\s+/).filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join("");
+
+// Deterministic avatar background colour derived from a display name (navy palette).
+export const avatarColor=name=>{
+  const c=["#163a63","#1f4e80","#2a6aa0","#0d6ea0","#264d73","#1a5e8a","#2b557d"];
+  let h=0;for(let i=0;i<name.length;i++) h=name.charCodeAt(i)+((h<<5)-h);
+  return c[Math.abs(h)%c.length];
+};

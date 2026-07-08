@@ -577,7 +577,7 @@ export function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canMa
 export const _hg_norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"");
 export const hgCompKey=c=>`${_hg_norm(c.name)}|${c.year||""}|${c.class?canonClass(c.class):""}`;
 // Simple bounded promise pool — runs `tasks` (thunks) at most `conc` at a time.
-async function hgRunPool(tasks,conc){
+export async function hgRunPool(tasks,conc){
   let i=0;
   const run=async()=>{ while(i<tasks.length){ const idx=i++; try{await tasks[idx]();}catch{} } };
   await Promise.all(Array.from({length:Math.min(conc,tasks.length)},run));

@@ -4,7 +4,7 @@
    Verbatim from App.jsx. */
 
 import React from "react";
-import { X, ChevronRight, Flag } from "lucide-react";
+import { X, ChevronRight, Flag, Globe, TrendingUp } from "lucide-react";
 import { formatDate, dateKey } from "../util/date.js";
 import { IOC_ISO, isoFlag } from "../util/flag.js";
 import { nuggetFor } from "../util/class.js";

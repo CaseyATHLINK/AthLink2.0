@@ -10,11 +10,11 @@ import {
 import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, authSignUp, authSignIn, authUser } from "@athlink/core";
 import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
 import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
-import { canonName, eventKey, ordinalOf, initials, pascalSlug } from "./util/name.js";
+import { canonName, eventKey, ordinalOf, initials, pascalSlug, avatarColor } from "./util/name.js";
 import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry, SUBCLASSES, nuggetFor, classFromFleetName } from "./util/class.js";
 import { DIV_COLOR, DIV_LABEL, parseDiv, divTokens, divToString, normGender, normCategory, genderCatOf, GENDER_COLOR } from "./util/gender.js";
-import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender } from "./data/athletes.js";
-import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed, MOCK_RESEARCH, mockResearchIdentity, mockResearchCompetitions, mockParse, mockProbe } from "./data/hosts.js";
+import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender, ATHLETE_USERNAMES, applyAthleteUsernames, usernameForName, nameForUsername } from "./data/athletes.js";
+import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, assocName, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed, MOCK_RESEARCH, mockResearchIdentity, mockResearchCompetitions, mockParse, mockProbe } from "./data/hosts.js";
 import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeleteProfile, fetchProfileNames, fetchAllClaims, createClaim, decideClaim, profileNameKey, fetchAllAthleteProfiles, upsertAthleteProfile, uploadAthletePhoto, uploadAthleteMedia, fetchAllEventClaims, createEventClaim, decideEventClaim } from "./data/profiles.js";
 import { isCode, scoreEvent, scorePreview, aggregate } from "./data/scoring.js";
 import { CountryTag, ConfirmModal, VerifyBadge, DivisionToggle, ClassPicker, HostClassPills, LiquidBackground, MagneticItem, ResultNuggets, WebIcon, ErrorBoundary } from "./views/atoms.jsx";
@@ -25,7 +25,7 @@ import { AthleteWeb, YearNuggets, ProgressChart } from "./views/charts.jsx";
 import { SPORT_MODELS, SpmDuo, HomeShowcaseRotator } from "./views/models.jsx";
 import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
 import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
-import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey } from "./views/host.jsx";
+import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey, hgRunPool } from "./views/host.jsx";
 import { SignInModal } from "./views/auth.jsx";
 import { fetchProfile, upsertProfile, authGoogleOAuth } from "@athlink/auth";
 
@@ -74,23 +74,6 @@ const hostBySlug=(slug)=>{const k=String(slug||"").toLowerCase();
   return [...ASSOCIATIONS,...CLUBS,...FEDERATIONS]
     .find(h=>(h.slug&&h.slug.toLowerCase()===k)||slugKey(h.name)===k)||null;};
 
-/* ── Public athlete usernames (name_key ⇄ username) ────────────────────────
-   Loaded from the athlete_usernames table; default is FirstnameLastname. The
-   registry is a module-level mutable map so the routing helpers below (module
-   scope) can read it. Falls back to PascalCase(name) for any not-yet-loaded
-   name so URLs still work before/without the table. */
-const uNameKey=(s)=>String(s||"").trim().toLowerCase();
-let ATHLETE_USERNAMES={byKey:new Map(),byUser:new Map()};
-function applyAthleteUsernames(rows){
-  const byKey=new Map(),byUser=new Map();
-  (rows||[]).forEach(r=>{ if(!r||!r.username) return;
-    byKey.set(r.name_key,r.username);
-    byUser.set(String(r.username).toLowerCase(),r.display_name||r.name_key);
-  });
-  ATHLETE_USERNAMES={byKey,byUser};
-}
-const usernameForName=(name)=>ATHLETE_USERNAMES.byKey.get(uNameKey(name))||pascalSlug(name);
-const nameForUsername=(u)=>ATHLETE_USERNAMES.byUser.get(String(u||"").toLowerCase())||null;
 const collectAthleteNames=(events)=>{const s=new Set();
   (events||[]).forEach(ev=>(ev.entries||[]).forEach(e=>{
     [e&&e.helm,e&&e.crew,e&&e.name,e&&e.helm_name,e&&e.crew_name].forEach(n=>{if(n)s.add(n);});
@@ -148,7 +131,6 @@ const pathToState=(pathname,athleteNames)=>{
   }
   return null;
 };
-const assocName=id=>hostById(id)?.name||id;
 // Association → ISO country flag (HK gets a flag; International gets none)
 const assocFlag=scope=>scope==="HK"?"🇭🇰":"";
 // scope → governing country code (extend as more countries are added)
@@ -333,11 +315,6 @@ function buildHomeCountry(evList){
   return home;
 }
 
-const avatarColor=name=>{
-  const c=["#163a63","#1f4e80","#2a6aa0","#0d6ea0","#264d73","#1a5e8a","#2b557d"];
-  let h=0;for(let i=0;i<name.length;i++) h=name.charCodeAt(i)+((h<<5)-h);
-  return c[Math.abs(h)%c.length];
-};
 
 /* ── Supabase + Auth (GoTrue) plumbing lives in @athlink/core (single source of
    truth); App.jsx imports it above and no longer redefines SB_URL/SB_KEY/sbH/
