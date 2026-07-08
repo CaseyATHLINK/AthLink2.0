@@ -3,6 +3,9 @@
    also injected into @athlink/rating via makeRatingEngine). Pure — no app-state
    deps. Verbatim from App.jsx. */
 
+import { dateKey } from "../util/date.js";
+import { canonName, eventKey } from "../util/name.js";
+
 /* ── Scoring codes ────────────────────────────────────────────────────────
    NEVER_DISCARD: cannot be dropped even if it would improve the score
    VARIABLE:      the PDF already provides the numeric value (RDG, SCP, STP, DPI, ZFP etc.)
@@ -97,4 +100,32 @@ export function scorePreview(ev){
     })
   }))};
   return scoreEvent(clean);
+}
+
+export function aggregate(name,evList){
+  const history=[];let wins=0,podiums=0,best=Infinity;
+  const target=canonName(name);
+  const seenComp=new Set(); // dedupe identical competition rows (duplicate imports)
+  for(const ev of evList){
+    if(ev.status==="Draft") continue;
+    const e=ev.entries.find(x=>canonName(x.helm)===target||canonName(x.crew)===target);
+    if(!e) continue;
+    const s=scoreEvent(ev);
+    const row=s.rows.find(r=>r.helm===e.helm&&r.crew===e.crew&&r.sail===e.sail);
+    if(!row) continue;
+    // Signature: same competition + same finishing line for this athlete → same result.
+    const sig=`${eventKey(ev)}|${e.sail||""}|${row.rank}|${row.net}|${(row.races||[]).join(",")}`;
+    if(seenComp.has(sig)) continue;
+    seenComp.add(sig);
+    const role=canonName(e.helm)===target?"Helm":"Crew";
+    const partner=role==="Helm"?e.crew:e.helm;
+    row.races.forEach(c=>{if(c===1) wins++;});
+    if(row.rank<=3) podiums++;
+    if(row.rank<best) best=row.rank;
+    history.push({ev,row:{...row,nat:e.nat||""},role,partner,fleet:s.fleet,countries:s.countries});
+  }
+  // Sort newest-first via a robust YYYYMMDD key (dates are DD/MM/YYYY; new Date()
+  // misreads that, which previously left history[0] = wrong "most recent").
+  history.sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date)));
+  return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
 }
