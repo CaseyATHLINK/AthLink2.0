@@ -5,10 +5,12 @@
   "detected_host": "Royal Hong Kong Yacht Club",
   "discards": 2,
   "n_entries": 104,
-  "confidence": 0.8,
+  "confidence": 1.0,
   "gate": "PASS (use rules)",
+  "complete": true,
+  "completeness": "PASS: complete",
   "confidence_reasons": [
-    "52 ranks missing from 1..104"
+    "looks clean"
   ],
   "sample_rows": [
     {
@@ -17,17 +19,7 @@
       "helm": "Duncan Gregor",
       "crew": "",
       "nat": "HKG",
-      "div": "",
-      "gender": "",
-      "category": ""
-    },
-    {
-      "pdf_rank": 1,
-      "sail": "319",
-      "helm": "Patrick Feng",
-      "crew": "",
-      "nat": "HKG",
-      "div": "",
+      "div": "Gold Flight",
       "gender": "",
       "category": ""
     },
@@ -37,17 +29,7 @@
       "helm": "Blake Wilson",
       "crew": "",
       "nat": "AUS",
-      "div": "",
-      "gender": "",
-      "category": ""
-    },
-    {
-      "pdf_rank": 2,
-      "sail": "6677",
-      "helm": "Hsiang Hui Chiang",
-      "crew": "",
-      "nat": "TPE",
-      "div": "",
+      "div": "Gold Flight",
       "gender": "",
       "category": ""
     },
@@ -57,7 +39,27 @@
       "helm": "Jack Ferguson",
       "crew": "",
       "nat": "AUS",
-      "div": "",
+      "div": "Gold Flight",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 4,
+      "sail": "1575",
+      "helm": "Daniel Links",
+      "crew": "",
+      "nat": "AUS",
+      "div": "Gold Flight",
+      "gender": "",
+      "category": ""
+    },
+    {
+      "pdf_rank": 5,
+      "sail": "1720",
+      "helm": "Quinn Auricht",
+      "crew": "",
+      "nat": "AUS",
+      "div": "Gold Flight",
       "gender": "",
       "category": ""
     }

@@ -50,6 +50,14 @@ try:
 except Exception:
     score_parse = None
 try:
+    # Deterministic completeness gate (parser rebuild §6A) — stricter than
+    # score_parse: a parse that is "confident" but missing rows / race columns /
+    # required cells FAILs here and is escalated to a targeted AI repair.
+    from completeness import verify_completeness, repair_hint
+except Exception:
+    verify_completeness = None
+    repair_hint = None
+try:
     from llm import (call_gemini, gemini_text, call_openai_compat, openai_text,
                      LLMError, ROUTES as _LLM_ROUTES, route as _llm_route,
                      _gemini_key, _anthropic_fallback_model)
@@ -765,6 +773,22 @@ def parse_row_with_cols(row, cols, open_division=False):
             except ValueError:
                 pass
 
+    # Extract the gross Total (sum of ALL race scores incl. discards). The
+    # completeness gate uses it as a per-row checksum: sum(races) == total proves
+    # a row has every race cell, regardless of how many races the row's fleet band
+    # sailed (Gold vs Silver finals differ) — far more reliable than comparing
+    # race counts across rows.
+    pdf_total = None
+    if 'total' in cols:
+        total_raw = get('total')
+        if total_raw:
+            try:
+                pdf_total = float(total_raw)
+                if pdf_total == int(pdf_total):
+                    pdf_total = int(pdf_total)
+            except ValueError:
+                pass
+
     # ── Birth year / age extraction ──
     def _year(v):
         m = re.search(r'\b(19[3-9]\d|20[0-2]\d)\b', str(v or ''))
@@ -804,6 +828,7 @@ def parse_row_with_cols(row, cols, open_division=False):
         '_disc':      _disc_count,
         'pdf_rank':   pdf_rank,
         'pdf_net':    pdf_net,
+        'pdf_total':  pdf_total,
         'birth_year':      birth_year,
         'crew_birth_year': crew_birth_year,
         '_age': age_h, '_crew_age': age_c,   # resolved to birth_year once event year is known
@@ -1124,6 +1149,23 @@ def _leading_name_pair(toks):
                 break
     return ''
 
+def _leading_name_titlecase(toks):
+    """Fallback name reader for SailingResults fleets printed WITHOUT an all-caps
+    surname (e.g. 'Charles Weatherly' rather than 'Yuen Wai FOO'). Takes the
+    leading run of Titlecase word tokens as forename+surname, capped at two so a
+    following Titlecase boat name ('… Di Di 2763 …') isn't folded into the name.
+    Returns '' unless at least two name-like tokens lead the run — used only when
+    `_leading_name_pair` finds nothing, so the all-caps path is never disturbed."""
+    run = []
+    for t in toks:
+        if re.match(r"^[A-Z][a-z][A-Za-z'’.\-]*$", t):
+            run.append(t)
+            if len(run) == 2:
+                break
+        else:
+            break
+    return ' '.join(run) if len(run) >= 2 else ''
+
 def _text_line_entry(rank, helm, crew, sail, nat, div, race_tokens, net_token=None):
     races, race_codes, disc = [], [], 0
     for tok in race_tokens:
@@ -1250,7 +1292,7 @@ def try_sailingresults(full_text):
                 sail, sidx = t, k; break
         left = middle[:sidx] if sidx is not None else middle
         names = []
-        nm = _leading_name_pair(left)
+        nm = _leading_name_pair(left) or _leading_name_titlecase(left)
         if nm:
             names.append(nm)
         end = helm_idx[j + 1] if j + 1 < len(helm_idx) else len(raw)
@@ -1258,7 +1300,7 @@ def try_sailingresults(full_text):
             low = raw[k].lower()
             if not raw[k].strip() or 'sailingresults' in low or 'http' in low or low.startswith('created'):
                 continue
-            nm = _leading_name_pair(raw[k].split())
+            nm = _leading_name_pair(raw[k].split()) or _leading_name_titlecase(raw[k].split())
             if nm:
                 names.append(nm)
         if not names:
@@ -2819,7 +2861,10 @@ def _anthropic_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeou
                        "source": {"type": "base64", "media_type": mime_type,
                                   "data": base64.b64encode(file_bytes).decode()}}
     payload = json.dumps({
-        "model": _AI_MODEL, "max_tokens": 8192, "temperature": 0,
+        # NB: no "temperature" — claude-sonnet-5 (the current _AI_MODEL) 400s on
+        # it ("`temperature` is deprecated for this model"). Omitting it uses the
+        # model default; sending it breaks the whole Anthropic fallback lane.
+        "model": _AI_MODEL, "max_tokens": 8192,
         "messages": [{"role": "user", "content": [media_block, {"type": "text", "text": prompt}]}],
     }).encode()
     req = UrlRequest(_ANTHROPIC_URL, data=payload,
@@ -3134,7 +3179,7 @@ def _fleet_base(label):
     s = re.sub(r'\b(fleet|flight)\b', ' ', s, flags=re.IGNORECASE)
     return re.sub(r'\s+', ' ', s).strip()
 
-def _sailwave_fleet_map(full_text):
+def _sailwave_fleet_map(full_text, known_sails=None):
     """Map each sail number → its fleet-section name for a multi-fleet Sailwave
     PDF ('Boys ILCA 4 Gold Fleet', 'Girls ILCA 4 Silver Fleet', …). The table
     extractor can't attach these centred fleet headings to their rows, so every
@@ -3142,7 +3187,17 @@ def _sailwave_fleet_map(full_text):
     ranks. Fleet sections are delimited by the per-fleet 'Sailed: N … Entries:
     E …' summary line; the name is the nearest heading line above it, and the
     sail numbers listed under it belong to that fleet. Returns {} unless ≥2
-    distinct fleets are present."""
+    distinct fleets are present.
+
+    When `known_sails` (a set of digit-only sail numbers already parsed from the
+    table) is supplied, each section's rows are matched by intersecting every
+    digit-run on the line with that set. That keys the map off REAL sail numbers
+    regardless of column order (sail before OR after the NAT code) and never
+    mistakes an adjacent 'Opti Age'/rank column for the sail — the bug that made
+    the NAT-anchored pattern below map ages instead of sails (e.g. HKRW 2017,
+    where 'Sail' precedes 'NAT'), matching almost no rows and silently leaving
+    two 52-boat fleets collapsed into one. Falls back to the NAT-anchored pattern
+    when no sail set is available."""
     lines = full_text.split('\n')
     summ = [i for i, l in enumerate(lines)
             if re.search(r'sailed:\s*\d+.*entries:\s*\d+', l, re.IGNORECASE)]
@@ -3160,8 +3215,10 @@ def _sailwave_fleet_map(full_text):
             return re.sub(r'\s+', ' ', t)
         return ''
 
+    known = {s for s in (known_sails or ()) if s}
     # NAT + sail number, anchored so a glued WS_id (e.g. GREKP16) can't match.
-    sail_re = re.compile(r'(?:^|\s)[A-Z]{3}\s?(\d{2,7})\b')
+    nat_sail_re = re.compile(r'(?:^|\s)[A-Z]{3}\s?(\d{2,7})\b')
+    digit_run_re = re.compile(r'\d{1,7}')
     out = {}
     for n, si in enumerate(summ):
         name = section_name(si)
@@ -3169,8 +3226,14 @@ def _sailwave_fleet_map(full_text):
             continue
         end = summ[n + 1] if n + 1 < len(summ) else len(lines)
         for l in lines[si + 1:end]:
-            for m in sail_re.finditer(l):
-                out.setdefault(m.group(1), name)
+            if known:
+                for m in digit_run_re.finditer(l):
+                    d = m.group(0)
+                    if d in known:
+                        out.setdefault(d, name)
+            else:
+                for m in nat_sail_re.finditer(l):
+                    out.setdefault(m.group(1), name)
     if len(set(out.values())) < 2:
         return {}
     return out
@@ -3563,6 +3626,31 @@ def detect_format(file_bytes, full_text_lower, pdf_meta):
     return 'unknown', input_type, 0.3
 
 
+def _extract_checksums(full_text: str) -> dict:
+    """Source-stated row/race counts for the completeness gate (api/completeness).
+
+    Sailwave prints a free checksum on each fleet block:
+      'Sailed: N, Discards: N, To count: N, Entries: N, Scoring system: ...'
+    We surface the OVERALL declared entry count (max across blocks) and, when the
+    document states a SINGLE distinct 'Sailed: N', that race count. Per-fleet
+    mapping is intentionally not attempted — the gate applies these only to a
+    single-fleet/single-group result, where they are unambiguous, and treats a
+    split/multi-block document's counts as advisory (the per-group monotonic
+    check guards those). Returns {} when the source states no counts (most
+    non-Sailwave formats), so the checksum checks become no-ops, never false
+    gaps."""
+    if not full_text:
+        return {}
+    ents = [int(x) for x in re.findall(r'[Ee]ntries\s*:\s*(\d+)', full_text)]
+    sailed = set(int(x) for x in re.findall(r'[Ss]ailed\s*:\s*(\d+)', full_text))
+    out = {}
+    if ents:
+        out["entries"] = max(ents)
+    if len(sailed) == 1:                     # one fleet block ⇒ trustworthy count
+        out["sailed"] = next(iter(sailed))
+    return out
+
+
 def _rule_based_parse(pdf_bytes: bytes) -> dict:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         _pdf_meta = dict(pdf.metadata or {})
@@ -3821,7 +3909,9 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
     # div (a real per-row class/fleet column still wins).
     if ('sailwave results for' in sig or re.search(r'sailed:\s*\d+.*entries:\s*\d+', sig)) \
        and not any((e.get('div') or '').strip() for e in all_parsed) and all_parsed:
-        fleet_map = _sailwave_fleet_map(full_text)
+        known_sails = {re.sub(r'\D', '', str(e.get('sail') or '')) for e in all_parsed}
+        known_sails.discard('')
+        fleet_map = _sailwave_fleet_map(full_text, known_sails=known_sails)
         if fleet_map:
             cand = [fleet_map.get(re.sub(r'\D', '', str(e.get('sail') or ''))) for e in all_parsed]
             hit = sum(1 for c in cand if c)
@@ -3870,6 +3960,7 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
     if isinstance(res, dict):
         res["_text_lines"] = len(full_text.splitlines())
         res["detected_format"] = _detected_format
+        res["_checksums"] = _extract_checksums(full_text)
     return res
 
 
@@ -3947,9 +4038,12 @@ def _finalize_flow(all_parsed, title_text, full_text, source_notes, source_label
     headings_text = title_text + ' ' + (full_text or '')[:1500]
     detected_class = detect_class(all_parsed, ev_name, headings_text)
     detected_host  = detect_host(title_text + ' ' + (full_text or '')[:2000])
-    return _finalize(all_parsed, ev_name, ev_date, discards, source_notes,
-                     source_label=source_label,
-                     detected_class=detected_class, detected_host=detected_host)
+    res = _finalize(all_parsed, ev_name, ev_date, discards, source_notes,
+                    source_label=source_label,
+                    detected_class=detected_class, detected_host=detected_host)
+    if isinstance(res, dict):
+        res["_checksums"] = _extract_checksums(full_text or '')
+    return res
 
 
 def _xlsx_split_blocks(grid):
@@ -4400,8 +4494,11 @@ def _parse_html_string(html_text: str) -> dict:
     all_parsed = []
     for ti, tbl in enumerate(hv.tables):
         anchor = hv._table_anchor_text[ti] if ti < len(hv._table_anchor_text) else ''
-        fsec = re.search(r'(\d+-(?:Gold|Silver|Bronze|Emerald)\s+Fleet|'
-                         r'Gold Fleet|Silver Fleet|Bronze Fleet)', anchor, re.IGNORECASE)
+        # Sailwave calls a split fleet a "Fleet" or a "Flight" (e.g. HKRW 2017
+        # prints 'Gold Flight'/'Silver Flight'); match both so the two per-flight
+        # tables stay distinct instead of collapsing into one with duplicate ranks.
+        fsec = re.search(r'(\d+-(?:Gold|Silver|Bronze|Emerald)\s+(?:Fleet|Flight)|'
+                         r'(?:Gold|Silver|Bronze|Emerald)\s+(?:Fleet|Flight))', anchor, re.IGNORECASE)
         # An "Open Division" / handicap heading keeps that table as one mixed-class
         # fleet (rows tagged with row_class) instead of splitting it per class.
         osec = re.search(r'(Open\s+Division|Handicap\s+Division|Performance\s+Handicap'
@@ -4680,7 +4777,8 @@ def _anthropic_read_nationalities(file_bytes: bytes, timeout: int = 50) -> dict:
     if urlopen is None:
         raise ValueError("urllib not available.")
     payload = json.dumps({
-        "model": _AI_MODEL, "max_tokens": 4096, "temperature": 0,
+        # No "temperature": claude-sonnet-5 rejects it (deprecated). See _anthropic_vision_raw.
+        "model": _AI_MODEL, "max_tokens": 4096,
         "messages": [{"role": "user", "content": [
             {"type": "document", "source": {"type": "base64",
              "media_type": "application/pdf", "data": base64.b64encode(file_bytes).decode()}},
@@ -4835,7 +4933,7 @@ def _agent_parse(file_bytes: bytes) -> dict:
         payload = json.dumps({
             "model": _AI_MODEL,
             "max_tokens": 4096,
-            "temperature": 0,
+            # No "temperature": claude-sonnet-5 rejects it (deprecated).
             "system": _AGENT_SYSTEM,
             "tools": _AGENT_TOOLS,
             "messages": messages,
@@ -5013,14 +5111,25 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
             result["low_confidence"] = not verdict["ok"]
             result["confidence_reasons"] = verdict["reasons"]
             result["ai_parsed"] = False
+        if verify_completeness is not None and isinstance(result, dict):
+            rep = verify_completeness(result, declared=result.get("_checksums"))
+            result["complete"] = rep["complete"]
+            result["completeness"] = rep
         return result
 
     # ── AI mode ──
     # Gemini is the primary AI provider; Anthropic Sonnet is the fallback. Either
     # key enables AI mode (Gemini alone is sufficient — no Anthropic required).
     if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
-        # No AI key at all — fall back to rule-based only, surface errors
-        return _rule_based_parse(file_bytes)
+        # No AI key at all — fall back to rule-based only, surface errors. Still
+        # attach the completeness verdict so the result is honestly labelled
+        # (no AI available to repair, but never a silent "complete" claim).
+        _r = _rule_based_parse(file_bytes)
+        if verify_completeness is not None and isinstance(_r, dict):
+            _rep = verify_completeness(_r, declared=_r.get("_checksums"))
+            _r["complete"] = _rep["complete"]
+            _r["completeness"] = _rep
+        return _r
 
     # Fast path: try the deterministic rule parser DIRECTLY first. When it parses
     # a known format with high confidence (and doesn't need an AI flag-image
@@ -5035,15 +5144,29 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
         rule_result = _rule_based_parse(file_bytes)
     except ValueError:
         rule_result = None
+    # Completeness gate (parser rebuild §6A): a confident parse that is still
+    # missing rows / race columns / required cells must NOT short-circuit to a
+    # "success" — that is the silent-incompleteness failure the rebuild targets.
+    # It carries the gap report so the AI escalation below can re-read only the
+    # gaps (targeted repair), and so an AI-less deploy still returns the honest
+    # `complete: false` instead of a clean-looking partial result.
+    comp_rep = None
+    if verify_completeness is not None and isinstance(rule_result, dict):
+        comp_rep = verify_completeness(rule_result, declared=rule_result.get("_checksums"))
+        rule_result["complete"] = comp_rep["complete"]
+        rule_result["completeness"] = comp_rep
+    rule_complete = (comp_rep is None) or comp_rep["complete"]
+
     if rule_result is not None and score_parse is not None:
         verdict = score_parse(rule_result)
-        if verdict.get("ok"):
+        if verdict.get("ok") and rule_complete:
             if not rule_result.get("nat_from_flags"):
-                # Fully clean → return immediately, no AI at all.
+                # Fully clean AND complete → return immediately, no AI at all.
                 rule_result["confidence"] = verdict["confidence"]
                 rule_result["ai_parsed"] = False
                 rule_result.setdefault("notes", []).append(
-                    f"Parsed by the built-in parser (confidence {verdict['confidence']:.2f}) — AI not needed."
+                    f"Parsed by the built-in parser (confidence {verdict['confidence']:.2f}, "
+                    f"completeness verified) — AI not needed."
                 )
                 return rule_result
             # Confident table whose ONLY gap is flag-image nationalities. Do ONE
@@ -5089,17 +5212,51 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
             else:
                 res.setdefault("detected_format",
                                {"family": "unknown", "input_type": "pdf-text", "confidence": 0.3})
+            # Final completeness gate (§6A): the AI result is verified too, so an
+            # AI re-read that itself drops rows/columns is not reported as clean.
+            if verify_completeness is not None:
+                rep = verify_completeness(res, declared=res.get("_checksums"))
+                res["complete"] = rep["complete"]
+                res["completeness"] = rep
         return res
+
+    def _entry_count(r):
+        if not isinstance(r, dict):
+            return 0
+        if r.get("multi") and r.get("fleets"):
+            return sum(len(f.get("entries") or []) for f in r["fleets"])
+        return len(r.get("entries") or [])
+
+    def _prefer(ai_res):
+        # Return the better of the rule result and an AI re-read: a COMPLETE
+        # result beats an incomplete one; otherwise the one with MORE transcribed
+        # rows wins. This guards the repair escalation from replacing a fuller
+        # rule parse with a truncated AI re-read (large tables truncate at
+        # max_tokens — the very reason the fast path exists).
+        if not isinstance(ai_res, dict):
+            return rule_result
+        if not isinstance(rule_result, dict):
+            return ai_res
+        rc, ac = bool(rule_result.get("complete")), bool(ai_res.get("complete"))
+        if ac != rc:
+            return ai_res if ac else rule_result
+        return ai_res if _entry_count(ai_res) >= _entry_count(rule_result) else rule_result
+
+    # Name the specific gaps so the model re-reads only what's missing (§6A
+    # targeted repair), not the whole document from scratch.
+    _repair = (repair_hint(comp_rep) if (repair_hint and comp_rep
+               and not rule_complete) else "")
 
     if _gemini_key():
         try:
-            return _finish(_gemini_parse(file_bytes, "application/pdf"))
+            return _prefer(_finish(_gemini_parse(file_bytes, "application/pdf",
+                                                 header_hint=_repair)))
         except Exception as vision_err:
             # Vision failed too; try the Anthropic agent loop if that key exists,
             # else return the rule result rather than erroring the whole upload.
             if os.environ.get("ANTHROPIC_API_KEY", ""):
                 try:
-                    return _finish(_agent_parse(file_bytes))
+                    return _prefer(_finish(_agent_parse(file_bytes)))
                 except Exception:
                     pass
             if rule_result is not None:
@@ -5108,7 +5265,7 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
 
     # No Gemini key — Anthropic-only path via the agent loop.
     try:
-        return _finish(_agent_parse(file_bytes))
+        return _prefer(_finish(_agent_parse(file_bytes)))
     except Exception as agent_err:
         # If the agent fails but the rule parser produced something usable,
         # return that rather than erroring the whole upload.
