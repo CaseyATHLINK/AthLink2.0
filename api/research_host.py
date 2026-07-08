@@ -54,13 +54,15 @@ def _research_model():
         return "gemini-3-flash"
 
 
-def _build_prompt(name, org_type, country_hint, mode):
+def _build_prompt(name, org_type, country_hint, mode, website=""):
     """Compose the web-search instruction. mode ∈ 'identity' | 'competitions'."""
     ident = [f'name the user typed: "{name}"']
     if org_type:
         ident.append(f"organisation type: {org_type}")
     if country_hint:
         ident.append(f"country hint (IOC 3-letter code): {country_hint}")
+    if website:
+        ident.append(f"official website: {website}")
 
     # Shared disambiguation rules — the model must find THE SPECIFIC org.
     common = (
@@ -81,6 +83,14 @@ def _build_prompt(name, org_type, country_hint, mode):
         "- Only include a competition the organisation itself ORGANISED or HOSTED "
         "— NOT an event merely held at their venue by someone else.\n"
     )
+    if website:
+        common += (
+            "- AUTHORITATIVE SOURCE: the official website above is where this "
+            "organisation publishes its results. Treat it as the primary, trusted "
+            "source: prioritise competitions and result URLs hosted on that "
+            "domain (and its results/archive sub-pages) over anything found "
+            "elsewhere on the web, and use it to confirm you have the right org.\n"
+        )
 
     if mode == "identity":
         return common + (
@@ -275,15 +285,16 @@ def _research_anthropic(prompt):
     return _extract_json(anthropic_text(resp))
 
 
-def research(name, org_type, country_hint, mode):
+def research(name, org_type, country_hint, mode, website=""):
     """Run the web research. Returns the shaped dossier dict for `mode`.
 
     Gemini + Google Search grounding is primary; Anthropic Sonnet 5 web_search is
     the fallback (fires only on a Gemini error). Raises LLMError only when BOTH
     providers fail (and one is configured) so the handler can turn it into
     ok:false. A "not found" is NOT an error — it returns found:false + nulls.
+    `website` (optional) scopes the search to the org's authoritative results site.
     """
-    prompt = _build_prompt(name, org_type, country_hint, mode)
+    prompt = _build_prompt(name, org_type, country_hint, mode, website)
     data = None
     if _gemini_key():
         try:
@@ -330,12 +341,17 @@ class handler(BaseHTTPRequestHandler):
         mode = str(body.get("mode", "") or "identity").strip().lower()
         if mode not in _VALID_MODES:
             mode = "identity"
+        website = str(body.get("website", "") or "").strip()
+        if website and not website.lower().startswith(("http://", "https://")):
+            website = "https://" + website          # accept a bare domain
+        if len(website) > 300:                        # sanity bound
+            website = ""
 
         if not name:
             return self._respond(200, {"ok": False, "error": "No organisation name provided."})
 
         try:
-            dossier = research(name, org_type, country_hint, mode)
+            dossier = research(name, org_type, country_hint, mode, website)
         except LLMError as exc:
             return self._respond(200, {"ok": False, "error": str(exc)})
         except Exception as exc:  # never let research crash signup

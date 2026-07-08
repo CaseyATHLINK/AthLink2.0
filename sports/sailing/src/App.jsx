@@ -4602,26 +4602,30 @@ const COUNTRIES=[
   {code:"NZL",name:"New Zealand"},{code:"NRU",name:"Nauru"},
 ];
 
-function CountrySelect({value,onChange,placeholder="Select country..."}){
+// intl=true prepends an "International" (non-country) option, value "INT".
+const INTL_OPTION={code:"INT",name:"International"};
+const csFlag=code=>code==="INT"?"🌐":iocFlag(code);
+function CountrySelect({value,onChange,placeholder="Select country...",intl=false,fullWidth=false}){
   const[open,setOpen]=React.useState(false);
   const[q,setQ]=React.useState("");
-  const sel=COUNTRIES.find(c=>c.code===value);
-  const filtered=q?COUNTRIES.filter(c=>c.code.includes(q.toUpperCase())||c.name.toLowerCase().includes(q.toLowerCase())):COUNTRIES;
+  const OPTS=intl?[INTL_OPTION,...COUNTRIES]:COUNTRIES;
+  const sel=OPTS.find(c=>c.code===value);
+  const filtered=q?OPTS.filter(c=>c.code.includes(q.toUpperCase())||c.name.toLowerCase().includes(q.toLowerCase())):OPTS;
   const ref=React.useRef();
   React.useEffect(()=>{
     const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
     document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
   },[]);
   return(
-    <div style={{position:"relative"}} ref={ref}>
-      <div onClick={()=>setOpen(o=>!o)} style={{border:"1px solid var(--line)",borderRadius:7,padding:"7px 10px",fontSize:13,background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"}}>
-        {sel?<>{iocFlag(sel.code)} <b>{sel.code}</b> {sel.name}</>:<span style={{color:"var(--mut)"}}>{placeholder}</span>}
+    <div style={{position:"relative",...(fullWidth?{width:"100%"}:{})}} ref={ref}>
+      <div onClick={()=>setOpen(o=>!o)} style={{border:"1px solid var(--line)",borderRadius:7,padding:"9px 12px",fontSize:13,background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"}}>
+        {sel?<>{csFlag(sel.code)} {sel.code!=="INT"&&<b>{sel.code}</b>} {sel.name}</>:<span style={{color:"var(--mut)"}}>{placeholder}</span>}
         <ChevronRight size={12} style={{marginLeft:"auto",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
       </div>
       {open&&(
         <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:90,background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.2)",maxHeight:220,overflow:"hidden",display:"flex",flexDirection:"column"}}>
           <div style={{padding:"8px 10px",borderBottom:"1px solid var(--line)"}}>
-            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search country..." style={{width:"100%",border:0,outline:0,font:"inherit",fontSize:13,color:"var(--ink)"}}/>
+            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Type a country…" style={{width:"100%",border:0,outline:0,font:"inherit",fontSize:13,color:"var(--ink)"}}/>
           </div>
           <div style={{overflowY:"auto",flex:1}}>
             {filtered.slice(0,80).map(co=>(
@@ -4629,8 +4633,8 @@ function CountrySelect({value,onChange,placeholder="Select country..."}){
                 style={{padding:"8px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:8,fontSize:13,background:co.code===value?"var(--sky)":"#fff",transition:".1s"}}
                 onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
                 onMouseLeave={e=>e.currentTarget.style.background=co.code===value?"var(--sky)":"#fff"}>
-                <span>{iocFlag(co.code)}</span>
-                <b style={{color:"var(--navy)",minWidth:36}}>{co.code}</b>
+                <span>{csFlag(co.code)}</span>
+                {co.code!=="INT"&&<b style={{color:"var(--navy)",minWidth:36}}>{co.code}</b>}
                 <span style={{color:"var(--mut)"}}>{co.name}</span>
               </div>
             ))}
@@ -4800,9 +4804,12 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
   const[selectedHostId,setSelectedHostId]=React.useState(null); // existing host being claimed
   const[addingNew,setAddingNew]=React.useState(false);          // new-host form open
   const[newHostName,setNewHostName]=React.useState("");
-  const[newHostScope,setNewHostScope]=React.useState("HK");     // HK | INT
   const[classId,setClassId]=React.useState("29er");             // association only
-  const[hostCountry,setHostCountry]=React.useState("HKG");      // federation only
+  const[hostCountry,setHostCountry]=React.useState("HKG");      // IOC code, or "INT" for International (all host kinds)
+  const[hostWebsite,setHostWebsite]=React.useState("");         // official results site (optional)
+  // Derive the legacy HK|INT scope + the stored country from the unified country field.
+  const hostScopeVal=hostCountry==="HKG"?"HK":"INT";            // HK org shows in HK section, else International
+  const hostCountryVal=hostCountry==="INT"?null:hostCountry;    // "INT" = no specific country
   /* step 4 — host auto-grab ("Is this you?" research card) */
   const[research,setResearch]=React.useState(null);             // shaped identity dossier (found) or null
   const[researching,setResearching]=React.useState(false);      // lookup in flight
@@ -4870,14 +4877,15 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
     const ac=new AbortController(); researchAbortRef.current=ac;
     setResearching(true); setResearch(null);
     (async()=>{
+      const hint=(hostCountry&&hostCountry!=="INT"&&hostCountry.length===3)?hostCountry:"";
       try{
         let d;
-        if(MOCK_RESEARCH){ d=mockResearchIdentity(nm,hostKind,hostCountry); }
+        if(MOCK_RESEARCH){ d=mockResearchIdentity(nm,hostKind,hint); }
         else{
           const r=await fetch("/api/research_host",{method:"POST",
             headers:{"Content-Type":"application/json"},signal:ac.signal,
-            body:JSON.stringify({name:nm,type:hostKind,
-              country_hint:hostKind==="federation"?hostCountry:"",mode:"identity"})});
+            body:JSON.stringify({name:nm,type:hostKind,country_hint:hint,
+              website:hostWebsite.trim()||"",mode:"identity"})});
           d=await r.json();
         }
         if(ac.signal.aborted) return;                    // superseded by a newer name
@@ -4906,10 +4914,8 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
       fetched_at:new Date().toISOString(),
       confirmed:true,
     });
-    if(research.country){
-      if(hostKind==="federation") setHostCountry(research.country);
-      if(research.country!=="HKG") setNewHostScope("INT");   // non-HK org ⇒ International region
-    }
+    if(research.country) setHostCountry(research.country);           // pre-fill the country field
+    if(research.website&&!hostWebsite.trim()) setHostWebsite(research.website);  // pre-fill results site
   };
   // "Not us" → dismiss permanently for this signup; everything stays manual.
   const dismissResearch=()=>{ setResearchDismissed(true); setResearch(null); setConfirmedDossier(null); };
@@ -5016,10 +5022,11 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
       let hostId=selectedHostId;
       if(addingNew){
         const created=await onCreateHost?.({
-          type:hostKind,scope:newHostScope,name:newHostName.trim(),
+          type:hostKind,scope:hostScopeVal,name:newHostName.trim(),
           cls:hostKind==="association"?classId:null,
-          country:hostKind==="federation"?(hostCountry||"HKG").toUpperCase():null,
-          dossier:confirmedDossier||null,   // host auto-grab: confirmed "Is this you?" research
+          country:hostCountryVal,
+          website:hostWebsite.trim()||null,     // official results site (scopes discovery)
+          dossier:confirmedDossier||null,       // host auto-grab: confirmed "Is this you?" research
         },tok);
         if(!created?.id) throw new Error("Couldn't create the host page.");
         hostId=created.id;
@@ -5386,9 +5393,10 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
                 )}
                 {/* ── Host auto-grab: "Is this you?" card ── */}
                 {research&&!confirmedDossier&&(
-                  <div className="liquidGlass-wrapper" style={{marginTop:10,borderRadius:16,overflow:"hidden",border:"1px solid var(--line)"}}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
-                    <div style={{position:"relative",padding:"14px 15px"}}>
+                  <div style={{marginTop:10,width:"100%",boxSizing:"border-box",borderRadius:16,border:"1px solid var(--line)",
+                    background:"rgba(255,255,255,.75)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",
+                    boxShadow:"0 10px 34px rgba(12,24,44,.13)",overflow:"hidden"}}>
+                    <div style={{padding:"14px 15px"}}>
                       <p style={{fontSize:11,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"var(--accent)",margin:"0 0 9px"}}>Is this you?</p>
                       <div style={{display:"flex",alignItems:"flex-start",gap:11}}>
                         {research.website&&(
@@ -5445,21 +5453,18 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
                 )}
               </div>
               <div>
-                <Label>Region</Label>
-                <div className="seg" style={{alignSelf:"flex-start"}}>
-                  <button className={newHostScope==="HK"?"on":""} onClick={()=>setNewHostScope("HK")}>Hong Kong</button>
-                  <button className={newHostScope==="INT"?"on":""} onClick={()=>setNewHostScope("INT")}>International</button>
-                </div>
+                <Label>Country / region</Label>
+                <CountrySelect intl fullWidth value={hostCountry} onChange={setHostCountry} placeholder="Type a country…"/>
+              </div>
+              <div>
+                <Label>Results website <span style={{textTransform:"none",fontWeight:500,color:"var(--mut)"}}>(optional)</span></Label>
+                <input style={FW()} type="url" inputMode="url" placeholder="e.g. sailing.org.hk"
+                  value={hostWebsite} onChange={e=>setHostWebsite(e.target.value)}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                <p style={{fontSize:11.5,color:"var(--mut)",margin:"6px 2px 0",lineHeight:1.45}}>The official site that hosts your results. We'll source past competitions from here instead of searching the whole web.</p>
               </div>
               {hostKind==="association"&&(
                 <div><Label>Boat class</Label><ClassPicker value={classId} onChange={setClassId}/></div>
-              )}
-              {hostKind==="federation"&&(
-                <div><Label>Governing country (IOC code)</Label>
-                  <input style={FW({maxWidth:120,textTransform:"uppercase"})} placeholder="HKG" maxLength={3}
-                    value={hostCountry} onChange={e=>setHostCountry(e.target.value.toUpperCase().slice(0,3))}
-                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-                </div>
               )}
             </>)}
 
@@ -6751,7 +6756,8 @@ function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier
           else{
             const r=await fetch("/api/research_host",{method:"POST",headers:{"Content-Type":"application/json"},
               body:JSON.stringify({name:host.name,type:host.type,
-                country_hint:(host.country||"").length===3?host.country:"",mode:"competitions"})});
+                country_hint:(host.country||"").length===3?host.country:"",
+                website:host.dossier?.identity?.website||"",mode:"competitions"})});
             d=await r.json();
           }
           if(d&&d.ok&&Array.isArray(d.competitions)){
@@ -7270,17 +7276,32 @@ export default function AthLinkMVP(){
     const name=(spec.name||"").trim(); if(!name) return null;
     const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"").slice(0,32)||"host";
     const id=slug+"-"+Math.random().toString(36).slice(2,6);
-    const payload={id,type:spec.type,scope:spec.scope||"HK",name,
-      cls:spec.type==="association"?spec.cls:null,
-      country:spec.type==="federation"?(spec.country||"HKG").toUpperCase():null,
-      // Host auto-grab: persist the confirmed "Is this you?" dossier (migration 0012).
-      // Column is nullable; a signup that skipped/dismissed research just omits it.
-      ...(spec.dossier?{dossier:spec.dossier}:{})};
-    // Persist to DB (use the user's token so RLS allows it if configured), then registry.
-    try{ await sbPost("hosts",payload); }catch(e){ console.error("createHostFromSignup",e); }
+    const country=spec.country?String(spec.country).toUpperCase():null;
+    // Host auto-grab: fold the confirmed dossier + the typed results website into
+    // hosts.dossier (migration 0012). Website goes under identity so discovery can
+    // scope competition research to it. A signup that skipped research still
+    // records the website (minimal, unconfirmed dossier).
+    let dossier=spec.dossier||null;
+    if(spec.website){
+      dossier=dossier
+        ?{...dossier,identity:{...(dossier.identity||{}),website:spec.website}}
+        :{identity:{website:spec.website},confirmed:false};
+    }
+    const base={id,type:spec.type,scope:spec.scope||"HK",name,
+      cls:spec.type==="association"?spec.cls:null,country};
+    // Persist. The host row is ESSENTIAL (it's what makes the club/association/
+    // federation appear in the directory); the dossier is best-effort. The
+    // dossier column may not exist yet (migration 0012 pending) and PostgREST
+    // rejects the WHOLE insert on an unknown column — which would silently drop
+    // the new host. So try WITH dossier, and on failure retry WITHOUT it so the
+    // host always gets created (dossier just isn't stored until 0012 lands).
+    let ins=dossier?await sbPost("hosts",{...base,dossier}):null;
+    if(!ins) ins=await sbPost("hosts",base);
+    if(!ins) console.error("createHostFromSignup: hosts insert failed for",name);
     addHostLocal({id,type:spec.type,scope:spec.scope||"HK",name,
-      ...(spec.type==="association"?{cls:spec.cls}:{}),
-      ...(spec.type==="federation"?{country:(spec.country||"HKG").toUpperCase()}:{})});
+      ...(spec.type==="association"&&spec.cls?{cls:spec.cls}:{}),
+      ...(country?{country}:{}),
+      ...(dossier?{dossier}:{})});
     setHostsVersion(v=>v+1);
     await reloadHosts();
     return {id};
