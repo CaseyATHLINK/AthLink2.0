@@ -61,6 +61,18 @@ importers:
         specifier: ^18
         version: 18.3.1
 
+  packages/features/auth:
+    dependencies:
+      '@athlink/core':
+        specifier: workspace:*
+        version: link:../../core
+      lucide-react:
+        specifier: '*'
+        version: 0.400.0(react@18.3.1)
+      react:
+        specifier: '*'
+        version: 18.3.1
+
   packages/features/rating: {}
 
   packages/sport-kit: {}
@@ -103,6 +115,9 @@ importers:
 
   sports/sailing:
     dependencies:
+      '@athlink/auth':
+        specifier: workspace:*
+        version: link:../../packages/features/auth
       '@athlink/core':
         specifier: workspace:*
         version: link:../../packages/core
