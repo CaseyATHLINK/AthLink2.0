@@ -13,6 +13,8 @@ import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
 import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
 import { canonName, eventKey, ordinalOf, initials } from "./util/name.js";
 import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry } from "./util/class.js";
+import { DIV_COLOR, DIV_LABEL, parseDiv, divTokens, divToString, normGender, normCategory, genderCatOf, GENDER_COLOR } from "./util/gender.js";
+import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender } from "./data/athletes.js";
 import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed } from "./data/hosts.js";
 import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeleteProfile, fetchProfileNames, fetchAllClaims, createClaim, decideClaim, profileNameKey, fetchAllAthleteProfiles, upsertAthleteProfile, uploadAthletePhoto, uploadAthleteMedia, fetchAllEventClaims, createEventClaim, decideEventClaim } from "./data/profiles.js";
 
@@ -682,66 +684,6 @@ function CollabPicker({owner,value,onChange}){
 }
 
 
-// ── Division (gender / age) helpers — shared by manual import, edit results,
-//    and the results page. Stored as a normalized token set on entry.div. ──
-const DIV_COLOR={M:"#1f6fd6",F:"#e8455f",Mix:"#8b5cf6",Jr:"#4caf50"};
-const DIV_LABEL={M:"Male",F:"Female",Mix:"Mixed",Jr:"Junior"};
-// Allowed gender bases (one of) plus optional Jr.
-function parseDiv(div){
-  // returns {gender:"M"|"F"|"Mix"|null, jr:bool}
-  const t=(div||"").toString();
-  let gender=null;
-  if(/\bmix/i.test(t)||/\bX\b/i.test(t)) gender="Mix";
-  else if(/\bf(emale)?\b/i.test(t)||/\bgirl/i.test(t)||/\bwomen/i.test(t)) gender="F";
-  else if(/\bm(ale)?\b/i.test(t)||/\bboy/i.test(t)||/\bmen\b/i.test(t)) gender="M";
-  const jr=/\bjr\b|\bjun/i.test(t)||/junior/i.test(t)||/youth/i.test(t)||/\bU1[0-9]\b/i.test(t);
-  return {gender,jr};
-}
-function divTokens(div){
-  const {gender,jr}=parseDiv(div);
-  const out=[]; if(gender)out.push(gender); if(jr)out.push("Jr"); return out;
-}
-function divToString(tokens){
-  // canonical storage e.g. "F Jr"
-  const g=tokens.find(t=>t!=="Jr"); const jr=tokens.includes("Jr");
-  return [g,jr?"Jr":null].filter(Boolean).join(" ");
-}
-
-/* ── gender + age-category (real fields, with legacy-div fallback) ─────────
-   Entries now carry real `gender` ('M'|'F'|'Mix') and `category` ('U17','Jr'…)
-   fields from parser v5. Older events stored both inside the free `div` string,
-   so genderCatOf() prefers the real fields and falls back to parsing div. */
-function normGender(raw){
-  const s=String(raw||"").toLowerCase().replace(/[^a-z]/g,"");
-  if(!s) return "";
-  if(["m","male","man","men","boy","boys"].includes(s)) return "M";
-  if(["f","female","woman","women","w","girl","girls","lady","ladies"].includes(s)) return "F";
-  if(["mix","mixed","x","mf","fm"].includes(s)) return "Mix";
-  return "";
-}
-function normCategory(raw){
-  const s=String(raw||"").trim(); if(!s) return "";
-  const low=s.toLowerCase();
-  if(["open","overall","main","all","mixed","m","f","-","—"].includes(low)) return "";
-  if(/\b(gold|silver|bronze|emerald|sapphire)\b/.test(low)) return "";
-  let m=low.match(/\bu[\s-]?(\d{1,2})\b/); if(m) return "U"+m[1];
-  m=low.match(/\bunder[\s-]?(\d{1,2})\b/); if(m) return "U"+m[1];
-  if(/\b(junior|jr|youth|cadet)\b/.test(low)) return "Jr";
-  if(/\b(master|veteran|senior)s?\b/.test(low)) return "Mst";
-  return s.length<=14?s.slice(0,12):"";
-}
-// Resolve the gender + category to display for an entry, preferring real fields.
-function genderCatOf(e){
-  if(!e) return {gender:"",category:""};
-  let gender=normGender(e.gender);
-  let category=normCategory(e.category);
-  if(!gender||!category){
-    const {gender:dg,jr}=parseDiv(e.div||"");
-    if(!gender&&dg) gender=dg;
-    if(!category&&jr) category="Jr";
-  }
-  return {gender,category};
-}
 // Infer a boat class id from a fleet/competition label (for multi-class imports).
 function classFromFleetName(name){
   const s=String(name||"").toLowerCase();
@@ -813,7 +755,6 @@ function LiquidBackground(){
   },[]);
   return <canvas ref={ref} className="al-liquid" aria-hidden="true"/>;
 }
-const GENDER_COLOR={M:"#2d6cc9",F:"#c2477f",Mix:"#7c3aed"};
 // Magnetic hover: the label eases toward the cursor and springs back — the "warp around the cursor" feel.
 function MagneticItem({children,onClick,className,strength=0.35}){
   const ref=React.useRef(null);
@@ -948,64 +889,6 @@ function aggregate(name,evList){
   return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
 }
 
-// ── Per-athlete attribute memory (gender, birth year, recent class) ──────────
-// Single pass over all events. For each athlete (by canonName), we remember:
-//   gender    — the most-frequently-stated single gender across all their entries
-//   birthYear — most-frequently-stated birth year
-//   recentCls/recentSub — class of their most recent competition
-// A person's own gender is a stable trait, so once stated anywhere it is applied
-// everywhere that athlete appears (including events whose PDF omitted gender).
-let ATHLETE_ATTRS=new Map();
-function buildAthleteAttrs(evList){
-  const m=new Map();
-  for(const ev of (evList||[])){
-    if(ev.status==="Draft") continue;
-    const dk=dateKey(ev.date); // "" = undated; never allowed to claim recency
-    for(const e of (ev.entries||[])){
-      const gc=genderCatOf(e); // resolves real fields + legacy div
-      // helm + crew, each with their own stated gender where derivable
-      const pairs=[[e.helm,e.birth_year,gc.gender,"helm"],[e.crew,e.crew_birth_year,gc.gender,"crew"]];
-      // When an entry's div implies a single gender (M/F), it applies to both
-      // members; "Mix" does not pin either individual, so skip it for the registry.
-      for(const [nm,by,g,which] of pairs){
-        if(!nm) continue; const k=canonName(nm); if(!k) continue;
-        let o=m.get(k); if(!o){o={gender:{},birthYear:{},recentDK:"",recentCls:null,recentSub:null};m.set(k,o);}
-        if(g&&g!=="Mix") o.gender[g]=(o.gender[g]||0)+1;
-        if(by) o.birthYear[by]=(o.birthYear[by]||0)+1;
-        // Undated events may seed recentCls (better than nothing) but any DATED
-        // event beats them; among dated events the latest date wins.
-        if(dk?dk>=o.recentDK:!o.recentDK&&!o.recentCls){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
-      }
-    }
-  }
-  const out=new Map();
-  const top=obj=>{const e=Object.entries(obj);return e.length?e.sort((a,b)=>b[1]-a[1])[0][0]:null;};
-  for(const [k,o] of m){
-    out.set(k,{gender:top(o.gender),birthYear:o.birthYear&&top(o.birthYear)?parseInt(top(o.birthYear)):null,recentCls:o.recentCls,recentSub:o.recentSub});
-  }
-  ATHLETE_ATTRS=out;
-  return out;
-}
-// Remembered gender for a single athlete name (or null).
-function rememberedGender(name){
-  const a=ATHLETE_ATTRS.get(canonName(name)); return a?.gender||null;
-}
-// Resolve the gender to SHOW for an entry, given a specific viewpoint:
-//   - singlehanded / solo: the helm's remembered/ stated gender
-//   - doublehanded: combine helm + crew remembered genders → M / F / Mix
-// Falls back to whatever the entry itself states.
-function resolvedEntryGender(e,doublehanded){
-  const stated=genderCatOf(e).gender;
-  if(doublehanded&&e.crew){
-    const gh=rememberedGender(e.helm)||(stated&&stated!=="Mix"?stated:null);
-    const gc=rememberedGender(e.crew)||(stated&&stated!=="Mix"?stated:null);
-    if(gh&&gc) return gh===gc?gh:"Mix";
-    if(stated) return stated;          // fall back to the entry's own div if we can't pin both
-    return gh||gc||null;
-  }
-  // Solo (or no crew): prefer the person's remembered gender, else stated.
-  return rememberedGender(e.helm)||stated||null;
-}
 
 /* ── Outstanding Achievement (division podium) ────────────────────────────────
    A result can be excellent *within a division* yet buried by a mediocre
