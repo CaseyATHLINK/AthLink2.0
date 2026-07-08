@@ -21,10 +21,12 @@ Beachhead: Hong Kong class associations (29er, ILCA, Optimist, 49er).
 ## Stack
 - Frontend: React 18, Vite. The sailing app was decomposed (reorg step 4, done
   2026-07-09) from one ~13k-line file into `sports/sailing/src/{util,data,views}/`
-  + shared `packages/features/*`; `App.jsx` (~6.8k lines) is now imports + a few
-  module helpers + the stateful `AthLinkMVP` shell. **See `sports/sailing/src/README.md`
-  for the module map and the rules for changing this code — read it before editing
-  sailing frontend, especially the "views never import App.jsx" rule.**
+  + shared `packages/features/*`; `App.jsx` (~6.3k lines) is now imports + the
+  app-shell helpers (URL routing, form scaffolding) + the stateful `AthLinkMVP`
+  component. **See `sports/sailing/src/README.md` for the module map and the rules
+  for changing this code — read it before editing sailing frontend, especially the
+  "views never import App.jsx" rule.** Run `node tools/check-modules.mjs` after any
+  cross-module move (the build does not catch undefined refs / bad named imports).
 - Backend: Python serverless `api/sailing/parse_pdf.py` + `api/ai_filter.py`
 - DB/Auth: Supabase (Postgres + GoTrue), project ref `ylzoburtpibbgqdggjty`
 - AI (parser v3, 2026-07): **Gemini is the universal primary** for EVERY AI task
@@ -270,9 +272,9 @@ athlete by the `ensure_athlete_username` trigger. This is DISTINCT from
   filtering the official overall order (scoreEvent rows) — never re-ranked.
   Shows just an Award icon + the achievement (e.g. "1st Under-18"); the full
   "Outstanding Achievement: …" text lives only in the `title` tooltip.
-  Module helpers in src/App.jsx: `outstandingAchievementFor(h, athleteName)`
-  (pure, reusable), `divisionDisplayName()`, `ordinalOf()`,
-  `MIN_DIVISION_SIZE=4` (tunable). One badge per row — best division rank wins,
+  Helpers in `data/scoring.js`: `outstandingAchievementFor(h, athleteName)`
+  (pure, reusable), `divisionDisplayName()`, `MIN_DIVISION_SIZE=4` (tunable);
+  `ordinalOf()` is in `util/name.js`. One badge per row — best division rank wins,
   tie prefers category; runner-up axis lives in the tooltip. CSS: `.oab`/`.oabv`
   pill (radius 980); collapses to icon-only ≤430px (the .ev row is nowrap — a
   wide badge crushes the middle column on mobile).
