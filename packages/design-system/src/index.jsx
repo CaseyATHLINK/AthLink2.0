@@ -4,10 +4,12 @@
 import React from "react";
 import "./tokens.css";
 
-/* Token values exposed for the rare case you need them in JS (charts, canvas). */
+/* Token values exposed for the rare case you need them in JS (charts, canvas).
+   Keep in sync with tokens.css / CLAUDE.md's locked palette. */
 export const tokens = {
-  navy: "#13314e", navy2: "#1f4e80", accent: "#0a84ff", accent2: "#409cff",
-  sky: "#e8f1fc", paper: "#eef3fb", ink: "#1d1d1f", gold: "#c8920b", link: "#0a4fb0",
+  navy: "#163a63", navy2: "#1f4e80", accent: "#0d8ecf", accent2: "#38a9e0",
+  sky: "#dcecf8", paper: "#f3f7fb", ink: "#14213a", mut: "#5b6b80", line: "#d9e3ef",
+  gold: "#c8920b", link: "#0a4fb0",
   radius: "16px",
 };
 

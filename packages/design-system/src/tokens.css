@@ -1,15 +1,17 @@
 /* AthLink design system — canonical theme.
    Extracted verbatim from the sailing app (src/App.jsx <style> block).
-   Every sport imports this; never redefine these values in a sport. */
-
-@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&display=swap');
+   Every sport imports this; never redefine these values in a sport.
+   Palette is the locked source of truth — see CLAUDE.md "Design tokens — never change". */
 
 :root, .al-ds {
-  --navy:#13314e; --navy2:#1f4e80; --accent:#0a84ff; --accent2:#409cff; --sky:#e8f1fc;
-  --paper:#eef3fb; --ink:#1d1d1f; --mut:rgba(44,52,68,0.86); --line:rgba(60,60,67,0.12);
-  --card:#ffffff; --gold:#c8920b; --link:#0a4fb0;
+  /* Locked palette (CLAUDE.md) */
+  --navy:#163a63; --navy2:#1f4e80; --accent:#0d8ecf; --sky:#dcecf8;
+  --paper:#f3f7fb; --ink:#14213a; --mut:#5b6b80; --line:#d9e3ef; --gold:#c8920b;
+  /* Derived / material (not locked) */
+  --accent2:#38a9e0; /* lighter accent for hovers, derived from --accent */
+  --card:#ffffff; --link:#0a4fb0;
   --mat-thin:rgba(255,255,255,0.40); --mat-reg:rgba(255,255,255,0.55); --mat-thick:rgba(250,251,253,0.85);
-  --mat-dark:rgba(17,40,66,0.58); --grouped:rgba(118,118,128,0.10); --halo:rgba(10,132,255,0.20);
+  --mat-dark:rgba(17,40,66,0.58); --grouped:rgba(118,118,128,0.10); --halo:rgba(13,142,207,0.20);
   --radius:16px;
 }
 
@@ -21,7 +23,7 @@
   background:linear-gradient(165deg,#d5deee 0%,#dfe8f5 45%,#e6eaf3 100%); background-attachment:fixed;
 }
 .al-ds *{box-sizing:border-box;}
-/* SF Pro everywhere — the platform feel (Barlow refs are overridden on purpose). */
+/* SF Pro everywhere — the platform feel (any stray Barlow/DM Sans refs are force-overridden). */
 .al-ds *:not(svg):not(svg *){font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif !important;}
 
 .al-ds .wrap{max-width:1000px;margin:0 auto;padding:0 22px;}
@@ -35,9 +37,9 @@
 
 /* ── Buttons — pills with hue-tinted hairline rings ── */
 .al-ds .btn{font-weight:600;font-size:14px;border:0;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:10px 18px;transition:transform .18s cubic-bezier(.4,0,.2,1),filter .18s,background .18s,box-shadow .18s;letter-spacing:-.01em;}
-.al-ds .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.30),inset 0 1px 0 rgba(255,255,255,.45),0 1px 3px rgba(10,132,255,.35);}.al-ds .btn.cta:hover{background:var(--accent2);}
+.al-ds .btn.cta{background:var(--accent);color:#fff;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.30),inset 0 1px 0 rgba(255,255,255,.45),0 1px 3px rgba(13,142,207,.35);}.al-ds .btn.cta:hover{background:var(--accent2);}
 .al-ds .btn.ghost{background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);color:var(--ink);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.62),inset 0 1px 0 rgba(255,255,255,.72),0 1px 2px rgba(0,0,0,.10);}.al-ds .btn.ghost:hover{background:rgba(255,255,255,.85);}
-.al-ds .btn.sky{background:rgba(10,132,255,.20);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);box-shadow:inset 0 0 0 .5px rgba(10,132,255,.45),inset 0 1px 0 rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.08);}.al-ds .btn.sky:hover{background:rgba(10,132,255,.28);}
+.al-ds .btn.sky{background:rgba(13,142,207,.20);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);box-shadow:inset 0 0 0 .5px rgba(13,142,207,.45),inset 0 1px 0 rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.08);}.al-ds .btn.sky:hover{background:rgba(13,142,207,.28);}
 .al-ds .btn.amber{background:rgba(255,149,0,.16);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);color:#a85c00;box-shadow:inset 0 0 0 .5px rgba(255,149,0,.42),inset 0 1px 0 rgba(255,255,255,.45),0 1px 2px rgba(0,0,0,.07);}.al-ds .btn.amber:hover{background:rgba(255,149,0,.24);}
 .al-ds .btn.green{background:rgba(52,199,89,.18);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);color:#0a7a3f;box-shadow:inset 0 0 0 .5px rgba(52,199,89,.45),inset 0 1px 0 rgba(255,255,255,.45),0 1px 2px rgba(0,0,0,.07);}.al-ds .btn.green:hover{background:rgba(52,199,89,.28);}
 .al-ds .btn:hover{transform:translateY(-2px) scale(1.025);filter:brightness(1.06);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 12px 28px -10px rgba(0,0,0,.22);}
@@ -67,7 +69,7 @@
 
 /* ── Results table ── */
 .al-ds table{width:100%;border-collapse:collapse;font-size:13px;}
-.al-ds thead th{background:linear-gradient(180deg,rgba(31,78,128,.92),rgba(19,49,78,.94));color:#fff;font-weight:600;text-align:center;padding:11px 5px;font-size:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.12);}
+.al-ds thead th{background:linear-gradient(180deg,rgba(31,78,128,.92),rgba(22,58,99,.94));color:#fff;font-weight:600;text-align:center;padding:11px 5px;font-size:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.12);}
 .al-ds thead th.l{text-align:left;padding-left:18px;}
 .al-ds tbody td{padding:8px 5px;text-align:center;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;}
 .al-ds tbody td.l{text-align:left;padding-left:18px;}
@@ -78,7 +80,7 @@
 .al-ds .namelink{color:var(--link);font-weight:700;cursor:pointer;text-decoration:none;}.al-ds .namelink:hover{color:#063a85;}
 
 /* ── Header panel (profile / portal hero) ── */
-.al-ds .phead{background:linear-gradient(135deg,rgba(31,78,128,.95),rgba(19,49,78,.96));backdrop-filter:blur(38px) saturate(185%);-webkit-backdrop-filter:blur(38px) saturate(185%);border-radius:22px;padding:26px;color:#fff;display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 10px 30px -16px rgba(0,0,0,.4);}
+.al-ds .phead{background:linear-gradient(135deg,rgba(31,78,128,.95),rgba(22,58,99,.96));backdrop-filter:blur(38px) saturate(185%);-webkit-backdrop-filter:blur(38px) saturate(185%);border-radius:22px;padding:26px;color:#fff;display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 10px 30px -16px rgba(0,0,0,.4);}
 
 /* ── Avatar ── */
 .al-ds .av{width:30px;height:30px;border-radius:50%;color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),inset 0 0 0 1px rgba(255,255,255,.18);}
