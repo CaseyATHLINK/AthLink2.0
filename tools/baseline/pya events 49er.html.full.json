@@ -53,6 +53,7 @@
           ],
           "pdf_rank": 1,
           "pdf_net": 71,
+          "pdf_total": null,
           "birth_year": 1992,
           "crew_birth_year": 1999
         },
@@ -95,6 +96,7 @@
           ],
           "pdf_rank": 2,
           "pdf_net": 59,
+          "pdf_total": null,
           "birth_year": 2000,
           "crew_birth_year": 2000
         },
@@ -137,6 +139,7 @@
           ],
           "pdf_rank": 3,
           "pdf_net": 67,
+          "pdf_total": null,
           "birth_year": 1999,
           "crew_birth_year": 2001
         },
@@ -179,6 +182,7 @@
           ],
           "pdf_rank": 4,
           "pdf_net": 98,
+          "pdf_total": null,
           "birth_year": 2001,
           "crew_birth_year": 2002
         },
@@ -221,6 +225,7 @@
           ],
           "pdf_rank": 5,
           "pdf_net": 85,
+          "pdf_total": null,
           "birth_year": 1999,
           "crew_birth_year": null
         },
@@ -263,6 +268,7 @@
           ],
           "pdf_rank": 6,
           "pdf_net": 103,
+          "pdf_total": null,
           "birth_year": 2001,
           "crew_birth_year": 1999
         },
@@ -305,6 +311,7 @@
           ],
           "pdf_rank": 7,
           "pdf_net": 107,
+          "pdf_total": null,
           "birth_year": 2003,
           "crew_birth_year": 2006
         },
@@ -347,6 +354,7 @@
           ],
           "pdf_rank": 8,
           "pdf_net": 104,
+          "pdf_total": null,
           "birth_year": 1992,
           "crew_birth_year": 2001
         },
@@ -393,6 +401,7 @@
           ],
           "pdf_rank": 9,
           "pdf_net": 121,
+          "pdf_total": null,
           "birth_year": 2005,
           "crew_birth_year": 2006
         },
@@ -439,6 +448,7 @@
           ],
           "pdf_rank": 10,
           "pdf_net": 133,
+          "pdf_total": null,
           "birth_year": 1998,
           "crew_birth_year": 1997
         },
@@ -485,6 +495,7 @@
           ],
           "pdf_rank": 11,
           "pdf_net": 135,
+          "pdf_total": null,
           "birth_year": 2005,
           "crew_birth_year": 2006
         },
@@ -531,6 +542,7 @@
           ],
           "pdf_rank": 12,
           "pdf_net": 136,
+          "pdf_total": null,
           "birth_year": 2002,
           "crew_birth_year": 2006
         },
@@ -577,6 +589,7 @@
           ],
           "pdf_rank": 13,
           "pdf_net": 136,
+          "pdf_total": null,
           "birth_year": 2004,
           "crew_birth_year": 2005
         },
@@ -623,6 +636,7 @@
           ],
           "pdf_rank": 14,
           "pdf_net": 139,
+          "pdf_total": null,
           "birth_year": 1999,
           "crew_birth_year": 1995
         },
@@ -669,6 +683,7 @@
           ],
           "pdf_rank": 15,
           "pdf_net": 142,
+          "pdf_total": null,
           "birth_year": 2005,
           "crew_birth_year": 2006
         },
@@ -715,6 +730,7 @@
           ],
           "pdf_rank": 16,
           "pdf_net": 154,
+          "pdf_total": null,
           "birth_year": 2004,
           "crew_birth_year": 2001
         },
@@ -761,6 +777,7 @@
           ],
           "pdf_rank": 17,
           "pdf_net": 173,
+          "pdf_total": null,
           "birth_year": 1989,
           "crew_birth_year": 1992
         },
@@ -807,6 +824,7 @@
           ],
           "pdf_rank": 18,
           "pdf_net": 176,
+          "pdf_total": null,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -853,6 +871,7 @@
           ],
           "pdf_rank": 19,
           "pdf_net": 191,
+          "pdf_total": null,
           "birth_year": 2001,
           "crew_birth_year": 2007
         },
@@ -899,6 +918,7 @@
           ],
           "pdf_rank": 20,
           "pdf_net": 194,
+          "pdf_total": null,
           "birth_year": 2005,
           "crew_birth_year": 2004
         },
@@ -945,6 +965,7 @@
           ],
           "pdf_rank": 21,
           "pdf_net": 213,
+          "pdf_total": null,
           "birth_year": 2007,
           "crew_birth_year": 2006
         },
@@ -991,6 +1012,7 @@
           ],
           "pdf_rank": 22,
           "pdf_net": 217,
+          "pdf_total": null,
           "birth_year": 2003,
           "crew_birth_year": 2003
         },
@@ -1037,6 +1059,7 @@
           ],
           "pdf_rank": 23,
           "pdf_net": 233,
+          "pdf_total": null,
           "birth_year": 2008,
           "crew_birth_year": 2007
         },
@@ -1083,6 +1106,7 @@
           ],
           "pdf_rank": 24,
           "pdf_net": 238,
+          "pdf_total": null,
           "birth_year": 2002,
           "crew_birth_year": 1977
         },
@@ -1129,6 +1153,7 @@
           ],
           "pdf_rank": 25,
           "pdf_net": 271,
+          "pdf_total": null,
           "birth_year": 2003,
           "crew_birth_year": 2004
         },
@@ -1175,6 +1200,7 @@
           ],
           "pdf_rank": 26,
           "pdf_net": 293,
+          "pdf_total": null,
           "birth_year": 1995,
           "crew_birth_year": 1999
         }
@@ -1222,6 +1248,7 @@
           ],
           "pdf_rank": 1,
           "pdf_net": 49,
+          "pdf_total": null,
           "birth_year": 1998,
           "crew_birth_year": 2000
         },
@@ -1262,6 +1289,7 @@
           ],
           "pdf_rank": 2,
           "pdf_net": 66,
+          "pdf_total": null,
           "birth_year": 2002,
           "crew_birth_year": 2004
         },
@@ -1302,6 +1330,7 @@
           ],
           "pdf_rank": 3,
           "pdf_net": 60,
+          "pdf_total": null,
           "birth_year": 2000,
           "crew_birth_year": 2001
         },
@@ -1342,6 +1371,7 @@
           ],
           "pdf_rank": 4,
           "pdf_net": 59,
+          "pdf_total": null,
           "birth_year": 2006,
           "crew_birth_year": 2004
         },
@@ -1382,6 +1412,7 @@
           ],
           "pdf_rank": 5,
           "pdf_net": 80,
+          "pdf_total": null,
           "birth_year": 2008,
           "crew_birth_year": 2008
         },
@@ -1422,6 +1453,7 @@
           ],
           "pdf_rank": 6,
           "pdf_net": 62,
+          "pdf_total": null,
           "birth_year": 1995,
           "crew_birth_year": 1992
         },
@@ -1462,6 +1494,7 @@
           ],
           "pdf_rank": 7,
           "pdf_net": 65,
+          "pdf_total": null,
           "birth_year": 1999,
           "crew_birth_year": 2001
         },
@@ -1502,6 +1535,7 @@
           ],
           "pdf_rank": 8,
           "pdf_net": 82,
+          "pdf_total": null,
           "birth_year": 1996,
           "crew_birth_year": 1997
         },
@@ -1546,6 +1580,7 @@
           ],
           "pdf_rank": 9,
           "pdf_net": 110,
+          "pdf_total": null,
           "birth_year": 1999,
           "crew_birth_year": 2002
         },
@@ -1590,6 +1625,7 @@
           ],
           "pdf_rank": 10,
           "pdf_net": 123,
+          "pdf_total": null,
           "birth_year": 2001,
           "crew_birth_year": 2003
         },
@@ -1634,6 +1670,7 @@
           ],
           "pdf_rank": 11,
           "pdf_net": 137,
+          "pdf_total": null,
           "birth_year": 2004,
           "crew_birth_year": 2006
         },
@@ -1678,6 +1715,7 @@
           ],
           "pdf_rank": 12,
           "pdf_net": 137,
+          "pdf_total": null,
           "birth_year": 2001,
           "crew_birth_year": 2002
         },
@@ -1722,6 +1760,7 @@
           ],
           "pdf_rank": 13,
           "pdf_net": 152,
+          "pdf_total": null,
           "birth_year": 2007,
           "crew_birth_year": 2007
         },
@@ -1766,6 +1805,7 @@
           ],
           "pdf_rank": 14,
           "pdf_net": 157,
+          "pdf_total": null,
           "birth_year": 2004,
           "crew_birth_year": 2003
         },
@@ -1810,6 +1850,7 @@
           ],
           "pdf_rank": 15,
           "pdf_net": 161.1,
+          "pdf_total": null,
           "birth_year": 2000,
           "crew_birth_year": 2003
         },
@@ -1854,6 +1895,7 @@
           ],
           "pdf_rank": 16,
           "pdf_net": 164,
+          "pdf_total": null,
           "birth_year": 2008,
           "crew_birth_year": 2007
         },
@@ -1898,6 +1940,7 @@
           ],
           "pdf_rank": 17,
           "pdf_net": 166,
+          "pdf_total": null,
           "birth_year": 2004,
           "crew_birth_year": 1994
         },
@@ -1942,6 +1985,7 @@
           ],
           "pdf_rank": 18,
           "pdf_net": 176,
+          "pdf_total": null,
           "birth_year": 2008,
           "crew_birth_year": 2009
         },
@@ -1986,6 +2030,7 @@
           ],
           "pdf_rank": 19,
           "pdf_net": 183,
+          "pdf_total": null,
           "birth_year": 2003,
           "crew_birth_year": 2004
         },
@@ -2030,6 +2075,7 @@
           ],
           "pdf_rank": 20,
           "pdf_net": 202,
+          "pdf_total": null,
           "birth_year": 2005,
           "crew_birth_year": 2005
         },
@@ -2074,6 +2120,7 @@
           ],
           "pdf_rank": 21,
           "pdf_net": 205,
+          "pdf_total": null,
           "birth_year": 2007,
           "crew_birth_year": 2007
         },
@@ -2118,6 +2165,7 @@
           ],
           "pdf_rank": 22,
           "pdf_net": 208,
+          "pdf_total": null,
           "birth_year": 2004,
           "crew_birth_year": 2003
         },
@@ -2162,6 +2210,7 @@
           ],
           "pdf_rank": 23,
           "pdf_net": 225,
+          "pdf_total": null,
           "birth_year": 1996,
           "crew_birth_year": 1982
         },
@@ -2206,6 +2255,7 @@
           ],
           "pdf_rank": 24,
           "pdf_net": 231,
+          "pdf_total": null,
           "birth_year": 2004,
           "crew_birth_year": 2005
         },
@@ -2250,6 +2300,7 @@
           ],
           "pdf_rank": 25,
           "pdf_net": 242,
+          "pdf_total": null,
           "birth_year": 2003,
           "crew_birth_year": 1999
         },
@@ -2294,6 +2345,7 @@
           ],
           "pdf_rank": 26,
           "pdf_net": 251,
+          "pdf_total": null,
           "birth_year": 2005,
           "crew_birth_year": 2003
         }
@@ -2309,5 +2361,11 @@
     "family": "pya-events",
     "input_type": "html",
     "confidence": 0.9
-  }
+  },
+  "confidence": 0.8,
+  "low_confidence": false,
+  "confidence_reasons": [
+    "26 ranks missing from 1..52"
+  ],
+  "ai_parsed": false
 }

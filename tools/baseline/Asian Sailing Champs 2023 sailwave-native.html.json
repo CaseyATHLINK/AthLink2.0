@@ -7,6 +7,8 @@
   "n_entries": 136,
   "confidence": 0.8,
   "gate": "PASS (use rules)",
+  "complete": true,
+  "completeness": "PASS: complete",
   "confidence_reasons": [
     "90 ranks missing from 1..136"
   ],

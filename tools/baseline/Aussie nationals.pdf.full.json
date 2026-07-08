@@ -390,8 +390,8 @@
       "crew_birth_year": null
     },
     {
-      "helm": "Laura Stoltenberg",
-      "crew": "Daniel Bradford",
+      "helm": "Wing It",
+      "crew": "Laura Stoltenberg",
       "sail": "170",
       "nat": "",
       "div": "49erFX",
@@ -450,5 +450,6 @@
     "family": "sailingresults",
     "input_type": "pdf-text",
     "confidence": 0.9
-  }
+  },
+  "_checksums": {}
 }

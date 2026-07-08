@@ -43,6 +43,10 @@ def summarize(result: dict) -> dict:
         for f in fleets:
             entries.extend(f.get("entries") or [])
     verdict = pp.score_parse(result) if getattr(pp, "score_parse", None) else None
+    # Deterministic completeness gate (§6A) — the hard "every row + every race
+    # column + every required cell" check, asserted alongside confidence.
+    comp = (pp.verify_completeness(result, declared=result.get("_checksums"))
+            if getattr(pp, "verify_completeness", None) else None)
     return {
         "event":          result.get("event") or result.get("event_name") or result.get("name"),
         "date":           result.get("date"),
@@ -53,6 +57,8 @@ def summarize(result: dict) -> dict:
         "confidence":     verdict["confidence"] if verdict else None,
         "gate":           ("PASS (use rules)" if verdict and verdict["ok"]
                            else "FALL BACK TO AI" if verdict else None),
+        "complete":       comp["complete"] if comp else None,
+        "completeness":   comp["summary"] if comp else None,
         "confidence_reasons": verdict["reasons"] if verdict else None,
         "sample_rows": [
             {k: e.get(k) for k in ("pdf_rank", "sail", "helm", "crew", "nat",

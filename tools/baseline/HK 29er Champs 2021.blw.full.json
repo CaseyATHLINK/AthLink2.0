@@ -456,9 +456,16 @@
   "nat_from_flags": false,
   "detected_class": "29er",
   "detected_host": "Aberdeen Boat Club",
+  "_checksums": {},
   "detected_format": {
     "family": "sailwave-blw",
     "input_type": "blw",
     "confidence": 0.9
-  }
+  },
+  "confidence": 1.0,
+  "low_confidence": false,
+  "confidence_reasons": [
+    "looks clean"
+  ],
+  "ai_parsed": false
 }

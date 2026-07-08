@@ -7,6 +7,8 @@
   "n_entries": 52,
   "confidence": 0.8,
   "gate": "PASS (use rules)",
+  "complete": false,
+  "completeness": "FAIL: 2 gap(s) [missing_cells]",
   "confidence_reasons": [
     "26 ranks missing from 1..52"
   ],
