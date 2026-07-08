@@ -173,7 +173,7 @@ Audited against live DB 2026-06-25 — see migrations/README.md for full notes.
 - migrations/0009_athlete_media.sql — APPLIED 2026-07-02 — athlete_profiles.media jsonb ('[]'). Athlete-owned photo+video gallery (array of {url,type,caption}); owner-write via existing 0004/0005 RLS. Managed in MediaModal (popup opened by a Media button between Calendar and Instagram under the profile photo), saved via saveAthleteMedia/upsertAthleteProfile.
 - migrations/0010_athlete_media_bucket.sql — APPLIED 2026-07-02 — public `athlete-media` storage bucket (50MB, image+video MIME) + public-read/authenticated-write policies mirroring athlete-photos. REQUIRED for athlete video uploads (athlete-photos is images-only, 5MB). Uploaded to by uploadAthleteMedia.
 - migrations/0011_host_logos_bucket.sql — APPLIED 2026-07-07 — public `host-logos` storage bucket (5MB, PNG/webp) + public-read/authenticated-write policies mirroring athlete-media. Backs the host/association self-logo feature: HostEditModal lets the user square-crop/centre the logo (LogoCropper), then removeLogoBackground strips the background ONCE at save time (KEEPING original colours — corner-sampled bg → transparent, feathered edge), uploadHostLogo stores the PNG here, and writes its public URL to hosts.logo_url. Reuses the existing hosts.logo_url column (from 0008) — no new column.
-- migrations/0012_host_dossier.sql — PENDING (not yet applied) — adds `hosts.dossier jsonb` for the Host auto-grab feature (see "Host auto-grab" below). Stores the confirmed web-research dossier `{identity, competitions[], pending_import[], needs_review[], fetched_at, confirmed}`. Written by the signing-up owner via the normal host save path (saveHost); no new RLS (host write policies already cover it). Run `NOTIFY pgrst, 'reload schema';` after applying. Until applied, saveHost's dossier writes fail with PGRST204 and are caught (UI keeps working on optimistic local state).
+- migrations/0012_host_dossier.sql — APPLIED 2026-07-08 — adds `hosts.dossier jsonb` for the Host auto-grab feature (see "Host auto-grab" below). Stores the confirmed web-research dossier `{identity, competitions[], pending_import[], needs_review[], fetched_at, confirmed}`. Written by the signing-up owner via the normal host save path (saveHost); no new RLS (host write policies already cover it). Schema reloaded via `NOTIFY pgrst, 'reload schema';`. (createHostFromSignup also has a resilient fallback — it retries the hosts insert without the dossier if the column is ever missing — so host creation never depends on this migration.)
 - migrations/0099_cleanup_duplicate_policies.sql — OPTIONAL dedupe of redundant RLS policies
 
 ### Host logos (crop + background-removal at upload)
@@ -443,8 +443,9 @@ never auto-apply; keys server-side; 45s provider bound under the 60s ceiling).
 - TDZ is the primary white-screen vector — mandatory check after every edit
 - Host auto-grab endpoints (api/research_host.py, the parse_pdf probe) are NEW —
   NOT testable on localhost (404 until deployed); use MOCK_RESEARCH for the UI and
-  test live calls on the branch's Vercel preview. Migration 0012 must be applied
-  before dossier persistence works (else PGRST204, caught by saveHost).
+  test live calls on the branch's Vercel preview. Migration 0012 is APPLIED
+  (2026-07-08) so dossier persistence works; createHostFromSignup also retries the
+  hosts insert without the dossier as a belt-and-suspenders fallback.
 - Trailing /rest/v1/ in VITE_SUPABASE_URL breaks the Supabase client
 - Non-UUID IDs cause silent 400s (events.id = uuid; host ids = text)
 - Dev view ALWAYS starts OFF on every page load — opt-in per session via
