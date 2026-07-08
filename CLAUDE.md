@@ -173,6 +173,7 @@ Audited against live DB 2026-06-25 — see migrations/README.md for full notes.
 - migrations/0009_athlete_media.sql — APPLIED 2026-07-02 — athlete_profiles.media jsonb ('[]'). Athlete-owned photo+video gallery (array of {url,type,caption}); owner-write via existing 0004/0005 RLS. Managed in MediaModal (popup opened by a Media button between Calendar and Instagram under the profile photo), saved via saveAthleteMedia/upsertAthleteProfile.
 - migrations/0010_athlete_media_bucket.sql — APPLIED 2026-07-02 — public `athlete-media` storage bucket (50MB, image+video MIME) + public-read/authenticated-write policies mirroring athlete-photos. REQUIRED for athlete video uploads (athlete-photos is images-only, 5MB). Uploaded to by uploadAthleteMedia.
 - migrations/0011_host_logos_bucket.sql — APPLIED 2026-07-07 — public `host-logos` storage bucket (5MB, PNG/webp) + public-read/authenticated-write policies mirroring athlete-media. Backs the host/association self-logo feature: HostEditModal lets the user square-crop/centre the logo (LogoCropper), then removeLogoBackground strips the background ONCE at save time (KEEPING original colours — corner-sampled bg → transparent, feathered edge), uploadHostLogo stores the PNG here, and writes its public URL to hosts.logo_url. Reuses the existing hosts.logo_url column (from 0008) — no new column.
+- migrations/0012_host_dossier.sql — PENDING (not yet applied) — adds `hosts.dossier jsonb` for the Host auto-grab feature (see "Host auto-grab" below). Stores the confirmed web-research dossier `{identity, competitions[], pending_import[], needs_review[], fetched_at, confirmed}`. Written by the signing-up owner via the normal host save path (saveHost); no new RLS (host write policies already cover it). Run `NOTIFY pgrst, 'reload schema';` after applying. Until applied, saveHost's dossier writes fail with PGRST204 and are caught (UI keeps working on optimistic local state).
 - migrations/0099_cleanup_duplicate_policies.sql — OPTIONAL dedupe of redundant RLS policies
 
 ### Host logos (crop + background-removal at upload)
@@ -279,7 +280,9 @@ Under-16: guardian-email approval only, never ID verification.
 ## Host trust
 Roles: Owner + Editor. Editor can do everything except remove/demote Owner.
 Last Owner never removable. First claimant = Owner but write/import gated
-until Casey flips verified=true in Supabase.
+until Casey flips verified=true in Supabase. Host auto-grab bulk import honours
+this same gate (verified owner membership; dev view bypasses) — see "Host
+auto-grab".
 Invite links: 7-day expiry, single-use.
 Tables: host_members, host_invites, host_audit.
 
@@ -376,7 +379,10 @@ Table: athlete_claims.
   preview shows it as a confirm-strip, never auto-applied. Host club's home
   country is the default event country when the document is silent (HK club ⇒
   HKG), overridable in preview.
-- Timeout: 50s. vercel.json sets maxDuration 60 (parse_pdf + enrich).
+- Probe mode: POST `{probe:true, url}` → fetch+sniff+detect_format only (no
+  parse/AI, ~10s bound), returns `{ok, reachable, family, parseable, ...}`. Backs
+  the Host auto-grab discovery view — see "Host auto-grab".
+- Timeout: 50s. vercel.json sets maxDuration 60 (parse_pdf + enrich + research_host).
 - Test loop: /opt/anaconda3/bin/python3 tools/test_parser.py --diff — one
   fixture per family in tools/fixtures/ (17 fixtures incl. xlsx/blw/html);
   regenerate baselines deliberately, never blind-accept.
@@ -389,8 +395,56 @@ Table: athlete_claims.
   vision-by-design / 4 images / 3 deferred-to-vision (Palma+SOF Sailti glyph,
   Hebe clubspot). Scoreboard + limitations: docs/parser-v3-results.md.
 
+## Host auto-grab (AI onboarding) — added 2026-07-08
+When a new host (club / class association / federation) signs up, AthLink
+researches them on the web and offers to pre-fill their profile + bulk-import
+their past competitions. Three phases, all sharing the enrich.py contract (never
+hard-fail: HTTP 200 + `{ok:false}` on any provider error; nulls over guesses;
+never auto-apply; keys server-side; 45s provider bound under the 60s ceiling).
+- **api/research_host.py** (NEW endpoint) — host-agnostic web research. POST
+  `{name, type, country_hint?, mode}`; `mode` ∈ `identity` (signup "Is this you?"
+  card: official_name/acronym/website/country/classes/blurb + up to 5 recent
+  competitions) | `competitions` (discovery: up to 20 events with a `kind`
+  pdf/html/unknown guess). Gemini-primary + Google Search grounding → Sonnet-5
+  web_search fallback (routed as task `research` in llm.py, model `gemini-3-flash`,
+  env `RESEARCH_MODEL`). Registered in vercel.json (maxDuration 60). Pure
+  name+type → dossier out — no DB access, so an admin "run for any host" UI can
+  call it later unchanged.
+- **Probe mode** (in api/parse_pdf.py) — POST `{probe:true, url}` → fetch (bounded
+  ~10s) + sniff + `detect_format` ONLY (NO parse, NO AI). Returns `{ok, reachable,
+  family, parseable, content_type, bytes}`; unreachable → `{ok:true,
+  reachable:false}` (never hard-fails). `parseable` = matched family OR input type
+  the parser accepts (pdf/image/html/xlsx/csv). `fetch_url_bytes(url, timeout=45)`
+  gained the optional timeout (default preserves behavior).
+- **Frontend** (src/App.jsx) — Phase A: best-effort research during host signup
+  (800ms debounce + blur, `researchedNameRef` refire guard, AbortController for
+  stale responses) → liquid-glass "Is this you?" card; confirm stashes the dossier
+  into the `createHostFromSignup` hosts insert. Phase B: `HostDiscoveryModal`
+  (portal-header "Import past results" pill / post-signup CTA) extends the dossier
+  via competitions-mode research, probes each URL (3-concurrent pool), fuzzy-dedups
+  vs `events` (name + year via dateKey + class) — matches → "Already on AthLink" +
+  Claim it (event_claims). Phase C: bulk import queue (2-concurrent pool → parse
+  via URL path → `validate.py` confidence gate → high-confidence commit with
+  provenance `owner=hostId, owner_confirmed=true, imported_by=hostId,
+  organizer_name` from dossier, `sources=[url]`, `eventFingerprint` dedup;
+  low-confidence/parse-error → `dossier.needs_review`, opened in the STANDARD
+  import preview modal pre-loaded). Selection + needs_review persist to
+  `hosts.dossier` via saveHost.
+- **Verified gate**: bulk import is gated on the host being verified — realized via
+  the owner's verified `host_members` row (`hosts` has no verified column). Unverified
+  hosts see a disabled "Ready to import — pending verification" button (selection
+  still saves); dev view (Ctrl/Cmd+Shift+D) bypasses it like every other gate.
+- **MOCK_RESEARCH** (const, module scope in src/App.jsx, DEFAULT false) — stubs
+  research/probe/parse for localhost smoke tests (the research_host + probe
+  endpoints are NEW, so they 404 on localhost until pushed to a Vercel preview).
+  Must stay false in commits.
+
 ## Known gotchas
 - TDZ is the primary white-screen vector — mandatory check after every edit
+- Host auto-grab endpoints (api/research_host.py, the parse_pdf probe) are NEW —
+  NOT testable on localhost (404 until deployed); use MOCK_RESEARCH for the UI and
+  test live calls on the branch's Vercel preview. Migration 0012 must be applied
+  before dossier persistence works (else PGRST204, caught by saveHost).
 - Trailing /rest/v1/ in VITE_SUPABASE_URL breaks the Supabase client
 - Non-UUID IDs cause silent 400s (events.id = uuid; host ids = text)
 - Dev view ALWAYS starts OFF on every page load — opt-in per session via
