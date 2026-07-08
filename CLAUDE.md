@@ -420,10 +420,17 @@ never auto-apply; keys server-side; 45s provider bound under the 60s ceiling).
   (800ms debounce + blur, `researchedNameRef` refire guard, AbortController for
   stale responses) → liquid-glass "Is this you?" card; confirm stashes the dossier
   into the `createHostFromSignup` hosts insert. Phase B: `HostDiscoveryModal`
-  (portal-header "Import past results" pill / post-signup CTA) extends the dossier
-  via competitions-mode research, probes each URL (3-concurrent pool), fuzzy-dedups
-  vs `events` (name + year via dateKey + class) — matches → "Already on AthLink" +
-  Claim it (event_claims). Phase C: bulk import queue (2-concurrent pool → parse
+  extends the dossier via competitions-mode research, probes each URL (3-concurrent
+  pool), fuzzy-dedups vs `events` (name + year via dateKey + class) — matches →
+  "Already on AthLink" + Claim it (event_claims). **Entry (all hosts):** a
+  dismissible "We found your organisation on the web" banner on every host page
+  (managers/members only) — clicking "See what we found" opens discovery AND sets
+  `dossier.grab_dismissed` (persisted) so it disappears; a "×" dismisses without
+  opening. The scraped site is set in Edit page → **Host website** (stored at
+  `dossier.identity.website`); changing it resets `grab_dismissed` so the offer
+  returns for the new site. `dismissHostGrab()` in AthLinkMVP persists the flag.
+  (The old portal-header "Import past results" pill was removed; the needs-review
+  badge stays.) Phase C: bulk import queue (2-concurrent pool → parse
   via URL path → `validate.py` confidence gate → high-confidence commit with
   provenance `owner=hostId, owner_confirmed=true, imported_by=hostId,
   organizer_name` from dossier, `sources=[url]`, `eventFingerprint` dedup;

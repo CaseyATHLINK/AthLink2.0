@@ -6557,6 +6557,7 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
   const[tab,setTab]=React.useState("details");
   const[name,setName]=React.useState(host?.name||"");
   const[country,setCountry]=React.useState(host?.country||"");
+  const[website,setWebsite]=React.useState(host?.dossier?.identity?.website||"");  // official results site (auto-grab)
   const[slug,setSlug]=React.useState(host?.slug||pascalSlug(host?.name||""));
   const[slugErr,setSlugErr]=React.useState("");
   const[busy,setBusy]=React.useState(false);
@@ -6596,6 +6597,15 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
     setBusy(true); setSlugErr("");
     const patch={name:name.trim()||host.name,country:(country||"").toUpperCase()||null};
     if((logo||null)!==(host?.logo_url||null)) patch.logo_url=logo||null;  // only when changed
+    // Host website (auto-grab source). When it changes, merge into
+    // dossier.identity.website AND reset grab_dismissed so the "We found your
+    // organisation" offer returns to scan the new site.
+    const curSite=host?.dossier?.identity?.website||"";
+    const newSite=website.trim();
+    if(newSite!==curSite){
+      const base=host?.dossier||{};
+      patch.dossier={...base,identity:{...(base.identity||{}),website:newSite||null},grab_dismissed:false};
+    }
     await onSave(patch);
     // Public slug (URL). Saved separately so a "taken" clash can be reported.
     if(onSaveSlug&&(slug||"").trim()&&slug.trim()!==(host?.slug||pascalSlug(host?.name||""))){
@@ -6676,6 +6686,13 @@ function HostEditModal({host,onSave,onSaveSlug,onUploadLogo,onClose,canManage,me
                   <div style={{position:"relative"}}>
                     <input value={country} onChange={e=>setCountry(e.target.value.toUpperCase().slice(0,3))} placeholder="HKG" maxLength={3} style={{...barStyle,paddingRight:46}}/>
                     {iso&&<span style={{position:"absolute",right:18,top:"50%",transform:"translateY(-50%)",fontSize:17,pointerEvents:"none"}}>{iocFlag(country)}</span>}
+                  </div>
+                </div>
+                <div style={{marginTop:14}}>
+                  <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Host website <span style={{fontWeight:400}}>(optional)</span></label>
+                  <input value={website} onChange={e=>setWebsite(e.target.value)} type="url" inputMode="url" placeholder="e.g. sailing.org.hk" style={barStyle}/>
+                  <div style={{fontSize:11.5,color:"var(--mut)",margin:"6px 2px 0",lineHeight:1.45,display:"flex",alignItems:"center",gap:6}}>
+                    <Sparkles size={12} style={{flex:"none",color:"var(--accent)"}}/>Your official results site — we can help scrape old competitions from here.
                   </div>
                 </div>
                 <div style={{display:"flex",gap:10,marginTop:"auto",paddingTop:18}}>
@@ -7143,6 +7160,15 @@ export default function AthLinkMVP(){
         await sbPost("hosts",row);
       }
     }catch(e){console.error("saveHost persist",e);}
+  };
+  // Host auto-grab: permanently dismiss the "We found your organisation" invitation
+  // for this host (persists dossier.grab_dismissed). Reset to false when the host
+  // sets/changes their website in Edit page, so the offer returns for the new site.
+  const dismissHostGrab=(hostId=portal)=>{
+    if(!hostId) return;
+    const base=hostById(hostId)?.dossier||{};
+    if(base.grab_dismissed) return;
+    saveHost(hostId,{dossier:{...base,grab_dismissed:true}});
   };
   // Host auto-grab: build + persist ONE discovered event with host provenance.
   // Mirrors importPreview's fingerprint/dedup contract but is self-organized by
@@ -11438,10 +11464,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
                 <Settings size={14} style={{flex:"none"}}/> Edit page
               </MagneticItem>}
-              {/* Host auto-grab: import past results (any member of a host with a dossier; dev too) */}
-              {!isClassPortal&&host?.dossier&&(canManageMembers||!!myPortalMembership)&&<MagneticItem className="portal-pill" onClick={()=>{setDiscoveryReview(false);setShowDiscovery(true);}} strength={0.28}>
-                <Upload size={14} style={{flex:"none"}}/> Import past results
-              </MagneticItem>}
+              {/* Host auto-grab: entry is the dismissible "We found your organisation"
+                  banner below (not a header pill) + the Host website field in Edit page. */}
               {/* Host auto-grab: needs-review badge (non-empty queue) */}
               {!isClassPortal&&(canManageMembers||!!myPortalMembership)&&(host?.dossier?.needs_review?.length>0)&&<MagneticItem className="portal-pill" onClick={()=>{setDiscoveryReview(true);setShowDiscovery(true);}} strength={0.28}>
                 <span style={{display:"inline-flex",alignItems:"center",gap:6,color:"#8a6400"}}><AlertCircle size={14} style={{flex:"none"}}/> {host.dossier.needs_review.length} need review</span>
@@ -11489,17 +11513,21 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
           </div>
         )}
-        {/* Host auto-grab: post-signup "see what we found" CTA (host confirmed research at signup) */}
-        {!isClassPortal&&host?.dossier&&(canManageMembers||!!myPortalMembership)&&(()=>{
-          const nComp=(host.dossier.competitions||[]).length;
+        {/* Host auto-grab: "We found your organisation on the web" invitation — shown
+            to the host (managers/members) on EVERY host page until dismissed. Clicking
+            opens discovery AND dismisses it for good. The website used to scrape lives
+            in Edit page → "Host website". */}
+        {!isClassPortal&&(canManageMembers||!!myPortalMembership)&&!host?.dossier?.grab_dismissed&&(()=>{
+          const nComp=(host?.dossier?.competitions||[]).length;
           return(
             <div style={{display:"flex",alignItems:"center",gap:12,background:"rgba(13,142,207,.08)",border:"1px solid rgba(13,142,207,.28)",borderRadius:14,padding:"14px 18px",marginBottom:18}}>
               <Sparkles size={20} color="var(--accent)" style={{flex:"none"}}/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontWeight:700,color:"var(--navy)",fontSize:14}}>We found {nComp>0?`${nComp} past ${nComp===1?"competition":"competitions"}`:"your organisation"} on the web</div>
-                <div style={{fontSize:13,color:"var(--mut)",marginTop:2,lineHeight:1.5}}>Review what AthLink discovered and import the results in a few clicks.</div>
+                <div style={{fontSize:13,color:"var(--mut)",marginTop:2,lineHeight:1.5}}>Let AthLink pull your past competitions from the web — no manual entry. Set or change the site we scrape in <b>Edit page → Host website</b>.</div>
               </div>
-              <button className="btn cta" style={{flex:"none",whiteSpace:"nowrap"}} onClick={()=>{setDiscoveryReview(false);setShowDiscovery(true);}}>See what we found <ChevronRight size={15}/></button>
+              <button className="btn cta" style={{flex:"none",whiteSpace:"nowrap"}} onClick={()=>{setDiscoveryReview(false);setShowDiscovery(true);dismissHostGrab();}}>See what we found <ChevronRight size={15}/></button>
+              <button className="x" title="Dismiss" style={{flex:"none"}} onClick={()=>dismissHostGrab()}><X size={15}/></button>
             </div>
           );
         })()}
