@@ -614,6 +614,7 @@ export default function Landing({ sports = [] }) {
           <div className="hero-portals">
             <button className="pbtn" onClick={goSailing}>Sailing<span className="pill-live">Live</span><ArrowRight size={16} /></button>
             <button className="pbtn soon" disabled aria-disabled="true">Golf<span className="pill-soon">Coming soon</span></button>
+            <button className="pbtn soon" disabled aria-disabled="true">Rowing<span className="pill-soon">Coming soon</span></button>
           </div>
         </div>
       </header>
