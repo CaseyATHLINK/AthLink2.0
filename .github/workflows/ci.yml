@@ -24,7 +24,8 @@ jobs:
         with: { python-version: "3.12" }
       - name: Python syntax check
         run: |
-          for f in api/*.py; do python3 -c "import ast,sys; ast.parse(open('$f').read())"; done
+          # Recurse: backend now lives in api/_shared + api/sailing as well as api/ root.
+          for f in $(find api -name '*.py' -not -path '*/__pycache__/*'); do python3 -c "import ast,sys; ast.parse(open('$f').read())"; done
       - name: Parser regression vs baseline
         run: |
           pip install -r requirements.txt || true

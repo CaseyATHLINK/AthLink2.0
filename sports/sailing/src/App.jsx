@@ -4729,7 +4729,7 @@ function HostPicker({hosts,value,onChange,orgName,onOrgName}){
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* ── Host auto-grab: localhost mock ───────────────────────────────────────────
-   /api/research_host and the /api/parse_pdf probe are NEW endpoints — they only
+   /api/research_host and the /api/sailing/parse_pdf probe are NEW endpoints — they only
    exist on a Vercel preview deploy, so on localhost:5173 they 404. Flip
    MOCK_RESEARCH to true to smoke-test the signup research card + discovery view
    WITHOUT a deploy. It MUST default to false — with it false, real calls hit the
@@ -4770,7 +4770,7 @@ function mockResearchCompetitions(name,kind,countryHint,site){
   return {ok:true,mode:"competitions",found:true,official_name:name.trim(),
     website:`https://${dom}`,country:c,competitions:comps,sources:[`https://${dom}`]};
 }
-// Mirrors a /api/parse_pdf {url} parse response (single-fleet). The 29er rows come
+// Mirrors a /api/sailing/parse_pdf {url} parse response (single-fleet). The 29er rows come
 // back low-confidence so the smoke test exercises the needs-review path too.
 function mockParse(row){
   const low=/29er/i.test(row?.name||row?.class||"");
@@ -4782,7 +4782,7 @@ function mockParse(row){
     low_confidence:low,confidence:low?0.4:0.9,
     confidence_reasons:low?["only 3 entries parsed (rows likely dropped)"]:["looks clean"]};
 }
-// Mirrors the /api/parse_pdf probe response.
+// Mirrors the /api/sailing/parse_pdf probe response.
 function mockProbe(url){
   if(!url) return {ok:true,reachable:false};
   const isPdf=/\.pdf(\?|$)/i.test(url), isHtml=/\.html?(\?|$)/i.test(url);
@@ -6794,7 +6794,7 @@ function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSaveDossier
         let res;
         try{
           if(MOCK_RESEARCH) res=mockProbe(c.url);
-          else{ const r=await fetch("/api/parse_pdf",{method:"POST",headers:{"Content-Type":"application/json"},
+          else{ const r=await fetch("/api/sailing/parse_pdf",{method:"POST",headers:{"Content-Type":"application/json"},
             body:JSON.stringify({probe:true,url:c.url})}); res=await r.json(); }
         }catch{ res={ok:true,reachable:false}; }
         if(!cancelled) setProbes(p=>({...p,[k]:res}));
@@ -8935,7 +8935,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // send everything there first. For HTML, fall back to the in-browser parser
     // only if the server is unreachable or can't read the page.
     try{
-      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const res=await fetch(`/api/sailing/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const data=await res.json();
       if(data.ok) return data;
       if(!isHtml){
@@ -8987,7 +8987,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // 1) page count (instant, server-side via pypdf)
     let pageCount=1;
     try{
-      const cres=await fetch(`/api/parse_pdf?count=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const cres=await fetch(`/api/sailing/parse_pdf?count=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const cdata=await cres.json();
       if(cdata.ok&&cdata.page_count) pageCount=Math.max(1,cdata.page_count|0);
     }catch{ /* fall back to a single whole-file AI call below */ }
@@ -9010,7 +9010,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const pageResults=new Array(pageCount).fill(null);
     const pageErrors=[];
     const fetchPage=async(pi)=>{
-      const r=await fetch(`/api/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const r=await fetch(`/api/sailing/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       return r.json();
     };
     let doneP=0;
@@ -9095,7 +9095,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // Fetch + parse a live results link server-side (browser can't, due to CORS).
   const parseLink=async(url,mode="ai")=>{
     try{
-      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,mode})});
+      const res=await fetch(`/api/sailing/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,mode})});
       const data=await res.json();
       if(!data.ok) return{ok:false,error:data.error||"Could not parse that link."};
       return data;
@@ -9213,7 +9213,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       if(data.ok&&data.nat_from_flags&&isPdf){
         try{
           setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading nationalities from flags…"]}:l));
-          const nr=await fetch(`/api/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
+          const nr=await fetch(`/api/sailing/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
           const nd=await nr.json();
           if(nd.ok&&nd.nats&&Object.keys(nd.nats).length){
             const norm=v=>String(v||"").replace(/\s+/g,"").toLowerCase();
