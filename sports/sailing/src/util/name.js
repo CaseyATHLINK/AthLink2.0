@@ -18,3 +18,6 @@ export function eventKey(ev){
 export function ordinalOf(n){const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
 
 export const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
+
+export const pascalSlug=(s)=>String(s||"").replace(/[^A-Za-z0-9]+/g," ").trim()
+  .split(/\s+/).filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join("");
