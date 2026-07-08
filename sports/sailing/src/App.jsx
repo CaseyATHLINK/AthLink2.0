@@ -13,8 +13,8 @@ import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
 import { canonName, eventKey, ordinalOf, initials, pascalSlug, avatarColor } from "./util/name.js";
 import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry, SUBCLASSES, nuggetFor, classFromFleetName } from "./util/class.js";
 import { DIV_COLOR, DIV_LABEL, parseDiv, divTokens, divToString, normGender, normCategory, genderCatOf, GENDER_COLOR } from "./util/gender.js";
-import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender, ATHLETE_USERNAMES, applyAthleteUsernames, usernameForName, nameForUsername } from "./data/athletes.js";
-import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, assocName, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed, MOCK_RESEARCH, mockResearchIdentity, mockResearchCompetitions, mockParse, mockProbe } from "./data/hosts.js";
+import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender, ATHLETE_USERNAMES, applyAthleteUsernames, usernameForName, nameForUsername, META, athleteNat, athleteBirthYear, buildHomeCountry } from "./data/athletes.js";
+import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, assocName, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed, MOCK_RESEARCH, mockResearchIdentity, mockResearchCompetitions, mockParse, mockProbe, eventCountryCode, governingFeds, eventAssocs, eventFingerprint, hostLocation } from "./data/hosts.js";
 import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeleteProfile, fetchProfileNames, fetchAllClaims, createClaim, decideClaim, profileNameKey, fetchAllAthleteProfiles, upsertAthleteProfile, uploadAthletePhoto, uploadAthleteMedia, fetchAllEventClaims, createEventClaim, decideEventClaim } from "./data/profiles.js";
 import { isCode, scoreEvent, scorePreview, aggregate } from "./data/scoring.js";
 import { parseHtml } from "./data/parse-html.js";
@@ -36,12 +36,6 @@ import { fetchProfile, upsertProfile, authGoogleOAuth } from "@athlink/auth";
 
 
 /* ── static data ──────────────────────────────────────────────────────── */
-const META={
-  "Bunyamin Klongsamoot":{nat:"THA"},"Kan Kachachuen":{nat:"THA"},
-  "Chatree Makmul":{nat:"THA"},"Manintorn Leelas":{nat:"THA"},
-  "Mihiro Okada":{nat:"JPN"},"Iwao Yasuda":{nat:"JPN"},
-  "Yuto Tsutsumi":{nat:"JPN"},"Taishi Goto":{nat:"JPN"},
-};
 // ── Base classes (used for colour coding) ──
 
 // Accepted upload types for the import pop-up (file input `accept` + drop zone).
@@ -134,48 +128,6 @@ const pathToState=(pathname,athleteNames)=>{
   return null;
 };
 // Association → ISO country flag (HK gets a flag; International gets none)
-const assocFlag=scope=>scope==="HK"?"🇭🇰":"";
-// scope → governing country code (extend as more countries are added)
-const SCOPE_COUNTRY={HK:"HKG"};
-// The country an event is "hosted in": its own country code, else its owner's scope country.
-const eventCountryCode=ev=>{
-  if(ev.country) return String(ev.country).toUpperCase();
-  return SCOPE_COUNTRY[hostById(ev.owner)?.scope]||"";
-};
-// Federations that govern an event (auto-collaborators): owner is a host in the
-// federation's country, OR the event's host country matches the federation's.
-const governingFeds=ev=>{
-  const ownerCountry=SCOPE_COUNTRY[hostById(ev.owner)?.scope];
-  const cc=eventCountryCode(ev);
-  return FEDERATIONS.filter(f=>(ownerCountry&&ownerCountry===f.country)||(cc&&cc===f.country));
-};
-// All hosts that own/co-own an event, INCLUDING auto-collaborating federations.
-const eventAssocs=ev=>[...new Set([ev.owner,...(ev.collabs||[]),...governingFeds(ev).map(f=>f.id)].filter(Boolean))];
-
-// Dedup fingerprint: normalised name + date + class + sorted sail-number set.
-// Two imports of the same regatta (by different hosts) collide here so we can
-// link them instead of creating duplicates.
-const eventFingerprint=ev=>{
-  const norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
-  const sails=[...new Set((ev.entries||[]).map(e=>norm(e.sail)).filter(Boolean))].sort();
-  return [norm(ev.name),norm(ev.date),norm(ev.cls||ev.class),sails.join(",")].join("|");
-};
-// Where a host's globe is oriented (IOC code): its explicitly-set country, else
-// the most common country across the events it owns/co-owns. Used ONLY for the
-// "where they compete" globe/footprint and overridable form prefills — NEVER for
-// a flag next to the host's name. A host with no explicit country and no events
-// has no orientation (null); we never assume one from `scope` (no default HKG).
-const hostLocation=(hostId,evList)=>{
-  const h=hostById(hostId);
-  if(h?.country) return String(h.country).toUpperCase();
-  const counts={};
-  (evList||[]).forEach(ev=>{
-    if(!eventAssocs(ev).includes(hostId)&&ev.owner!==hostId) return;
-    const cc=eventCountryCode(ev); if(cc) counts[cc]=(counts[cc]||0)+1;
-  });
-  const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-  return top?top[0]:null;
-};
 
 
 // Global class colour coding (used by calendar circles)
@@ -266,56 +218,6 @@ function outstandingAchievementFor(h,athleteName){
 }
 
 // Derive athlete's primary nationality from their result history
-function athleteNat(name,evList){
-  const counts={};
-  for(const ev of evList){
-    const e=ev.entries.find(x=>x.helm===name||x.crew===name);
-    if(e?.nat){counts[e.nat]=(counts[e.nat]||0)+1;}
-  }
-  if(!Object.keys(counts).length) return META[name]?.nat||"";
-  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
-}
-
-// Most-frequently-seen birth year for an athlete (as helm or crew), or null.
-function athleteBirthYear(name,evList){
-  const counts={};
-  for(const ev of (evList||[])){
-    for(const e of (ev.entries||[])){
-      let by=null;
-      if(e.helm===name) by=e.birth_year;
-      else if(e.crew===name) by=e.crew_birth_year;
-      if(by){counts[by]=(counts[by]||0)+1;}
-    }
-  }
-  const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-  return top?parseInt(top[0]):null;
-}
-
-// Build name -> home ISO-A2 (most frequent nationality seen anywhere in the data)
-function buildHomeCountry(evList){
-  const tally={};
-  for(const ev of evList){
-    for(const e of (ev.entries||[])){
-      const ioc=e.nat||""; if(!ioc) continue;
-      const iso=IOC_ISO[ioc]||""; if(!iso) continue;
-      for(const nm of [e.helm,e.crew]){
-        if(!nm) continue;
-        (tally[nm]||(tally[nm]={}));
-        tally[nm][iso]=(tally[nm][iso]||0)+1;
-      }
-    }
-  }
-  // seed with META nationality (weak weight) so known athletes still resolve
-  for(const nm in META){
-    const iso=IOC_ISO[META[nm]?.nat||""]||""; if(!iso) continue;
-    (tally[nm]||(tally[nm]={})); if(!tally[nm][iso]) tally[nm][iso]=0.5;
-  }
-  const home={};
-  for(const nm in tally){
-    home[nm]=Object.entries(tally[nm]).sort((a,b)=>b[1]-a[1])[0][0];
-  }
-  return home;
-}
 
 
 /* ── Supabase + Auth (GoTrue) plumbing lives in @athlink/core (single source of
