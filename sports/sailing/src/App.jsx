@@ -12,6 +12,7 @@ import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sb
 import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
 import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
 import { canonName, eventKey, ordinalOf, initials } from "./util/name.js";
+import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry } from "./util/class.js";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
    NEVER_DISCARD: cannot be dropped even if it would improve the score
@@ -166,49 +167,16 @@ const META={
   "Yuto Tsutsumi":{nat:"JPN"},"Taishi Goto":{nat:"JPN"},
 };
 // ── Base classes (used for colour coding) ──
-const CLASSES=[
-  {id:"29er",    short:"29er"},
-  {id:"ilca",    short:"ILCA"},
-  {id:"optimist",short:"OPTI",full:"Optimist"},
-  {id:"49er",    short:"49er"},
-];
-// ── Custom boat classes (runtime registry, mirrors the host pattern) ──
-// Beyond the four main CLASSES above. Each: {id, short, full, color, canonical}.
-// In-memory only for now — seeded empty; DB persistence comes later.
+
 // Accepted upload types for the import pop-up (file input `accept` + drop zone).
 const IMPORT_ACCEPT=".pdf,.png,.jpg,.jpeg,.webp,.heic,.xlsx,.xls,.csv,.html,.htm,.blw";
-let CUSTOM_CLASSES=[];
 // In-memory (session-scoped) snapshot of an unfinished import batch. Restored when
 // the import pop-up is reopened within the same page session; cleared on successful
 // publish/save-draft and when a fresh import batch starts. NOT persisted — page
 // reload clears it by design (CLAUDE.md forbids dev-view localStorage/sessionStorage).
 let IMPORT_DRAFT=null;
-const customClassById=id=>CUSTOM_CLASSES.find(c=>c.id===id)||null;
-// Normalise a class name → canonical key for dedup (lowercase, strip non-alphanumerics).
-const canonClass=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]/g,"");
-// Muted navy-palette colours auto-assigned to custom classes (no aggressive highlights).
-const CUSTOM_CLASS_PALETTE=["#1f4e80","#0d8ecf","#5b6b80"];
-// Best-effort readable text from a custom-class canonical slug, used only when no
-// registry entry exists (e.g. after a refresh — custom classes are in-memory).
-// Adds spaces at letter/number boundaries and uppercases; never the bare slug.
-const prettifyClassSlug=(slug)=>{
-  const s=String(slug||"").trim();
-  if(!s) return "Custom class";
-  return s.replace(/([a-z])([0-9])/gi,"$1 $2").replace(/([0-9])([a-z])/gi,"$1 $2").toUpperCase();
-};
-// Single source of truth for displaying ANY class id:
-//   • main class  → its short/full from CLASSES
-//   • custom class in the live registry → its stored (readable) short
-//   • orphaned "custom:<slug>" id (no entry) → prefix stripped + prettified
-// Never returns the literal "custom:" prefix.
-const classLabel=(clsId)=>{
-  const main=CLASSES.find(c=>c.id===clsId);
-  if(main) return main.short||main.full||clsId;
-  const cc=customClassById(clsId);
-  if(cc) return cc.short||cc.full||clsId;
-  if(typeof clsId==="string"&&clsId.startsWith("custom:")) return prettifyClassSlug(clsId.slice(7));
-  return clsId;
-};
+
+
 
 // ── Associations: each portal is one association ──
 // ── Hosts (associations, clubs, federations) ────────────────────────────────
@@ -451,14 +419,8 @@ const nuggetFor=(cls,subclass)=>{
 //   ILCA  -> "ILCA red"      (#E2231A, matches the ILCA logo red; sub-rigs are dark→light shades of it)
 //   Optimist -> "Optimist black" (#000000, matches the Optimist logo; lower fleets fade to grey)
 //   49er  -> "49er green"    (#5FAF4E); women's sub-fleet "49er FX" -> "49er FX blue" (#1B87C9, matches the 49er FX logo)
-const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#E2231A","optimist":"#000000"};
-const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||customClassById(cls)?.color||"#5b6b80";
 // Class colour at a given alpha (for translucent buttons that go solid on hover).
-const classColorA=(cls,a)=>{
-  const hex=classColor(cls).replace("#","");
-  const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
-  return `rgba(${r},${g},${b},${a})`;
-};
+
 
 // Sub-class picker (ILCA 4/6/7, Optimist fleets, 49er / 49er FX) — shown for any class with SUBCLASSES.
 // Hover-reveal: renders the parent class button; when the class has SUBCLASSES and is
@@ -6673,7 +6635,7 @@ export default function AthLinkMVP(){
     if(existing) return existing.id;
     const color=CUSTOM_CLASS_PALETTE[CUSTOM_CLASSES.length%CUSTOM_CLASS_PALETTE.length];
     const cc={id:`custom:${canonical}`,short:nm,full:nm,color,canonical};
-    CUSTOM_CLASSES=[...CUSTOM_CLASSES,cc];
+    setCustomClassRegistry([...CUSTOM_CLASSES,cc]);
     setCustomClasses(CUSTOM_CLASSES);
     persistCustomClass(cc);
     return cc.id;
@@ -7025,7 +6987,7 @@ export default function AthLinkMVP(){
       const rows=await fetchCustomClasses(auth?.token);
       if(Array.isArray(rows)&&rows.length){
         const db=new Map(rows.filter(r=>r.canonical).map(r=>[r.canonical,{id:r.id,short:r.short,full:r.full||r.short,color:r.color,canonical:r.canonical}]));
-        CUSTOM_CLASSES=[...db.values(),...CUSTOM_CLASSES.filter(c=>!db.has(c.canonical))];
+        setCustomClassRegistry([...db.values(),...CUSTOM_CLASSES.filter(c=>!db.has(c.canonical))]);
         setCustomClasses(CUSTOM_CLASSES);
         rows.forEach(r=>dropPendingCustomClass(r.canonical)); // already in DB — no retry needed
       }
@@ -7050,7 +7012,7 @@ export default function AthLinkMVP(){
       const nm=prettifyClassSlug(canonical);
       missing.set(canonical,{id,short:nm,full:nm,color,canonical});
     });
-    if(missing.size){ CUSTOM_CLASSES=[...CUSTOM_CLASSES,...missing.values()]; setCustomClasses(CUSTOM_CLASSES); }
+    if(missing.size){ setCustomClassRegistry([...CUSTOM_CLASSES,...missing.values()]); setCustomClasses(CUSTOM_CLASSES); }
   },[events,customClasses]);
   // Extras row for a profile name (or null).
   const athleteProfileOf=(nm)=>athleteProfiles[profileNameKey(nm)]||null;
