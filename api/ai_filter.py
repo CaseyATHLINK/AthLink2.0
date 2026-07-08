@@ -7,10 +7,12 @@ so the Anthropic API key is never exposed to the browser.
 from http.server import BaseHTTPRequestHandler
 import json, os, sys
 
-# Sibling import (same pattern parse_pdf.py uses for validate.py).
-_API_DIR = os.path.dirname(os.path.abspath(__file__))
-if _API_DIR not in sys.path:
-    sys.path.insert(0, _API_DIR)
+# Shared LLM router now lives in api/_shared/llm.py; put it on sys.path (the dir
+# is force-bundled per-function via vercel.json includeFiles). Same idiom in
+# enrich.py / research_host.py.
+_SHARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_DIR)
 from llm import complete_text, LLMError, _gemini_key
 
 # Per-task routing lives in llm.py (filter/overview/hover → Gemini

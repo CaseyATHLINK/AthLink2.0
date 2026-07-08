@@ -39,12 +39,17 @@ try:
 except ImportError:
     pdfplumber = None
 
-# Confidence gate (standalone module in api/). Robust import so it works both
-# in the Vercel serverless runtime and the local test harness.
+# This parser lives in api/sailing/; validate.py + completeness.py are its
+# siblings here, and the shared LLM router is api/_shared/llm.py. Put both dirs on
+# sys.path so imports resolve in the Vercel serverless runtime and the local test
+# harness. api/_shared is force-bundled into this function via vercel.json
+# includeFiles (the dynamic path below isn't statically traceable by the builder).
 import sys
-_API_DIR = os.path.dirname(os.path.abspath(__file__))
-if _API_DIR not in sys.path:
-    sys.path.insert(0, _API_DIR)
+_API_DIR = os.path.dirname(os.path.abspath(__file__))                 # api/sailing
+_SHARED_DIR = os.path.join(os.path.dirname(_API_DIR), "_shared")      # api/_shared
+for _p in (_API_DIR, _SHARED_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 try:
     from validate import score_parse
 except Exception:

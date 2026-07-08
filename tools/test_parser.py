@@ -26,7 +26,7 @@ BASELINE = os.path.join(HERE, "baseline")
 
 # Import api/parse_pdf.py as a module without needing it on the path.
 spec = importlib.util.spec_from_file_location(
-    "parse_pdf", os.path.join(REPO, "api", "parse_pdf.py"))
+    "parse_pdf", os.path.join(REPO, "api", "sailing", "parse_pdf.py"))
 pp = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pp)
 
