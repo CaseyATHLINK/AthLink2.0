@@ -8,6 +8,7 @@ import {
   Award, TrendingUp
 } from "lucide-react";
 import { makeRatingEngine } from "@athlink/rating";
+import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, authSignUp, authSignIn, authUser } from "@athlink/core";
 
 /* ── Scoring codes ────────────────────────────────────────────────────────
    NEVER_DISCARD: cannot be dropped even if it would improve the score
@@ -1305,35 +1306,11 @@ const avatarColor=name=>{
 };
 const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
 
-/* ── Supabase ─────────────────────────────────────────────────────────── */
-const SB_URL=import.meta.env.VITE_SUPABASE_URL;
-const SB_KEY=import.meta.env.VITE_SUPABASE_ANON_KEY;
-const sbH=(SB_URL&&SB_KEY)?{"apikey":SB_KEY,"Authorization":`Bearer ${SB_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"}:null;
-const sbGet=async p=>{
-  if(!sbH) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/${p}`,{headers:sbH});
-    if(!r.ok){const err=await r.text();console.error("Supabase GET error",r.status,err);return null;}
-    return r.json();
-  }catch(e){console.error("Supabase GET network error",e);return null;}
-};
-const sbPost=async(t,b)=>{
-  if(!sbH) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/${t}`,{method:"POST",headers:sbH,body:JSON.stringify(b)});
-    if(!r.ok){const err=await r.text();console.error("Supabase POST error",r.status,err,JSON.stringify(b).slice(0,200));return null;}
-    return r.json();
-  }catch(e){console.error("Supabase POST network error",e);return null;}
-};
-const sbPatch=async(t,f,b)=>{
-  if(!sbH) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"PATCH",headers:sbH,body:JSON.stringify(b)});
-    if(!r.ok){const err=await r.text();console.error("Supabase PATCH error",r.status,err);return null;}
-    const txt=await r.text(); return txt?JSON.parse(txt):[];
-  }catch(e){console.error("Supabase PATCH network error",e);return null;}
-};
-const sbDel=async(t,f)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"DELETE",headers:{...sbH,"Prefer":""}});};
+/* ── Supabase + Auth (GoTrue) plumbing lives in @athlink/core (single source of
+   truth); App.jsx imports it above and no longer redefines SB_URL/SB_KEY/sbH/
+   sbGet/sbPost/sbPatch/sbDel/AUTH_BASE/authHeaders/authSignUp/authSignIn/authUser.
+   Sailing-local helpers below (dup-dismissals, fetchProfile/upsertProfile,
+   authGoogleOAuth) build on the imported primitives. ── */
 // Reviewed duplicate pairs (see migrations/0006). Read to seed the hidden set;
 // save so a "merge"/"don't merge" decision sticks across reloads and devices.
 const fetchDupDismissals=()=>sbGet("dup_dismissals?select=key");
@@ -1345,21 +1322,6 @@ async function saveDupDismissals(keys){
   catch(e){console.error("saveDupDismissals",e);}
 }
 
-/* ── Auth (Supabase GoTrue) — minimal, no extra deps ─────────────────────── */
-const AUTH_BASE=SB_URL?`${SB_URL}/auth/v1`:null;
-const authHeaders=tok=>({"apikey":SB_KEY,"Content-Type":"application/json",...(tok?{"Authorization":`Bearer ${tok}`}:{})});
-async function authSignUp(email,password){
-  const r=await fetch(`${AUTH_BASE}/signup`,{method:"POST",headers:authHeaders(),body:JSON.stringify({email,password})});
-  const d=await r.json(); if(!r.ok) throw new Error(d.msg||d.error_description||d.error||"Sign-up failed"); return d;
-}
-async function authSignIn(email,password){
-  const r=await fetch(`${AUTH_BASE}/token?grant_type=password`,{method:"POST",headers:authHeaders(),body:JSON.stringify({email,password})});
-  const d=await r.json(); if(!r.ok) throw new Error(d.msg||d.error_description||d.error||"Sign-in failed"); return d;
-}
-async function authUser(tok){
-  const r=await fetch(`${AUTH_BASE}/user`,{headers:authHeaders(tok)});
-  if(!r.ok) return null; return r.json();
-}
 // profiles table: {user_id (uuid, pk), role, display_name, class_id, athlete_name}
 async function fetchProfile(userId,tok){
   if(!sbH) return null;
