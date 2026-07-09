@@ -15,6 +15,11 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       # Production build of the shell — surfaces JSX/import errors (incl. most TDZ).
       - run: pnpm --filter @athlink/web build
+      # Static safety net the bundler can't provide: fails on undefined references
+      # (→ runtime ReferenceError) and imports of non-exported names (→ silently
+      # undefined) across the decomposed sailing modules + feature packages.
+      # See sports/sailing/src/README.md. Manual run: node tools/check-modules.mjs
+      - run: node tools/check-modules.mjs
 
   backend:
     runs-on: ubuntu-latest
