@@ -183,9 +183,9 @@ function DivNugget({div}){
   </span>;
 }
 
-// Class nugget dropdown for manual import (looks like the class nuggets used elsewhere).
+// Division nugget dropdown for manual import (looks like the division nuggets used elsewhere).
 function ClassPicker({value,onChange}){
-  const opts=[["29er","29er"],["ilca","ILCA"],["optimist","Optimist"],["49er","49er"]];
+  const opts=[["mens","Men's"],["womens","Women's"],["amateur","Amateur"],["senior","Senior"]];
   return <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
     {opts.map(([id,label])=>{
       const on=value===id;
@@ -225,14 +225,19 @@ const META={
   "Mihiro Okada":{nat:"JPN"},"Iwao Yasuda":{nat:"JPN"},
   "Yuto Tsutsumi":{nat:"JPN"},"Taishi Goto":{nat:"JPN"},
 };
-// ── Base classes (used for colour coding) ──
+// ── Base divisions (used for colour coding) ──
+// Golf seed divisions — same data shape as the sailing classes so the whole
+// class registry / classLabel() plumbing carries over untouched.
 const CLASSES=[
-  {id:"29er",    short:"29er"},
-  {id:"ilca",    short:"ILCA"},
-  {id:"optimist",short:"OPTI",full:"Optimist"},
-  {id:"49er",    short:"49er"},
+  {id:"mens",   short:"Men's",  full:"Men's Division"},
+  {id:"womens", short:"Women's",full:"Women's Division"},
+  {id:"amateur",short:"AM",     full:"Amateur"},
+  {id:"senior", short:"SEN",    full:"Senior"},
 ];
-// ── Custom boat classes (runtime registry, mirrors the host pattern) ──
+// Golf is a single-competitor sport: force every entry down the single-athlete
+// path and keep the helm/crew (pair) UI dormant. Flip to false to resurface it.
+const SINGLE_ATHLETE=true;
+// ── Custom divisions (runtime registry, mirrors the host pattern) ──
 // Beyond the four main CLASSES above. Each: {id, short, full, color, canonical}.
 // In-memory only for now — seeded empty; DB persistence comes later.
 // Accepted upload types for the import pop-up (file input `accept` + drop zone).
@@ -333,18 +338,21 @@ const isFedId=id=>!!fedById(id);
 const hostById=id=>assocById(id)||clubById(id)||fedById(id)||null;
 
 /* ── Clean-URL slugs & path <-> state mapping ─────────────────────────────
-   Fully-flat scheme so links read cleanly and share well:
+   Golf lives under the /golf prefix — the flat root namespace (/<Host>,
+   /<Athlete>) belongs to the DEFAULT sport (sailing), so every golf path is
+   prefixed to keep the shell routing to this module:
      /                     → AthLink landing (all sports) — handled by the shell
-     /sailing              → sailing home (all portals)
-     /<Host>               → that host's competitions   e.g. /HongKongSailingFederation
-     /<Host>/athletes      → that host's athletes
-     /<Athlete>            → an athlete profile          e.g. /CaseyLaw
-     /athletes             → all athletes
-     /ranking              → season ranking
-     /event/<id>           → one competition
-     /class/<clsId>[/athletes] → the per-class "all results" portal
-   Resolution priority for a single segment: reserved word > host > athlete.
+     /golf                 → golf home (all portals)
+     /golf/<Host>          → that host's competitions
+     /golf/<Host>/athletes → that host's athletes
+     /golf/<Athlete>       → an athlete profile
+     /golf/athletes        → all athletes
+     /golf/rankings        → season ranking
+     /golf/competition/<id>→ one competition
+     /golf/class/<clsId>[/athletes] → the per-division "all results" portal
+   Resolution priority for a segment: reserved word > host > athlete.
    Slugs are PascalCase, punctuation-stripped; matching is case-insensitive. */
+const SPORT_BASE="/golf";
 const pascalSlug=(s)=>String(s||"").replace(/[^A-Za-z0-9]+/g," ").trim()
   .split(/\s+/).filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join("");
 const slugKey=(s)=>pascalSlug(s).toLowerCase();
@@ -376,31 +384,33 @@ const collectAthleteNames=(events)=>{const s=new Set();
   (events||[]).forEach(ev=>(ev.entries||[]).forEach(e=>{
     [e&&e.helm,e&&e.crew,e&&e.name,e&&e.helm_name,e&&e.crew_name].forEach(n=>{if(n)s.add(n);});
   }));return s;};
-// Current {portal,view} → the path it should live at.
+// Current {portal,view} → the path it should live at (always under SPORT_BASE).
 const stateToPath=(portal,view)=>{
   const v=view||{name:"portals"};
-  if(v.name==="profile") return "/"+usernameForName(v.id||"");
-  if(v.name==="event")   return "/competition/"+encodeURIComponent(v.id||"");
-  if(v.name==="competitions") return v.cls?"/class/"+encodeURIComponent(v.cls):"/competitions";
-  if(v.name==="hosts")   return "/hosts";
-  if(v.name==="ranking") return "/rankings";
+  if(v.name==="profile") return SPORT_BASE+"/"+usernameForName(v.id||"");
+  if(v.name==="event")   return SPORT_BASE+"/competition/"+encodeURIComponent(v.id||"");
+  if(v.name==="competitions") return v.cls?SPORT_BASE+"/class/"+encodeURIComponent(v.cls):SPORT_BASE+"/competitions";
+  if(v.name==="hosts")   return SPORT_BASE+"/hosts";
+  if(v.name==="ranking") return SPORT_BASE+"/rankings";
   const isClassPortal=portal&&String(portal).startsWith("class:");
   if(v.name==="athletes"){
-    if(portal&&!isClassPortal) return "/"+hostSlug(portal)+"/athletes";
-    if(isClassPortal) return "/class/"+encodeURIComponent(String(portal).slice(6))+"/athletes";
-    if(v.cls) return "/class/"+encodeURIComponent(v.cls)+"/athletes";
-    return "/athletes";
+    if(portal&&!isClassPortal) return SPORT_BASE+"/"+hostSlug(portal)+"/athletes";
+    if(isClassPortal) return SPORT_BASE+"/class/"+encodeURIComponent(String(portal).slice(6))+"/athletes";
+    if(v.cls) return SPORT_BASE+"/class/"+encodeURIComponent(v.cls)+"/athletes";
+    return SPORT_BASE+"/athletes";
   }
   // events / portals home
-  if(isClassPortal) return "/class/"+encodeURIComponent(String(portal).slice(6));
-  if(portal) return "/"+hostSlug(portal);
-  return "/sailing";
+  if(isClassPortal) return SPORT_BASE+"/class/"+encodeURIComponent(String(portal).slice(6));
+  if(portal) return SPORT_BASE+"/"+hostSlug(portal);
+  return SPORT_BASE;
 };
 // A path → the {portal,view} it represents, or null if it resolves to nothing.
 const pathToState=(pathname,athleteNames)=>{
   const seg=decodeURIComponent(pathname||"/").split("/").filter(Boolean);
+  // Strip the sport prefix — every golf path lives under /golf.
+  if((seg[0]||"").toLowerCase()===SPORT_BASE.slice(1)) seg.shift();
   const s0=(seg[0]||"").toLowerCase();
-  if(seg.length===0||s0==="sailing") return {portal:null,view:{name:"portals"}};
+  if(seg.length===0) return {portal:null,view:{name:"portals"}};
   if(s0==="athletes") return {portal:null,view:{name:"athletes"}};
   if(s0==="hosts")    return {portal:null,view:{name:"hosts"}};
   if(s0==="competitions") return {portal:null,view:{name:"competitions"}};
@@ -472,21 +482,11 @@ const hostLocation=(hostId,evList)=>{
   return SCOPE_COUNTRY[h?.scope]||null;
 };
 
-// ── Sub-classes (per-event) for ILCA and Optimist ──
-// ILCA: 3 rigs, varying shades of blue (ILCA 7 darkest → ILCA 4 lightest).
-// Optimist: 3 fleets, ranked high→low performance, black → grey.
-const SUBCLASSES={
-  ilca:[
-    {id:"ilca7", label:"ILCA 7", color:"#16456e"},
-    {id:"ilca6", label:"ILCA 6", color:"#2E78C8"},
-    {id:"ilca4", label:"ILCA 4", color:"#6db3ef"},
-  ],
-  optimist:[
-    {id:"opti",       label:"Optimist",              short:"OPTI",       color:"#2b2b2b"},
-    {id:"opti-int",   label:"Optimist Intermediate", short:"OPTI Inter", color:"#6b6b6b"},
-    {id:"opti-green", label:"Optimist Green",        short:"OPTI Green", color:"#a3a3a3"},
-  ],
-};
+// ── Sub-divisions (per-event) ──
+// Golf has no seed sub-divisions (sailing used these for ILCA rigs / Optimist
+// fleets). The machinery stays intact — seed a division here to light up the
+// inline sub-division picker again.
+const SUBCLASSES={};
 const subById=(cls,id)=>(SUBCLASSES[cls]||[]).find(s=>s.id===id);
 // Nugget label + colour for an event (subclass overrides base class)
 const nuggetFor=(cls,subclass)=>{
@@ -496,13 +496,13 @@ const nuggetFor=(cls,subclass)=>{
   return{label:classLabel(cls),full:c?.full||classLabel(cls),color:classColor(cls)};
 };
 
-// Global class colour coding (used by calendar circles)
-// Canonical class colours (refer to them by these names):
-//   29er  -> "29er red"      (#E84855)
-//   ILCA  -> "ILCA blue"     (#2E78C8, lightened so it's distinct from Optimist black)
-//   Optimist -> "Optimist black" (#3D3D3D)
-//   49er  -> "49er green"    (#5FAF4E)
-const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#2E78C8","optimist":"#3D3D3D"};
+// Global division colour coding (used by calendar circles)
+// Muted navy-palette tones only (CLAUDE.md: no aggressive highlight colours):
+//   Men's   -> navy      (#1f4e80)
+//   Women's -> sky blue  (#409cff)
+//   Amateur -> slate     (#5b6b80)
+//   Senior  -> charcoal  (#3D3D3D)
+const CLASS_COLOR={"mens":"#1f4e80","womens":"#409cff","amateur":"#5b6b80","senior":"#3D3D3D"};
 const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||customClassById(cls)?.color||"#5b6b80";
 // Class colour at a given alpha (for translucent buttons that go solid on hover).
 const classColorA=(cls,a)=>{
@@ -679,7 +679,7 @@ function CustomClassPicker({classes,value,disabled,onSelect,onAdd}){
         style={{border:"1px solid "+(on?classColor(value):"var(--line)"),background:on?classColor(value):"transparent",
           color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
           cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1,display:"inline-flex",alignItems:"center",gap:6}}>
-        {sel?sel.short:(isCustomVal?classLabel(value):"+ Other class")}
+        {sel?sel.short:(isCustomVal?classLabel(value):"+ Other division")}
         <ChevronRight size={12} style={{transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
       </button>
       {open&&(
@@ -1635,7 +1635,7 @@ async function updateEventStatus(evId,status){
 
 /* ── manual form ─────────────────────────────────────────────────────── */
 const defRow=n=>({helm:"",crew:"",sail:"",nat:"",div:"",scores:Array(n).fill("")});
-const emptyForm=()=>({name:"",cls:"29er",subclass:null,collabs:[],club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
+const emptyForm=()=>({name:"",cls:"mens",subclass:null,collabs:[],club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
 
 /* ── HTML (Sailwave) parser ────────────────────────────────────────────────
    Parses the standard Sailwave HTML results format directly in the browser.
@@ -1729,7 +1729,7 @@ function parseHtml(htmlString){
     const fixedHtml=fixEncoding(htmlString);
     const parser=new DOMParser();
     const doc=parser.parseFromString(fixedHtml,'text/html');
-    const title=doc.querySelector('h1')?.textContent?.trim()||'Imported Regatta';
+    const title=doc.querySelector('h1')?.textContent?.trim()||'Imported Competition';
     const bodyText=doc.body?.textContent||'';
     const evDate=parseHtmlDate(bodyText);
     // Extract discards
@@ -2626,7 +2626,7 @@ function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,
                   <span>{formatDate(ev.date)}</span>
                   {ng&&<span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 9px",fontWeight:700,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>}
                   {sc.sameBoat
-                    ?<span style={{color:"#9fc4ec",fontWeight:700,fontSize:11.5}}>Sailed together{sc.focalRank!=null?` · #${sc.focalRank}`:""}</span>
+                    ?<span style={{color:"#9fc4ec",fontWeight:700,fontSize:11.5}}>Competed together{sc.focalRank!=null?` · #${sc.focalRank}`:""}</span>
                     :<span style={{fontVariantNumeric:"tabular-nums",fontWeight:800,fontSize:11.5}}>
                       <span style={{color:won?"#ffcf2e":"#dcecf8"}}>{sc.focalRank!=null?`#${sc.focalRank}`:"—"}</span>
                       <span style={{fontWeight:600,color:"#7fa0c0"}}>{" vs "}</span>
@@ -2683,7 +2683,7 @@ function ProgressChart({name,events,history,height=220}){
   const M={l:26,r:8,t:10,b:14};
   const plotW=W-M.l-M.r, plotH=CH-M.t-M.b;
   const yOf=s=>M.t+plotH*(1-s);
-  const infoTxt="Measured against the same top rivals shown in the Rival Web — the athletes this athlete races most often. This normalizes for event difficulty: 50% means finishing level with your rivals, wherever you race.";
+  const infoTxt="Measured against the same top rivals shown in the Rival Web — the athletes this athlete competes against most often. This normalizes for event difficulty: 50% means finishing level with your rivals, wherever you play.";
   const chip=(k,lab)=>(
     <button key={k} onClick={()=>{setMode(k);setTip(null);}}
       style={{fontSize:10,fontWeight:700,letterSpacing:".02em",border:"1px solid rgba(120,160,210,.3)",borderRadius:980,
@@ -3539,8 +3539,8 @@ function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffi
                     <div style={{fontWeight:700,color:"#eaf3fc",fontSize:14,marginBottom:3}}>{h.ev.name}</div>
                     <div style={{display:"flex",flexWrap:"wrap",gap:"4px 12px",fontSize:12.5,color:"#9fbdd9"}}>
                       {!hostMode&&<span style={{color:h.row.rank<=3?"#ffd86b":"#cfe0f2",fontWeight:700}}>
-                        {h.row.rank}<span style={{color:"#9fbdd9",fontWeight:500}}> of {h.fleet} boats</span></span>}
-                      {hostMode&&<span style={{color:"#cfe0f2",fontWeight:600}}>{h.fleet} boats</span>}
+                        {h.row.rank}<span style={{color:"#9fbdd9",fontWeight:500}}> of {h.fleet} players</span></span>}
+                      {hostMode&&<span style={{color:"#cfe0f2",fontWeight:600}}>{h.fleet} players</span>}
                       {h.countries>0&&<span>{h.countries} countr{h.countries===1?"y":"ies"}</span>}
                       <span>{formatDate(h.ev.date)}</span>
                       {h.ev.cls?(()=>{const ng=nuggetFor(h.ev.cls,h.ev.subclass);return(
@@ -3834,7 +3834,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
   const[addingNew,setAddingNew]=React.useState(false);          // new-host form open
   const[newHostName,setNewHostName]=React.useState("");
   const[newHostScope,setNewHostScope]=React.useState("HK");     // HK | INT
-  const[classId,setClassId]=React.useState("29er");             // association only
+  const[classId,setClassId]=React.useState("mens");             // association only
   const[hostCountry,setHostCountry]=React.useState("HKG");      // federation only
   /* shared */
   const[busy,setBusy]=React.useState(false);
@@ -4177,9 +4177,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
           {mode==="signup"&&step===2&&(<>
             <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
               <RoleCard id="athlete" label="Athlete" icon="🏆" desc="Build your profile from your results."/>
-              <RoleCard id="association" label="Association" icon="⚓" desc="Manage results for your class association."/>
+              <RoleCard id="association" label="Association" icon="⛳" desc="Manage results for your golf association."/>
               <RoleCard id="club" label="Club" icon="🌊" desc="Host competitions for your yacht club."/>
-              <RoleCard id="federation" label="Federation" icon="🏳️" desc="Govern your national sailing federation."/>
+              <RoleCard id="federation" label="Federation" icon="🏳️" desc="Govern your national golf federation."/>
             </div>
 
             <div style={{display:"flex",gap:10}}>
@@ -4210,7 +4210,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
             {/* Athlete-only extras — never shown in invite mode (host co-admin) */}
             {role==="athlete"&&!isInviteMode&&(<>
               <p style={{fontSize:12,color:"var(--mut)",margin:"-4px 0 0",lineHeight:1.5}}>
-                Use your name <b>exactly as it appears in results</b> — this is how AthLink links your profile to your race history.
+                Use your name <b>exactly as it appears in results</b> — this is how AthLink links your profile to your results history.
               </p>
               <div>
                 <Label>Year of birth</Label>
@@ -4352,7 +4352,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
                 </div>
               </div>
               {hostKind==="association"&&(
-                <div><Label>Boat class</Label><ClassPicker value={classId} onChange={setClassId}/></div>
+                <div><Label>Division</Label><ClassPicker value={classId} onChange={setClassId}/></div>
               )}
               {hostKind==="federation"&&(
                 <div><Label>Governing country (IOC code)</Label>
@@ -5009,7 +5009,7 @@ function ClaimProfileModal({myName="",people=[],events=[],alreadyClaimed=null,on
         <div style={{padding:"14px 24px 24px"}}>
           {alreadyClaimed
             ? <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 4px",lineHeight:1.45}}>You've already claimed <b style={{color:"var(--navy)"}}>{alreadyClaimed}</b>. You can only claim one profile.</p>
-            : <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.45}}>Find the auto-built profile that's you, preview the results, and claim it. A verified host admin from a competition you sailed will confirm it.</p>}
+            : <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.45}}>Find the auto-built profile that's you, preview the results, and claim it. A verified host admin from a competition you played will confirm it.</p>}
           {!alreadyClaimed&&<>
           <div style={{position:"relative",marginBottom:14}}>
             <Search size={14} color="#9fb2c8" style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)"}}/>
@@ -5204,7 +5204,7 @@ function MediaModal({name,media,canEdit,uploadMedia,onSaveMedia,onClose}){
           )}
           {err&&<div style={{fontSize:12.5,color:"#c0392b",margin:"0 0 12px"}}>{err}</div>}
           {items.length===0
-            ? <div style={{padding:"38px 0",textAlign:"center",color:"var(--mut)",fontSize:13.5}}>{canEdit?"No media yet — add photos or videos to showcase your sailing.":"No media yet."}</div>
+            ? <div style={{padding:"38px 0",textAlign:"center",color:"var(--mut)",fontSize:13.5}}>{canEdit?"No media yet — add photos or videos to showcase your golf.":"No media yet."}</div>
             : <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
                 {items.map((it,i)=>(
                   <div key={i}>
@@ -5824,7 +5824,7 @@ export default function AthLinkMVP(){
   // athlete_usernames; host slugs in hosts.slug. Case preserved (CaseyLaw, HKSF);
   // uniqueness is case-insensitive and spans BOTH athletes and hosts.
   const[usernamesVersion,setUsernamesVersion]=useState(0); // bump → routing re-reads the map
-  const USERNAME_RESERVED=new Set(["sailing","athletes","ranking","rankings","event","competition","competitions","clubs","class","classes","api","sailti","host","hosts","athlete","profile","landing"]);
+  const USERNAME_RESERVED=new Set(["sailing","golf","athletes","ranking","rankings","event","competition","competitions","clubs","class","classes","division","divisions","api","sailti","host","hosts","athlete","profile","landing"]);
   const validateUsername=(u)=>{
     const s=String(u||"").trim();
     if(!/^[A-Za-z0-9]{3,30}$/.test(s)) return {ok:false,msg:"3–30 characters, letters and numbers only (no spaces or symbols)."};
@@ -5852,7 +5852,7 @@ export default function AthLinkMVP(){
     const old=ATHLETE_USERNAMES.byKey.get(nk); if(old) ATHLETE_USERNAMES.byUser.delete(old.toLowerCase());
     ATHLETE_USERNAMES.byKey.set(nk,v.value); ATHLETE_USERNAMES.byUser.set(v.value.toLowerCase(),name);
     setUsernamesVersion(x=>x+1);
-    if(view.name==="profile"&&profileNameKey(view.id)===nk) window.history.replaceState(null,"","/"+v.value);
+    if(view.name==="profile"&&profileNameKey(view.id)===nk) window.history.replaceState(null,"",SPORT_BASE+"/"+v.value);
     return {ok:true,username:v.value};
   };
   const saveHostSlug=async(hostId,desired)=>{
@@ -6081,7 +6081,7 @@ export default function AthLinkMVP(){
   const[showCalendar,setShowCalendar]=useState(false);
   const[calScopePortal,setCalScopePortal]=useState(null); // null = global; else portal id for popup scope
   // Ranking page
-  const[rankCls,setRankCls]=useState("29er");
+  const[rankCls,setRankCls]=useState("mens");
   const[rankMode,setRankMode]=useState("cumulative"); // "cumulative" (every race) | "position" (regatta placings)
   const[rankCountry,setRankCountry]=useState(""); // country lens on the Rankings page ("" = all)
   const[rankDiscards,setRankDiscards]=useState(0);    // configurable; default 0
@@ -6111,7 +6111,7 @@ export default function AthLinkMVP(){
   },[view.name,rankCls,events]);
   // Dev-mode host creation
   const[showAddHost,setShowAddHost]=useState(false);
-  const[newHost,setNewHost]=useState({type:"club",scope:"HK",name:"",cls:"29er",country:"HKG"});
+  const[newHost,setNewHost]=useState({type:"club",scope:"HK",name:"",cls:"mens",country:"HKG"});
   const[addingHost,setAddingHost]=useState(false);
   const saveNewHost=async()=>{
     const name=(newHost.name||"").trim();
@@ -6131,7 +6131,7 @@ export default function AthLinkMVP(){
     addHostLocal(host);
     setHostsVersion(v=>v+1);
     setShowAddHost(false);
-    setNewHost({type:"club",scope:"HK",name:"",cls:"29er",country:"HKG"});
+    setNewHost({type:"club",scope:"HK",name:"",cls:"mens",country:"HKG"});
     setNote({name,matched:0,created:0,msg:`${payload.type} portal created.`});
     setTimeout(()=>setNote(null),5000);
     // Persist in the background; reconcile from DB on success
@@ -6490,8 +6490,9 @@ export default function AthLinkMVP(){
     if(urlReady) return;
     const path=window.location.pathname;
     const seg=decodeURIComponent(path).split("/").filter(Boolean);
+    if((seg[0]||"").toLowerCase()===SPORT_BASE.slice(1)) seg.shift(); // strip /golf prefix
     const s0=(seg[0]||"").toLowerCase();
-    const RESERVED=["","sailing","athletes","ranking","rankings","event","competition","competitions","hosts","class"];
+    const RESERVED=["","athletes","ranking","rankings","event","competition","competitions","hosts","class"];
     // Athlete slugs can only be resolved after events (hence names) have loaded.
     const needsAthlete=seg.length>0&&!RESERVED.includes(s0)&&!hostBySlug(seg[0]);
     if(needsAthlete&&events.length===0) return; // wait for events, effect re-runs on load
@@ -6535,8 +6536,8 @@ export default function AthLinkMVP(){
     else if(v.name==="ranking") t="Rankings";
     else if(v.name==="competitions") t=v.cls?`${classLabel(v.cls)} — Competitions`:"Competitions";
     else if(v.name==="hosts") t="Hosts";
-    else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:(v.cls?`${classLabel(v.cls)} — Athletes`:"Athletes");
-    else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else sailing home
+    else if(v.name==="athletes")t=portal?`${hostName(portal)||"Golf"} — Athletes`:(v.cls?`${classLabel(v.cls)} — Athletes`:"Athletes");
+    else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else golf home
     else                        t="AthLink"; // portals home
     document.title=t||"AthLink";
   },[portal,view,events]);
@@ -6551,7 +6552,7 @@ export default function AthLinkMVP(){
     if(!snap) return "Back";
     const v=snap.view||{};
     const pName=id=>{const a=ASSOCIATIONS.find(x=>x.id===id);if(a)return a.name;if(typeof id==="string"&&id.startsWith("class:"))return`All ${classLabel(id.slice(6))} Results`;return null;};
-    if(v.name==="portals") return "Sailing";
+    if(v.name==="portals") return "Golf";
     if(v.name==="competitions") return "Competitions";
     if(v.name==="hosts") return "Hosts";
     if(v.name==="ranking") return "Rankings";
@@ -6589,12 +6590,12 @@ export default function AthLinkMVP(){
 
   /* ── AI smart filter ─────────────────────────────────────── */
   const buildFilterPrompt=(query,context)=>
-    `You are a sailing results filter engine. The user has described a filter in natural language.
+    `You are a golf results filter engine. The user has described a filter in natural language.
 Return ONLY a JSON object (no markdown, no explanation) with two fields:
   "label": short human-readable description of the filter (max 8 words)
   "code": a JavaScript arrow function body string that takes an event object "ev" and returns true/false.
     The event object has: ev.name (string), ev.date (dd/mm/yyyy string), ev.entries (array of {helm,crew,sail,nat,div}),
-    and scoreEvent(ev).fleet (number of boats), scoreEvent(ev).races (number of races).
+    and scoreEvent(ev).fleet (number of players), scoreEvent(ev).races (number of rounds).
     You can use these fields in the code. The code must be valid JS for use in new Function("ev","scoreEvent","return "+code).
 Context: ${context}
 Query: "${query}"`;
@@ -6639,7 +6640,7 @@ Query: "${query}"`;
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
           task:"filter",
-          prompt:`You convert a natural-language sailing-results filter into one or more conditions.
+          prompt:`You convert a natural-language golf-results filter into one or more conditions.
 A query may contain SEVERAL conditions (e.g. "finished top 15 in the world championships" = a placing condition AND an event-type condition). Split them.
 Return ONLY a JSON array (no markdown). Each element: {"label": short human label (max 6 words), "code": a JS arrow-function BODY string operating on item "h"}.
 "h" has: h.ev (event with .name string, .date "dd/mm/yyyy", .country), h.row.rank (number), h.row.net, h.fleet (number), h.role ('Helm'|'Crew'), h.partner.
@@ -6673,7 +6674,7 @@ Query: "${q}"`,
           task:"filter",
           prompt:`You convert a natural-language athlete search into a JS predicate.
 Return ONLY a JSON object (no markdown): {"label": short label (max 7 words), "code": arrow-function BODY operating on athlete "a"}.
-"a" has: a.name (string), a.iso (ISO-2 country like "GB","HK"), a.country (full country name), a.events (number of regattas), a.best (best finish rank number or null), a.podiums, a.wins, and a.results = array of {name (event name), rank, fleet, year}.
+"a" has: a.name (string), a.iso (ISO-2 country like "GB","HK"), a.country (full country name), a.events (number of competitions), a.best (best finish rank number or null), a.podiums, a.wins, and a.results = array of {name (event name), rank, fleet, year}.
 Code must be valid for new Function("a","return "+code) and return true/false.
 Examples:
 "Hong Kong" => {"label":"Hong Kong athletes","code":"a.country==='Hong Kong'||a.iso==='HK'"}
@@ -6708,8 +6709,8 @@ Query: "${qq}"`,
     if(!q.trim()||q.length<3){setEvSuggestions([]);return;}
     setEvSugLoading(true);
     try{
-      const eventCtx=classEvents.slice(0,5).map(e=>`"${e.name}" (${scoreEvent(e).fleet} boats)`).join(", ");
-      const prompt=`You are a sailing results filter suggestion engine. Given a partial query, suggest 4 short filter query completions.
+      const eventCtx=classEvents.slice(0,5).map(e=>`"${e.name}" (${scoreEvent(e).fleet} players)`).join(", ");
+      const prompt=`You are a golf results filter suggestion engine. Given a partial query, suggest 4 short filter query completions.
 Return ONLY a JSON array of 4 strings (no markdown). Each string is a complete natural-language filter query.
 Context: portal=${host?.name||"unknown"}, recent events: ${eventCtx}
 Partial query: "${q}"`;
@@ -6729,7 +6730,7 @@ Partial query: "${q}"`;
     if(!q.trim()||q.length<3){setProfileSuggestions([]);return;}
     setProfileSugLoading(true);
     try{
-      const prompt=`Suggest 4 short sailing result filter queries for an athlete profile.
+      const prompt=`Suggest 4 short golf result filter queries for an athlete profile.
 Return ONLY a JSON array of 4 strings. Each is a complete filter query.
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -6762,7 +6763,7 @@ Partial query: "${q}"`;
     });
     // Global class portals
     CLASSES.filter(c=>c.short.toLowerCase().includes(ql)||(c.full||"").toLowerCase().includes(ql)).forEach(c=>{
-      results.push({type:"portal",label:`${c.short} — all competitions`,sub:"Class",nav:{type:"competitions",cls:c.id}});
+      results.push({type:"portal",label:`${c.short} — all competitions`,sub:"Division",nav:{type:"competitions",cls:c.id}});
     });
     // Club portals
     CLUBS.filter(c=>c.name.toLowerCase().includes(ql)).forEach(c=>{
@@ -6777,8 +6778,8 @@ Partial query: "${q}"`;
       results.push({type:"portal",label:a.name,sub:"Association",nav:{type:"portal",assoc:a.id}});
     });
     // Nav shortcuts
-    if("home all classes portals sailing associations".includes(ql))
-      results.push({type:"nav",label:"Sailing — Home",sub:"Navigate",nav:{type:"home"}});
+    if("home all divisions portals golf associations".includes(ql))
+      results.push({type:"nav",label:"Golf — Home",sub:"Navigate",nav:{type:"home"}});
     if("all athletes".includes(ql)||ql.includes("athlete"))
       results.push({type:"nav",label:"Athletes",sub:"Navigate",nav:{type:"athletes"}});
     setGSearchResults(results.slice(0,10));
@@ -6791,7 +6792,7 @@ Partial query: "${q}"`;
   const[eventSummaries,setEventSummaries]=useState({}); // key=event.id → competition blurb
   const[eventSummaryOpen,setEventSummaryOpen]=useState({}); // key=event.id → revealed?
 
-  const SPONSOR_LENS=`Write for a prospective SPONSOR/INVESTOR evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-fleet finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the fleet, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
+  const SPONSOR_LENS=`Write for a prospective SPONSOR/INVESTOR evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-field finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the field, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
 
   const fetchEventSummary=async(ev)=>{
     if(eventSummaries[ev.id]!==undefined) return;
@@ -6800,8 +6801,8 @@ Partial query: "${q}"`;
       const sc=scoreEvent(ev);
       const yr=ev.date?.split('/')?.[2]||"";
       const prompt=`${SPONSOR_LENS}
-In 2-4 sentences, summarize this sailing competition for a sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical fleet strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club regatta) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
-Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev.country||"unknown"}. Fleet size: ${sc.fleet} boats. Races sailed: ${sc.races}.`;
+In 2-4 sentences, summarize this golf competition for a sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical field strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club event) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
+Event name: "${ev.name}". Division: ${ev.cls}. Year: ${yr}. Host country: ${ev.country||"unknown"}. Field size: ${sc.fleet} players. Rounds played: ${sc.races}.`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({task:"overview",prompt,max_tokens:220})});
       const data=await res.json();
@@ -6859,19 +6860,19 @@ Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev
       let prompt;
       if(crew){
         const agCrew=aggregate(crew,events);
-        // Events both sailed together (shared regattas with this partner).
+        // Events both competed in together (shared competitions with this partner).
         const together=ag.history.filter(h=>h.partner&&canonName(h.partner)===canonName(crew));
         const firstTog=together.slice().sort((a,b)=>dateKey(a.ev.date).localeCompare(dateKey(b.ev.date)))[0];
-        const togLine=together.length?`Sailed together in ${together.length} regatta(s) since ${firstTog?.ev.date?.split('/')?.[2]||"?"}; best together #${Math.min(...together.map(h=>h.row.rank))}.`:"First/few events as a pair.";
-        prompt=`Write a SHORT scouting blurb for a sailing PAIR (helm+crew): 2 sentences, MAX 38 words. Cover (a) when they started sailing together and how they've performed as a pair, (b) any standout milestone by either sailor, and (c) how they stack up against similar-calibre competition. Factual, no markdown, no heading. Always refer to each sailor by their FULL name exactly as "${name}" and "${crew}" (first and last together) — never just a first name or just a last name.
-Helm: ${name} (${evs} regattas since ${firstYr||"?"}, best ${best}, ${pods} podiums, ${wins} race wins).
-Crew: ${crew} (${agCrew.events} regattas, best ${agCrew.best?"#"+agCrew.best:"unknown"}).
+        const togLine=together.length?`Competed together in ${together.length} competition(s) since ${firstTog?.ev.date?.split('/')?.[2]||"?"}; best together #${Math.min(...together.map(h=>h.row.rank))}.`:"First/few events as a pair.";
+        prompt=`Write a SHORT scouting blurb for a golf PAIR: 2 sentences, MAX 38 words. Cover (a) when they started competing together and how they've performed as a pair, (b) any standout milestone by either player, and (c) how they stack up against similar-calibre competition. Factual, no markdown, no heading. Always refer to each player by their FULL name exactly as "${name}" and "${crew}" (first and last together) — never just a first name or just a last name.
+Player: ${name} (${evs} competitions since ${firstYr||"?"}, best ${best}, ${pods} podiums, ${wins} wins).
+Partner: ${crew} (${agCrew.events} competitions, best ${agCrew.best?"#"+agCrew.best:"unknown"}).
 Together: ${togLine}`;
       } else {
         // Comparison context: peers who finished near them in their events.
         const peerNote=ag.history.slice(0,5).map(h=>`${h.ev.name}: #${h.row.rank}/${h.fleet}`).join('; ');
-        prompt=`Write a SHORT scouting blurb for a SINGLE-HANDED sailor: 2 sentences, MAX 32 words. Focus mainly on how they performed RELATIVE TO COMPETITORS OF SIMILAR CALIBRE — i.e. where they placed within the fleet at their events, and against peers who finished near them. Factual, no markdown, no heading. Always refer to the athlete by their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name.
-Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins} race wins. Placings: ${peerNote||"unknown"}.`;
+        prompt=`Write a SHORT scouting blurb for a golf PLAYER: 2 sentences, MAX 32 words. Focus mainly on how they performed RELATIVE TO COMPETITORS OF SIMILAR CALIBRE — i.e. where they placed within the field at their events, and against peers who finished near them. Factual, no markdown, no heading. Always refer to the athlete by their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name.
+Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins} wins. Placings: ${peerNote||"unknown"}.`;
       }
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({task:"hover",prompt,max_tokens:90})});
@@ -7324,8 +7325,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     let detCls="";
     if(detectedClass)
       detCls=CLASSES.some(c=>c.id===detectedClass)?detectedClass:(addCustomClass(detectedClass)||"");
-    const cls=lockedCls||inferred||detCls||(dhFromEntries?"29er":"optimist");
-    const sh=cls==="ilca"||cls==="optimist";
+    const cls=lockedCls||inferred||detCls||"mens"; // golf: single default division (sailing picked 29er/optimist by crew count)
+    const sh=SINGLE_ATHLETE||cls==="ilca"||cls==="optimist";
     return{
       id:"imp_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
       name:(fleet.name?`${name} — ${fleet.name}`:name)||"Imported Competition",
@@ -7413,7 +7414,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       }else if(data.multi&&data.fleets?.length){
         const groupId="fg_"+Date.now()+"_"+i;
         const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
-        rows=data.fleets.map((fl,fi)=>({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+        rows=data.fleets.map((fl,fi)=>({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Field "+(fi+1)}`,status:"ok",error:null,
           previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
           fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc}));
         setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]}:l));
@@ -7455,7 +7456,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const groupId="fg_link_"+Date.now();
       const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
       data.fleets.forEach((fl,fi)=>{
-        results.push({id:groupId+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+        results.push({id:groupId+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Field "+(fi+1)}`,status:"ok",error:null,
           previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
           fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc});
       });
@@ -7604,7 +7605,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const selfOrganized=(previewEv._orgMode||"self")!=="external" && !!importerHost;
     const attributedHost=selfOrganized?importerHost:(previewEv._orgHost||null);
     const ev={...previewEv,status,
-      cls:previewEv.cls||assoc?.cls||"29er",
+      cls:previewEv.cls||assoc?.cls||"mens",
       subclass:mf.subclass||previewEv.subclass||null,
       owner:attributedHost||null,
       owner_confirmed:selfOrganized,
@@ -7741,8 +7742,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const buildManualEvent=()=>{
     const rows=mf.rows.filter(r=>r.helm.trim());if(!rows.length)return null;
     const disc=Math.min(mf.discards,Math.max(0,mf.numRaces-1));
-    const evCls=assoc?.cls||mf.cls||"29er";
-    const sh=evCls==="ilca"||evCls==="optimist";
+    const evCls=assoc?.cls||mf.cls||"mens";
+    const sh=SINGLE_ATHLETE||evCls==="ilca"||evCls==="optimist";
     return{id:"imp_"+Date.now(),name:mf.name||"Imported Competition",cls:evCls,
       subclass:mf.subclass||null,owner:portal||null,collabs:mf.collabs||[],
       doublehanded:!sh&&rows.some(r=>r.crew.trim()),venue:mf.club||"—",country:mf.club||mf.country||"",
@@ -8213,10 +8214,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .cal-cell-num.today-circle{background:var(--accent);color:#fff;}
     .cal-cell-ev{background:var(--accent);color:#fff;border-radius:8px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:.12s;box-shadow:inset 0 1px 0 rgba(255,255,255,.3);}
     .cal-cell-ev:hover{filter:brightness(1.08);transform:translateY(-1px);}
-    .cal-cell-ev.cls-29er{background:#E84855;}
-    .cal-cell-ev.cls-ilca{background:#2E78C8;}
-    .cal-cell-ev.cls-49er{background:#5FAF4E;}
-    .cal-cell-ev.cls-optimist{background:#3D3D3D;}
+    .cal-cell-ev.cls-mens{background:#1f4e80;}
+    .cal-cell-ev.cls-womens{background:#409cff;}
+    .cal-cell-ev.cls-amateur{background:#5b6b80;}
+    .cal-cell-ev.cls-senior{background:#3D3D3D;}
     .cal-filters{display:flex;gap:8px;align-items:center;flex:1;flex-wrap:wrap;}
     .cal-ev{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 16px;margin-bottom:8px;cursor:pointer;transition:.15s;display:flex;align-items:center;gap:14px;}
     .cal-ev:hover{border-color:#b9cee4;box-shadow:0 6px 20px -10px rgba(22,58,99,.4);transform:translateY(-1px);}
@@ -8299,12 +8300,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   {/* ── FLOATING TOP BAR (no frame; glass pills that hide on scroll-down) ── */}
   <div className={`topbar2${barHidden?" hidden":""}`}>
-    {/* left: two targets on one pill — logo → AthLink landing (shell); "Sailing" → sailing home. */}
+    {/* left: two targets on one pill — logo → AthLink landing (shell); "Golf" → golf home. */}
     <div className="tb-brand">
       <span className="tb-logo" title="Back to AthLink — all sports"
         onClick={()=>{window.history.pushState(null,"","/");window.dispatchEvent(new Event("locationchange"));}}><img src="/brand/icon-app-circle.png" alt="AthLink"/></span>
       <span className="tb-divider"/>
-      <span className="tb-sport" title="Sailing home" onClick={goHome}>Sailing</span>
+      <span className="tb-sport" title="Golf home" onClick={goHome}>Golf</span>
     </div>
     {/* center: 3-item primary nav — Athletes · Competitions · Rankings — with an
         expanding search in the utility slot. No hamburger on desktop by design. */}
@@ -8327,7 +8328,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div className="np-item">
                 <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
                 <div className="np-drop">
-                  <p className="nd-label">By class</p>
+                  <p className="nd-label">By division</p>
                   <div className="nd-chips">
                     {CLASSES.map(c=>(
                       <button key={c.id} className="nd-chip" onClick={()=>goTop("athletes",{cls:c.id})}>
@@ -8350,7 +8351,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div className="np-item">
                 <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
                 <div className="np-drop">
-                  <p className="nd-label">By class</p>
+                  <p className="nd-label">By division</p>
                   <div className="nd-chips">
                     {CLASSES.map(c=>(
                       <button key={c.id} className="nd-chip" onClick={()=>goTop("competitions",{cls:c.id})}>
@@ -8394,7 +8395,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div className="np-item">
                 <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
                 <div className="np-drop">
-                  <p className="nd-label">By class</p>
+                  <p className="nd-label">By division</p>
                   <div className="nd-chips">
                     {CLASSES.map(c=>(
                       <button key={c.id} className="nd-chip" onClick={()=>goRankingClass(c.id)}>
@@ -8550,7 +8551,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   )}
   {classNote&&(
     <div className="notice"><div className="ico"><AlertCircle size={18}/></div>
-      <div><b>Class not saved yet</b>
+      <div><b>Division not saved yet</b>
       <div style={{fontSize:13,color:"#bcd2e8",marginTop:2}}>"<b>{classNote.name}</b>" couldn't be written to the database — it will be retried automatically next time you load AthLink signed in.</div></div>
       <button className="x" style={{marginLeft:8}} onClick={()=>setClassNote(null)}><X size={15}/></button>
     </div>
@@ -8663,7 +8664,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       crumbs.push({label:"Athletes",go:()=>goTop("athletes")},{label:view.id||"Athlete"});
     }else if(isCls){
       const cls=classLabel(String(portal).slice(6));
-      crumbs.push({label:"Classes"});
+      crumbs.push({label:"Divisions"});
       if(view.name==="athletes") crumbs.push({label:cls,go:()=>{pushNav();setView({name:"events"});window.scrollTo(0,0);}},{label:"Athletes"});
       else crumbs.push({label:cls});
     }else if(portal){
@@ -8693,7 +8694,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   {!portal&&view.name==="portals"&&(
     <div className="home-hero">
       <div className="wrap">
-        <h1 className="disp" style={{margin:0}}>Sailing</h1>
+        <h1 className="disp" style={{margin:0}}>Golf</h1>
       </div>
     </div>
   )}
@@ -8719,8 +8720,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     }));
     return(
     <div className="wrap sec">
-      <SportShowcase clsId="49er"/>
-      <p style={{margin:"0 0 8px",color:"var(--mut)",fontSize:15}}>Results, athlete profiles and class standings for competitive sailing</p>
+      {/* Sport explainer — dormant for golf (sailing's interactive 49er model).
+          Re-enable by adding a golf entry to SPORT_MODELS and passing its id. */}
+      {false&&<SportShowcase clsId="49er"/>}
+      <p style={{margin:"0 0 8px",color:"var(--mut)",fontSize:15}}>Results, athlete profiles and division standings for competitive golf</p>
       <div className="hero-srch" style={{maxWidth:"none"}} onClick={e=>e.stopPropagation()}>
         <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
         <input placeholder="Search athletes, competitions & clubs…" value={gSearch}
@@ -8891,7 +8894,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {hostName&&<span><Waves size={13}/>{hostName}</span>}
               <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
               <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={e=>{e.stopPropagation();openCalendarAt(ev.date);}}>{formatDate(ev.date)}</span></span>
-              <span><Users size={13}/>{s.fleet} boats · {s.races} races</span>
+              <span><Users size={13}/>{s.fleet} players · {s.races} rounds</span>
             </div>
           </div>
           {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
@@ -9144,7 +9147,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           ))}
         </div>}
         {comps.length===0
-          ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Selected regattas combine into one series — lowest total wins.</p>
+          ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Selected competitions combine into one series — lowest total wins.</p>
           :<>
           {/* When the source pickers are collapsed, show the selected competitions as removable nuggets */}
           {!rankSourceOpen&&<div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
@@ -9162,7 +9165,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <div style={{display:"inline-flex",borderRadius:980,overflow:"hidden",border:"1px solid var(--line)"}}>
               {[["cumulative","Cumulative"],["position","Position"]].map(([id,label])=>{
                 const on=rankMode===id;
-                return<button key={id} onClick={()=>setRankMode(id)} title={id==="cumulative"?"Weighs every race across the combined series":"Weighs each competition's finishing place equally"}
+                return<button key={id} onClick={()=>setRankMode(id)} title={id==="cumulative"?"Weighs every round across the combined series":"Weighs each competition's finishing place equally"}
                   style={{border:"0",background:on?"var(--navy)":"rgba(255,255,255,.7)",color:on?"#fff":"var(--navy)",padding:"7px 15px",fontSize:12.5,fontWeight:700,cursor:"pointer",transition:".12s"}}>{label}</button>;
               })}
             </div>
@@ -9172,7 +9175,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <span style={{minWidth:16,textAlign:"center"}}>{rankDiscards}</span>
               <button onClick={()=>setRankDiscards(d=>d+1)} title="More discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>+</button>
             </div>
-            <span style={{fontSize:11.5,color:"var(--mut)"}}>{rankMode==="cumulative"?"Combined series · every race counts · DNC = entries+1":"Sum of competition placings · DNC = entries+1"}</span>
+            <span style={{fontSize:11.5,color:"var(--mut)"}}>{rankMode==="cumulative"?"Combined series · every round counts · DNC = entries+1":"Sum of competition placings · DNC = entries+1"}</span>
           </div>
           <div className="panel" style={{overflowX:"auto"}}>
             <table>
@@ -9204,7 +9207,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                         const shown=rankMode==="position"?(pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–")):pcell.contrib;
                         const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
                         return <td key={c.id}>
-                          <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this competition (entries+1)":"Tap for race detail"}
+                          <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this competition (entries+1)":"Tap for round detail"}
                             style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:pcell.dnc?"var(--mut)":"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:pc?"pointer":"default",fontSize:13,fontStyle:pcell.dnc?"italic":"normal"}}>{shown}{pcell.dnc?" DNC":""}</button>
                         </td>;
                       })}
@@ -9370,7 +9373,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <div className="ai-srch">
               <Sparkles size={13} color={evFilterLoading?"#0d8ecf":"#9fb2c8"}/>
               <input
-                placeholder="Smart filter — e.g. more than 30 boats, or Emily Polson"
+                placeholder="Smart filter — e.g. more than 30 players, or Emily Polson"
                 value={evFilter}
                 onChange={e=>{
                   setEvFilter(e.target.value);
@@ -9447,7 +9450,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div className="evmeta">
                     <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
                     <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-                    <span><Users size={13}/>{s.fleet} boats · {s.races} races{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
+                    <span><Users size={13}/>{s.fleet} players · {s.races} rounds{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
                   </div>
                 </div>
                 {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
@@ -9500,7 +9503,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         const head=(
         <div style={{display:"flex",alignItems:"stretch",gap:16,marginBottom:16}}>
           {hostIso&&(
-            <div onClick={()=>setRegattaFootprint(ev)} title="Who's racing — click to expand"
+            <div onClick={()=>setRegattaFootprint(ev)} title="Who's playing — click to expand"
               style={{width:118,flex:"none",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center"}}>
               <SailingGlobe countryData={{[hostIso]:1}} height={118} dark mini bare hostIso={hostIso}/>
             </div>
@@ -9576,13 +9579,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               : eventSummaries[ev.id]
                 ? <p style={{color:"#dce8f8",fontSize:13.5,lineHeight:1.55,margin:0}}>{eventSummaries[ev.id]}</p>
                 : <p style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",margin:0}}>Add ANTHROPIC_API_KEY to Vercel env vars to enable AI summaries.</p>}
-            <p style={{color:"#6f93b8",fontSize:10.5,margin:"9px 0 0",fontStyle:"italic"}}>AI-generated from the competition's level and fleet; verify specifics independently.</p>
+            <p style={{color:"#6f93b8",fontSize:10.5,margin:"9px 0 0",fontStyle:"italic"}}>AI-generated from the competition's level and field; verify specifics independently.</p>
           </div>
         )}
       </div>
       <div className="panel"><table>
         <thead><tr>
-          <th>Pos</th><th className="l">Boat</th><th aria-label="Gender / Division"></th><th className="l">Sail #</th>
+          <th>Pos</th><th className="l">Athlete</th><th aria-label="Gender / Division"></th><th className="l">ID</th>
           {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
           <th>Net</th>
         </tr></thead>
@@ -9980,7 +9983,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div><div className="v disp">{ag.events}</div><div className="k">Competitions</div></div>
                   <div><div className="v disp">{ag.best?"#"+ag.best:"—"}</div><div className="k">Best result</div></div>
                   <div><div className="v disp">{ag.podiums}</div><div className="k">Podiums</div></div>
-                  <div><div className="v disp">{ag.wins}</div><div className="k">Race wins</div></div>
+                  <div><div className="v disp">{ag.wins}</div><div className="k">Wins</div></div>
                 </div>
                 {/* Owner-written bio (verified athlete's own words) */}
                 {extras?.bio&&<p style={{color:"#dce8f8",fontSize:13.5,lineHeight:1.55,margin:"16px 0 0",whiteSpace:"pre-wrap"}}>{extras.bio}</p>}
@@ -10265,11 +10268,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:10,flexWrap:"wrap"}}>
                 <div style={{flex:1,minWidth:200}}>
                   <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Competition name</label>
-                  <input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="2025 29er Asian Championship" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
+                  <input value={mf.name} onChange={e=>updMeta("name",e.target.value)} placeholder="2025 HK Amateur Open" style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
                 </div>
               </div>
               {SUBCLASSES[evCls]&&<div style={{marginBottom:12}}>
-                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Class type</label>
+                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Division type</label>
                 <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
                   {SUBCLASSES[evCls].map(s=>{
                     const on=mf.subclass===s.id;
@@ -10292,7 +10295,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <CollabPicker owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
               </>);})()}
               <div className="race-ctrl">
-                <span>Number of races</span>
+                <span>Number of rounds</span>
                 <div className="stepper">
                   <button onClick={()=>mf.numRaces>1&&setNumRaces(mf.numRaces-1)}><Minus size={13}/></button>
                   <span>{mf.numRaces}</span>
@@ -10302,10 +10305,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div className="rtable-wrap">
                 <table className="rtable">
                   <thead><tr>
-                    <th className="l" style={{minWidth:110}}>Helm Name</th>
-                    {!((assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist")&&<th className="l" style={{minWidth:110}}>Crew Name</th>}
+                    <th className="l" style={{minWidth:110}}>Athlete Name</th>
+                    {!(SINGLE_ATHLETE||(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist")&&<th className="l" style={{minWidth:110}}>Crew Name</th>}
                     <th style={{minWidth:46}}>Nat</th>
-                    <th style={{minWidth:46}}>Sail</th>
+                    <th style={{minWidth:46}}>ID</th>
                     <th style={{minWidth:140}}>Div</th>
                     {Array.from({length:mf.numRaces}).map((_,i)=><th key={i} style={{minWidth:34}}>R{i+1}</th>)}
                     <th className="calc" style={{minWidth:38}}>Total</th>
@@ -10315,11 +10318,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <tbody>
                     {mf.rows.map((row,i)=>(
                       <tr key={i}>
-                        <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Helm name"/></td>
-                        {!((assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist")&&<td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>}
+                        <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Athlete name"/></td>
+                        {!(SINGLE_ATHLETE||(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist")&&<td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>}
                         <td><NatInput value={row.nat||""} onChange={v=>updRow(i,"nat",v)}/></td>
                         <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="···" style={{textAlign:"center"}}/></td>
-                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)} noMix={(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist"}/></td>
+                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)} noMix={SINGLE_ATHLETE||(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist"}/></td>
                         {Array.from({length:mf.numRaces}).map((_,j)=>(
                           <td key={j}><input value={row.scores[j]||""} onChange={e=>updScore(i,j,e.target.value)} placeholder="–" style={{textAlign:"center"}}/></td>
                         ))}
@@ -10345,7 +10348,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
         {importStep==="picker"&&(
           <div className="mbody">
-            <p style={{fontSize:14,color:"var(--mut)",margin:"0 0 4px"}}>Multiple fleets found in <strong style={{color:"var(--ink)"}}>{pdfMeta?.name}</strong>. Select which fleet to import, or combine all into one overall results page:</p>
+            <p style={{fontSize:14,color:"var(--mut)",margin:"0 0 4px"}}>Multiple fields found in <strong style={{color:"var(--ink)"}}>{pdfMeta?.name}</strong>. Select which field to import, or combine all into one overall results page:</p>
             <div className="fleet-grid">
               {/* Overall Results option — merges all fleets, preserves PDF ranks */}
               <div className="fleet-card" style={{borderColor:"var(--accent)",background:"#f0f8ff"}} onClick={()=>{
@@ -10360,12 +10363,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 buildPreviewFromFleet(pdfMeta.name,pdfMeta.date,{name:"",entries:merged,discards:maxDisc});
               }}>
                 <div className="fname" style={{color:"var(--accent)"}}>🏆 Overall Results</div>
-                <div className="fcount">{fleetChoices.reduce((s,f)=>s+f.count,0)} boats total · all {fleetChoices.length} fleets combined</div>
+                <div className="fcount">{fleetChoices.reduce((s,f)=>s+f.count,0)} players total · all {fleetChoices.length} fields combined</div>
               </div>
               {fleetChoices.map((fleet,i)=>(
                 <div key={i} className="fleet-card" onClick={()=>selectFleet(fleet)}>
                   <div className="fname">{fleet.name||"Unnamed fleet"}</div>
-                  <div className="fcount">{fleet.count} boats · {fleet.discards} discard{fleet.discards!==1?"s":""}</div>
+                  <div className="fcount">{fleet.count} players · {fleet.discards} discard{fleet.discards!==1?"s":""}</div>
                 </div>
               ))}
             </div>
@@ -10381,8 +10384,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const missingCells=previewEv&&previewEv.entries.some(e=>!e.helm||(e.races||[]).length<maxR);
           // Effective class for the table comes from the previewEv itself when set
           // by the per-result selector, else the portal association's class.
-          const evCls=(previewEv?.cls)||assoc?.cls||"29er";
-          const singleHanded=evCls==="ilca"||evCls==="optimist";
+          const evCls=(previewEv?.cls)||assoc?.cls||"mens";
+          const singleHanded=SINGLE_ATHLETE||evCls==="ilca"||evCls==="optimist";
           // Associations may only host their own class; clubs (and edit mode) host any.
           const classLocked=!!assoc&&!editResultsEv;
           // Detect fleet groups in pending (same fleetGroupId = same multi-fleet source file)
@@ -10525,7 +10528,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {/* LEFT — per-result class selector (reshapes the table). Subclass options
                   (ILCA/Optimist) are revealed on hover/focus of the parent class button. */}
               <div style={{flex:"1 1 300px",minWidth:260}}>
-                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class{classLocked&&<span style={{fontWeight:500,opacity:.7}}> — fixed to {assoc.name}'s class</span>}</label>
+                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Division{classLocked&&<span style={{fontWeight:500,opacity:.7}}> — fixed to {assoc.name}'s division</span>}</label>
                 <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
                   {CLASSES.map(c=>{
                     const on=evCls===c.id;
@@ -10583,9 +10586,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <thead>
                   <tr>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Pos</th>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Athlete</th>
                     {!singleHanded&&<th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>}
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>ID</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:160}}>Gender / Div</th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
                     <th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>
@@ -10858,7 +10861,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
             {newHost.type==="association"&&<div style={{flex:1}}>
-              <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:5}}>Boat class</label>
+              <label style={{fontSize:12,color:"var(--mut)",fontWeight:600,display:"block",marginBottom:5}}>Division</label>
               <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
                 {CLASSES.map(c=>(
                   <button key={c.id} type="button" onClick={()=>setNewHost(h=>({...h,cls:c.id}))}
