@@ -16,7 +16,8 @@ export const sports = [
   {
     id: "golf",
     name: "Golf",
-    tagline: "Competitions & athlete profiles",
+    tagline: "Clubs, associations, competitions & athlete profiles",
+    providesOwnNav: true,
     Portal: React.lazy(() =>
       import("@athlink/sport-golf").then((m) => ({ default: m.default.Portal }))
     ),
