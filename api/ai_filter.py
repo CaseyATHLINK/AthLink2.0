@@ -7,17 +7,20 @@ so the Anthropic API key is never exposed to the browser.
 from http.server import BaseHTTPRequestHandler
 import json, os, sys
 
-# Sibling import (same pattern parse_pdf.py uses for validate.py).
-_API_DIR = os.path.dirname(os.path.abspath(__file__))
-if _API_DIR not in sys.path:
-    sys.path.insert(0, _API_DIR)
-from llm import complete_text, LLMError
+# Shared LLM router now lives in api/_shared/llm.py; put it on sys.path (the dir
+# is force-bundled per-function via vercel.json includeFiles). Same idiom in
+# enrich.py / research_host.py.
+_SHARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_DIR)
+from llm import complete_text, LLMError, _gemini_key
 
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-# Haiku 4.5 is the universal fallback. Per-task routing (filter→Kimi,
-# overview→DeepSeek, hover→Cerebras) lives in llm.py; a request with no `task`
-# label routes to Anthropic, keeping older clients backward-compatible.
-CLAUDE_MODEL = "claude-haiku-4-5"
+# Per-task routing lives in llm.py (filter/overview/hover → Gemini
+# gemini-3.1-flash-lite; Anthropic Sonnet 5 is the universal fallback). A request
+# with no `task` label routes straight to Anthropic Sonnet, keeping older clients
+# backward-compatible. AI is available whenever EITHER key is configured.
+def _have_ai_key():
+    return bool(_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", ""))
 
 
 class handler(BaseHTTPRequestHandler):
@@ -28,8 +31,9 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if not ANTHROPIC_KEY:
-            return self._respond(500, {"ok": False, "error": "ANTHROPIC_API_KEY not set in environment."})
+        if not _have_ai_key():
+            return self._respond(500, {"ok": False, "error": "No AI key set in environment "
+                                       "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback)."})
 
         length = int(self.headers.get("Content-Length", 0))
         if not length:

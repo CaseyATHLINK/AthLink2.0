@@ -65,14 +65,25 @@ if [ "$FRONT" -eq 1 ]; then
   # @athlink/web build` takes minutes (too slow to run on every Stop-hook turn)
   # and is already run authoritatively by Vercel CI on push. Run it locally
   # before a merge if you want the full workspace-resolved build.
+  # Pick an esbuild binary that ACTUALLY RUNS. Some pnpm layouts leave a broken
+  # `node_modules/.bin/esbuild` symlink that resolves to the native launcher and
+  # dies under node ("Invalid or unexpected token"); the working shim lives at
+  # `.pnpm/node_modules/.bin/esbuild` (worktrees) or `.ds-sync/...` (main
+  # checkout). `-x` alone can't tell them apart, so verify with `--version`.
   ESB="${ESBUILD_BIN:-}"
+  esb_ok(){ [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
   if [ -z "$ESB" ]; then
-    for c in "$REPO/node_modules/.bin/esbuild" "$REPO/apps/web/node_modules/.bin/esbuild" \
-             "$REPO/.ds-sync/node_modules/.bin/esbuild"; do
-      [ -x "$c" ] && ESB="$c" && break
+    for c in "$REPO/node_modules/.pnpm/node_modules/.bin/esbuild" \
+             "$REPO/.ds-sync/node_modules/.bin/esbuild" \
+             "$REPO/node_modules/.bin/esbuild" "$REPO/apps/web/node_modules/.bin/esbuild"; do
+      esb_ok "$c" && ESB="$c" && break
     done
   fi
-  [ -z "$ESB" ] && ESB="$(find "$REPO" -path '*/node_modules/.bin/esbuild' -type f 2>/dev/null | head -1)"
+  if [ -z "$ESB" ]; then
+    for c in $(find "$REPO" -path '*/node_modules/.bin/esbuild' -type f 2>/dev/null); do
+      esb_ok "$c" && ESB="$c" && break
+    done
+  fi
   [ -z "$ESB" ] && command -v esbuild >/dev/null 2>&1 && ESB="esbuild"
   [ -z "$ESB" ] && ESB="npx --yes esbuild"
 
@@ -105,7 +116,7 @@ fi
 # hits the LIVE Vercel parser, so the harness is the authoritative local test.
 # ---------------------------------------------------------------------------
 if [ "$BACK" -eq 1 ]; then
-  for f in api/parse_pdf.py api/validate.py api/ai_filter.py; do
+  for f in api/sailing/parse_pdf.py api/sailing/validate.py api/sailing/completeness.py api/_shared/llm.py api/ai_filter.py api/enrich.py api/research_host.py; do
     [ -f "$f" ] || continue
     if python3 -c "import ast; ast.parse(open('$f').read())" 2>/dev/null; then
       add "PASS  ${f##*/} syntax ok"

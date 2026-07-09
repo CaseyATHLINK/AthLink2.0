@@ -4,11 +4,20 @@
   "buildCommand": "pnpm --filter @athlink/web build",
   "outputDirectory": "apps/web/dist",
   "functions": {
-    "api/parse_pdf.py": {
-      "maxDuration": 60
+    "api/sailing/parse_pdf.py": {
+      "maxDuration": 60,
+      "includeFiles": "api/_shared/**"
     },
     "api/enrich.py": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "api/_shared/**"
+    },
+    "api/research_host.py": {
+      "maxDuration": 60,
+      "includeFiles": "api/_shared/**"
+    },
+    "api/ai_filter.py": {
+      "includeFiles": "api/_shared/**"
     }
   },
   "rewrites": [

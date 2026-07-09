@@ -36,6 +36,7 @@
       ],
       "pdf_rank": 1,
       "pdf_net": 7,
+      "pdf_total": 16,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -70,6 +71,7 @@
       ],
       "pdf_rank": 2,
       "pdf_net": 18,
+      "pdf_total": 22,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -104,6 +106,7 @@
       ],
       "pdf_rank": 3,
       "pdf_net": 20,
+      "pdf_total": 29,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -138,6 +141,7 @@
       ],
       "pdf_rank": 4,
       "pdf_net": 29,
+      "pdf_total": 38,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -172,6 +176,7 @@
       ],
       "pdf_rank": 5,
       "pdf_net": 58,
+      "pdf_total": 67,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -206,6 +211,7 @@
       ],
       "pdf_rank": 6,
       "pdf_net": 63,
+      "pdf_total": 72,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -240,6 +246,7 @@
       ],
       "pdf_rank": 7,
       "pdf_net": 63,
+      "pdf_total": 72,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -274,6 +281,7 @@
       ],
       "pdf_rank": 8,
       "pdf_net": 63,
+      "pdf_total": 72,
       "birth_year": null,
       "crew_birth_year": null
     }
@@ -290,5 +298,6 @@
     "family": "excel-print-pdf",
     "input_type": "pdf-text",
     "confidence": 0.9
-  }
+  },
+  "_checksums": {}
 }

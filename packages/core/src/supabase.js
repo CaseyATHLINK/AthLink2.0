@@ -2,14 +2,16 @@
    Lifted from the sailing app so every sport talks to the DB the same way.
    IMPORTANT: VITE_SUPABASE_URL must be the base URL with NO trailing /rest/v1/. */
 
-const SB_URL = import.meta.env.VITE_SUPABASE_URL;
-const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+export const SB_URL = import.meta.env.VITE_SUPABASE_URL;
+export const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 const baseHeaders = (SB_URL && SB_KEY)
   ? { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" }
   : null;
 
 export const sbConfigured = !!baseHeaders;
+// Exposed under the sailing app's historical name so App.jsx can import it as-is.
+export const sbH = baseHeaders;
 
 export async function sbGet(path) {
   if (!baseHeaders) return null;
@@ -44,8 +46,8 @@ export async function sbDel(table, filter) {
 }
 
 /* ── Auth (Supabase GoTrue) ── */
-const AUTH_BASE = SB_URL ? `${SB_URL}/auth/v1` : null;
-const authHeaders = (tok) => ({ apikey: SB_KEY, "Content-Type": "application/json", ...(tok ? { Authorization: `Bearer ${tok}` } : {}) });
+export const AUTH_BASE = SB_URL ? `${SB_URL}/auth/v1` : null;
+export const authHeaders = (tok) => ({ apikey: SB_KEY, "Content-Type": "application/json", ...(tok ? { Authorization: `Bearer ${tok}` } : {}) });
 
 export async function authSignUp(email, password) {
   const r = await fetch(`${AUTH_BASE}/signup`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ email, password }) });

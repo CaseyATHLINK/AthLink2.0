@@ -49,6 +49,7 @@
           ],
           "pdf_rank": 1,
           "pdf_net": 26,
+          "pdf_total": 33,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -89,6 +90,7 @@
           ],
           "pdf_rank": 2,
           "pdf_net": 28,
+          "pdf_total": 33,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -129,6 +131,7 @@
           ],
           "pdf_rank": 3,
           "pdf_net": 48,
+          "pdf_total": 60,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -169,6 +172,7 @@
           ],
           "pdf_rank": 4,
           "pdf_net": 51,
+          "pdf_total": 68,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -209,6 +213,7 @@
           ],
           "pdf_rank": 5,
           "pdf_net": 60,
+          "pdf_total": 69,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -249,6 +254,7 @@
           ],
           "pdf_rank": 6,
           "pdf_net": 65,
+          "pdf_total": 82,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -289,6 +295,7 @@
           ],
           "pdf_rank": 7,
           "pdf_net": 70,
+          "pdf_total": 82,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -329,6 +336,7 @@
           ],
           "pdf_rank": 8,
           "pdf_net": 76,
+          "pdf_total": 89,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -369,6 +377,7 @@
           ],
           "pdf_rank": 9,
           "pdf_net": 88,
+          "pdf_total": 101,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -409,6 +418,7 @@
           ],
           "pdf_rank": 10,
           "pdf_net": 98,
+          "pdf_total": 112,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -447,6 +457,7 @@
           ],
           "pdf_rank": 11,
           "pdf_net": 78,
+          "pdf_total": 89,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -485,6 +496,7 @@
           ],
           "pdf_rank": 12,
           "pdf_net": 96,
+          "pdf_total": 110,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -523,6 +535,7 @@
           ],
           "pdf_rank": 13,
           "pdf_net": 102,
+          "pdf_total": 118,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -561,6 +574,7 @@
           ],
           "pdf_rank": 14,
           "pdf_net": 117,
+          "pdf_total": 132,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -599,6 +613,7 @@
           ],
           "pdf_rank": 15,
           "pdf_net": 132,
+          "pdf_total": 148,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -637,6 +652,7 @@
           ],
           "pdf_rank": 16,
           "pdf_net": 136,
+          "pdf_total": 152,
           "birth_year": null,
           "crew_birth_year": null
         }
@@ -688,6 +704,7 @@
           ],
           "pdf_rank": 1,
           "pdf_net": 37,
+          "pdf_total": 47,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -732,6 +749,7 @@
           ],
           "pdf_rank": 2,
           "pdf_net": 66,
+          "pdf_total": 85,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -776,6 +794,7 @@
           ],
           "pdf_rank": 3,
           "pdf_net": 68,
+          "pdf_total": 81,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -820,6 +839,7 @@
           ],
           "pdf_rank": 4,
           "pdf_net": 78,
+          "pdf_total": 94,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -864,6 +884,7 @@
           ],
           "pdf_rank": 5,
           "pdf_net": 86,
+          "pdf_total": 108,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -908,6 +929,7 @@
           ],
           "pdf_rank": 6,
           "pdf_net": 101,
+          "pdf_total": 117,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -952,6 +974,7 @@
           ],
           "pdf_rank": 7,
           "pdf_net": 115,
+          "pdf_total": 131,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -996,6 +1019,7 @@
           ],
           "pdf_rank": 8,
           "pdf_net": 116.3,
+          "pdf_total": 134.3,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1040,6 +1064,7 @@
           ],
           "pdf_rank": 9,
           "pdf_net": 122,
+          "pdf_total": 139,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1084,6 +1109,7 @@
           ],
           "pdf_rank": 10,
           "pdf_net": 128,
+          "pdf_total": 147,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1126,6 +1152,7 @@
           ],
           "pdf_rank": 11,
           "pdf_net": 114,
+          "pdf_total": 134,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1168,6 +1195,7 @@
           ],
           "pdf_rank": 12,
           "pdf_net": 131,
+          "pdf_total": 153,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1210,6 +1238,7 @@
           ],
           "pdf_rank": 13,
           "pdf_net": 134,
+          "pdf_total": 154,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1252,6 +1281,7 @@
           ],
           "pdf_rank": 14,
           "pdf_net": 136,
+          "pdf_total": 158,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1294,6 +1324,7 @@
           ],
           "pdf_rank": 15,
           "pdf_net": 140,
+          "pdf_total": 161,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1336,6 +1367,7 @@
           ],
           "pdf_rank": 16,
           "pdf_net": 142,
+          "pdf_total": 164,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1378,6 +1410,7 @@
           ],
           "pdf_rank": 17,
           "pdf_net": 148,
+          "pdf_total": 168,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1420,6 +1453,7 @@
           ],
           "pdf_rank": 18,
           "pdf_net": 149,
+          "pdf_total": 171,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1462,6 +1496,7 @@
           ],
           "pdf_rank": 19,
           "pdf_net": 152,
+          "pdf_total": 172,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1504,6 +1539,7 @@
           ],
           "pdf_rank": 20,
           "pdf_net": 157,
+          "pdf_total": 178,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1546,6 +1582,7 @@
           ],
           "pdf_rank": 21,
           "pdf_net": 180,
+          "pdf_total": 200,
           "birth_year": null,
           "crew_birth_year": null
         }
@@ -1597,6 +1634,7 @@
           ],
           "pdf_rank": 1,
           "pdf_net": 25,
+          "pdf_total": 30,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1641,6 +1679,7 @@
           ],
           "pdf_rank": 2,
           "pdf_net": 42,
+          "pdf_total": 50,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1685,6 +1724,7 @@
           ],
           "pdf_rank": 3,
           "pdf_net": 47,
+          "pdf_total": 56,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1729,6 +1769,7 @@
           ],
           "pdf_rank": 4,
           "pdf_net": 51,
+          "pdf_total": 59,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1773,6 +1814,7 @@
           ],
           "pdf_rank": 5,
           "pdf_net": 59,
+          "pdf_total": 66,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1817,6 +1859,7 @@
           ],
           "pdf_rank": 6,
           "pdf_net": 71,
+          "pdf_total": 80,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1861,6 +1904,7 @@
           ],
           "pdf_rank": 7,
           "pdf_net": 75,
+          "pdf_total": 84,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1905,6 +1949,7 @@
           ],
           "pdf_rank": 8,
           "pdf_net": 79,
+          "pdf_total": 87,
           "birth_year": null,
           "crew_birth_year": null
         }
@@ -1950,6 +1995,7 @@
           ],
           "pdf_rank": 1,
           "pdf_net": 34,
+          "pdf_total": 45,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -1988,6 +2034,7 @@
           ],
           "pdf_rank": 2,
           "pdf_net": 37,
+          "pdf_total": 43,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2026,6 +2073,7 @@
           ],
           "pdf_rank": 3,
           "pdf_net": 42,
+          "pdf_total": 61,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2064,6 +2112,7 @@
           ],
           "pdf_rank": 4,
           "pdf_net": 44,
+          "pdf_total": 60,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2102,6 +2151,7 @@
           ],
           "pdf_rank": 5,
           "pdf_net": 55,
+          "pdf_total": 71,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2140,6 +2190,7 @@
           ],
           "pdf_rank": 6,
           "pdf_net": 56,
+          "pdf_total": 68,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2178,6 +2229,7 @@
           ],
           "pdf_rank": 7,
           "pdf_net": 62,
+          "pdf_total": 80,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2216,6 +2268,7 @@
           ],
           "pdf_rank": 8,
           "pdf_net": 93,
+          "pdf_total": 112,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2254,6 +2307,7 @@
           ],
           "pdf_rank": 9,
           "pdf_net": 105,
+          "pdf_total": 118,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2292,6 +2346,7 @@
           ],
           "pdf_rank": 10,
           "pdf_net": 106,
+          "pdf_total": 125,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2328,6 +2383,7 @@
           ],
           "pdf_rank": 11,
           "pdf_net": 98,
+          "pdf_total": 122,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2364,6 +2420,7 @@
           ],
           "pdf_rank": 12,
           "pdf_net": 98,
+          "pdf_total": 118,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2400,6 +2457,7 @@
           ],
           "pdf_rank": 13,
           "pdf_net": 101,
+          "pdf_total": 128,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2436,6 +2494,7 @@
           ],
           "pdf_rank": 14,
           "pdf_net": 109,
+          "pdf_total": 130,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2472,6 +2531,7 @@
           ],
           "pdf_rank": 15,
           "pdf_net": 111,
+          "pdf_total": 158,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2508,6 +2568,7 @@
           ],
           "pdf_rank": 16,
           "pdf_net": 123,
+          "pdf_total": 170,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2544,6 +2605,7 @@
           ],
           "pdf_rank": 17,
           "pdf_net": 129,
+          "pdf_total": 154,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2580,6 +2642,7 @@
           ],
           "pdf_rank": 18,
           "pdf_net": 133,
+          "pdf_total": 161,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2616,6 +2679,7 @@
           ],
           "pdf_rank": 19,
           "pdf_net": 143,
+          "pdf_total": 171,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2652,6 +2716,7 @@
           ],
           "pdf_rank": 20,
           "pdf_net": 145,
+          "pdf_total": 169,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2688,6 +2753,7 @@
           ],
           "pdf_rank": 21,
           "pdf_net": 153,
+          "pdf_total": 190,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2724,6 +2790,7 @@
           ],
           "pdf_rank": 22,
           "pdf_net": 154,
+          "pdf_total": 183,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2760,6 +2827,7 @@
           ],
           "pdf_rank": 23,
           "pdf_net": 170,
+          "pdf_total": 201,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2796,6 +2864,7 @@
           ],
           "pdf_rank": 24,
           "pdf_net": 172,
+          "pdf_total": 211,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2832,6 +2901,7 @@
           ],
           "pdf_rank": 25,
           "pdf_net": 193,
+          "pdf_total": 228,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2868,6 +2938,7 @@
           ],
           "pdf_rank": 26,
           "pdf_net": 208,
+          "pdf_total": 247,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2904,6 +2975,7 @@
           ],
           "pdf_rank": 27,
           "pdf_net": 211,
+          "pdf_total": 246,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2940,6 +3012,7 @@
           ],
           "pdf_rank": 28,
           "pdf_net": 212,
+          "pdf_total": 259,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -2976,6 +3049,7 @@
           ],
           "pdf_rank": 29,
           "pdf_net": 227,
+          "pdf_total": 261,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3012,6 +3086,7 @@
           ],
           "pdf_rank": 30,
           "pdf_net": 233,
+          "pdf_total": 269,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3048,6 +3123,7 @@
           ],
           "pdf_rank": 31,
           "pdf_net": 233,
+          "pdf_total": 269,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3084,6 +3160,7 @@
           ],
           "pdf_rank": 32,
           "pdf_net": 235,
+          "pdf_total": 276,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3120,6 +3197,7 @@
           ],
           "pdf_rank": 33,
           "pdf_net": 247,
+          "pdf_total": 294,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3156,6 +3234,7 @@
           ],
           "pdf_rank": 34,
           "pdf_net": 247,
+          "pdf_total": 284,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3192,6 +3271,7 @@
           ],
           "pdf_rank": 35,
           "pdf_net": 254,
+          "pdf_total": 293,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3228,6 +3308,7 @@
           ],
           "pdf_rank": 36,
           "pdf_net": 265,
+          "pdf_total": 306,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3264,6 +3345,7 @@
           ],
           "pdf_rank": 37,
           "pdf_net": 272,
+          "pdf_total": 310,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3300,6 +3382,7 @@
           ],
           "pdf_rank": 38,
           "pdf_net": 282,
+          "pdf_total": 322,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3336,6 +3419,7 @@
           ],
           "pdf_rank": 39,
           "pdf_net": 304,
+          "pdf_total": 346,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3372,6 +3456,7 @@
           ],
           "pdf_rank": 40,
           "pdf_net": 306,
+          "pdf_total": 349,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3408,6 +3493,7 @@
           ],
           "pdf_rank": 41,
           "pdf_net": 307,
+          "pdf_total": 354,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3444,6 +3530,7 @@
           ],
           "pdf_rank": 42,
           "pdf_net": 312,
+          "pdf_total": 359,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3480,6 +3567,7 @@
           ],
           "pdf_rank": 43,
           "pdf_net": 318,
+          "pdf_total": 362,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3516,6 +3604,7 @@
           ],
           "pdf_rank": 44,
           "pdf_net": 324,
+          "pdf_total": 371,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3552,6 +3641,7 @@
           ],
           "pdf_rank": 45,
           "pdf_net": 352,
+          "pdf_total": 397,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3588,6 +3678,7 @@
           ],
           "pdf_rank": 46,
           "pdf_net": 357,
+          "pdf_total": 403,
           "birth_year": null,
           "crew_birth_year": null
         }
@@ -3633,6 +3724,7 @@
           ],
           "pdf_rank": 1,
           "pdf_net": 36,
+          "pdf_total": 49,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3671,6 +3763,7 @@
           ],
           "pdf_rank": 2,
           "pdf_net": 44,
+          "pdf_total": 56,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3709,6 +3802,7 @@
           ],
           "pdf_rank": 3,
           "pdf_net": 51,
+          "pdf_total": 67,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3747,6 +3841,7 @@
           ],
           "pdf_rank": 4,
           "pdf_net": 60,
+          "pdf_total": 74,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3785,6 +3880,7 @@
           ],
           "pdf_rank": 5,
           "pdf_net": 72,
+          "pdf_total": 86,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3823,6 +3919,7 @@
           ],
           "pdf_rank": 6,
           "pdf_net": 73,
+          "pdf_total": 93,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3861,6 +3958,7 @@
           ],
           "pdf_rank": 7,
           "pdf_net": 74,
+          "pdf_total": 87,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3899,6 +3997,7 @@
           ],
           "pdf_rank": 8,
           "pdf_net": 76,
+          "pdf_total": 91,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3937,6 +4036,7 @@
           ],
           "pdf_rank": 9,
           "pdf_net": 87,
+          "pdf_total": 108,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -3975,6 +4075,7 @@
           ],
           "pdf_rank": 10,
           "pdf_net": 91,
+          "pdf_total": 111,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4011,6 +4112,7 @@
           ],
           "pdf_rank": 11,
           "pdf_net": 77,
+          "pdf_total": 92,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4047,6 +4149,7 @@
           ],
           "pdf_rank": 12,
           "pdf_net": 81,
+          "pdf_total": 98,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4083,6 +4186,7 @@
           ],
           "pdf_rank": 13,
           "pdf_net": 83,
+          "pdf_total": 104,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4119,6 +4223,7 @@
           ],
           "pdf_rank": 14,
           "pdf_net": 92,
+          "pdf_total": 116,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4155,6 +4260,7 @@
           ],
           "pdf_rank": 15,
           "pdf_net": 105,
+          "pdf_total": 128,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4191,6 +4297,7 @@
           ],
           "pdf_rank": 16,
           "pdf_net": 117,
+          "pdf_total": 148,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4227,6 +4334,7 @@
           ],
           "pdf_rank": 17,
           "pdf_net": 124,
+          "pdf_total": 149,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4263,6 +4371,7 @@
           ],
           "pdf_rank": 18,
           "pdf_net": 138,
+          "pdf_total": 162,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4299,6 +4408,7 @@
           ],
           "pdf_rank": 19,
           "pdf_net": 151,
+          "pdf_total": 180,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4335,6 +4445,7 @@
           ],
           "pdf_rank": 20,
           "pdf_net": 163,
+          "pdf_total": 196,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4371,6 +4482,7 @@
           ],
           "pdf_rank": 21,
           "pdf_net": 165,
+          "pdf_total": 192,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4407,6 +4519,7 @@
           ],
           "pdf_rank": 22,
           "pdf_net": 172,
+          "pdf_total": 201,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4443,6 +4556,7 @@
           ],
           "pdf_rank": 23,
           "pdf_net": 174,
+          "pdf_total": 204,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4479,6 +4593,7 @@
           ],
           "pdf_rank": 24,
           "pdf_net": 175,
+          "pdf_total": 204,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4515,6 +4630,7 @@
           ],
           "pdf_rank": 25,
           "pdf_net": 178,
+          "pdf_total": 210,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4551,6 +4667,7 @@
           ],
           "pdf_rank": 26,
           "pdf_net": 186,
+          "pdf_total": 217,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4587,6 +4704,7 @@
           ],
           "pdf_rank": 27,
           "pdf_net": 188,
+          "pdf_total": 220,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4623,6 +4741,7 @@
           ],
           "pdf_rank": 28,
           "pdf_net": 192,
+          "pdf_total": 221,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4659,6 +4778,7 @@
           ],
           "pdf_rank": 29,
           "pdf_net": 196,
+          "pdf_total": 229,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4695,6 +4815,7 @@
           ],
           "pdf_rank": 30,
           "pdf_net": 216,
+          "pdf_total": 248,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4731,6 +4852,7 @@
           ],
           "pdf_rank": 31,
           "pdf_net": 230,
+          "pdf_total": 263,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4767,6 +4889,7 @@
           ],
           "pdf_rank": 32,
           "pdf_net": 247,
+          "pdf_total": 280,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4803,6 +4926,7 @@
           ],
           "pdf_rank": 33,
           "pdf_net": 251,
+          "pdf_total": 284,
           "birth_year": null,
           "crew_birth_year": null
         }
@@ -4854,6 +4978,7 @@
           ],
           "pdf_rank": 1,
           "pdf_net": 32,
+          "pdf_total": 38,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4898,6 +5023,7 @@
           ],
           "pdf_rank": 2,
           "pdf_net": 39,
+          "pdf_total": 47,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4942,6 +5068,7 @@
           ],
           "pdf_rank": 3,
           "pdf_net": 46,
+          "pdf_total": 52,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -4986,6 +5113,7 @@
           ],
           "pdf_rank": 4,
           "pdf_net": 55,
+          "pdf_total": 65,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -5030,6 +5158,7 @@
           ],
           "pdf_rank": 5,
           "pdf_net": 67,
+          "pdf_total": 80,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -5074,6 +5203,7 @@
           ],
           "pdf_rank": 6,
           "pdf_net": 79,
+          "pdf_total": 92,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -5118,6 +5248,7 @@
           ],
           "pdf_rank": 7,
           "pdf_net": 84,
+          "pdf_total": 95,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -5162,6 +5293,7 @@
           ],
           "pdf_rank": 8,
           "pdf_net": 94,
+          "pdf_total": 104,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -5206,6 +5338,7 @@
           ],
           "pdf_rank": 9,
           "pdf_net": 100,
+          "pdf_total": 111,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -5250,6 +5383,7 @@
           ],
           "pdf_rank": 10,
           "pdf_net": 104,
+          "pdf_total": 117,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -5292,6 +5426,7 @@
           ],
           "pdf_rank": 11,
           "pdf_net": 103,
+          "pdf_total": 116,
           "birth_year": null,
           "crew_birth_year": null
         },
@@ -5334,6 +5469,7 @@
           ],
           "pdf_rank": 12,
           "pdf_net": 128,
+          "pdf_total": 141,
           "birth_year": null,
           "crew_birth_year": null
         }
@@ -5349,5 +5485,11 @@
     "family": "sailwave-html-native",
     "input_type": "html",
     "confidence": 0.9
-  }
+  },
+  "confidence": 0.8,
+  "low_confidence": false,
+  "confidence_reasons": [
+    "90 ranks missing from 1..136"
+  ],
+  "ai_parsed": false
 }

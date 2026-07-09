@@ -26,6 +26,9 @@ importers:
       '@athlink/sport-kit':
         specifier: workspace:*
         version: link:../../packages/sport-kit
+      '@athlink/sport-rowing':
+        specifier: workspace:*
+        version: link:../../sports/rowing
       '@athlink/sport-sailing':
         specifier: workspace:*
         version: link:../../sports/sailing
@@ -60,6 +63,20 @@ importers:
       react:
         specifier: ^18
         version: 18.3.1
+
+  packages/features/auth:
+    dependencies:
+      '@athlink/core':
+        specifier: workspace:*
+        version: link:../../core
+      lucide-react:
+        specifier: '*'
+        version: 0.400.0(react@18.3.1)
+      react:
+        specifier: '*'
+        version: 18.3.1
+
+  packages/features/rating: {}
 
   packages/sport-kit: {}
 
@@ -105,7 +122,7 @@ importers:
         specifier: ^18
         version: 18.3.1(react@18.3.1)
 
-  sports/sailing:
+  sports/rowing:
     dependencies:
       '@athlink/core':
         specifier: workspace:*
@@ -113,6 +130,30 @@ importers:
       '@athlink/design-system':
         specifier: workspace:*
         version: link:../../packages/design-system
+      '@athlink/sport-kit':
+        specifier: workspace:*
+        version: link:../../packages/sport-kit
+      lucide-react:
+        specifier: ^0.400.0
+        version: 0.400.0(react@18.3.1)
+      react:
+        specifier: ^18
+        version: 18.3.1
+
+  sports/sailing:
+    dependencies:
+      '@athlink/auth':
+        specifier: workspace:*
+        version: link:../../packages/features/auth
+      '@athlink/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@athlink/design-system':
+        specifier: workspace:*
+        version: link:../../packages/design-system
+      '@athlink/rating':
+        specifier: workspace:*
+        version: link:../../packages/features/rating
       '@athlink/sport-kit':
         specifier: workspace:*
         version: link:../../packages/sport-kit

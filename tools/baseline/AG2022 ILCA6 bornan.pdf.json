@@ -7,6 +7,8 @@
   "n_entries": 9,
   "confidence": 0.9,
   "gate": "PASS (use rules)",
+  "complete": true,
+  "completeness": "PASS: complete",
   "confidence_reasons": [
     "format has no sail-number column (nat-identified rows)"
   ],

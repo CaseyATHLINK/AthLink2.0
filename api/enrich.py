@@ -2,32 +2,47 @@
 AthLink event enrichment — Vercel serverless function.
 
 When the parser returns no date and/or no host country PRINTED on the document,
-this endpoint looks the event up on the web (Anthropic server-side web_search
-tool) and returns a LOW-CONFIDENCE suggestion the preview UI can offer the user.
-Enrichment is strictly optional: the UI treats any failure as "no suggestion",
-so this endpoint NEVER hard-fails the import — provider errors come back as
-{"ok": false, "error": str} with HTTP 200.
+this endpoint looks the event up on the web and returns a LOW-CONFIDENCE
+suggestion the preview UI can offer the user. Enrichment is strictly optional:
+the UI treats any failure as "no suggestion", so this endpoint NEVER hard-fails
+the import — provider errors come back as {"ok": false, "error": str} with HTTP
+200.
 
-Key stays server-side (ANTHROPIC_API_KEY), same as ai_filter.py / parse_pdf.py.
-Uses the urllib pattern from llm.py (no SDK) to stay under the 60s ceiling.
+Provider (parser v3): **Gemini + Google Search grounding** is primary (one paid
+key via _gemini_key(), routed as task 'enrich' → gemini-3-flash). Anthropic
+Sonnet 5 with server-side web_search is the fallback. Same "low-confidence,
+never auto-applied" contract as before. Keys stay server-side. Uses the urllib
+pattern from llm.py (no SDK) to stay under the 60s ceiling.
 """
 
 from http.server import BaseHTTPRequestHandler
 import json, os, sys
 
-# Sibling import (same pattern parse_pdf.py / ai_filter.py use).
-_API_DIR = os.path.dirname(os.path.abspath(__file__))
-if _API_DIR not in sys.path:
-    sys.path.insert(0, _API_DIR)
-from llm import _post_json, LLMError, anthropic_text, ANTHROPIC_URL
+# Shared LLM router now lives in api/_shared/llm.py; put it on sys.path (the dir
+# is force-bundled per-function via vercel.json includeFiles). Same idiom in
+# ai_filter.py / research_host.py.
+_SHARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_DIR)
+from llm import (_post_json, LLMError, anthropic_text, ANTHROPIC_URL,
+                 call_gemini, gemini_text, _gemini_key, route as _llm_route,
+                 _anthropic_fallback_model)
 
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-# Web-search enrichment runs on Haiku 4.5 — cheap, fast, and enough to read a
-# few result pages. Never guesses: the prompt forces nulls when unsure.
-ENRICH_MODEL = "claude-haiku-4-5"
+# Anthropic fallback (web-search) model — Sonnet 5, env-overridable. NEVER Haiku.
+ENRICH_FALLBACK_MODEL = _anthropic_fallback_model()
 # The endpoint must finish < 60s (Vercel Hobby ceiling). Bound the provider
 # call to 45s so we always return before the platform kills the function.
 REQUEST_TIMEOUT = 45
+
+
+def _enrich_model():
+    """Gemini model for enrichment via llm.route('enrich') (honours ENRICH_MODEL
+    env override), defaulting to gemini-3-flash."""
+    try:
+        return (_llm_route("enrich") or {}).get("model") or "gemini-3-flash"
+    except Exception:
+        return "gemini-3-flash"
 
 
 def _build_prompt(name, cls, year, host, missing):
@@ -99,15 +114,18 @@ def _clean_date(v):
     return None
 
 
-def enrich(name, cls, year, host, missing):
-    """Run the web-search lookup. Returns (date, country, source).
+def _enrich_gemini(prompt):
+    """Primary: Gemini + Google Search grounding. Raises on any failure."""
+    resp = call_gemini(_gemini_key(), _enrich_model(), [{"text": prompt}],
+                       max_tokens=700, timeout=REQUEST_TIMEOUT,
+                       tools=[{"google_search": {}}])
+    return _extract_json(gemini_text(resp))
 
-    Raises LLMError on any provider/transport failure so the handler can turn
-    it into ok:false. Never raises for a "not found" — that returns nulls.
-    """
-    prompt = _build_prompt(name, cls, year, host, missing)
+
+def _enrich_anthropic(prompt):
+    """Fallback: Anthropic Sonnet 5 + server-side web_search. Raises on failure."""
     payload = {
-        "model": ENRICH_MODEL,
+        "model": ENRICH_FALLBACK_MODEL,
         "max_tokens": 700,
         "messages": [{"role": "user", "content": prompt}],
         # Anthropic server-side web search — bounded to a few queries so the
@@ -120,7 +138,29 @@ def enrich(name, cls, year, host, missing):
                "x-api-key": ANTHROPIC_KEY,
                "anthropic-version": "2023-06-01"}
     resp = _post_json(ANTHROPIC_URL, payload, headers, REQUEST_TIMEOUT)
-    data = _extract_json(anthropic_text(resp))
+    return _extract_json(anthropic_text(resp))
+
+
+def enrich(name, cls, year, host, missing):
+    """Run the web-search lookup. Returns (date, country, source).
+
+    Gemini + Google Search grounding is primary; Anthropic Sonnet 5 web_search
+    is the fallback (fires only on a Gemini error). Raises LLMError only when
+    BOTH providers fail (and one is configured) so the handler can turn it into
+    ok:false. Never raises for a "not found" — that returns nulls.
+    """
+    prompt = _build_prompt(name, cls, year, host, missing)
+    data = None
+    if _gemini_key():
+        try:
+            data = _enrich_gemini(prompt)
+        except Exception:
+            data = None  # fall through to Anthropic
+    if data is None and ANTHROPIC_KEY:
+        data = _enrich_anthropic(prompt)
+    if data is None:
+        raise LLMError("no enrichment provider configured "
+                       "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback)")
     return (_clean_date(data.get("date")),
             _clean_country(data.get("country")),
             (data.get("source") or None))
@@ -134,10 +174,10 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if not ANTHROPIC_KEY:
+        if not (_gemini_key() or ANTHROPIC_KEY):
             # Optional feature — never break the preview. 200 + ok:false.
             return self._respond(200, {"ok": False,
-                                       "error": "ANTHROPIC_API_KEY not set in environment."})
+                                       "error": "No AI key set (Gemini_API_Key_Universal or ANTHROPIC_API_KEY)."})
 
         length = int(self.headers.get("Content-Length", 0))
         if not length:

@@ -1,0 +1,18 @@
+{
+  "name": "@athlink/sport-rowing",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "manifest.jsx",
+  "exports": {
+    ".": "./manifest.jsx"
+  },
+  "dependencies": {
+    "@athlink/core": "workspace:*",
+    "@athlink/design-system": "workspace:*",
+    "@athlink/sport-kit": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18",
+    "lucide-react": "^0.400.0"
+  }
+}

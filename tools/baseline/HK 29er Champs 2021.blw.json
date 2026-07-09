@@ -7,6 +7,8 @@
   "n_entries": 13,
   "confidence": 1.0,
   "gate": "PASS (use rules)",
+  "complete": true,
+  "completeness": "PASS: complete",
   "confidence_reasons": [
     "looks clean"
   ],

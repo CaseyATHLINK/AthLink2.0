@@ -46,6 +46,7 @@
       ],
       "pdf_rank": 1,
       "pdf_net": 41,
+      "pdf_total": 56,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -90,6 +91,7 @@
       ],
       "pdf_rank": 2,
       "pdf_net": 95,
+      "pdf_total": 121,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -134,6 +136,7 @@
       ],
       "pdf_rank": 3,
       "pdf_net": 97,
+      "pdf_total": 125,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -178,6 +181,7 @@
       ],
       "pdf_rank": 4,
       "pdf_net": 98,
+      "pdf_total": 124,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -222,6 +226,7 @@
       ],
       "pdf_rank": 5,
       "pdf_net": 101,
+      "pdf_total": 127,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -266,6 +271,7 @@
       ],
       "pdf_rank": 6,
       "pdf_net": 107,
+      "pdf_total": 132,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -310,6 +316,7 @@
       ],
       "pdf_rank": 7,
       "pdf_net": 109,
+      "pdf_total": 135,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -354,6 +361,7 @@
       ],
       "pdf_rank": 8,
       "pdf_net": 115,
+      "pdf_total": 139,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -398,6 +406,7 @@
       ],
       "pdf_rank": 9,
       "pdf_net": 124,
+      "pdf_total": 150,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -442,6 +451,7 @@
       ],
       "pdf_rank": 10,
       "pdf_net": 126,
+      "pdf_total": 152,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -484,6 +494,7 @@
       ],
       "pdf_rank": 11,
       "pdf_net": 114,
+      "pdf_total": 140,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -526,12 +537,13 @@
       ],
       "pdf_rank": 12,
       "pdf_net": 115,
+      "pdf_total": 143,
       "birth_year": null,
       "crew_birth_year": null
     },
     {
-      "helm": "Sam Bacon Blake McGlashan",
-      "crew": "",
+      "helm": "Sam Bacon",
+      "crew": "Blake McGlashan",
       "sail": "900",
       "nat": "NZL",
       "div": "49er",
@@ -568,6 +580,7 @@
       ],
       "pdf_rank": 13,
       "pdf_net": 116,
+      "pdf_total": 142,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -610,6 +623,7 @@
       ],
       "pdf_rank": 14,
       "pdf_net": 121,
+      "pdf_total": 143,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -652,6 +666,7 @@
       ],
       "pdf_rank": 15,
       "pdf_net": 123,
+      "pdf_total": 149,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -694,6 +709,7 @@
       ],
       "pdf_rank": 16,
       "pdf_net": 125,
+      "pdf_total": 151,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -736,6 +752,7 @@
       ],
       "pdf_rank": 17,
       "pdf_net": 128,
+      "pdf_total": 148,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -778,6 +795,7 @@
       ],
       "pdf_rank": 18,
       "pdf_net": 130,
+      "pdf_total": 156,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -820,6 +838,7 @@
       ],
       "pdf_rank": 19,
       "pdf_net": 134,
+      "pdf_total": 162,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -862,6 +881,7 @@
       ],
       "pdf_rank": 20,
       "pdf_net": 136,
+      "pdf_total": 162,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -904,6 +924,7 @@
       ],
       "pdf_rank": 21,
       "pdf_net": 141,
+      "pdf_total": 167,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -946,6 +967,7 @@
       ],
       "pdf_rank": 22,
       "pdf_net": 152,
+      "pdf_total": 178,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -988,6 +1010,7 @@
       ],
       "pdf_rank": 23,
       "pdf_net": 160,
+      "pdf_total": 186,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1030,6 +1053,7 @@
       ],
       "pdf_rank": 24,
       "pdf_net": 173,
+      "pdf_total": 199,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1072,6 +1096,7 @@
       ],
       "pdf_rank": 25,
       "pdf_net": 178,
+      "pdf_total": 204,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1116,6 +1141,7 @@
       ],
       "pdf_rank": 26,
       "pdf_net": 132,
+      "pdf_total": 162,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1160,6 +1186,7 @@
       ],
       "pdf_rank": 27,
       "pdf_net": 135,
+      "pdf_total": 165,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1204,6 +1231,7 @@
       ],
       "pdf_rank": 28,
       "pdf_net": 138,
+      "pdf_total": 163,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1248,6 +1276,7 @@
       ],
       "pdf_rank": 29,
       "pdf_net": 142,
+      "pdf_total": 172,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1292,6 +1321,7 @@
       ],
       "pdf_rank": 30,
       "pdf_net": 143,
+      "pdf_total": 171,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1336,6 +1366,7 @@
       ],
       "pdf_rank": 31,
       "pdf_net": 143,
+      "pdf_total": 171,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1380,6 +1411,7 @@
       ],
       "pdf_rank": 32,
       "pdf_net": 156,
+      "pdf_total": 180,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1424,6 +1456,7 @@
       ],
       "pdf_rank": 33,
       "pdf_net": 156,
+      "pdf_total": 180,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1468,6 +1501,7 @@
       ],
       "pdf_rank": 34,
       "pdf_net": 159,
+      "pdf_total": 186,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1512,6 +1546,7 @@
       ],
       "pdf_rank": 35,
       "pdf_net": 161,
+      "pdf_total": 191,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1556,6 +1591,7 @@
       ],
       "pdf_rank": 36,
       "pdf_net": 162,
+      "pdf_total": 192,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1600,6 +1636,7 @@
       ],
       "pdf_rank": 37,
       "pdf_net": 169,
+      "pdf_total": 192,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1644,6 +1681,7 @@
       ],
       "pdf_rank": 38,
       "pdf_net": 173,
+      "pdf_total": 203,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1688,6 +1726,7 @@
       ],
       "pdf_rank": 39,
       "pdf_net": 176,
+      "pdf_total": 206,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1732,6 +1771,7 @@
       ],
       "pdf_rank": 40,
       "pdf_net": 180,
+      "pdf_total": 208,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1776,6 +1816,7 @@
       ],
       "pdf_rank": 41,
       "pdf_net": 181,
+      "pdf_total": 211,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1820,6 +1861,7 @@
       ],
       "pdf_rank": 42,
       "pdf_net": 182,
+      "pdf_total": 207,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1864,6 +1906,7 @@
       ],
       "pdf_rank": 43,
       "pdf_net": 186,
+      "pdf_total": 216,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1908,6 +1951,7 @@
       ],
       "pdf_rank": 44,
       "pdf_net": 188,
+      "pdf_total": 212,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1952,6 +1996,7 @@
       ],
       "pdf_rank": 45,
       "pdf_net": 198,
+      "pdf_total": 226,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -1996,6 +2041,7 @@
       ],
       "pdf_rank": 46,
       "pdf_net": 199,
+      "pdf_total": 229,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -2040,6 +2086,7 @@
       ],
       "pdf_rank": 47,
       "pdf_net": 202,
+      "pdf_total": 232,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -2084,12 +2131,13 @@
       ],
       "pdf_rank": 48,
       "pdf_net": 212,
+      "pdf_total": 239,
       "birth_year": null,
       "crew_birth_year": null
     },
     {
-      "helm": "Francesco Kayrouz Hamish McLaren",
-      "crew": "",
+      "helm": "Francesco Kayrouz",
+      "crew": "Hamish McLaren",
       "sail": "135",
       "nat": "NZL",
       "div": "49er",
@@ -2128,6 +2176,7 @@
       ],
       "pdf_rank": 49,
       "pdf_net": 214,
+      "pdf_total": 244,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -2172,6 +2221,7 @@
       ],
       "pdf_rank": 50,
       "pdf_net": 218,
+      "pdf_total": 248,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -2216,6 +2266,7 @@
       ],
       "pdf_rank": 51,
       "pdf_net": 234,
+      "pdf_total": 264,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -2260,6 +2311,7 @@
       ],
       "pdf_rank": 52,
       "pdf_net": 261,
+      "pdf_total": 291,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -2304,6 +2356,7 @@
       ],
       "pdf_rank": 53,
       "pdf_net": 262,
+      "pdf_total": 292,
       "birth_year": null,
       "crew_birth_year": null
     },
@@ -2348,6 +2401,7 @@
       ],
       "pdf_rank": 54,
       "pdf_net": 292,
+      "pdf_total": 320,
       "birth_year": null,
       "crew_birth_year": null
     }
@@ -2364,5 +2418,6 @@
     "family": "manage2sail",
     "input_type": "pdf-text",
     "confidence": 0.9
-  }
+  },
+  "_checksums": {}
 }

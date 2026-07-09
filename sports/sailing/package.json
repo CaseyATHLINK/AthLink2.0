@@ -10,6 +10,8 @@
     "@athlink/core": "workspace:*",
     "@athlink/design-system": "workspace:*",
     "@athlink/sport-kit": "workspace:*",
+    "@athlink/rating": "workspace:*",
+    "@athlink/auth": "workspace:*",
     "d3-force": "^3.0.0"
   },
   "peerDependencies": {
