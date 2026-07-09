@@ -1,15 +1,20 @@
-/* Golf sport manifest. Scaffolded from sports/_template.
-   Build your portal in ./src. Import UI from @athlink/design-system and
-   data/auth from @athlink/core — never hardcode colors or fonts. */
+/* Golf sport manifest.
+   Golf is a verbatim clone of the full sailing app (see sports/sailing) —
+   src/App.jsx is the Portal as-is; it carries its own chrome/theme, so it
+   renders standalone inside the shell. Relabel pass (sailing → golf wording)
+   happens inside src/App.jsx only. */
 import { defineSport } from "@athlink/sport-kit";
-import { Trophy } from "lucide-react";
-import Portal from "./src/Portal.jsx";
+import { Flag } from "lucide-react";
+import App from "./src/App.jsx";
 
 export default defineSport({
   id: "golf",
   name: "Golf",
-  tagline: "Competitions & athlete profiles",
-  icon: Trophy,
+  tagline: "Clubs, associations, competitions & athlete profiles",
+  icon: Flag,
   accentToken: "--accent",
-  Portal,
+  // Golf has its own top bar (cloned from sailing); its AthLink logo returns
+  // to the landing, so the shell's floating "All sports" link is hidden.
+  providesOwnNav: true,
+  Portal: App,
 });
