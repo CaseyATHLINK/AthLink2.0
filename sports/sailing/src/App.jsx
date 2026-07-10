@@ -19,7 +19,7 @@ import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeletePro
 import { isCode, scoreEvent, scorePreview, aggregate, outstandingAchievementFor } from "./data/scoring.js";
 import { parseHtml } from "./data/parse-html.js";
 import { dbToApp, saveEventToDb, updateEventStatus, fetchDupDismissals, saveDupDismissals } from "./data/events.js";
-import { CountryTag, ConfirmModal, VerifyBadge, DivisionToggle, ClassPicker, HostClassPills, LiquidBackground, MagneticItem, ResultNuggets, WebIcon, ErrorBoundary } from "./views/atoms.jsx";
+import { CountryTag, ConfirmModal, VerifyBadge, DivisionToggle, ClassPicker, HostClassPills, LiquidBackground, MagneticItem, ResultNuggets, WebIcon, ErrorBoundary, HostLogo } from "./views/atoms.jsx";
 import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect, SubclassHover, HostPicker } from "./views/forms.jsx";
 import { CalendarBody } from "./views/calendar.jsx";
 import { GLOBE_NAMES, SailingGlobe, FootprintLegend } from "./views/globe.jsx";
@@ -3316,7 +3316,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .cal-cell-num.today-circle{background:var(--accent);color:#fff;}
     .cal-cell-ev{background:var(--accent);color:#fff;border-radius:8px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:.12s;box-shadow:inset 0 1px 0 rgba(255,255,255,.3);}
     .cal-cell-ev:hover{filter:brightness(1.08);transform:translateY(-1px);}
-    .cal-cell-ev.cls-29er{background:#E84855;}
+    .cal-cell-ev.cls-29er{background:#E62A22;}
     .cal-cell-ev.cls-ilca{background:#2E78C8;}
     .cal-cell-ev.cls-49er{background:#5FAF4E;}
     .cal-cell-ev.cls-optimist{background:#3D3D3D;}
@@ -3404,14 +3404,39 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        IN-FLOW below the models — it self-sizes to any wrap count (long text wraps to 4-5
        lines on a phone) and can never overlap the models or the results. */
     @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}.spm-classgrid .spm-duo{padding-bottom:0}.spm-classgrid .spm-info{position:static;margin-top:10px}}
+    /* ── Host portal header WITH an interactive model (spm-classgrid--host) ──
+       Unlike the global-class / competitions grids above, this one must NEVER stack:
+       the model belongs on the same row as the title at every width. Re-assert the
+       two-column track (higher specificity than the stack rule above) and let BOTH
+       columns shrink — the SVG models are width:100% so they scale down fluidly.
+       Placed AFTER the max-width:1150px media block so it wins by source order. */
+    .strip .spm-classgrid--host{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(10px,1.6vw,16px)}
+    .spm-classgrid--host .spm-duo{padding-bottom:62px}                 /* keep overlay clearance (2-col, not stacked) */
+    .spm-classgrid--host .spm-info{position:absolute;margin-top:0}
+    /* ── Fluid header sizing — EVERY host portal header, model or not ──
+       The whole header (title, globe, logo, stat pills, action pills) lives in .strip,
+       so scope the clamp()s there. As the viewport narrows everything scales down
+       together instead of wrapping or overflowing. */
+    .strip .page-title{font-size:clamp(15px,2.3vw,28px)}
+    .strip .pillbar{gap:clamp(9px,1.4vw,20px)}
+    .strip .pill{font-size:clamp(11.5px,1.15vw,15px)}
+    .strip .portal-pill{min-width:0;font-size:clamp(11px,1.05vw,13.5px);padding:9px clamp(11px,1.3vw,18px)}
+    /* Header globe + logo: fluid heights so they shrink with the header. SailingGlobe
+       fill=true reads .hdr-globe's height; the square aspect keeps the projection round.
+       .hdr-logo drives the logo height in CSS (width follows via its aspect-ratio). */
+    .hdr-globe{width:clamp(88px,12vw,150px);aspect-ratio:1}
+    .hdr-logo{height:clamp(45px,6.9vw,84px)}
     .spm-duo{position:relative;min-width:0}
     .spm-duorow{display:flex;gap:0;justify-content:center;align-items:flex-start}
     /* pull the two boats together — their outer whitespace overlaps, closing the empty gap */
     .spm-duorow .spm-holo{flex:1 1 0;min-width:0;max-width:480px}
     .spm-duorow .spm-holo:first-child{margin-right:-6%}
     .spm-duorow .spm-holo:last-child{margin-left:-6%}
-    /* home page only: models render 30% smaller (480px → 336px); overlap % and info line stay proportional */
-    .spm-duorow--home .spm-holo{max-width:336px}
+    /* Home showcase models shrink fluidly with the viewport — same effect as the host-page
+       models, but 30% larger overall (the host's ~0.25vw rate scaled ×1.3 → ~0.325vw per holo,
+       capped at 437px, floored at 143px so they stay legible). Replaces the old fixed 336px,
+       which held full size until a hard mobile breakpoint. */
+    .spm-duorow--home .spm-holo{max-width:clamp(143px,32.5vw,437px)}
     .spm-holo{position:relative} /* frameless — the models sit directly on the page */
     /* absolutely placed OVERLAY below the row — out of flow, so it never shifts the
        models or (on the grid pages) the header; callers reserve real space for it via
@@ -3594,8 +3619,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       .spm-sec{margin:18px 0 44px;}
       .spm-sec--home{margin:6px 0 30px;}
       .spm-duorow--home{justify-content:center;}
-      .spm-duorow--home .spm-holo:last-child{display:none;} /* course diagram lives on class pages */
-      .spm-duorow--home .spm-holo:first-child{margin-right:0;max-width:min(320px,82vw);}
+      /* Home models now shrink fluidly at every width (see the .spm-duorow--home .spm-holo
+         clamp above) — matching the host-page shrink. Both the boat and the course diagram
+         stay visible and scale down together, instead of the boat jumping to 82vw and the
+         course diagram being hidden on phones. */
       .spm-duo--home .spm-info{position:static;margin-top:8px;text-align:center;min-height:36px;}
       .hero-srch{padding:12px 15px;margin:14px 0 6px;}
     }
@@ -4618,73 +4645,98 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const modelCfg=SPORT_MODELS[isClassPortal?portalCls:(host&&host.cls)]||null;
           // Globe for BOTH association/club/federation portals AND class portals.
           const globe=(()=>{
-            let hiso=null;
-            if(isClassPortal){
-              const top=Object.entries(hostCountryCounts).sort((a,b)=>b[1]-a[1])[0];
-              hiso=top?top[0]:null;
-            } else {
-              const hc=hostLocation(portal,events);
-              hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
-            }
-            if(!hiso) return null;
-            return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where they compete — click to expand" onClick={()=>setHostFootprintOpen(true)}>
-              <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={isClassPortal?null:hiso}/>
+            // Explicit home country → yellow host marker. Class portals never have one.
+            const hc=isClassPortal?null:hostLocation(portal,events);
+            const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+            // Show the globe whenever there's ANY location to show — the host's own
+            // country OR at least one country in its competition footprint. International
+            // associations have no home country but do compete somewhere, so they still
+            // get a globe (just without the yellow home marker).
+            if(!hiso&&Object.keys(hostCountryCounts).length===0) return null;
+            return(<div className="hdr-globe" style={{flex:"none",cursor:"pointer",position:"relative"}} title="Where they compete — click to expand" onClick={()=>setHostFootprintOpen(true)}>
+              <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare fill hostIso={hiso}/>
             </div>);
           })();
-          // Host logo — read-only display (the upload UI is paused); globe always shows when known,
-          // the logo renders alongside it only when host.logo_url is set, with no placeholder otherwise.
-          // Frameless: shown on a transparent ground, contained within a globe-sized box.
-          const logo=host?.logo_url?(
-            <div style={{width:150,height:150,flex:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
-              <img src={host.logo_url} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",display:"block"}}/>
+          // Host logo — read-only display (the upload UI is paused). It stacks ON TOP of the
+          // title (left-aligned to the title), so it's a left-hugging, height-capped box on a
+          // transparent ground. Its top isn't aligned to anything; the title below it is what
+          // bottom-aligns to the globe.
+          const logo=host?.logo_url?<HostLogo src={host.logo_url}/>:null;
+          // OWNER/role badge — sits above the logo/title stack, left-aligned.
+          const badge=(!isClassPortal&&myPortalMembership&&myPortalMembership.verified)?(
+            <div style={{marginBottom:8}}>
+              <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
+                color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
+                <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
+              </span>
             </div>
           ):null;
-          const actions=(
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
-                <Users size={14} style={{flex:"none"}}/> Athletes
-              </MagneticItem>
-              <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
-                <Calendar size={14} style={{flex:"none"}}/> Calendar
-              </MagneticItem>
-              {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
-                <Trophy size={14} style={{flex:"none"}}/> Rankings
-              </MagneticItem>}
-              {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
-                <Settings size={14} style={{flex:"none"}}/> Edit page
-              </MagneticItem>}
-              {/* Host auto-grab: entry is the dismissible "We found your organisation"
-                  banner below (not a header pill) + the Host website field in Edit page. */}
-              {/* Host auto-grab: needs-review badge (non-empty queue) */}
-              {!isClassPortal&&(canManageMembers||!!myPortalMembership)&&(host?.dossier?.needs_review?.length>0)&&<MagneticItem className="portal-pill" onClick={()=>{setDiscoveryReview(true);setShowDiscovery(true);}} strength={0.28}>
-                <span style={{display:"inline-flex",alignItems:"center",gap:6,color:"#8a6400"}}><AlertCircle size={14} style={{flex:"none"}}/> {host.dossier.needs_review.length} need review</span>
-              </MagneticItem>}
+          // Identity row: globe on the LEFT; to its right a bottom-aligned column holding the
+          // (badge →) logo → title. flex-end bottom-aligns the column to the globe, and the title
+          // carries a marginBottom that lifts its baseline to the globe's visible circle bottom —
+          // the SailingGlobe canvas has a ~16px transparent inset below the circle, so aligning the
+          // raw boxes would leave the title sitting ~9px low. The logo stacks above the title and
+          // can rise past the globe's top freely.
+          const identity=(
+            <div style={{display:"flex",alignItems:"flex-end",gap:14,minWidth:0}}>
+              {globe}
+              <div style={{minWidth:0,display:"flex",flexDirection:"column",alignItems:"flex-start"}}>
+                {badge}
+                {logo}
+                <h1 className="page-title" style={{margin:"0 0 9px"}}>{portalName}</h1>
+              </div>
             </div>
           );
-          // Left column mirrors the global-class-page layout: title pinned at the very top,
-          // then the globe/logo identity row (globe → logo, left to right), stat pills, and actions.
+          const pillbar=(
+            <div className="pillbar" style={{marginTop:14}}>
+              <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
+              <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
+            </div>
+          );
+          const actionPills=(<>
+            <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
+              <Users size={14} style={{flex:"none"}}/> Athletes
+            </MagneticItem>
+            <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
+              <Calendar size={14} style={{flex:"none"}}/> Calendar
+            </MagneticItem>
+            {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
+              <Trophy size={14} style={{flex:"none"}}/> Rankings
+            </MagneticItem>}
+            {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
+              <Settings size={14} style={{flex:"none"}}/> Edit page
+            </MagneticItem>}
+            {/* Host auto-grab: entry is the dismissible "We found your organisation"
+                banner below (not a header pill) + the Host website field in Edit page. */}
+            {/* Host auto-grab: needs-review badge (non-empty queue) */}
+            {!isClassPortal&&(canManageMembers||!!myPortalMembership)&&(host?.dossier?.needs_review?.length>0)&&<MagneticItem className="portal-pill" onClick={()=>{setDiscoveryReview(true);setShowDiscovery(true);}} strength={0.28}>
+              <span style={{display:"inline-flex",alignItems:"center",gap:6,color:"#8a6400"}}><AlertCircle size={14} style={{flex:"none"}}/> {host.dossier.needs_review.length} need review</span>
+            </MagneticItem>}
+          </>);
+          // No interactive model: buttons return to the RIGHT of the title, on the far right of
+          // the page (space-between) and centred against the globe/identity row — as it was before.
+          if(!modelCfg) return(
+            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
+              <div style={{minWidth:0}}>
+                {identity}
+                {pillbar}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",alignSelf:"center"}}>
+                {actionPills}
+              </div>
+            </div>
+          );
+          // Interactive model present: the model takes the right half, so actions stay stacked
+          // below the pillbar in the left header column.
           const head=(
             <div style={{minWidth:0}}>
-              {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
-                <div style={{marginBottom:8}}>
-                  <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
-                    color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
-                    <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
-                  </span>
-                </div>
-              )}
-              <h1 className="page-title">{portalName}</h1>
-              {(globe||logo)&&<div style={{display:"flex",alignItems:"center",gap:14,marginTop:14}}>{globe}{logo}</div>}
-              <div className="pillbar" style={{marginTop:14}}>
-                <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
-                <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
-              </div>
-              <div style={{marginTop:14}}>{actions}</div>
+              {identity}
+              {pillbar}
+              <div style={{marginTop:14,display:"flex",gap:8,flexWrap:"wrap"}}>{actionPills}</div>
             </div>
           );
-          if(!modelCfg) return head;
           return(
-            <div className="spm-classgrid">
+            <div className="spm-classgrid spm-classgrid--host">
               <div className="spm-classhead">{head}</div>
               <SpmDuo cfg={modelCfg}/>
             </div>);
