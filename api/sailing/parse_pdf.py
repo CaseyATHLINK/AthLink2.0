@@ -493,6 +493,44 @@ def _is_age_cat_token(s):
     return low in ('junior', 'jr', 'youth', 'cadet', 'master', 'masters',
                    'veteran', 'veterans', 'senior')
 
+# A single division/age token (the part before an optional "/gender" suffix).
+# Deliberately a known, closed set — like _is_age_cat_token it must never match
+# names/clubs/sails — but wider: it also covers Open/Senior and adds the combined
+# "Division/Gender" cell some manage2sail exports pack into one column.
+_DIVISION_TOKEN = re.compile(
+    r'^(?:u[\s\-]?\d{1,2}|under[\s\-]?\d{1,2}|youth|junior|jr|cadet|juvenile|'
+    r'open|senior|master(?:s)?|veteran(?:s)?|apprentice)$', re.IGNORECASE)
+
+def split_div_gender(raw):
+    """Split a combined division/gender cell into (division_label, gender).
+    Handles 'Youth', 'U17', 'Open', 'Youth/M', 'Open/Female', 'U17/X'. Returns
+    ('','') when the cell isn't a division[/gender] token, so it can double as a
+    detector. The division label is returned RAW (caller runs norm_category);
+    the gender is normalised to M/F/Mix."""
+    s = re.sub(r'\s+', ' ', str(raw or '')).strip()
+    if not s:
+        return '', ''
+    parts = [p.strip() for p in s.split('/') if p.strip()]
+    if not parts or len(parts) > 2 or not _DIVISION_TOKEN.match(parts[0]):
+        return '', ''
+    gender = ''
+    if len(parts) == 2:
+        gender = norm_gender(parts[1])
+        if not gender:
+            return '', ''            # second part isn't a gender → not this format
+    # Tidy the division label but keep the SOURCE name (this is an explicit named
+    # division — 'Youth', 'U17', 'Open' — not a value to fold into Jr/Mst):
+    # U-tokens → 'U17'; everything else Title-cased.
+    label = parts[0]
+    m = (re.match(r'^u[\s\-]?(\d{1,2})$', label, re.IGNORECASE)
+         or re.match(r'^under[\s\-]?(\d{1,2})$', label, re.IGNORECASE))
+    label = ('U' + m.group(1)) if m else (label[:1].upper() + label[1:].lower())
+    return label, gender
+
+def _is_div_gender_cell(s):
+    div, _ = split_div_gender(s)
+    return bool(div)
+
 # ── metadata ───────────────────────────────────────────────────────────────
 def extract_event_name(text):
     kw = r'(?i)(championship|regatta|nationals|cup|trophy|open|series|race|sailing|woche|ovington)'
@@ -685,6 +723,17 @@ def parse_row_with_cols(row, cols, open_division=False):
     nat_raw  = get('nat')
     div_raw  = re.sub(r'\s+', ' ', get('div')).strip()
     cat_raw  = get('category')
+    # A recovered combined division/gender column ('Youth/M', 'Open/Female' packed
+    # under a mislabelled header) — split it into a clean division token (feeds
+    # category) plus a gender, BEFORE any routing below reads cat_raw. This is a
+    # demographic division, never a scoring fleet, so it must not reach the fleet
+    # routing further down (guarded by the '_divgender' checks).
+    _dg_gender = ''
+    _dg_category = None
+    if '_divgender' in cols:
+        _dvl, _dgn = split_div_gender(cat_raw)
+        cat_raw, _dg_gender = _dvl, _dgn   # _dvl is '' for a stray non-div value
+        _dg_category = _dvl                # keep the source division label as-is
     # Per-row boat class from a "Class"/"Boat"/"Type" column (mixed-handicap
     # divisions). Kept on every entry so the frontend can create custom classes.
     row_class = re.sub(r'\s+', ' ', get('rowclass')).strip()
@@ -696,8 +745,10 @@ def parse_row_with_cols(row, cols, open_division=False):
     # Sailwave often packs gender into the Division column ("Junior, Men",
     # "Women", "Mixed") with no separate gender column — recover it here.
     if not gender and 'gender' not in cols:
-        gender = gender_from_text(cat_raw) or gender_from_text(div_raw)
-    category = norm_category(cat_raw)
+        gender = _dg_gender or gender_from_text(cat_raw) or gender_from_text(div_raw)
+    # A divgender column keeps its source label ('Youth'/'U17'/'Open'); every other
+    # category source is normalised (Junior→Jr, Under 17→U17, …).
+    category = _dg_category if _dg_category is not None else norm_category(cat_raw)
 
     # A "Fleet"/"Division" column sometimes holds an age group ("U23") or a
     # placeholder ("---") rather than a real boat class. Route those away from
@@ -718,7 +769,8 @@ def parse_row_with_cols(row, cols, open_division=False):
     # rather than a demographic group. When there's no separate fleet column, use
     # the RAW value as the fleet key (div) so the event splits per class. Runs
     # last so the demotion above can't strip an unrecognised-but-valid class.
-    if not div_raw and cat_raw and _looks_like_fleet_label(cat_raw):
+    if (not div_raw and cat_raw and '_divgender' not in cols
+            and _looks_like_fleet_label(cat_raw)):
         div_raw  = re.sub(r'\s+', ' ', cat_raw).strip()
         category = ''
 
@@ -920,12 +972,15 @@ def parse_table(tbl, fleet_hint=''):
     if not (has_name and has_races):
         return None
 
-    # Recover an UNLABELLED age-category column. Some exports (e.g. the Sailwave
-    # 'Group' column in the ILCA Youth Worlds) render category values — U16/U18 —
-    # under a blank header cell, so detect_cols never maps them. If no category
-    # column was found, scan the body for an unclaimed column whose non-empty
-    # values are overwhelmingly bare age tokens and adopt it, so the per-row
-    # division survives (it was silently dropped before).
+    # Recover an UNLABELLED division/category column. Some exports render the
+    # division under a blank or WRONG header cell, so detect_cols never maps it:
+    #   - the Sailwave 'Group' column in the ILCA Youth Worlds (bare U16/U18);
+    #   - manage2sail overall PDFs that pack the division AND gender into one cell
+    #     ('Youth', 'U17', 'Open', 'Youth/M', 'Open/Female') under a mislabelled
+    #     'Bow No' header (e.g. 29er Worlds 2026).
+    # If no category column was found, scan the body for an unclaimed column whose
+    # non-empty values are overwhelmingly division[/gender] tokens and adopt it, so
+    # the per-row division (and gender) survives instead of being silently dropped.
     if 'category' not in cols:
         claimed = set()
         for _k, _v in cols.items():
@@ -946,11 +1001,15 @@ def parse_table(tbl, fleet_hint=''):
                      if _ci < len(r) and str(r[_ci] or '').strip()]
             if len(_vals) < 2:
                 continue
-            _hits = sum(1 for v in _vals if _is_age_cat_token(v))
+            _hits = sum(1 for v in _vals if _is_div_gender_cell(v))
             if _hits >= 2 and _hits >= 0.8 * len(_vals) and _hits > _best_hits:
                 _best_idx, _best_hits = _ci, _hits
         if _best_idx is not None:
             cols['category'] = _best_idx
+            # This column may also carry a '/gender' suffix — mark it so the row
+            # parser splits division from gender (harmless for bare-token columns,
+            # which just yield an empty gender).
+            cols['_divgender'] = _best_idx
 
     # An "Open Division" / handicap / PY section is ONE fleet of mixed classes —
     # tell the row parser not to split it by its per-row class column.
