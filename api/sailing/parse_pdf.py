@@ -733,7 +733,11 @@ def parse_row_with_cols(row, cols, open_division=False):
     if '_divgender' in cols:
         _dvl, _dgn = split_div_gender(cat_raw)
         cat_raw, _dg_gender = _dvl, _dgn   # _dvl is '' for a stray non-div value
-        _dg_category = _dvl                # keep the source division label as-is
+        # Surface only a SPECIFIC age band (U17, U19, …) as the division. A generic
+        # 'Youth'/'Junior'/'Open'/'Senior' label is not a meaningful sub-division
+        # here — those boats are just the general fleet (category left blank). The
+        # gender is still captured either way.
+        _dg_category = _dvl if re.fullmatch(r'U\d{1,2}', _dvl or '') else ''
     # Per-row boat class from a "Class"/"Boat"/"Type" column (mixed-handicap
     # divisions). Kept on every entry so the frontend can create custom classes.
     row_class = re.sub(r'\s+', ' ', get('rowclass')).strip()
