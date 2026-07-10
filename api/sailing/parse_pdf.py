@@ -212,6 +212,21 @@ def is_race_hdr(cell):
     )
 
 
+def is_series_pts_hdr(cell):
+    """Manage2sail series-points column ('Q-SP', 'F-SP', 'SP') — the qualifying /
+    final sub-series start-points carried into the overall table. These sit inside
+    the race-header band but hold a carried series total, NOT a race score, so
+    they must count towards recognising the split header yet be skipped when
+    scoring. Match the LAST token so a merged label ('Qualifying Series Q-SP')
+    still resolves."""
+    s = fix_doubled(str(cell or '')).strip().upper()
+    toks = s.split()
+    last = toks[-1] if toks else s
+    # Require the dashed form (Q-SP, F-SP) or a bare 'SP' so glued 3-letter tokens
+    # (e.g. 'ISP') can't false-match.
+    return bool(re.match(r'^[A-Z]{1,2}-SP$', last)) or last == 'SP'
+
+
 def hdr_key(cell):
     return re.sub(r"[\s\n_()/\\'#.]+", '', fix_doubled(str(cell or '')).lower())
 
@@ -639,6 +654,14 @@ def detect_cols(header_rows):
             # Sailti carry-forward / points-situation columns are cumulative,
             # NOT individual races — mark them to skip in the race loop.
             cols.setdefault('_skip', set()).add(i)
+        if is_series_pts_hdr(cell):
+            # Q-SP / F-SP carried series subtotals — inside the race band but not a
+            # race, so skip them when scoring (they'd otherwise be a phantom race).
+            # They DO count towards the printed Total, so also track them as carry-
+            # forward points so the completeness checksum (sum races + carry == Total)
+            # stays exact instead of false-flagging a dropped cell.
+            cols.setdefault('_skip', set()).add(i)
+            cols.setdefault('_carry', set()).add(i)
         if is_race_hdr(cell):
             cols.setdefault('race_start', i)
             cols['race_end'] = i
@@ -749,6 +772,17 @@ def parse_row_with_cols(row, cols, open_division=False):
                 if re.match(r'^\s*\(', str(row[i] or '')):
                     _disc_count += 1
 
+    # Carry-forward series points (Q-SP / F-SP): not a race, but included in the
+    # printed gross Total. Sum them so the completeness checksum can account for
+    # the difference between summed race scores and the Total.
+    carry_pts = 0.0
+    for ci in cols.get('_carry', ()):
+        if ci < len(row):
+            cm = re.match(r'^\(?(-?\d+(?:\.\d+)?)\)?$', str(row[ci] or '').strip())
+            if cm:
+                carry_pts += float(cm.group(1))
+    carry_pts = int(carry_pts) if carry_pts == int(carry_pts) else round(carry_pts, 2)
+
     # Extract PDF rank (first column) and net score (last meaningful column)
     # Get rank from dedicated column, or fall back to first column
     if 'rank' in cols:
@@ -830,6 +864,7 @@ def parse_row_with_cols(row, cols, open_division=False):
         'category':   category,
         'races':      races,
         'race_codes': race_codes,
+        '_carry':     carry_pts,
         '_disc':      _disc_count,
         'pdf_rank':   pdf_rank,
         'pdf_net':    pdf_net,
@@ -856,7 +891,13 @@ def parse_table(tbl, fleet_hint=''):
                 next_row = tbl[idx+1]
                 next_non_empty = [str(c).strip() for c in next_row if str(c or '').strip()]
                 import re as _re
-                is_pure_race_row = bool(next_non_empty) and all(is_race_hdr(c) for c in next_non_empty)
+                # A manage2sail split header's second row is race headers (Q1, F1…)
+                # possibly interleaved with series-points columns (Q-SP, F-SP). Accept
+                # the row as long as every cell is one or the other and at least one
+                # is a real race header.
+                is_pure_race_row = (bool(next_non_empty)
+                    and all(is_race_hdr(c) or is_series_pts_hdr(c) for c in next_non_empty)
+                    and any(is_race_hdr(c) for c in next_non_empty))
                 if is_pure_race_row:
                     header_rows = [tbl[idx], tbl[idx+1]]
                     header_end  = idx + 2
