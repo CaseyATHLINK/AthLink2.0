@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 const CSS = `
-.al-landing{--c29:#E84855;--cilca:#2E78C8;--c49:#5FAF4E;--copt:#3D3D3D;--serif:'New York',ui-serif,Georgia,serif;
+.al-landing{--c29:#E62A22;--cilca:#2E78C8;--c49:#5FAF4E;--copt:#3D3D3D;--serif:'New York',ui-serif,Georgia,serif;
   font-family:var(--sans,-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',Roboto,system-ui,sans-serif);
   font-optical-sizing:auto;
   color:var(--ink);-webkit-font-smoothing:antialiased;letter-spacing:-.01em;line-height:1.5;

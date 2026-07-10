@@ -13,7 +13,8 @@ export const CLASSES=[
 ];
 
 // Locked class colours (CLAUDE.md) + custom-class palette.
-export const CLASS_COLOR={"29er":"#E84855","49er":"#5FAF4E","ilca":"#E2231A","optimist":"#000000"};
+// 29er = logo red (#E62A22); ILCA = blue (#2E78C8), kept distinct from the 29er red.
+export const CLASS_COLOR={"29er":"#E62A22","49er":"#5FAF4E","ilca":"#2E78C8","optimist":"#000000"};
 export const CUSTOM_CLASS_PALETTE=["#1f4e80","#0d8ecf","#5b6b80"];
 
 // Pure helpers.
@@ -48,14 +49,14 @@ export const classColorA=(cls,a)=>{
 };
 
 // ── Sub-classes (per-event) for ILCA, Optimist and 49er ──
-// ILCA: 3 rigs, varying shades of red (ILCA 7 darkest → ILCA 4 lightest), matching the ILCA logo red.
+// ILCA: 3 rigs, varying shades of blue (ILCA 7 darkest → ILCA 4 lightest), matching the ILCA class blue.
 // Optimist: 3 fleets, ranked high→low performance, black → grey (top fleet matches the Optimist logo black).
 // 49er: 2 fleets that race separately — 49er (men, green) and 49er FX (women, blue, matching the 49er FX logo).
 export const SUBCLASSES={
   ilca:[
-    {id:"ilca7", label:"ILCA 7", color:"#8E1519"},
-    {id:"ilca6", label:"ILCA 6", color:"#E2231A"},
-    {id:"ilca4", label:"ILCA 4", color:"#F2867F"},
+    {id:"ilca7", label:"ILCA 7", color:"#1F5490"},
+    {id:"ilca6", label:"ILCA 6", color:"#2E78C8"},
+    {id:"ilca4", label:"ILCA 4", color:"#86B4E4"},
   ],
   optimist:[
     {id:"opti",       label:"Optimist",              short:"OPTI",       color:"#000000"},

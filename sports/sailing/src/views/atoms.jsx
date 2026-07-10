@@ -242,3 +242,53 @@ export class ErrorBoundary extends React.Component{
     return this.props.children;
   }
 }
+
+/* Host logo, rendered tight to its artwork. The stored PNG is a square canvas with
+   the logo letterboxed on transparent padding (baked at upload — see removeLogoBackground
+   in data/hosts.js). Displayed raw at a tall height, that padding reads as a big empty gap
+   above the title. So we measure the opaque bounding box once (via a CORS Image → canvas
+   alpha scan) and crop to it: the wrapper is the artwork's size, the image is scaled/offset
+   so only the artwork shows. If the pixel read fails (e.g. missing CORS header taints the
+   canvas), we fall back to the plain contained image — same, just with padding still visible.
+   Sizing is CSS-driven via `className` (default .hdr-logo, a clamp() height): the wrapper's
+   height comes from CSS and its width follows through aspect-ratio, so the logo shrinks with
+   the rest of the header. The crop is expressed in PERCENTAGES of the wrapper (not fixed px),
+   so it stays correct at every size. */
+export function HostLogo({src,className="hdr-logo"}){
+  const [crop,setCrop]=React.useState(null); // {minX,minY,aw,ah,nw,nh}
+  React.useEffect(()=>{
+    setCrop(null);
+    if(!src) return;
+    let alive=true;
+    const im=new Image(); im.crossOrigin="anonymous";
+    im.onload=()=>{
+      if(!alive) return;
+      try{
+        const nw=im.naturalWidth,nh=im.naturalHeight; if(!nw||!nh) return;
+        const c=document.createElement("canvas"); c.width=nw; c.height=nh;
+        const cx=c.getContext("2d"); cx.drawImage(im,0,0);
+        const d=cx.getImageData(0,0,nw,nh).data;
+        let minX=nw,minY=nh,maxX=-1,maxY=-1;
+        for(let y=0;y<nh;y++)for(let x=0;x<nw;x++){ if(d[(y*nw+x)*4+3]>8){ if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; } }
+        if(maxX<minX||maxY<minY) return;                 // fully transparent → leave uncropped
+        setCrop({minX,minY,aw:maxX-minX+1,ah:maxY-minY+1,nw,nh});
+      }catch(e){/* tainted canvas → leave uncropped */}
+    };
+    im.src=src;
+    return()=>{alive=false;};
+  },[src]);
+  if(!crop){
+    // Fallback (couldn't read pixels): uncropped, contained — height from the CSS class.
+    return(
+      <div className={className} style={{marginBottom:10,display:"flex",alignItems:"flex-end",justifyContent:"flex-start"}}>
+        <img src={src} alt="" style={{height:"100%",width:"auto",maxWidth:"100%",objectFit:"contain",display:"block"}}/>
+      </div>
+    );
+  }
+  const {minX,minY,aw,ah,nw,nh}=crop;
+  return(
+    <div className={className} style={{aspectRatio:`${aw} / ${ah}`,marginBottom:10,overflow:"hidden",position:"relative"}}>
+      <img src={src} alt="" style={{position:"absolute",left:`${-(minX/aw)*100}%`,top:`${-(minY/ah)*100}%`,width:`${(nw/aw)*100}%`,height:`${(nh/ah)*100}%`,maxWidth:"none",display:"block"}}/>
+    </div>
+  );
+}

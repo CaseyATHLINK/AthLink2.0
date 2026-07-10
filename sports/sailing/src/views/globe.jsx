@@ -92,7 +92,7 @@ export const TIER_COLORS=["#f0a79e","#d24a3e","#921508"];
 export function tierColor(count){return count>=4?TIER_COLORS[2]:count>=2?TIER_COLORS[1]:TIER_COLORS[0];}
 export function tierLabel(count){return count>=4?"4+":count>=2?"2–3":"1";}
 
-export function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="competition",hostIso=null,rankShade=false,markersHostOnly=false}){
+export function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="competition",hostIso=null,rankShade=false,markersHostOnly=false,fill=false}){
   const canvasRef=React.useRef(null);
   const wrapRef=React.useRef(null);
   const stateRef=React.useRef({lon:0,lat:-12,zoom:1,auto:true,drag:false,px:0,py:0,vlon:0.16,pinch:0,tlon:null,tlat:null,lastPulse:undefined});
@@ -144,7 +144,7 @@ export function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mi
     const canvas=canvasRef.current; if(!canvas) return;
     const ctx=canvas.getContext('2d');
     let raf,W,H,baseR,R,cx,cy,dpr=Math.min(2,window.devicePixelRatio||1);
-    const size=()=>{if(!wrapRef.current)return;const w=wrapRef.current.clientWidth||0,h=height;if(!w)return;W=w;H=h;canvas.width=w*dpr;canvas.height=h*dpr;
+    const size=()=>{if(!wrapRef.current)return;const w=wrapRef.current.clientWidth||0,h=fill?(wrapRef.current.clientHeight||height):height;if(!w)return;W=w;H=h;canvas.width=w*dpr;canvas.height=h*dpr;
       canvas.style.width=w+'px';canvas.style.height=h+'px';ctx.setTransform(dpr,0,0,dpr,0,0);
       baseR=Math.min(W,H)/2-16;cx=W/2;cy=H/2;};
     size();
@@ -289,7 +289,7 @@ export function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mi
   const total=Object.values(data).reduce((a,b)=>a+b,0);
   const nC=Object.keys(data).length;
   return(
-    <div ref={wrapRef} style={bare?{position:'relative',width:'100%'}:{position:'relative',width:'100%',borderRadius:14,overflow:'hidden',
+    <div ref={wrapRef} style={bare?{position:'relative',width:'100%',height:fill?'100%':undefined}:{position:'relative',width:'100%',borderRadius:14,overflow:'hidden',
          background:dark?'radial-gradient(120% 120% at 30% 18%,#0d2745 0%,#06122a 75%)':'radial-gradient(120% 120% at 30% 18%,#163a63 0%,#0a1f3a 72%)',
          border:'1px solid rgba(160,195,230,0.14)'}}>
       <canvas ref={canvasRef} style={{display:'block',cursor:'grab',touchAction:'none'}}/>
