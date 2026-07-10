@@ -233,11 +233,16 @@ def verify_completeness(result: dict, *, declared: dict | None = None) -> dict:
                     rs = _race_sum(e)
                     if not isinstance(tot, (int, float)) or rs is None:
                         continue          # can't checksum this row — don't guess
+                    # Carry-forward series points (manage2sail Q-SP / F-SP) count
+                    # towards the printed Total but are not a race score, so add
+                    # them back before comparing or every carried boat false-flags.
+                    carry = e.get("_carry")
+                    rs_eff = rs + carry if isinstance(carry, (int, float)) else rs
                     # A shortfall vs the printed Total means a dropped race cell,
                     # UNLESS this row already has the group's max width: a
                     # medal-race boat's medal score is weighted (200%), so its
                     # face-value sum is legitimately below the printed Total.
-                    if rs < tot - 0.5 and _race_width(e) < full:
+                    if rs_eff < tot - 0.5 and _race_width(e) < full:
                         short.append(e)
                 if short:
                     gaps.append({
