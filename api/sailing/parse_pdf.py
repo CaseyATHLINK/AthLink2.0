@@ -733,11 +733,12 @@ def parse_row_with_cols(row, cols, open_division=False):
     if '_divgender' in cols:
         _dvl, _dgn = split_div_gender(cat_raw)
         cat_raw, _dg_gender = _dvl, _dgn   # _dvl is '' for a stray non-div value
-        # Surface only a SPECIFIC age band (U17, U19, …) as the division. A generic
-        # 'Youth'/'Junior'/'Open'/'Senior' label is not a meaningful sub-division
-        # here — those boats are just the general fleet (category left blank). The
-        # gender is still captured either way.
-        _dg_category = _dvl if re.fullmatch(r'U\d{1,2}', _dvl or '') else ''
+        # Keep the age/division label; 'Open'/'Overall'/'Main' is the
+        # no-restriction default → no category. A specific age band (U17…) vs a
+        # generic 'Youth'/'Junior' tag is resolved event-wide in _finalize (a Uxx
+        # band, when present, takes priority and the generic tag is dropped), so
+        # here we preserve both. Gender is captured either way.
+        _dg_category = '' if re.fullmatch(r'open|overall|main|all', (_dvl or '').lower()) else _dvl
     # Per-row boat class from a "Class"/"Boat"/"Type" column (mixed-handicap
     # divisions). Kept on every entry so the frontend can create custom classes.
     row_class = re.sub(r'\s+', ' ', get('rowclass')).strip()
@@ -3381,6 +3382,26 @@ def _looks_like_fleet_label(value):
     stripped = re.sub(r'[\s,]+', ' ', stripped).strip()
     return len(stripped) >= 2
 
+# A generic, ambiguous age tag (no number). A numbered band (U17, Under 18) is
+# "specific" and always wins over these.
+_GENERIC_AGE_TOKEN = re.compile(r'^(?:youth|junior|jr|cadet|juvenile)$', re.IGNORECASE)
+_SPECIFIC_AGE_BAND = re.compile(r'^u\d{1,2}$', re.IGNORECASE)
+
+def _apply_age_band_priority(entries):
+    """A specific age band (U17/U18/U21…) takes priority over a generic
+    'Youth'/'Junior' category: when ANY entry carries a Uxx category, blank the
+    generic youth/junior categories across the results (they're the ambiguous
+    superset). If youth/junior are the only age tags present, leave them. Gender
+    is never modified. Mutates entries in place."""
+    if not entries:
+        return
+    has_specific = any(_SPECIFIC_AGE_BAND.match(str(e.get('category') or '')) for e in entries)
+    if not has_specific:
+        return
+    for e in entries:
+        if _GENERIC_AGE_TOKEN.match(str(e.get('category') or '')):
+            e['category'] = ''
+
 def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label="the built-in parser",
               detected_class='', detected_host=None):
     """
@@ -3395,6 +3416,15 @@ def _finalize(all_entries, ev_name, ev_date, discards, base_notes, source_label=
     otherwise → multi, one competition per group.
     """
     from collections import OrderedDict
+
+    # Age-band priority: a SPECIFIC age band (U17/U18/U21…) is unambiguous and
+    # takes precedence over a generic 'Youth'/'Junior' tag. When any entry in the
+    # results carries a Uxx category, blank the generic youth/junior categories
+    # (they're the ambiguous superset). If youth/junior are the ONLY age tags
+    # present, they're kept. Gender is never touched. Applied once over the whole
+    # event so the division choices are consistent (e.g. this becomes M/F/Mix/U17,
+    # not M/F/Mix/U17/Youth).
+    _apply_age_band_priority(all_entries)
 
     div_vals  = [(e.get('div') or '').strip() for e in all_entries]
     distinct_div = [v for v in dict.fromkeys(div_vals) if v]
