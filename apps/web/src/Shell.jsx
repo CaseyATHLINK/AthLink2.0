@@ -3,9 +3,10 @@
    so this file never needs editing when a sport is added. */
 import React, { Suspense } from "react";
 import { ThemeRoot } from "@athlink/design-system";
-import { Loader2, ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { sports } from "./sports.js";
 import Landing from "./Landing.jsx";
+import NeonLogoLoader from "./NeonLogoLoader.jsx";
 
 // Path-based routing. The first segment picks the view:
 //   ""            → AthLink landing (all sports)
@@ -30,11 +31,7 @@ function usePathRoute() {
 }
 
 function Spinner() {
-  return (
-    <div style={{ display: "grid", placeItems: "center", minHeight: "60vh" }}>
-      <Loader2 className="spin" size={26} color="var(--accent)" />
-    </div>
-  );
+  return <NeonLogoLoader />;
 }
 
 function HomeLink() {
