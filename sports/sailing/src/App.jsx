@@ -2590,21 +2590,22 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     })();
   },[pending,activePending,_pvResolvedHost]);
   // Build the DivisionToggle string from an entry's real gender + category.
+  // Carry the ACTUAL age band (U17/U18/Jr…), not a flattened Jr flag, so the
+  // picker shows the real division.
   const divFromEntry=(e)=>{
     const g=normGender(e.gender)||parseDiv(e.div||"").gender||"";
-    const jr=normCategory(e.category)==="Jr"||parseDiv(e.div||"").jr;
-    return [g,jr?"Jr":null].filter(Boolean).join(" ");
+    const cat=normCategory(e.category)||(parseDiv(e.div||"").jr?"Jr":"");
+    return [g,cat].filter(Boolean).join(" ");
   };
   // Toggle in preview writes the REAL gender + category fields (preserves U17 etc.).
   const applyPreviewDiv=(idx,v)=>{
-    const g=/mix/i.test(v)?"Mix":/\bF\b/.test(v)?"F":/\bM\b/.test(v)?"M":"";
-    const jr=/\bJr\b/.test(v);
-    setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>{
-      if(i!==idx) return e;
-      let category=e.category||"";
-      if(jr&&!category) category="Jr"; else if(!jr&&category==="Jr") category="";
-      return {...e,div:v,gender:g,category};
-    })}));
+    const parts=String(v||"").trim().split(/\s+/).filter(Boolean);
+    const isGender=t=>/^(m|f|mix)$/i.test(t);
+    const gTok=parts.find(isGender)||"";
+    const g=/mix/i.test(gTok)?"Mix":gTok.toUpperCase();
+    const category=parts.find(t=>!isGender(t))||"";   // U17 / U18 / Jr / …
+    setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>
+      i!==idx?e:{...e,div:v,gender:g,category})}));
   };
 
   const startPreviewEdit=(type,idx,raceIdx,val)=>{

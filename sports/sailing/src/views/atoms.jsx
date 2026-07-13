@@ -6,7 +6,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { AlertCircle, Trash2, CheckCircle, BadgeCheck } from "lucide-react";
 import { iocFlag } from "../util/flag.js";
 import { classColor, classLabel } from "../util/class.js";
-import { DIV_COLOR, DIV_LABEL, GENDER_COLOR, divTokens, divToString, genderCatOf } from "../util/gender.js";
+import { DIV_COLOR, DIV_LABEL, GENDER_COLOR, divTokens, genderCatOf } from "../util/gender.js";
 import { resolvedEntryGender } from "../data/athletes.js";
 
 /* ── Shared display helpers ───────────────────────────────────────────────
@@ -48,26 +48,31 @@ export function VerifyBadge({verified,size=14,title}){
     title={title||(verified?"Verified athlete":"Unverified")} style={{flex:"none"}}/>;
 }
 
-// Toggleable M / F / Mix / Jr selector. value = "F Jr" style string; onChange(string).
-// Rules: at most one gender (M/F/Mix); Jr is an independent add-on.
+// Toggleable gender + age-category selector. value = "M U17" / "F Jr" style
+// string; onChange(string). Rules: at most one gender (M/F/Mix); one age token
+// alongside it. The age token is whatever the entry actually carries (U17, U18,
+// Jr…) — NOT hardcoded to Jr — so a parsed U17 boat shows "U17" here, not "Jr".
 export function DivisionToggle({value,onChange,size="sm",noMix=false}){
-  const tokens=divTokens(value);
-  let gender=tokens.find(t=>t!=="Jr")||null;
+  const parts=String(value||"").trim().split(/\s+/).filter(Boolean);
+  const isGender=t=>/^(m|f|mix)$/i.test(t);
+  let gender=parts.find(isGender)||null;
+  if(gender) gender=/mix/i.test(gender)?"Mix":gender.toUpperCase();
   if(noMix&&gender==="Mix") gender=null; // single-handed: Mix not applicable
-  const jr=tokens.includes("Jr");
-  const set=(g,j)=>onChange(divToString([g,j?"Jr":null].filter(Boolean)));
-  const btn=(key,label)=>{
-    const isJr=key==="Jr";
-    const on=isJr?jr:gender===key;
-    const col=DIV_COLOR[key];
-    return <button key={key} type="button"
-      onClick={e=>{e.stopPropagation();isJr?set(gender,!jr):set(gender===key?null:key,jr);}}
+  const cat=parts.find(t=>!isGender(t))||null;   // U17 / U18 / Jr / Mst …
+  const set=(g,c)=>onChange([g,c].filter(Boolean).join(" "));
+  const chip=(key,label,on,col,onClick,title)=>
+    <button key={key} type="button" title={title}
+      onClick={e=>{e.stopPropagation();onClick();}}
       style={{border:"1px solid "+(on?col:"var(--line)"),background:on?col:"transparent",color:on?"#fff":"var(--mut)",
         borderRadius:6,fontSize:size==="sm"?10:11.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",
         padding:size==="sm"?"2px 6px":"3px 8px",cursor:"pointer",lineHeight:1.3,transition:".12s"}}>{label}</button>;
-  };
+  const gBtn=key=>chip(key,key,gender===key,DIV_COLOR[key],()=>set(gender===key?null:key,cat),DIV_LABEL[key]);
+  // Age chip: shows the real category token (falls back to Jr when none is set,
+  // as the default add-on). Non-Jr bands (U17…) reuse the Jr colour.
+  const ageBtn=chip("age",cat||"Jr",!!cat,DIV_COLOR[cat]||DIV_COLOR.Jr,
+    ()=>set(gender,cat?null:"Jr"),cat?("Age category: "+cat):"Junior");
   return <div style={{display:"inline-flex",gap:4,flexWrap:"wrap"}}>
-    {btn("M","M")}{btn("F","F")}{!noMix&&btn("Mix","Mix")}{btn("Jr","Jr")}</div>;
+    {gBtn("M")}{gBtn("F")}{!noMix&&gBtn("Mix")}{ageBtn}</div>;
 }
 
 // Small read-only division nugget(s) for the results page.
