@@ -32,9 +32,6 @@ importers:
       '@athlink/sport-sailing':
         specifier: workspace:*
         version: link:../../sports/sailing
-      animejs:
-        specifier: ^4.0.2
-        version: 4.5.0
       lucide-react:
         specifier: ^0.400.0
         version: 0.400.0(react@18.3.1)
@@ -591,17 +588,6 @@ packages:
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0
 
-  animejs@4.5.0:
-    resolution: {integrity: sha512-NQimYX+lz8WaXonGS9zVVoviCIAjONeJayxacUditaivYLqyXgGjFKjuyl0aUUhFKm5MriX9ty1TGovNzoJQWA==}
-    peerDependencies:
-      '@types/three': '>=0.150.0'
-      three: '>=0.150.0'
-    peerDependenciesMeta:
-      '@types/three':
-        optional: true
-      three:
-        optional: true
-
   baseline-browser-mapping@2.10.40:
     resolution: {integrity: sha512-BSSLZ9/Cjjv7Gtj5B68ZzXcXUg8iOf3fme+FCuh8rC/Go+Kmh8cox7M3A8dolou16s64QjLPOSdngh7GxXvkSw==}
     engines: {node: '>=6.0.0'}
@@ -1112,8 +1098,6 @@ snapshots:
       vite: 5.4.21
     transitivePeerDependencies:
       - supports-color
-
-  animejs@4.5.0: {}
 
   baseline-browser-mapping@2.10.40: {}
 
