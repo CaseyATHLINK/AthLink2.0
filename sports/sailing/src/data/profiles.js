@@ -81,14 +81,14 @@ export async function upsertAthleteProfile(name,patch,userId,tok){
 // Upload an athlete headshot to the public `athlete-photos` bucket; returns its
 // public URL or null. Path: <name slug>/<timestamp>.<ext>.
 export async function uploadAthletePhoto(file,name,tok){
-  if(!SB_URL||!file||!tok) return null;   // storage write needs a signed-in token
+  if(!SB_URL||!file) return null;   // no token → anon write (dev view; RLS from migration 0013 decides)
   const type=file.type||"image/jpeg";
   const ext=type.includes("png")?"png":type.includes("webp")?"webp":type.includes("gif")?"gif":"jpg";
   const slug=profileNameKey(name).replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"athlete";
   const path=`${slug}/${Date.now()}.${ext}`;
   try{
     const r=await fetch(`${SB_URL}/storage/v1/object/athlete-photos/${path}`,{method:"POST",
-      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":type,"x-upsert":"true"},
+      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok||SB_KEY}`,"Content-Type":type,"x-upsert":"true"},
       body:file});
     if(!r.ok){console.error("uploadAthletePhoto",r.status,await r.text().catch(()=>""));return null;}
     return `${SB_URL}/storage/v1/object/public/athlete-photos/${path}`;
@@ -100,7 +100,7 @@ export async function uploadAthletePhoto(file,name,tok){
 // migrations/0010_athlete_media_bucket.sql); type is inferred from the MIME.
 export const ATHLETE_MEDIA_BUCKET="athlete-media";
 export async function uploadAthleteMedia(file,name,tok){
-  if(!SB_URL||!file||!tok) return null;   // storage write needs a signed-in token
+  if(!SB_URL||!file) return null;   // no token → anon write (dev view; RLS from migration 0013 decides)
   const mime=file.type||"application/octet-stream";
   const isVideo=mime.startsWith("video/");
   const extMap={"image/png":"png","image/webp":"webp","image/gif":"gif","image/jpeg":"jpg","video/mp4":"mp4","video/quicktime":"mov","video/webm":"webm"};
@@ -109,7 +109,7 @@ export async function uploadAthleteMedia(file,name,tok){
   const path=`${slug}/${Date.now()}-${Math.random().toString(36).slice(2,7)}.${ext}`;
   try{
     const r=await fetch(`${SB_URL}/storage/v1/object/${ATHLETE_MEDIA_BUCKET}/${path}`,{method:"POST",
-      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":mime,"x-upsert":"true"},
+      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok||SB_KEY}`,"Content-Type":mime,"x-upsert":"true"},
       body:file});
     if(!r.ok){console.error("uploadAthleteMedia",r.status,await r.text().catch(()=>""));return null;}
     return {url:`${SB_URL}/storage/v1/object/public/${ATHLETE_MEDIA_BUCKET}/${path}`,type:isVideo?"video":"image"};

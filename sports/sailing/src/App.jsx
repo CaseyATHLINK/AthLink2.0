@@ -627,16 +627,17 @@ export default function AthLinkMVP(){
   const athleteProfileOf=(nm)=>athleteProfiles[profileNameKey(nm)]||null;
   // Can the signed-in user edit this profile's extras? Verified owner, or dev.
   const isProfileOwner=(nm)=>devMode||(myClaimFor(nm)?.status==="approved");
-  // Persist extras for a profile name, then refresh.
+  // Persist extras for a profile name, then refresh. Dev view saves without a
+  // session: anon writes, updated_by null (RLS policy from migration 0013).
   const saveAthleteExtras=async(nm,patch)=>{
-    if(!auth?.user?.id||!auth?.token) return;
-    await upsertAthleteProfile(nm,patch,auth.user.id,auth.token);
+    if(!devMode&&(!auth?.user?.id||!auth?.token)) return;
+    await upsertAthleteProfile(nm,patch,auth?.user?.id||null,auth?.token||null);
     await reloadAthleteProfiles();
   };
   // Persist the athlete's media gallery (array of {url,type,caption}), then refresh.
   const saveAthleteMedia=async(nm,media)=>{
-    if(!auth?.user?.id||!auth?.token) return;
-    await upsertAthleteProfile(nm,{media:media||[]},auth.user.id,auth.token);
+    if(!devMode&&(!auth?.user?.id||!auth?.token)) return;
+    await upsertAthleteProfile(nm,{media:media||[]},auth?.user?.id||null,auth?.token||null);
     await reloadAthleteProfiles();
   };
   // Owner/dev rename: rename entries everywhere, keep the approved claim pointing
@@ -650,8 +651,8 @@ export default function AthLinkMVP(){
       try{await hostRest(`athlete_claims?id=eq.${mine.id}`,{method:"PATCH",body:JSON.stringify({profile_name:nn})},auth.token);}catch(e){console.error("rename: claim follow",e);}
       await reloadClaims();
     }
-    if(extras&&auth?.user?.id){
-      await upsertAthleteProfile(nn,{bio:extras.bio,instagram_url:extras.instagram_url,nat_override:extras.nat_override,photo_url:extras.photo_url,media:extras.media||[]},auth.user.id,auth.token);
+    if(extras&&(devMode||auth?.user?.id)){
+      await upsertAthleteProfile(nn,{bio:extras.bio,instagram_url:extras.instagram_url,nat_override:extras.nat_override,photo_url:extras.photo_url,media:extras.media||[]},auth?.user?.id||null,auth?.token||null);
       await reloadAthleteProfiles();
     }
   };
@@ -679,12 +680,12 @@ export default function AthLinkMVP(){
   };
   const saveAthleteUsername=async(name,desired)=>{
     const v=validateUsername(desired); if(!v.ok) return {error:v.msg};
-    if(!auth?.user?.id||!auth?.token) return {error:"Please sign in again."};
+    if(!devMode&&(!auth?.user?.id||!auth?.token)) return {error:"Please sign in again."};
     const nk=profileNameKey(name);
     if((ATHLETE_USERNAMES.byKey.get(nk)||"")===v.value) return {ok:true,username:v.value};
     if(!(await usernameAvailable(v.value,{selfNameKey:nk}))) return {error:"That username is taken. Try another."};
-    const body={name_key:nk,username:v.value,display_name:name,is_custom:true,updated_by:auth.user.id,updated_at:new Date().toISOString()};
-    const res=await hostRest("athlete_usernames",{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=representation"},body:JSON.stringify(body)},auth.token);
+    const body={name_key:nk,username:v.value,display_name:name,is_custom:true,updated_by:auth?.user?.id||null,updated_at:new Date().toISOString()};
+    const res=await hostRest("athlete_usernames",{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=representation"},body:JSON.stringify(body)},auth?.token||null);
     if(!res) return {error:"Couldn't save — you may not be the verified owner of this profile."};
     const old=ATHLETE_USERNAMES.byKey.get(nk); if(old) ATHLETE_USERNAMES.byUser.delete(old.toLowerCase());
     ATHLETE_USERNAMES.byKey.set(nk,v.value); ATHLETE_USERNAMES.byUser.set(v.value.toLowerCase(),name);
@@ -694,11 +695,11 @@ export default function AthLinkMVP(){
   };
   const saveHostSlug=async(hostId,desired)=>{
     const v=validateUsername(desired); if(!v.ok) return {error:v.msg};
-    if(!auth?.token) return {error:"Please sign in again."};
+    if(!devMode&&!auth?.token) return {error:"Please sign in again."};
     const h=hostById(hostId); if(!h) return {error:"Host not found."};
     if((h.slug||"")===v.value) return {ok:true,slug:v.value};
     if(!(await usernameAvailable(v.value,{selfHostId:hostId}))) return {error:"That username is taken. Try another."};
-    const res=await hostRest(`hosts?id=eq.${encodeURIComponent(hostId)}`,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify({slug:v.value})},auth.token);
+    const res=await hostRest(`hosts?id=eq.${encodeURIComponent(hostId)}`,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify({slug:v.value})},auth?.token||null);
     if(!res) return {error:"Couldn't save — you may not have permission."};
     h.slug=v.value; setHostsVersion(x=>x+1);
     if(portal===hostId) window.history.replaceState(null,"",stateToPath(portal,view));
@@ -3846,6 +3847,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <button onClick={()=>setShowDevApprovals(true)}>Pending approvals</button>
       <button onClick={()=>setShowDevProfiles(true)}>All profiles</button>
       <button onClick={()=>setShowAddHost(true)}><Plus size={11}/>Add host</button>
+      {portal&&!isClassPortal&&hostById(portal)&&<button style={{color:"#e74c3c"}} onClick={e=>deleteHost(portal,hostById(portal).name,e)}><Trash2 size={11}/>Delete this host</button>}
       <button onClick={()=>setDevMode(false)}><Pencil size={11}/>Dev view ON — turn off</button>
     </div>
   )}
@@ -4348,6 +4350,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <p className="class-name">{h.loc?<span style={{marginRight:6}}>{iocFlag(h.loc)}</span>:null}{h.name}</p>
             <div className="class-stats" style={{marginBottom:0}}><div><b>{h.n}</b>competitions</div><div><b>{ppl.size}</b>athletes</div></div>
             {h.logo_url&&<img src={h.logo_url} alt="" style={{position:"absolute",right:16,bottom:16,width:60,height:60,objectFit:"contain",pointerEvents:"none",background:"transparent"}}/>}
+            {devMode&&<button className="delbtn" title="Delete host (dev)" style={{position:"absolute",top:10,right:10}} onClick={e=>deleteHost(h.id,h.name,e)}><Trash2 size={15}/></button>}
           </div>);
         })}
       </div>

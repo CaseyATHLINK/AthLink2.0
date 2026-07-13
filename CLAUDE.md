@@ -185,6 +185,7 @@ Audited against live DB 2026-06-25 — see migrations/README.md for full notes.
 - migrations/0010_athlete_media_bucket.sql — APPLIED 2026-07-02 — public `athlete-media` storage bucket (50MB, image+video MIME) + public-read/authenticated-write policies mirroring athlete-photos. REQUIRED for athlete video uploads (athlete-photos is images-only, 5MB). Uploaded to by uploadAthleteMedia.
 - migrations/0011_host_logos_bucket.sql — APPLIED 2026-07-07 — public `host-logos` storage bucket (5MB, PNG/webp) + public-read/authenticated-write policies mirroring athlete-media. Backs the host/association self-logo feature: HostEditModal lets the user square-crop/centre the logo (LogoCropper), then removeLogoBackground strips the background ONCE at save time (KEEPING original colours — corner-sampled bg → transparent, feathered edge), uploadHostLogo stores the PNG here, and writes its public URL to hosts.logo_url. Reuses the existing hosts.logo_url column (from 0008) — no new column.
 - migrations/0012_host_dossier.sql — APPLIED 2026-07-08 — adds `hosts.dossier jsonb` for the Host auto-grab feature (see "Host auto-grab" below). Stores the confirmed web-research dossier `{identity, competitions[], pending_import[], needs_review[], fetched_at, confirmed}`. Written by the signing-up owner via the normal host save path (saveHost); no new RLS (host write policies already cover it). Schema reloaded via `NOTIFY pgrst, 'reload schema';`. (createHostFromSignup also has a resilient fallback — it retries the hosts insert without the dossier if the column is ever missing — so host creation never depends on this migration.)
+- migrations/0013_devmode_anon_writes.sql — APPLIED 2026-07-13 — dev-mode admin editing WITHOUT a signed-in session: anon write policies on athlete_profiles + athlete_usernames (anon rows carry updated_by null), anon insert/update on the athlete-photos / athlete-media / host-logos buckets, and the new `site_content` table (public read, open write) backing the landing-page dev copy editor. ⚠ Extends the "app-gated, not RLS-gated" stance of hosts_write; drop the *_anon policies together with fixing is_athlink_admin().
 - migrations/0099_cleanup_duplicate_policies.sql — OPTIONAL dedupe of redundant RLS policies
 
 ### Host logos (crop + background-removal at upload)
@@ -486,9 +487,14 @@ never auto-apply; keys server-side; 45s provider bound under the 60s ceiling).
   Ctrl/Cmd+Shift+D only. No ?dev=1, no localStorage persistence (removed
   2026-07-02), so nobody lands in dev mode by accident. In dev mode: full
   (association) access, all auth/verification gates bypassed client-side
-  (canEdit/canManage/canVouch forced true, verify warnings suppressed). DB
-  writes still hit Supabase RLS, so persisting changes needs a signed-in
-  session. To hard-disable the keyboard toggle at launch, set
+  (canEdit/canManage/canVouch forced true, verify warnings suppressed), host
+  delete buttons on the directory cards + the dev strip, and — since migration
+  0013 (2026-07-13) — host/athlete settings SAVES persist signed-out too (anon
+  RLS policies; anon rows carry updated_by null). Member/invite management
+  still needs a signed-in session (needs a real actor user id). The landing
+  page has its own Ctrl/Cmd+Shift+D copy editor (click-to-edit, saves to
+  site_content id='landing', merged over the coded defaults at load; "Reset
+  all" clears). To hard-disable the keyboard toggle at launch, set
   DEV_VIEW_ENABLED=false.
 - Tab title: sports/sailing sets document.title per page (host/athlete/event
   name); the shell resets it to "AthLink" on the landing route.
