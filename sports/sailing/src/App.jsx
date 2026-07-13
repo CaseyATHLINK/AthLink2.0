@@ -2813,16 +2813,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   <div className="al-root">
   {initialLoading&&(
     <div className="al-splash" role="status" aria-label="Loading AthLink">
-      <div className="al-splash-logo">
-        <img src="/brand/icon-white.png" alt="AthLink"/>
-        {/* Loading indicator: a light traces around the chain links of the mark.
-            viewBox matches the 1024² logo so the path sits on the actual chain. */}
-        <svg className="al-splash-chain" viewBox="0 0 1024 1024" fill="none" aria-hidden="true">
-          <path className="al-chain-trace" pathLength="100" d="
-            M321,508 H445 A60,60 0 0 1 505,568 V606 A60,60 0 0 1 445,666 H321 A60,60 0 0 1 261,606 V568 A60,60 0 0 1 321,508 Z
-            M570,508 H694 A60,60 0 0 1 754,568 V606 A60,60 0 0 1 694,666 H570 A60,60 0 0 1 510,606 V568 A60,60 0 0 1 570,508 Z"/>
-        </svg>
-      </div>
+      <img src="/brand/icon-white.png" alt="AthLink" className="al-splash-logo"/>
+      <div className="al-splash-bar"><span/></div>
     </div>
   )}
   <svg xmlns="http://www.w3.org/2000/svg" style={{display:'none'}} aria-hidden="true">
@@ -2840,20 +2832,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        so the app never reads as a broken blank white screen. */
     .al-splash{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;
       background:radial-gradient(120% 120% at 50% 0%,#1f4e80 0%,#13314e 55%,#0e2137 100%);}
-    .al-splash-logo{position:relative;width:132px;height:132px;
-      filter:drop-shadow(0 8px 24px rgba(0,0,0,.35));animation:al-splash-pulse 1.5s ease-in-out infinite;}
-    .al-splash-logo img{width:100%;height:100%;object-fit:contain;display:block;}
-    .al-splash-chain{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
-    /* A short light travels around the chain-link outline (pathLength normalised to 100). */
-    .al-chain-trace{fill:none;stroke:#2ac7f2;stroke-width:22;stroke-linecap:round;stroke-linejoin:round;
-      stroke-dasharray:20 80;stroke-dashoffset:0;animation:al-chain-trace 1.6s linear infinite;
-      filter:drop-shadow(0 0 6px rgba(42,199,242,.95)) drop-shadow(0 0 3px rgba(42,199,242,.85));}
-    @keyframes al-chain-trace{to{stroke-dashoffset:-100;}}
-    @keyframes al-splash-pulse{0%,100%{transform:scale(1);opacity:.92;}50%{transform:scale(1.06);opacity:1;}}
-    @media (prefers-reduced-motion:reduce){
-      .al-splash-logo{animation:none;}
-      .al-chain-trace{animation:none;stroke-dasharray:none;stroke-opacity:.9;}
-    }
+    .al-splash-logo{width:78px;height:78px;object-fit:contain;filter:drop-shadow(0 8px 24px rgba(0,0,0,.35));animation:al-splash-pulse 1.5s ease-in-out infinite;}
+    .al-splash-bar{width:160px;height:4px;border-radius:980px;background:rgba(255,255,255,.18);overflow:hidden;}
+    .al-splash-bar span{display:block;height:100%;width:40%;border-radius:980px;background:rgba(255,255,255,.88);animation:al-splash-slide 1.1s ease-in-out infinite;}
+    @keyframes al-splash-pulse{0%,100%{transform:scale(1);opacity:.9;}50%{transform:scale(1.08);opacity:1;}}
+    @keyframes al-splash-slide{0%{transform:translateX(-120%);}100%{transform:translateX(320%);}}
     .al-root{
       --navy:#13314e;--navy2:#1f4e80;--accent:#0a84ff;--accent2:#409cff;--sky:#e8f1fc;
       --paper:#eef3fb;--ink:#1d1d1f;--mut:rgba(44,52,68,0.86);--line:rgba(60,60,67,0.12);
