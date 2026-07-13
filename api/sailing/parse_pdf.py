@@ -1664,15 +1664,100 @@ def try_sailwave_geometry(pdf_bytes):
                 entries.append(e)
     return entries or None
 
-def try_sailti(full_text):
-    """Sailti Scoring Soft results (TCPDF 'HTML2PDF'). One fleet, layout:
+def _try_sailti_tables(pdf_bytes):
+    """Sailti Scoring Soft via pdfplumber TABLE extraction. Layout per row:
+        Pos | NAT sail | SURNAME, Forename | [Cat] | race×N | TOTAL | NET
+    The text-line reader (_try_sailti_text) loses penalty-coded cells (BFD/UFD/
+    DNC/… + points) because they wrap onto neighbouring text lines, leaving that
+    race blank. The table grid keeps each 'BFD\\n72' as ONE cell, so every race is
+    read. Returns entries or None (missing pdfplumber / no clean grid)."""
+    if pdfplumber is None or not pdf_bytes:
+        return None
+    CAT = {'M', 'W', 'F', 'X'}
+    rows = []
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                for tbl in (page.extract_tables() or []):
+                    for row in tbl:
+                        if not row or len(row) < 8:
+                            continue
+                        r0 = str(row[0] or '').strip()
+                        r1 = str(row[1] or '').strip()
+                        # A data row: integer Pos, then a "NAT sail" cell.
+                        if not re.fullmatch(r'\d+', r0) or not re.match(r'^[A-Z]{3}\b', r1):
+                            continue
+                        rows.append([('' if c is None else str(c)) for c in row])
+    except Exception:
+        return None
+    if len(rows) < 3:
+        return None
+    # Cat column present when the 4th cell is predominantly a category token.
+    has_cat = sum(1 for r in rows if r[3].strip() in CAT) >= 0.5 * len(rows)
+    race_start = 4 if has_cat else 3
+    def _num(t):
+        try:
+            v = float(str(t).strip('()')); return int(v) if v == int(v) else v
+        except (ValueError, TypeError):
+            return None
+    entries = []
+    for r in rows:
+        if len(r) < race_start + 3:      # need ≥1 race + TOTAL + NET
+            continue
+        try:
+            rank = int(r[0].strip())
+        except ValueError:
+            continue
+        nat, sail = parse_sail_country(r[1].strip())
+        name = r[2].strip()
+        if ',' in name:                  # "SURNAME, Forename" → "Forename Surname"
+            sur, _, fore = name.partition(',')
+            name = (fore.strip() + ' ' + sur.strip()).strip()
+        cat = r[3].strip() if has_cat else ''
+        gender = 'F' if cat in ('W', 'F') else ('M' if cat == 'M' else '')
+        races, codes, disc = [], [], 0
+        for tok in r[race_start:-2]:
+            sc, code = clean_score_with_code(tok)
+            if sc is not None:
+                races.append(sc); codes.append(code)
+                if '(' in str(tok):
+                    disc += 1
+        if not name or not races:
+            continue
+        entries.append({
+            'helm': clean_name(name), 'crew': '',
+            'sail': sail or '—', 'nat': flag_from_ioc(nat),
+            'div': '', 'row_class': '', 'gender': gender, 'category': '',
+            'races': races, 'race_codes': codes, '_disc': disc,
+            'pdf_rank': rank, 'pdf_net': _num(r[-1]), 'pdf_total': _num(r[-2]),
+            'birth_year': None, 'crew_birth_year': None, '_age': None, '_crew_age': None,
+        })
+    return entries or None
+
+
+def try_sailti(full_text, pdf_bytes=None):
+    """Sailti Scoring Soft results. Prefer the table grid (keeps wrapped penalty
+    cells intact); fall back to the text-line reader when the grid reads fewer
+    rows or race cells (or pdfplumber is unavailable)."""
+    if 'sailti' not in full_text.lower():
+        return None
+    text_res = _try_sailti_text(full_text)
+    tbl_res = _try_sailti_tables(pdf_bytes)
+    def _cells(res):
+        return sum(len(e.get('races') or []) for e in (res or []))
+    # Use the table result only when it loses NEITHER rows nor race cells vs text
+    # — guarantees the grid can never regress a file the text reader handled.
+    if (tbl_res and len(tbl_res) >= len(text_res or [])
+            and _cells(tbl_res) >= _cells(text_res)):
+        return tbl_res
+    return text_res
+
+
+def _try_sailti_text(full_text):
+    """Text-line reader for Sailti Scoring Soft (TCPDF 'HTML2PDF'). One fleet:
         Pos | NAT sail | SURNAME, Forename | Cat | race scores | TOTAL | NET
-    The column header appears once (page 1); rows run continuously across pages
-    (footer 'Sailti Scoring Soft  Page x/y'). Penalty-coded scores (STP, BFD,
-    DNC, DNS, DSQ…) wrap onto the lines above/below the row, leaving that one
-    cell blank on the row line — but Pos, name, sail, Cat, TOTAL and NET are
-    always intact on the row line, so we anchor on those and read the row-line
-    race cells best-effort (a wrapped cell is left blank for manual review)."""
+    Penalty-coded scores wrap onto neighbouring lines; those cells are left blank
+    (the table reader above recovers them). Kept as the fallback."""
     if 'sailti' not in full_text.lower():
         return None
     RACE = re.compile(r'^\(?-?\d+(?:\.\d+)?\)?$')
@@ -3911,7 +3996,7 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         declared = max([int(x) for x in re.findall(r'Entries\s*:\s*(\d+)', full_text)] or [0])
         deficient = (not all_parsed) or len(all_parsed) < max(5, 0.5 * declared)
         if deficient:
-            st = try_sailti(full_text)
+            st = try_sailti(full_text, pdf_bytes)
             if st and len(st) > len(all_parsed):
                 all_parsed = st
 
