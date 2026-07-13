@@ -161,12 +161,12 @@ export function removeLogoBackground(src){
 // kept) to `host-logos` under a `<host slug>/` prefix; returns its public URL
 // (or null on any failure — never throws, mirroring the other upload helpers).
 export async function uploadHostLogo(blob,host,tok){
-  if(!SB_URL||!blob||!tok||!host) return null;   // storage write needs a token
+  if(!SB_URL||!blob||!host) return null;   // no token → anon write (dev view; RLS from migration 0013 decides)
   const slug=String(host.id||"host").replace(/[^a-z0-9-]+/gi,"-").toLowerCase()||"host";
   const path=`${slug}/${Date.now()}.png`;
   try{
     const r=await fetch(`${SB_URL}/storage/v1/object/${HOST_LOGO_BUCKET}/${path}`,{method:"POST",
-      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":"image/png","x-upsert":"true"},
+      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok||SB_KEY}`,"Content-Type":"image/png","x-upsert":"true"},
       body:blob});
     if(!r.ok){console.error("uploadHostLogo",r.status,await r.text().catch(()=>""));return null;}
     return `${SB_URL}/storage/v1/object/public/${HOST_LOGO_BUCKET}/${path}`;

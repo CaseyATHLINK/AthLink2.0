@@ -171,6 +171,17 @@ const CSS = `
 .spin{animation:al-spin 1s linear infinite;}
 @keyframes al-spin{to{transform:rotate(360deg);}}
 
+/* ── Dev landing editor (Ctrl/Cmd+Shift+D) ── */
+.ed-on{outline:1px dashed rgba(13,142,207,.55);outline-offset:2px;border-radius:4px;cursor:text;}
+.ed-on:hover{outline-color:var(--accent);background:rgba(13,142,207,.07);}
+.ed-on:focus{outline:2px solid var(--accent);background:rgba(255,255,255,.3);}
+.devbar{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:200;display:flex;align-items:center;gap:10px;background:rgba(17,40,66,.92);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);color:#dcecf8;font-size:12.5px;font-weight:600;border-radius:980px;padding:9px 16px;box-shadow:0 14px 34px -12px rgba(0,0,0,.5);white-space:nowrap;}
+.devbar b{color:#fff;}
+.devbar button{font:inherit;border:0;border-radius:980px;padding:5px 12px;cursor:pointer;background:rgba(255,255,255,.14);color:#fff;}
+.devbar button:hover{background:rgba(255,255,255,.26);}
+.devbar .st{font-weight:700;color:#9fe0b3;}
+.devbar .st.err{color:#ffb3a7;}
+
 @media(max-width:900px){
   .hero h1{font-size:42px;} .sec-h{font-size:32px;} .mtext{font-size:22px;} .vision-tag{font-size:26px;}
   .frow,.frow.flip{grid-template-columns:1fr;gap:22px;} .frow.flip .ftext{order:1;} .frow.flip .fshot{order:2;}
@@ -237,6 +248,43 @@ async function fetchAthleteEvents(name) {
 
 /* SPA navigation into a sport app (same event contract as Shell.jsx). */
 const goPath = (path) => { window.history.pushState(null, "", path); window.dispatchEvent(new Event("locationchange")); window.scrollTo(0, 0); };
+
+/* ── Dev landing editor (Ctrl/Cmd+Shift+D) — click-to-edit copy overrides ────
+   Overrides live in Supabase `site_content` (id='landing', content = a flat
+   {slug: text} map — migration 0013) and are merged over the hard-coded
+   defaults at load, so the copy below stays the source of truth in code and
+   the DB only holds edits. Mirrors the sailing dev view: session-only toggle,
+   no URL param, no localStorage. Writes are anon (RLS open, app-gated — same
+   stance as the hosts table). */
+async function fetchLandingOverrides() {
+  const rows = await sbRows("site_content?id=eq.landing&select=content");
+  return (rows && rows[0] && rows[0].content) || {};
+}
+async function saveLandingOverrides(content) {
+  if (!sbHeaders) return false;
+  try {
+    const r = await fetch(`${SB}/rest/v1/site_content`, {
+      method: "POST",
+      headers: { ...sbHeaders, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({ id: "landing", content, updated_at: new Date().toISOString() }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+/* One editable copy slot. A plain span normally; in dev-edit mode it turns
+   contentEditable and commits its text to the overrides map on blur. */
+function EdText({ k, val, dev, onCommit, className }) {
+  if (!dev) return <span className={className}>{val}</span>;
+  return (
+    <span
+      className={(className ? className + " " : "") + "ed-on"}
+      contentEditable
+      suppressContentEditableWarning
+      spellCheck={false}
+      onBlur={(e) => onCommit(k, e.currentTarget.textContent)}
+    >{val}</span>
+  );
+}
 
 function useLiquid(ref, { scoped, count, alpha, palette }) {
   useEffect(() => {
@@ -377,16 +425,16 @@ function ProgressDemo({ mod, events }) {
   );
 }
 
-function FeatureRow({ f, flip, demo }) {
+function FeatureRow({ f, flip, demo, ed, kbase }) {
   const [ok, setOk] = useState(true);
   const Icon = f.Icon;
   return (
     <div className={"frow" + (flip ? " flip" : "")}>
       <div className="ftext">
-        <h3>{f.title}</h3>
-        <span className="pain"><b>Solves:</b>&nbsp;{f.pain}</span>
-        <div className="value">{f.value}</div>
-        <p>{f.desc}</p>
+        <h3>{ed(`${kbase}.title`, f.title)}</h3>
+        <span className="pain"><b>Solves:</b>&nbsp;{ed(`${kbase}.pain`, f.pain)}</span>
+        <div className="value">{ed(`${kbase}.value`, f.value)}</div>
+        <p>{ed(`${kbase}.desc`, f.desc)}</p>
       </div>
       <div className="fshot">
         {f.demo
@@ -494,6 +542,32 @@ export default function Landing({ sports = [] }) {
   const results = useHeroSearch(q);
   const demo = useSailingDemo(tab === "athletes" || tab === "sponsors");
 
+  // ── Dev copy editor: session-only toggle + overrides map (see EdText above) ──
+  const [dev, setDev] = useState(false); // never auto-on — keyboard shortcut only
+  const [ov, setOv] = useState({});
+  const [saveSt, setSaveSt] = useState("");
+  useEffect(() => {
+    const onKey = (e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "D" || e.key === "d")) { e.preventDefault(); setDev(d => !d); } };
+    window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => { (async () => { const o = await fetchLandingOverrides(); if (o && Object.keys(o).length) setOv(o); })(); }, []);
+  const commit = (k, text) => {
+    const t = String(text ?? "");
+    if ((ov[k] ?? null) === t) return;
+    const next = { ...ov, [k]: t };
+    setOv(next);
+    setSaveSt("saving");
+    saveLandingOverrides(next).then((ok) => setSaveSt(ok ? "saved" : "error"));
+  };
+  const resetEdits = () => {
+    if (!window.confirm("Reset ALL landing copy edits back to the coded defaults?")) return;
+    setOv({});
+    setSaveSt("saving");
+    saveLandingOverrides({}).then((ok) => setSaveSt(ok ? "saved" : "error"));
+  };
+  // ed(key, fallback): override-aware copy slot, editable while dev is on.
+  const ed = (k, fallback, className) => <EdText key={k} k={k} val={ov[k] ?? fallback} dev={dev} onCommit={commit} className={className} />;
+
   useLiquid(bgRef, { scoped: false, count: 13, alpha: 0.42, palette: [[36, 58, 86], [44, 74, 110], [30, 50, 78], [52, 86, 128], [38, 64, 96], [46, 78, 118]] });
   useLiquid(heroRef, { scoped: true, count: 11, alpha: 0.5, palette: [[31, 78, 128], [40, 92, 150], [23, 58, 98], [54, 120, 190], [28, 70, 120], [46, 104, 168]] });
 
@@ -584,7 +658,7 @@ export default function Landing({ sports = [] }) {
             <img className="hero-mark" src="/brand/icon-white.png" alt="" aria-hidden="true" />
             <span className="hero-word">AthLink</span>
           </div>
-          <h1>The ultimate <span className="g">data centre</span> for sports results</h1>
+          <h1>{ed("hero.h1.pre", "The ultimate")} {ed("hero.h1.g", "data centre", "g")} {ed("hero.h1.post", "for sports results")}</h1>
           <div className="hsearch">
             <div className="hs-bar">
               <Search size={19} style={{ flex: "none", opacity: .75 }} />
@@ -622,7 +696,7 @@ export default function Landing({ sports = [] }) {
       {/* COLLABORATORS */}
       <section className="beltsec center" id="trusted">
         <div className="wrap">
-          <h2 className="sec-h center">Organizations we collaborate with</h2>
+          <h2 className="sec-h center">{ed("trusted.h", "Organizations we collaborate with")}</h2>
         </div>
         <div className="beltwrap" aria-hidden="true">
           <div className="belt">
@@ -636,8 +710,8 @@ export default function Landing({ sports = [] }) {
       {/* ECOSYSTEM / FEATURES */}
       <section id="ecosystem" style={{ paddingTop: 40 }}>
         <div className="wrap center">
-          <div className="seclabel">Built by elite athletes</div>
-          <h2 className="sec-h center">Making data actually interesting</h2>
+          <div className="seclabel">{ed("eco.label", "Built by elite athletes")}</div>
+          <h2 className="sec-h center">{ed("eco.h", "Making data actually interesting")}</h2>
           <div className="tabs">
             <button className={tab === "hosts" ? "on" : ""} onClick={() => setTab("hosts")}>Hosts</button>
             <button className={tab === "athletes" ? "on" : ""} onClick={() => setTab("athletes")}>Athletes</button>
@@ -645,28 +719,28 @@ export default function Landing({ sports = [] }) {
           </div>
         </div>
         <div className="wrap panel-fade" key={tab}>
-          {rows.map((f, i) => <FeatureRow key={f.title} f={f} flip={i % 2 === 1} demo={demo} />)}
+          {rows.map((f, i) => <FeatureRow key={f.title} f={f} flip={i % 2 === 1} demo={demo} ed={ed} kbase={`${tab}.${i}`} />)}
         </div>
       </section>
 
       {/* MISSION */}
       <section className="mission" id="mission">
         <div className="wrap">
-          <div className="seclabel">Our mission</div>
-          <p className="mtext">At AthLink, our mission is to become the <span className="em">ultimate data centre</span> for global sport: verifying every result, empowering every athlete, and giving sponsors the trusted foundation they need to back the next generation of champions.</p>
+          <div className="seclabel">{ed("mission.label", "Our mission")}</div>
+          <p className="mtext">{ed("mission.pre", "At AthLink, our mission is to become the")} {ed("mission.em", "ultimate data centre", "em")} {ed("mission.post", "for global sport: verifying every result, empowering every athlete, and giving sponsors the trusted foundation they need to back the next generation of champions.")}</p>
         </div>
       </section>
 
       {/* VISION + LIVE STATS */}
       <section style={{ paddingTop: 0 }}>
         <div className="wrap vision-wrap">
-          <div className="seclabel center">Our vision</div>
-          <div className="vision-tag"><span className="grad">LinkedIn</span> for athletes and sponsors</div>
-          <p className="mtext">Revolutionizing sports sponsorship by <span className="em">connecting athletes with brands through AI-driven matchmaking</span>, empowering athletes to reach their potential and enabling companies to find authentic ambassadors.</p>
+          <div className="seclabel center">{ed("vision.label", "Our vision")}</div>
+          <div className="vision-tag">{ed("vision.tag.g", "LinkedIn", "grad")} {ed("vision.tag.post", "for athletes and sponsors")}</div>
+          <p className="mtext">{ed("vision.pre", "Revolutionizing sports sponsorship by")} {ed("vision.em", "connecting athletes with brands through AI-driven matchmaking", "em")}{ed("vision.post", ", empowering athletes to reach their potential and enabling companies to find authentic ambassadors.")}</p>
           <div className="stats">
-            <div className="stat"><div className="n">{stats.hosts.toLocaleString()}</div><div className="l">Hosts &amp; associations</div></div>
-            <div className="stat"><div className="n">{stats.events.toLocaleString()}</div><div className="l">Competitions on the platform</div></div>
-            <div className="stat"><div className="n">{stats.athletes.toLocaleString()}</div><div className="l">Athlete profiles built</div></div>
+            <div className="stat"><div className="n">{stats.hosts.toLocaleString()}</div><div className="l">{ed("stats.hosts", "Hosts & associations")}</div></div>
+            <div className="stat"><div className="n">{stats.events.toLocaleString()}</div><div className="l">{ed("stats.events", "Competitions on the platform")}</div></div>
+            <div className="stat"><div className="n">{stats.athletes.toLocaleString()}</div><div className="l">{ed("stats.athletes", "Athlete profiles built")}</div></div>
           </div>
         </div>
       </section>
@@ -676,17 +750,17 @@ export default function Landing({ sports = [] }) {
         <div className="wrap">
           <div className="quotes">
             <div className="quote">
-              <p>"This has saved me so many hours of organising files."</p>
-              <div className="who"><Landmark size={14} />Hong Kong Sailing Federation</div>
+              <p>"{ed("q1.text", "This has saved me so many hours of organising files.")}"</p>
+              <div className="who"><Landmark size={14} />{ed("q1.who", "Hong Kong Sailing Federation")}</div>
             </div>
             <div className="quote">
-              <p>"This is so crucial. I've never had a platform that housed all of my results for me."</p>
-              <div className="who"><User size={14} />Competing athlete</div>
+              <p>"{ed("q2.text", "This is so crucial. I've never had a platform that housed all of my results for me.")}"</p>
+              <div className="who"><User size={14} />{ed("q2.who", "Competing athlete")}</div>
             </div>
           </div>
           <div className="contactw">
-            <h2 className="sec-h center">Put your results on AthLink</h2>
-            <p className="sec-lead center">Run a class, club, or federation? Get your competitions into the database and your athletes into the network — let us help you.</p>
+            <h2 className="sec-h center">{ed("contact.h", "Put your results on AthLink")}</h2>
+            <p className="sec-lead center">{ed("contact.lead", "Run a class, club, or federation? Get your competitions into the database and your athletes into the network — let us help you.")}</p>
             <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 34, flexWrap: "wrap" }}>
               <button className="btn cta" onClick={openContact}>Contact us</button>
               <button className="btn ghost" onClick={() => goPath("/sailing?signup=1")}>Create a profile</button>
@@ -701,7 +775,7 @@ export default function Landing({ sports = [] }) {
           <div className="foot">
             <div>
               <div className="brand"><img className="foot-mark" src="/brand/icon-app.png" alt="" aria-hidden="true" />AthLink</div>
-              <p className="tag">The ultimate data centre for sports results. LinkedIn for athletes and sponsors.</p>
+              <p className="tag">{ed("foot.tag", "The ultimate data centre for sports results. LinkedIn for athletes and sponsors.")}</p>
             </div>
             <div className="foot-links">
               <div className="foot-col"><h5>Portals</h5><a onClick={goSailing}>Sailing</a><span className="dead">Golf — coming soon</span></div>
@@ -712,6 +786,17 @@ export default function Landing({ sports = [] }) {
           <div className="foot-base"><span>© 2026 AthLink</span><span>athlink.win</span></div>
         </div>
       </footer>
+
+      {/* DEV COPY-EDIT BAR (Ctrl/Cmd+Shift+D) */}
+      {dev && (
+        <div className="devbar">
+          <b>Landing edit ON</b>
+          <span>click any outlined text — saves on blur</span>
+          {saveSt && <span className={"st" + (saveSt === "error" ? " err" : "")}>{saveSt === "saving" ? "Saving…" : saveSt === "saved" ? "Saved ✓" : "Save failed"}</span>}
+          <button onClick={resetEdits}>Reset all</button>
+          <button onClick={() => setDev(false)}>Done</button>
+        </div>
+      )}
 
       {/* CONTACT MODAL */}
       {contactOpen && (
