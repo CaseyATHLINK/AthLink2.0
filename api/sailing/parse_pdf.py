@@ -3358,18 +3358,20 @@ def _kimi_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, key: str, t
     return raw, ("max_tokens" if fr == "length" else fr)
 
 
-def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str):
+def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeout_s: int = None):
     """Route the vision parse to Gemini — the ONLY AI provider for parsing
     (Casey's call 2026-07-14: never fall back to the Anthropic API here). A
     Gemini failure raises; the escalation callers catch it and return the rule
     parse instead. With no mid-chain fallback the Gemini budget can be generous
     and still leave room before the 60s function ceiling. Kimi remains an
     image-only primary when no Gemini key is configured (it is not Anthropic).
-    A full-table image read needs ~30s (bake-off 2026-07-04), hence 40s+."""
+    A full-table image read needs ~30s (bake-off 2026-07-04), hence 40s+.
+    timeout_s overrides the per-call budget (entry lists generate 150-250 rows
+    in one pass and run under the long 300s entries window)."""
     gkey = _gemini_key()
     if gkey and call_gemini is not None:
         return _gemini_vision_raw(file_bytes, prompt, gkey,
-                                  timeout=40 if mime_type.startswith("image/") else 38,
+                                  timeout=timeout_s or (40 if mime_type.startswith("image/") else 38),
                                   mime_type=mime_type)
     if mime_type.startswith("image/"):
         kkey = os.environ.get("KIMI_API_KEY", "")
@@ -3440,7 +3442,10 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
         prompt = prompt + _GEMINI_PAGE_HINT.format(header=header_hint)
 
     # Gemini only (image-only Kimi when no Gemini key); no Anthropic fallback.
-    raw, stop = _vision_raw(file_bytes, mime_type, prompt)
+    # Entry lists run under the long entries window (maxDuration 300) and need
+    # one big generation (150-250 rows); results keep the tight default budget.
+    raw, stop = _vision_raw(file_bytes, mime_type, prompt,
+                            timeout_s=110 if entries_mode else None)
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
         data = json.loads(raw)
@@ -5200,6 +5205,10 @@ def _parse_entries_html(text: str, src: str, base: str) -> dict:
             notes.insert(1, extra_note)
         return out
     try:
+        # A near-empty text body is a JS shell — the entries can't be in it, so
+        # don't burn a long model call proving that; go straight to the hops.
+        if len(_html_to_text(text).strip()) < 3000:   # 29er.org's shell is ~2.3k chars
+            raise ValueError("JS shell — following embedded entry endpoints.")
         return _ai_entries(text)
     except ValueError as first_err:
         tried = {src, base}
@@ -6056,9 +6065,13 @@ class handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         ctype = (self.headers.get('Content-Type') or '').lower()
 
-        # Raise _Deadline ~8s before the 60s maxDuration hard-kill so the AI
-        # escalation paths can return the rule parse instead of a bare 504.
-        _arm_deadline(52)
+        # Raise _Deadline BEFORE the maxDuration hard-kill so the AI escalation
+        # paths can return the rule parse instead of a bare 504. Results keep
+        # the tight 52s budget (their rule parse is the fast, good answer);
+        # entry lists have NO rule parse and legitimately need one long Gemini
+        # generation (150-250 rows), so they get the full Fluid window
+        # (vercel.json maxDuration 300).
+        _arm_deadline(290 if mode == 'entries' else 52)
         try:
             # ?count=1 → just return the PDF page count (instant; no parsing)
             if want_count and 'application/json' not in ctype:

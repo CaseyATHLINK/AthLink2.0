@@ -5,7 +5,7 @@
   "outputDirectory": "apps/web/dist",
   "functions": {
     "api/sailing/parse_pdf.py": {
-      "maxDuration": 60,
+      "maxDuration": 300,
       "memory": 2048,
       "includeFiles": "api/_shared/**"
     },
@@ -22,6 +22,9 @@
     }
   },
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
