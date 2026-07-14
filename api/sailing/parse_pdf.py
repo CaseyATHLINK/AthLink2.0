@@ -3291,10 +3291,12 @@ def _vision_model():
 
 
 def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 30,
-                       mime_type: str = "application/pdf"):
+                       mime_type: str = "application/pdf", thinking_budget: int = None):
     """Vision parse via Gemini (native PDF/image ingest, no rasterisation).
     text/* inputs (e.g. an HTML results page with no <table>) are sent as a
-    plain-text part — Gemini rejects HTML/text bytes labelled as a PDF."""
+    plain-text part — Gemini rejects HTML/text bytes labelled as a PDF.
+    thinking_budget=0 disables flash reasoning — entry-list transcription needs
+    none, and thinking burned both the clock and the output-token budget."""
     if mime_type.startswith("text/"):
         parts = [{"text": prompt + "\n\n----- PAGE TEXT -----\n"
                   + file_bytes.decode("utf-8", "replace")}]
@@ -3317,7 +3319,8 @@ def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 
         try:
             # 16k output: a dense 60-row page overflows 8k and used to
             # hard-fail with "too much data".
-            resp = call_gemini(key, model, parts, max_tokens=16384, timeout=timeout)
+            resp = call_gemini(key, model, parts, max_tokens=16384, timeout=timeout,
+                               thinking_budget=thinking_budget)
             break
         except Exception as exc:
             s = str(exc)
@@ -3362,7 +3365,8 @@ def _kimi_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, key: str, t
     return raw, ("max_tokens" if fr == "length" else fr)
 
 
-def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeout_s: int = None):
+def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeout_s: int = None,
+                thinking_budget: int = None):
     """Route the vision parse to Gemini — the ONLY AI provider for parsing
     (Casey's call 2026-07-14: never fall back to the Anthropic API here). A
     Gemini failure raises; the escalation callers catch it and return the rule
@@ -3376,7 +3380,7 @@ def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeout_s: int =
     if gkey and call_gemini is not None:
         return _gemini_vision_raw(file_bytes, prompt, gkey,
                                   timeout=timeout_s or (40 if mime_type.startswith("image/") else 38),
-                                  mime_type=mime_type)
+                                  mime_type=mime_type, thinking_budget=thinking_budget)
     if mime_type.startswith("image/"):
         kkey = os.environ.get("KIMI_API_KEY", "")
         if kkey and call_openai_compat is not None:
@@ -3449,8 +3453,11 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
     # Entry lists run under the long entries window (112s self-deadline) and
     # need one big generation (150-250 rows): 52s per rung lets a slow/spiking
     # primary time out and STILL leave a full second rung before the deadline.
+    # thinking_budget=0: transcription needs no reasoning — with thinking ON,
+    # flash burned the whole clock AND the 16k output budget on big lists.
     raw, stop = _vision_raw(file_bytes, mime_type, prompt,
-                            timeout_s=52 if entries_mode else None)
+                            timeout_s=52 if entries_mode else None,
+                            thinking_budget=0 if entries_mode else None)
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
         data = json.loads(raw)
