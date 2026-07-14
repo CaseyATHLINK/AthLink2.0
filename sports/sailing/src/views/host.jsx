@@ -613,15 +613,13 @@ export function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSave
   },[events]);
 
   // On open: extend the dossier via competitions-mode research, then probe every
-  // URL (max 3 concurrent). Everything is best-effort. When opened from the
-  // "Scrape website" tab, research each pasted site (seedSites); otherwise research
-  // once by host name (+ any stored website).
+  // URL (max 3 concurrent). Everything is best-effort. Research runs ONLY over
+  // sites the user explicitly provided (seedSites) — a host's stored "home
+  // website" is never scraped automatically, so no results appear unbidden.
   React.useEffect(()=>{ let cancelled=false;
     (async()=>{
       let list=[...(dossier.competitions||[])];
-      const sites=(seedSites&&seedSites.length)
-        ? seedSites
-        : (list.length<20 ? [host.dossier?.identity?.website||""] : []);
+      const sites=(seedSites&&seedSites.length)?seedSites:[];
       if(sites.length){
         setExtending(true);
         const cc=async(website)=>{
@@ -735,8 +733,11 @@ export function HostDiscoveryModal({host,events=[],auth,canImport,devMode,onSave
         boxShadow:"0 30px 80px rgba(12,24,44,.35)",overflow:"hidden"}}>
         {/* Header */}
         <div style={{background:"linear-gradient(180deg,var(--navy2),var(--navy))",color:"#fff",padding:"18px 20px",position:"relative"}}>
-          <button onClick={onClose} aria-label="Close" style={{position:"absolute",top:14,right:14,width:30,height:30,borderRadius:"50%",border:0,
-            background:"rgba(255,255,255,.16)",color:"#fff",cursor:"pointer",display:"grid",placeItems:"center"}}><X size={16}/></button>
+          {/* Close on pointerDOWN: probe results re-render this modal constantly, and a
+              re-render between mousedown and mouseup makes the browser drop the click —
+              so a plain onClick only "worked" when the timing was lucky. */}
+          <button type="button" onPointerDown={onClose} aria-label="Close" style={{position:"absolute",top:14,right:14,width:34,height:34,borderRadius:"50%",border:0,zIndex:5,
+            background:"rgba(255,255,255,.16)",color:"#fff",cursor:"pointer",display:"grid",placeItems:"center"}}><X size={17}/></button>
           <p style={{fontSize:11,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",opacity:.85,margin:0}}>Here's what we found</p>
           <h3 style={{margin:"3px 0 0",fontSize:20,fontWeight:800}}>Import {host?.name}'s past results</h3>
           <p style={{margin:"6px 0 0",fontSize:12.5,opacity:.9,lineHeight:1.45}}>We researched the web for competitions you've run. Pick the ones to bring onto AthLink — each is checked for whether we can read its results.</p>
