@@ -9,7 +9,7 @@ the import — provider errors come back as {"ok": false, "error": str} with HTT
 200.
 
 Provider (parser v3): **Gemini + Google Search grounding** is primary (one paid
-key via _gemini_key(), routed as task 'enrich' → gemini-3-flash). Anthropic
+key via _gemini_key(), routed as task 'enrich' → gemini-3.5-flash). Anthropic
 Sonnet 5 with server-side web_search is the fallback. Same "low-confidence,
 never auto-applied" contract as before. Keys stay server-side. Uses the urllib
 pattern from llm.py (no SDK) to stay under the 60s ceiling.
@@ -38,11 +38,11 @@ REQUEST_TIMEOUT = 45
 
 def _enrich_model():
     """Gemini model for enrichment via llm.route('enrich') (honours ENRICH_MODEL
-    env override), defaulting to gemini-3-flash."""
+    env override), defaulting to gemini-3.5-flash."""
     try:
-        return (_llm_route("enrich") or {}).get("model") or "gemini-3-flash"
+        return (_llm_route("enrich") or {}).get("model") or "gemini-3.5-flash"
     except Exception:
-        return "gemini-3-flash"
+        return "gemini-3.5-flash"
 
 
 def _build_prompt(name, cls, year, host, missing):
