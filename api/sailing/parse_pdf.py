@@ -45,6 +45,36 @@ except ImportError:
 # harness. api/_shared is force-bundled into this function via vercel.json
 # includeFiles (the dynamic path below isn't statically traceable by the builder).
 import sys
+
+# ── Self-deadline: raise BEFORE Vercel's maxDuration hard-kill ──────────────
+# The AI escalation chain (Gemini 38s + Anthropic fallback + pdf→image) can
+# exceed the 60s function budget, and the platform kill is a bare connection
+# close — the client sees a 504 even when a perfectly usable rule parse was
+# sitting in memory. A SIGALRM a few seconds before the kill raises _Deadline,
+# which the escalation paths catch to return the rule result instead.
+# BaseException (not Exception) so no intermediate retry/fallback swallows it.
+class _Deadline(BaseException):
+    pass
+
+def _raise_deadline(signum, frame):
+    raise _Deadline()
+
+def _arm_deadline(seconds: int):
+    """Best-effort: no-op off unix / off the main thread (local test harness)."""
+    try:
+        import signal
+        signal.signal(signal.SIGALRM, _raise_deadline)
+        signal.alarm(seconds)
+    except Exception:
+        pass
+
+def _disarm_deadline():
+    try:
+        import signal
+        signal.alarm(0)
+    except Exception:
+        pass
+
 _API_DIR = os.path.dirname(os.path.abspath(__file__))                 # api/sailing
 _SHARED_DIR = os.path.join(os.path.dirname(_API_DIR), "_shared")      # api/_shared
 for _p in (_API_DIR, _SHARED_DIR):
@@ -5776,6 +5806,13 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
                     "Built-in parser + a single AI flag-nationality read (fast path)."
                 )
                 return rule_result
+            except _Deadline:
+                # Out of budget during the nat read — the table itself is good.
+                rule_result["confidence"] = verdict["confidence"]
+                rule_result["ai_parsed"] = False
+                rule_result.setdefault("notes", []).append(
+                    "Built-in parser; the flag-nationality read timed out.")
+                return rule_result
             except Exception as nat_err:
                 print("nat-only fast path failed; falling back to agent:", nat_err)
 
@@ -5837,6 +5874,13 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
         try:
             return _prefer(_finish(_gemini_parse(file_bytes, "application/pdf",
                                                  header_hint=_repair)))
+        except _Deadline:
+            # Out of function budget mid-AI: return the rule parse (honestly
+            # labelled incomplete) rather than dying to the platform kill.
+            if rule_result is not None:
+                return rule_result
+            raise ValueError("The AI parse ran out of time — try uploading the "
+                             "results file directly, or one page at a time.")
         except Exception as vision_err:
             # Vision failed too; try the Anthropic agent loop if that key exists,
             # else return the rule result rather than erroring the whole upload.
@@ -5852,6 +5896,11 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     # No Gemini key — Anthropic-only path via the agent loop.
     try:
         return _prefer(_finish(_agent_parse(file_bytes)))
+    except _Deadline:
+        if rule_result is not None:
+            return rule_result
+        raise ValueError("The AI parse ran out of time — try uploading the "
+                         "results file directly, or one page at a time.")
     except Exception as agent_err:
         # If the agent fails but the rule parser produced something usable,
         # return that rather than erroring the whole upload.
@@ -5889,6 +5938,9 @@ class handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         ctype = (self.headers.get('Content-Type') or '').lower()
 
+        # Raise _Deadline ~8s before the 60s maxDuration hard-kill so the AI
+        # escalation paths can return the rule parse instead of a bare 504.
+        _arm_deadline(52)
         try:
             # ?count=1 → just return the PDF page count (instant; no parsing)
             if want_count and 'application/json' not in ctype:
@@ -5923,8 +5975,15 @@ class handler(BaseHTTPRequestHandler):
                 return self._respond(200, parse_url(url, mode=jmode))
             # Otherwise treat the body as raw file bytes
             return self._respond(200, parse_pdf_bytes(body, mode=mode))
+        except _Deadline:
+            # Deadline fired outside a recoverable spot (e.g. during a fallback
+            # model call) — answer honestly instead of dying to the 504 kill.
+            self._respond(422, {'ok':False,'error':'This document took too long to '
+                'parse — try uploading the results file directly, or one page at a time.'})
         except Exception as exc:
             self._respond(422, {'ok':False,'error':str(exc)})
+        finally:
+            _disarm_deadline()
     def _cors(self):
         self.send_header('Access-Control-Allow-Origin','*')
         self.send_header('Access-Control-Allow-Methods','POST, OPTIONS')
