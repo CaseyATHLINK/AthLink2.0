@@ -3,7 +3,7 @@
    maps a DB row to the app event shape (re-exported by App.jsx for
    apps/web Landing.jsx). Verbatim. */
 
-import { SB_URL, sbH, sbGet, sbPost, sbPatch } from "@athlink/core";
+import { SB_URL, sbH, sbGet, sbPost, sbPatch, sbDel } from "@athlink/core";
 
 // Reviewed duplicate pairs (see migrations/0006). Read to seed the hidden set;
 // save so a "merge"/"don't merge" decision sticks across reloads and devices.
@@ -58,9 +58,16 @@ export async function saveEventToDb(ev){
     return null;
   }
   const eventId=ins[0].id;
-  // Insert entries one by one so a single bad row doesn't kill the whole batch
+  const entryErrors=await insertEntries(eventId,ev.entries);
+  if(entryErrors.length) console.warn("saveEventToDb: failed entries:",entryErrors);
+  else console.log("saveEventToDb: saved",ev.entries.length,"entries for",ev.name);
+  return ins;
+}
+// Insert entries one by one so a single bad row doesn't kill the whole batch.
+// Returns the helm names of any rows that failed.
+async function insertEntries(eventId,entries){
   const entryErrors=[];
-  for(const e of ev.entries){
+  for(const e of entries||[]){
     const entryPayload={
       event_id:eventId,
       sail:e.sail||"—",
@@ -80,9 +87,26 @@ export async function saveEventToDb(ev){
     const r=await sbPost("entries",entryPayload);
     if(!r?.[0]?.id) entryErrors.push(e.helm);
   }
-  if(entryErrors.length) console.warn("saveEventToDb: failed entries:",entryErrors);
-  else console.log("saveEventToDb: saved",ev.entries.length,"entries for",ev.name);
-  return ins;
+  return entryErrors;
+}
+// Attach imported results to an ALREADY-PUBLISHED event (an announced upcoming
+// competition): patch the event row in place — keeping its id/URL and its
+// announced owner/collabs — and swap the entry-list rows for the result rows.
+export async function replaceEventResultsInDb(evId,ev){
+  if(!sbH){console.warn("replaceEventResultsInDb: no Supabase connection");return null;}
+  await sbPatch("events",`id=eq.${evId}`,{
+    name:ev.name, class:ev.cls, doublehanded:!!ev.doublehanded,
+    venue:ev.venue||null, country:ev.country||null, date:ev.date||null,
+    discards:ev.discards||1, scoring:ev.scoring||null,
+    source:ev.source||null, status:ev.status||"Final",
+    subclass:ev.subclass||null, fingerprint:ev.fingerprint||null,
+    sources:ev.sources||[],
+  });
+  await sbDel("entries",`event_id=eq.${evId}`);
+  const entryErrors=await insertEntries(evId,ev.entries);
+  if(entryErrors.length) console.warn("replaceEventResultsInDb: failed entries:",entryErrors);
+  else console.log("replaceEventResultsInDb: attached",ev.entries.length,"result rows to",ev.name);
+  return evId;
 }
 export async function updateEventStatus(evId,status){
   await sbPatch("events",`id=eq.${evId}`,{status});

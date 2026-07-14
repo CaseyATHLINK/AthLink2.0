@@ -3150,6 +3150,27 @@ RULES:
 - pdf_rank: finishing position integer (1=winner). pdf_net: net score (the NET column, after discards) — usually the LAST numeric column; TOTAL is the second-to-last. discards: integer (usually 1).
 """
 
+# Entry-list mode (?mode=entries): an UPCOMING event's entry list — who is racing,
+# no results yet. Same field conventions as the results prompt, but no races /
+# ranks / discards exist, and rows must NOT be dropped for having no scores.
+_GEMINI_ENTRIES_PROMPT = """Parse this sailing regatta ENTRY LIST (the competitors entered in an upcoming event — there are NO results yet). Return ONLY a JSON object, no markdown/explanation.
+
+Structure:
+{"name":"event name","date":"dd/mm/yyyy or empty","entries":[{"helm":"First Last","crew":"First Last or empty","sail":"88 or NZL 7","nat":"3-letter IOC or empty","div":"fleet/division or empty","gender":"M/F/Mix or empty","category":"U17/U19/U23/Jr or empty","birth_year":2005,"crew_birth_year":2004}]}
+
+RULES:
+- Parse EVERY entry row. An entry has no scores, no rank — that is expected.
+- date: the event's START date if shown ("1 August 2026 to 8 August 2026" -> "01/08/2026").
+- helm/crew: title case "First Last"; convert "SMITH, John" and ALL-CAPS names ("MAXIMO VIDELA") to "Maximo Videla". Keep accents/diacritics as printed.
+- Helm and crew are often stacked in ONE cell (helm on the first line, crew below it) — split them correctly. A missing crew is fine: "".
+- IGNORE club, team, and sponsor text entirely; never put club text in any name field.
+- sail: country prefix + number if present ("NZL 7"), else number only; strip duplicated country tokens ("FRA FRA 3245" -> "FRA 3245"). Placeholder sails like "na" -> "".
+- nat: 3-letter IOC code, empty if unknown.
+- div: the entry table's own section/fleet heading if there are several (e.g. "49er" vs "49erFX"); else empty.
+- gender/category/birth_year: same conventions as printed; empty/null when absent.
+- Do NOT invent entries; do NOT deduplicate — return rows as printed.
+"""
+
 # Appended when parsing a single page of a multi-page table (the page may have no header row).
 _GEMINI_PAGE_HINT = """
 THIS IS ONE PAGE of a larger multi-page results table. It may have NO header row.
@@ -3394,7 +3415,8 @@ def _extract_image_band(file_bytes: bytes, page_index: int):
     return buf.getvalue()
 
 
-def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_hint: str = "") -> dict:
+def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_hint: str = "",
+                  entries_mode: bool = False) -> dict:
     if urlopen is None:
         raise ValueError("urllib not available.")
 
@@ -3405,7 +3427,7 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
     if mime_type.startswith("image/"):
         file_bytes, mime_type = _downscale_image(file_bytes, mime_type)
 
-    prompt = _GEMINI_PROMPT
+    prompt = _GEMINI_ENTRIES_PROMPT if entries_mode else _GEMINI_PROMPT
     if header_hint:
         prompt = prompt + _GEMINI_PAGE_HINT.format(header=header_hint)
 
@@ -3441,7 +3463,13 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
                 races.append(sc)
                 race_codes.append(code)
 
-        if not helm or not races:
+        # Entry lists have no scores by definition — a row only needs a helm.
+        # (And any scores the model hallucinated onto an entry list are dropped.)
+        if entries_mode:
+            races, race_codes = [], []
+            if not helm:
+                continue
+        elif not helm or not races:
             continue
 
         pdf_rank = None
@@ -3478,13 +3506,15 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
         })
 
     if not entries:
-        raise ValueError("AI parser returned no valid entries.")
+        raise ValueError("AI parser returned no valid entries."
+                         if not entries_mode else
+                         "AI parser found no entries on this page — check it actually shows the entry list.")
 
     n_gender = sum(1 for e in entries if e.get('gender'))
     n_cat    = sum(1 for e in entries if e.get('category'))
     notes = [
         "Sent the file to Gemini for analysis.",
-        f"Gemini returned {len(entries)} competitor rows.",
+        f"Gemini returned {len(entries)} {'entry' if entries_mode else 'competitor'} rows.",
     ]
     if n_gender:
         notes.append(f"Detected gender on {n_gender} of {len(entries)} rows.")
@@ -5119,12 +5149,88 @@ def _html_to_text(html_text: str) -> str:
     return '\n'.join(ln for ln in lines if ln)
 
 
+def _entry_list_urls(text: str, base: str) -> list:
+    """Candidate URLs that may hold an upcoming event's entry list. Event sites
+    often render the entries client-side: the visible page is a shell and the
+    rows come from an AJAX endpoint (29er.org → ourclubadmin event-entries.php),
+    sometimes via an intermediate event page embedded in a JSON config. Collect
+    (a) absolute URLs with entry-ish tokens, (b) relative paths with 'entr',
+    (c) embedded "/event/<id>" config URLs — capped, de-duplicated, asset-free."""
+    from urllib.parse import urljoin
+    unesc = text.replace('\\/', '/')          # JSON-escaped config URLs
+    cands = []
+    for m in re.findall(r'https?://[^\s"\'<>]+', unesc):
+        if any(k in m.lower() for k in ('entry', 'entries', 'entrant')):
+            cands.append(m)
+    for m in re.findall(r'["\']((?:/|\./)[^"\'\s]*entr[^"\'\s]*)["\']', unesc, re.I):
+        cands.append(urljoin(base, m))
+    for m in re.findall(r'"url"\s*:\s*"(https?://[^"]+/event/\d+[^"]*)"', unesc):
+        cands.append(m)
+    seen, out = set(), []
+    for u in cands:
+        u = u.replace('&amp;', '&').rstrip('\\')
+        if u in seen or u.lower().split('?')[0].endswith(
+                ('.png', '.jpg', '.jpeg', '.svg', '.gif', '.css', '.js', '.ico')):
+            continue
+        seen.add(u); out.append(u)
+    return out[:8]
+
+
 def parse_url(url: str, mode: str = 'ai') -> dict:
     """Fetch a results link and parse it. HTML pages are parsed from source
     (most accurate); PDFs go through the normal byte pipeline."""
     data, ctype = fetch_url_bytes(url)
     mime = _detect_mime(data)
     is_html = ('html' in ctype) or (mime == 'text/html')
+    # Entry-list mode: the page text goes straight to the AI entries prompt —
+    # results-table rules don't apply to a who's-racing list. If the page is a
+    # JS shell (no entries in its own HTML), follow embedded entry-ish endpoints
+    # up to two hops (page → event page → entries AJAX fragment).
+    if mode == 'entries':
+        if not is_html or 'pdf' in ctype:
+            return parse_pdf_bytes(data, mode='entries')
+        if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
+            raise ValueError("Entry lists are read by the AI parser, but no AI key is configured.")
+        text = _decode_html_bytes(data)
+        def _ai_entries(html_text, extra_note=None):
+            out = _gemini_parse(_html_to_text(html_text).encode("utf-8"), "text/plain", entries_mode=True)
+            notes = out.setdefault('notes', [])
+            notes.insert(0, f"Loaded {url}")
+            if extra_note:
+                notes.insert(1, extra_note)
+            return out
+        try:
+            return _ai_entries(text)
+        except ValueError as first_err:
+            tried = {url}
+            frontier = _entry_list_urls(text, url)
+            for _hop in range(2):
+                nxt = []
+                for u in frontier:
+                    if u in tried:
+                        continue
+                    tried.add(u)
+                    try:
+                        d2, _c2 = fetch_url_bytes(u, timeout=20)
+                    except Exception:
+                        continue
+                    if d2[:4] == b'%PDF':
+                        try:
+                            return parse_pdf_bytes(d2, mode='entries')
+                        except Exception:
+                            continue
+                    t2 = _decode_html_bytes(d2)
+                    if len(_html_to_text(t2).strip()) > 200:
+                        try:
+                            return _ai_entries(t2, "The page loads its entries by script; "
+                                                   f"followed {u} and read them there.")
+                        except ValueError:
+                            pass
+                    nxt.extend(x for x in _entry_list_urls(t2, u) if x not in tried)
+                frontier = nxt
+                if not frontier:
+                    break
+            raise first_err
     if is_html and 'pdf' not in ctype:
         text = _decode_html_bytes(data)
         try:
@@ -5619,8 +5725,30 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
 
     mode='rule'  → built-in parser only; raise on unknown formats (no AI).
     mode='ai'    → built-in parser first, Gemini fallback; images always AI.
+    mode='entries' → UPCOMING entry list: straight to the AI entries prompt
+                     (the rule parsers are results-shaped and would misread it).
     """
     mime = _detect_mime(file_bytes)
+
+    if mode == 'entries':
+        if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
+            raise ValueError("Entry lists are read by the AI parser, but no AI key is configured "
+                             "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback).")
+        if mime == "text/html":
+            blob = _html_to_text(_decode_html_bytes(file_bytes)).encode("utf-8")
+            return _gemini_parse(blob, "text/plain", entries_mode=True)
+        if mime in ("image/heic", "image/heif"):
+            jpeg = _heic_to_jpeg(file_bytes)
+            if jpeg is None:
+                raise ValueError("Couldn't decode this HEIC photo. Export it as JPEG "
+                                 "(or take a screenshot) and upload that.")
+            file_bytes, mime = jpeg, "image/jpeg"
+        if mime.startswith("image/"):
+            return _gemini_parse(file_bytes, mime, entries_mode=True)
+        if file_bytes[:4] == b'%PDF':
+            return _gemini_parse(file_bytes, "application/pdf", entries_mode=True)
+        # Anything text-ish (csv, plain text paste exported as file) → text prompt.
+        return _gemini_parse(file_bytes, "text/plain", entries_mode=True)
 
     def _stamp(res, family, input_type, conf=0.9):
         """Attach a detected_format verdict when the extractor didn't set one,
@@ -5888,13 +6016,13 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if pdfplumber is None:
             return self._respond(500, {'ok':False,'error':'pdfplumber not installed.'})
-        # mode comes from ?mode=rule|ai (default ai)
+        # mode comes from ?mode=rule|ai|entries (default ai)
         mode = 'ai'; want_count = False; page_idx = None
         try:
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             mode = (qs.get('mode', ['ai'])[0] or 'ai').lower()
-            if mode not in ('rule', 'ai'):
+            if mode not in ('rule', 'ai', 'entries'):
                 mode = 'ai'
             want_count = qs.get('count', ['0'])[0] in ('1', 'true')
             want_nat = qs.get('nat', ['0'])[0] in ('1', 'true')
@@ -5940,7 +6068,7 @@ class handler(BaseHTTPRequestHandler):
                         return self._respond(200, {'ok':True, 'reachable':False})
                     return self._respond(200, probe_url(url))
                 jmode = (payload.get('mode') or mode or 'ai').lower()
-                if jmode not in ('rule', 'ai'):
+                if jmode not in ('rule', 'ai', 'entries'):
                     jmode = 'ai'
                 if not url:
                     return self._respond(400, {'ok':False,'error':'No "url" provided in the request.'})

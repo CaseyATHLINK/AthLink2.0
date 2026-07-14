@@ -91,6 +91,14 @@ export function scoreEvent(ev){
   return{rows,fleet,races:Math.max(...ev.entries.map(e=>e.races.length)),countries};
 }
 
+/* Upcoming competition = a published entry list: entries exist but nobody has a
+   race score yet. Everything keys off the DATA (not a status string) so an
+   upcoming event flips to a normal results page the moment races land on it. */
+export function isUpcomingEvent(ev){
+  const ents=ev?.entries||[];
+  return ents.length>0&&ents.every(e=>!(e.races||[]).length);
+}
+
 export function scorePreview(ev){
   if(!ev?.entries?.length) return null;
   const maxR=Math.max(...ev.entries.map(e=>(e.races||[]).length),1);
@@ -110,6 +118,7 @@ export function aggregate(name,evList){
   const seenComp=new Set(); // dedupe identical competition rows (duplicate imports)
   for(const ev of evList){
     if(ev.status==="Draft") continue;
+    if(isUpcomingEvent(ev)) continue;   // entry lists carry no results — never stats
     const e=ev.entries.find(x=>canonName(x.helm)===target||canonName(x.crew)===target);
     if(!e) continue;
     const s=scoreEvent(ev);
