@@ -3323,7 +3323,11 @@ def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 
             s = str(exc)
             quota = "429" in s or "quota" in s.lower() or "RESOURCE_EXHAUSTED" in s
             notfound = ("404" in s and "not found" in s.lower()) or "NOT_FOUND" in s
-            if (quota or notfound) and i < len(ladder) - 1:
+            # 503 "experiencing high demand" — a per-model capacity spike, not a
+            # request problem; the next rung is usually idle (seen live on
+            # gemini-3.5-flash the day it became the default).
+            overloaded = "503" in s or "high demand" in s.lower() or "UNAVAILABLE" in s or "overloaded" in s.lower()
+            if (quota or notfound or overloaded) and i < len(ladder) - 1:
                 continue
             raise
     raw = (gemini_text(resp) or "").strip()
