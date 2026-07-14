@@ -3330,43 +3330,23 @@ def _kimi_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, key: str, t
 
 
 def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str):
-    """Route the vision parse to its provider, falling back to Anthropic on ANY
-    error (rate-limit/429, timeout, blocked, malformed). The fallback is what
-    lets parsing absorb Gemini's free-tier volume limits without ever failing.
-    Timeouts are bounded so a primary-then-fallback retry still fits the 60s
-    Vercel ceiling; the Anthropic-only path (no primary key) keeps the full 50s."""
-    if mime_type.startswith("image/"):
-        # Image branch: Gemini first (native image ingest; bake-off 2026-07-04:
-        # 30s vs Kimi's 48s on the same screenshot, equal accuracy — and only
-        # Gemini can also take PDFs). A full-table read needs ~30s, so the old
-        # 25s budget made Gemini time out and silently degrade to fallbacks;
-        # give it 38s. Kimi (~48s) can never fit as a mid-chain fallback inside
-        # the 50s self-timeout, so it is only the primary when Gemini has no key.
-        gkey = _gemini_key()
-        kkey = os.environ.get("KIMI_API_KEY", "")
-        if gkey and call_gemini is not None:
-            try:
-                return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=38,
-                                          mime_type=mime_type)
-            except Exception:
-                pass
-            return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=12)
-        if kkey and call_openai_compat is not None:
-            try:
-                return _kimi_vision_raw(file_bytes, mime_type, prompt, kkey, timeout=40)
-            except Exception:
-                return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=10)
-        return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
-    # application/pdf (and any non-image) → Gemini, else Anthropic. Whole-file
-    # calls only happen for small PDFs; big ones arrive page-chunked (?page=N).
+    """Route the vision parse to Gemini — the ONLY AI provider for parsing
+    (Casey's call 2026-07-14: never fall back to the Anthropic API here). A
+    Gemini failure raises; the escalation callers catch it and return the rule
+    parse instead. With no mid-chain fallback the Gemini budget can be generous
+    and still leave room before the 60s function ceiling. Kimi remains an
+    image-only primary when no Gemini key is configured (it is not Anthropic).
+    A full-table image read needs ~30s (bake-off 2026-07-04), hence 40s+."""
     gkey = _gemini_key()
     if gkey and call_gemini is not None:
-        try:
-            return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=35,
-                                      mime_type=mime_type)
-        except Exception:
-            return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=14)
-    return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
+        return _gemini_vision_raw(file_bytes, prompt, gkey,
+                                  timeout=40 if mime_type.startswith("image/") else 38,
+                                  mime_type=mime_type)
+    if mime_type.startswith("image/"):
+        kkey = os.environ.get("KIMI_API_KEY", "")
+        if kkey and call_openai_compat is not None:
+            return _kimi_vision_raw(file_bytes, mime_type, prompt, kkey, timeout=48)
+    raise ValueError("AI parsing needs a Gemini key (set Gemini_API_Key_Universal).")
 
 
 def _image_band_boxes(file_bytes: bytes):
@@ -3429,7 +3409,7 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
     if header_hint:
         prompt = prompt + _GEMINI_PAGE_HINT.format(header=header_hint)
 
-    # PDF → Gemini 3, image → Kimi, with automatic Anthropic fallback.
+    # Gemini only (image-only Kimi when no Gemini key); no Anthropic fallback.
     raw, stop = _vision_raw(file_bytes, mime_type, prompt)
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
@@ -5152,7 +5132,7 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
             out.setdefault('notes', []).insert(0, f"Loaded {url}")
             return out
         except ValueError as html_err:
-            have_ai = mode == 'ai' and (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY"))
+            have_ai = mode == 'ai' and bool(_gemini_key())
             # (1) JS-loaded results: the page is a "Loading results …" shell that
             #     pulls each fleet's real table over AJAX (e.g. 420sailing.org's
             #     /races/resultsajax). Fetch those endpoints and parse them — as a
@@ -5423,18 +5403,13 @@ def _ai_read_nationalities(file_bytes: bytes) -> dict:
     {normalised_sail: 'IOC'} so the caller can match by sail number (robust —
     never assigns a nationality to the wrong boat via row miscount).
 
-    Routes to Gemini (Phase 2) when GEMINI_API_KEY is set, falling back to
-    Anthropic on any Gemini error so a miss degrades gracefully. Timeouts are
-    bounded so a Gemini-then-Anthropic retry still fits the 60s Vercel ceiling."""
+    Gemini only (no Anthropic fallback — Casey's call 2026-07-14): a miss
+    raises and the caller decides (the nat fast path keeps the rule table)."""
     gkey = _gemini_key()
     if gkey and call_gemini is not None:
-        try:
-            return _gemini_read_nationalities(file_bytes, gkey, timeout=25)
-        except Exception:
-            # Gemini missed (error/timeout/bad JSON) → Anthropic with reduced
-            # budget so the combined wall time stays under the function ceiling.
-            return _anthropic_read_nationalities(file_bytes, timeout=30)
-    return _anthropic_read_nationalities(file_bytes, timeout=50)
+        return _gemini_read_nationalities(file_bytes, gkey, timeout=30)
+    raise ValueError("Flag-nationality read needs a Gemini key "
+                     "(set Gemini_API_Key_Universal).")
 
 
 # ── Agent tool wrappers ─────────────────────────────────────────────────────
@@ -5622,9 +5597,9 @@ def parse_pdf_page(file_bytes: bytes, page_index: int) -> dict:
     if mime != "application/pdf":
         # Other single files: no paging — parse whole thing.
         return _gemini_parse(file_bytes, mime)
-    if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
-        raise ValueError("Page parsing requires AI, but no AI key is configured "
-                         "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback).")
+    if not _gemini_key():
+        raise ValueError("Page parsing requires AI, but no Gemini key is "
+                         "configured (set Gemini_API_Key_Universal).")
     header = _pdf_header_hint(file_bytes)
     page_pdf = _extract_single_page_pdf(file_bytes, page_index)
     if page_pdf is None:
@@ -5697,10 +5672,10 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
                 "This is an image — the non-AI parser can't read it. "
                 "Use the AI parser for photos and screenshots."
             )
-        if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
+        if not (_gemini_key() or os.environ.get("KIMI_API_KEY", "")):
             raise ValueError(
-                "Image results require AI parsing, but no AI key is configured "
-                "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback)."
+                "Image results require AI parsing, but no Gemini key is "
+                "configured (set Gemini_API_Key_Universal)."
             )
         # HEIC (iPhone photos): Gemini can't ingest HEIC directly and PIL needs
         # pillow-heif to open it. Convert to JPEG first; if that isn't possible,
@@ -5734,9 +5709,9 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
         return result
 
     # ── AI mode ──
-    # Gemini is the primary AI provider; Anthropic Sonnet is the fallback. Either
-    # key enables AI mode (Gemini alone is sufficient — no Anthropic required).
-    if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
+    # Gemini is the ONLY AI provider for parsing (no Anthropic fallback —
+    # Casey's call 2026-07-14).
+    if not _gemini_key():
         # No AI key at all — fall back to rule-based only, surface errors. Still
         # attach the completeness verdict so the result is honestly labelled
         # (no AI available to repair, but never a silent "complete" claim).
@@ -5814,7 +5789,16 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
                     "Built-in parser; the flag-nationality read timed out.")
                 return rule_result
             except Exception as nat_err:
-                print("nat-only fast path failed; falling back to agent:", nat_err)
+                # Gemini-only now: a failed nat read is NOT worth a full vision
+                # re-read of a table we parsed confidently and completely — keep
+                # the rule result and just leave the nationalities blank.
+                print("nat read failed; keeping the rule parse without nats:", nat_err)
+                rule_result["confidence"] = verdict["confidence"]
+                rule_result["ai_parsed"] = False
+                rule_result.setdefault("notes", []).append(
+                    "Built-in parser; the flag-nationality read failed — "
+                    "nationalities left blank.")
+                return rule_result
 
     # Carry the rule parser's format verdict onto the AI paths when we have one
     # (the agent's finalized dict won't set it itself).
@@ -5882,31 +5866,19 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
             raise ValueError("The AI parse ran out of time — try uploading the "
                              "results file directly, or one page at a time.")
         except Exception as vision_err:
-            # Vision failed too; try the Anthropic agent loop if that key exists,
-            # else return the rule result rather than erroring the whole upload.
-            if os.environ.get("ANTHROPIC_API_KEY", ""):
-                try:
-                    return _prefer(_finish(_agent_parse(file_bytes)))
-                except Exception:
-                    pass
+            # Gemini failed — no second provider (Gemini-only, Casey's call
+            # 2026-07-14). Return the rule result rather than erroring the
+            # whole upload; error only when rules produced nothing at all.
             if rule_result is not None:
                 return rule_result
             raise ValueError(f"Vision parse failed: {vision_err}")
 
-    # No Gemini key — Anthropic-only path via the agent loop.
-    try:
-        return _prefer(_finish(_agent_parse(file_bytes)))
-    except _Deadline:
-        if rule_result is not None:
-            return rule_result
-        raise ValueError("The AI parse ran out of time — try uploading the "
-                         "results file directly, or one page at a time.")
-    except Exception as agent_err:
-        # If the agent fails but the rule parser produced something usable,
-        # return that rather than erroring the whole upload.
-        if rule_result is not None:
-            return rule_result
-        raise ValueError(f"Agent parse failed: {agent_err}")
+    # No Gemini key — no AI escalation at all (Gemini-only). Return the rule
+    # parse when there is one; otherwise say plainly what is missing.
+    if rule_result is not None:
+        return rule_result
+    raise ValueError("This document needs the AI parser, but no Gemini key is "
+                     "configured (set Gemini_API_Key_Universal).")
 
 
 # ── Vercel handler ─────────────────────────────────────────────────────────
