@@ -14,6 +14,9 @@
      computeAthleteRatings(events) -> Map(canon -> { r, rd, lastDk, history[] })
      getAthleteRatings(events)     -> cached computeAthleteRatings (WeakMap by events identity)
      computeRivalCohort(name, events, N=15) -> { focal, rivals[], clsCount, natCount, focalEvData, ... }
+     projectRating(history, months=12) -> { points:[{m,r,rd,cone,lo,hi}], slope, rate, base } | null
+     ratingAsOf(athlete, dk)       -> { r, rd, provisional } (RD idle-grown to dk; null athlete = fresh seed)
+     simulateFleet(entrants, opts) -> { iters, rows:[{...entrant, win, podium, top10, expFinish, p16, p50, p84, dist[]}] } | null
 */
 export function makeRatingEngine({ scoreEvent, canonName, dateKey, monthsBetween }) {
   /* === Rating engine (Glicko-lite Elo) ========================================
@@ -25,12 +28,12 @@ export function makeRatingEngine({ scoreEvent, canonName, dateKey, monthsBetween
      of pre-event ratings (never sequentially). RD grows with idle time and on a
      class switch, shrinks a touch each rated event. PDF is ground truth — ranks
      are READ from scoreEvent rows (tie-aware), never re-ranked here. */
-  const RATING_START=1200, RD_START=350, RD_MIN=60, RD_MAX=350; // new-athlete seed + RD bounds
+  const RATING_START=1200, RD_START=240, RD_MIN=45, RD_MAX=300; // new-athlete seed + RD bounds (tighter: less doubt to start, and can settle lower)
   const RATING_SCALE=400;        // Elo logistic scale (spread at which a 10x expected-score edge sits)
   const K_BASE=32;               // per-event K at RD_MIN; scales UP with RD (more uncertain ⇒ bigger swing)
-  const RD_DECAY_C=18;           // RD growth per idle month: sqrt(RD^2 + C^2 * monthsIdle), capped at RD_MAX
-  const RD_EVENT_SHRINK=0.97;    // RD multiplier per rated event (confidence grows), floored at RD_MIN
-  const CLS_SWITCH_RD_BUMP=60;   // added to RD (capped) the first time an athlete rates in a new class
+  const RD_DECAY_C=12;           // RD growth per idle month: sqrt(RD^2 + C^2 * monthsIdle), capped at RD_MAX (idle re-widens more slowly)
+  const RD_EVENT_SHRINK=0.90;    // RD multiplier per rated event (confidence grows ~3x faster than the old 0.97), floored at RD_MIN
+  const CLS_SWITCH_RD_BUMP=35;   // added to RD (capped) the first time an athlete rates in a new class (smaller re-widening)
   // Lazy per-events-array rating cache. Keyed by the events array reference so a
   // given dataset is computed at most once; a new array (new import/filter) recomputes.
   let RATINGS_CACHE=new WeakMap();
@@ -44,7 +47,9 @@ export function makeRatingEngine({ scoreEvent, canonName, dateKey, monthsBetween
       .sort((a,b)=>a.dk.localeCompare(b.dk)||String(a.ev.id||"").localeCompare(String(b.ev.id||"")));
     for(const {ev,dk} of list){
       let rows;
-      try{ rows=scoreEvent(ev).rows; }catch{ continue; }   // unscoreable ⇒ skip for rating
+      // unscoreable ⇒ skip for rating; races===0 (an entry list with nothing sailed
+      // yet — an upcoming event) would read as a fleet-wide tie, so skip those too.
+      try{ const sc=scoreEvent(ev); if(sc.races===0) continue; rows=sc.rows; }catch{ continue; }
       const fleet=rows.length;
       // participant list: canon -> best (lowest) rank; same-boat pairs tracked as mates
       const rankOf=new Map();               // canon -> best rank this event
@@ -187,6 +192,8 @@ export function makeRatingEngine({ scoreEvent, canonName, dateKey, monthsBetween
       let fleetN=0,focalRank=null,partnerKey="",partnerName="";
       try{
         const sc=scoreEvent(ev);
+        if(sc.races===0)throw null;   // upcoming (nothing sailed): co-appearance only — the
+                                      // all-tied placeholder ranks must never read as closeness
         fleetN=sc.rows.length;
         let focalRow=null;
         sc.rows.forEach(r=>{
@@ -258,5 +265,102 @@ export function makeRatingEngine({ scoreEvent, canonName, dateKey, monthsBetween
       .slice(0,N);                          // rank by rivalry, tie-break raw shared, then name
     return{focal,disp,focalEvents,totals,rivals,clsCount,natCount,focalEvData};
   }
-  return { computeAthleteRatings, getAthleteRatings, computeRivalCohort };
+  /* === Forecast layer ==========================================================
+     Prediction on top of the engine: projectRating extends one athlete's rating
+     a year into the future (damped recent trend inside a widening uncertainty
+     cone); simulateFleet Monte-Carlos an entry list into win/podium/top-10
+     probabilities and finish ranges. Deterministic (seeded PRNG) so a forecast
+     is stable across renders and testable. Pure functions of engine output. */
+  const TREND_WINDOW_M=12;   // months of history the trend slope is fitted on
+  const TREND_MIN_PTS=3;     // fewer rated events than this in-window ⇒ flat projection
+  const TREND_TAU_M=6;       // damping: slope decays exp(-t/TAU) into the future (momentum fades)
+  const TREND_SLOPE_CAP=40;  // |slope| cap in pts/month — two hot regattas are not destiny
+  const RATE_WINDOW_M=24;    // months used to estimate the athlete's events-per-month rate
+  const RW_SIGMA=28;         // random-walk rating drift (pts) per expected future event: unknown
+                             // future results widen the cone even for a busy athlete
+  const PERF_SIGMA=202;      // per-athlete race-day noise. Chosen so the pairwise Gaussian CDF
+                             // matches the Elo logistic over the practical 100–400 gap range and
+                             // simulated head-to-heads reproduce the expectation table
+                             // (gap 100 ⇒ ~64%, 200 ⇒ ~76%, 400 ⇒ ~91%) at tight RD.
+  // Project one athlete's rating `months` ahead of their last rated event.
+  // Trend: OLS slope over the trailing TREND_WINDOW_M months, damped so it
+  // flattens out (r(t) = r + slope·TAU·(1−e^(−t/TAU))). Cone: RD stepped month
+  // by month assuming the athlete keeps racing at their historical rate (idle
+  // growth + expected-event shrink), plus RW_SIGMA drift per expected event.
+  function projectRating(history,months=12){
+    const h=(history||[]).filter(p=>p&&p.dk);
+    if(!h.length)return null;
+    const last=h[h.length-1];
+    const recent=h.filter(p=>Math.abs(monthsBetween(p.dk,last.dk))<=TREND_WINDOW_M);
+    let slope=0;
+    if(recent.length>=TREND_MIN_PTS){
+      const xs=recent.map(p=>-Math.abs(monthsBetween(p.dk,last.dk)));  // months before last (≤0)
+      const ys=recent.map(p=>p.r);
+      const mx=xs.reduce((a,b)=>a+b,0)/xs.length, my=ys.reduce((a,b)=>a+b,0)/ys.length;
+      let num=0,den=0;
+      xs.forEach((x,i)=>{num+=(x-mx)*(ys[i]-my);den+=(x-mx)*(x-mx);});
+      if(den>0)slope=Math.max(-TREND_SLOPE_CAP,Math.min(TREND_SLOPE_CAP,num/den));
+    }
+    const rate=h.filter(p=>Math.abs(monthsBetween(p.dk,last.dk))<=RATE_WINDOW_M).length/RATE_WINDOW_M;
+    const points=[];
+    let rd=last.rd;
+    for(let m=1;m<=months;m++){
+      rd=Math.min(RD_MAX,Math.sqrt(rd*rd+RD_DECAY_C*RD_DECAY_C));       // one month of idle growth…
+      rd=Math.max(RD_MIN,rd*Math.pow(RD_EVENT_SHRINK,rate));            // …offset by expected racing
+      const r=last.r+slope*TREND_TAU_M*(1-Math.exp(-m/TREND_TAU_M));
+      const cone=Math.sqrt(rd*rd+RW_SIGMA*RW_SIGMA*rate*m);
+      points.push({m,r,rd,cone,lo:r-cone,hi:r+cone});
+    }
+    return{points,slope,rate,base:{r:last.r,rd:last.rd,dk:last.dk}};
+  }
+  // Rating "as of" a date: the stored RD is as-of the athlete's last rated
+  // event, so idle-grow it to dk before predicting. Unknown athlete ⇒ fresh
+  // seed, flagged provisional (shown, never hidden — honest about the guess).
+  function ratingAsOf(a,dk){
+    if(!a)return{r:RATING_START,rd:RD_START,provisional:true};
+    let rd=a.rd;
+    if(a.lastDk&&dk){
+      const idle=Math.abs(monthsBetween(a.lastDk,dk));
+      if(idle>0)rd=Math.min(RD_MAX,Math.sqrt(rd*rd+RD_DECAY_C*RD_DECAY_C*idle));
+    }
+    return{r:a.r,rd,provisional:false};
+  }
+  // mulberry32 — tiny seeded PRNG so forecasts are deterministic per event.
+  function makeRng(seed){let a=seed>>>0;return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+  // Monte-Carlo a fleet: each iteration samples every entrant's true skill from
+  // N(r, rd) — uncertainty bands feed straight in, so wide-band athletes spread
+  // over many finishes — plus N(0, PERF_SIGMA) race-day noise, then ranks the
+  // fleet. Tallies win/podium/top-10 rates, mean finish, the 68% finish interval
+  // (p16–p84), and the full finish distribution per entrant.
+  // entrants: [{key, name, r, rd, ...}] (extra fields pass through to rows).
+  function simulateFleet(entrants,{iters=0,seed=20260714}={}){
+    const N=(entrants||[]).length;
+    if(N<2)return null;
+    const n=iters||Math.max(2000,Math.min(10000,Math.floor(2e6/N)));  // adaptive: big fleets sim fewer iters
+    const rng=makeRng(seed);
+    const gauss=()=>{let u=0,v=0;while(u===0)u=rng();while(v===0)v=rng();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);};
+    const counts=entrants.map(()=>new Float64Array(N));   // entrant -> finish-position histogram
+    const perf=new Float64Array(N), order=new Array(N);
+    for(let it=0;it<n;it++){
+      for(let i=0;i<N;i++){const e=entrants[i];perf[i]=e.r+e.rd*gauss()+PERF_SIGMA*gauss();order[i]=i;}
+      order.sort((a,b)=>perf[b]-perf[a]);
+      for(let pos=0;pos<N;pos++)counts[order[pos]][pos]++;
+    }
+    const rows=entrants.map((e,i)=>{
+      const c=counts[i];
+      let pod=0,top10=0,cum=0,mean=0,p16=0,p50=0,p84=0;
+      for(let pos=0;pos<N;pos++){
+        const f=c[pos];mean+=f*(pos+1);
+        if(pos<3)pod+=f;
+        if(pos<10)top10+=f;
+        cum+=f;
+        if(!p16&&cum>=n*0.16)p16=pos+1;
+        if(!p50&&cum>=n*0.50)p50=pos+1;
+        if(!p84&&cum>=n*0.84)p84=pos+1;
+      }
+      return{...e,win:c[0]/n,podium:pod/n,top10:top10/n,expFinish:mean/n,p16,p50,p84,dist:Array.from(c,f=>f/n)};
+    }).sort((a,b)=>b.win-a.win||a.expFinish-b.expFinish);
+    return{iters:n,rows};
+  }
+  return { computeAthleteRatings, getAthleteRatings, computeRivalCohort, projectRating, ratingAsOf, simulateFleet };
 }

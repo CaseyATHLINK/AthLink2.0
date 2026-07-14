@@ -6,7 +6,7 @@
    from App.jsx. */
 
 import React from "react";
-import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY, forceRadial } from "d3-force";
+import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY } from "d3-force";
 import { makeRatingEngine } from "@athlink/rating";
 import { formatDate, dateKey, monthsBetween } from "../util/date.js";
 import { canonName, ordinalOf } from "../util/name.js";
@@ -19,7 +19,8 @@ import { scoreEvent } from "../data/scoring.js";
    in @athlink/rating — the first universal feature package. Sailing injects its own
    ranking + identity helpers (scoreEvent/canonName/dateKey/monthsBetween are hoisted
    functions defined above); another sport binds its own. Logic is unchanged. */
-const { getAthleteRatings, computeRivalCohort } = makeRatingEngine({ scoreEvent, canonName, dateKey, monthsBetween });
+export const ratingEngine = makeRatingEngine({ scoreEvent, canonName, dateKey, monthsBetween });   // shared instance (one ratings cache) — forecast.jsx reuses it
+const { getAthleteRatings, computeRivalCohort, projectRating } = ratingEngine;
 
 /* === AthleteWeb: force-directed "web" of rivals ==============================
    Each node is an athlete the focal athlete has raced against. Rivals are
@@ -44,10 +45,11 @@ const { getAthleteRatings, computeRivalCohort } = makeRatingEngine({ scoreEvent,
    pulls retired athletes out of the current orbit; a rival with no dated event
    gets a neutral 0.5. "now" is the dataset's own max dateKey, not wall-clock,
    so historical datasets decay relative to their own latest event.
-   Distance from the focal athlete truthfully encodes this score: a radial
-   force pins each rival at a target radius derived from its rank vs. the top
-   rival (closer = stronger rival), monotonic and no longer fought by the
-   focal↔rival links.
+   Distance from the focal athlete truthfully encodes this score via a SPRING:
+   each rival's focal link has a rest-length derived from its rank vs. the top
+   rival (stronger rival ⇒ bigger node ⇒ shorter spring ⇒ closer), so the layout
+   settles with bigger nodes near the centre but stays fluid — springs stretch,
+   sway and can be dragged, rather than being pinned to a rigid orbit shell.
    Raw integer shared count stays on the node for human-readable display AND for
    the MIN_SHARED eligibility test (both on RAW counts, not weighted). Edges
    connect any two shown athletes who appeared in the same event (weight = times
@@ -229,25 +231,21 @@ export function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpe
     };
     st.draw=draw;
     const sim=forceSimulation(nodes)
-      .velocityDecay(enlarged?.62:.58)        // higher damping = relaxed, fluid motion (less bounce)
-      // link distance is driven by correlation: more-correlated nodes sit
-      // closer to the focal, less-correlated ones further out. The radial force
-      // (below) now owns the focal↔rival distance truthfully, so focal links
-      // carry ~0 strength here; rival-rival links stay weak so they don't clump.
+      .velocityDecay(.5)                       // lighter damping = fluid, springy motion (nodes give and settle)
+      // Focal↔rival distance is a SPRING, not a rigid orbit shell: each rival's
+      // link rest-length encodes its rivalry score (bigger/stronger rival ⇒
+      // bigger node ⇒ shorter spring ⇒ closer to the focal), but the spring can
+      // stretch, sway and be dragged, so the web stays fluid and flexible.
+      // Rival↔rival links stay weak so the ring spaces out without clumping.
       .force("link",forceLink(links).id(d=>d.id)
         .distance(l=>{const a=l.source,b=l.target,other=a.focal?b:(b.focal?a:null);
           if(other){const ratio=(other.corr||0)/(st.maxCorr||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
           return enlarged?270:91;})
-        .strength(l=>(l.source.focal||l.target.focal)?0:.04))
+        .strength(l=>(l.source.focal||l.target.focal)?.3:.04))
       .force("charge",forceManyBody().strength(enlarged?-270:-60).distanceMax(enlarged?1100:390))
       .force("collide",forceCollide(d=>rad(d)+(enlarged?10:7)).strength(.6))
       .force("x",forceX(()=>st.w/2).strength(enlarged?.04:.05))
       .force("y",forceY(()=>st.h/2).strength(enlarged?.04:.05))
-      // radial: distance from the focal truthfully encodes the rival score —
-      // closer = stronger rival. Focal node is pinned at radius 0 (its fx/fy
-      // already center it); this force owns the focal↔rival distance now that
-      // the focal link strength above is 0.
-      .force("radial",forceRadial(d=>d.focal?0:d.targetR,st.w/2,st.h/2).strength(d=>d.focal?1:0.85))
       // soft walls — any node dragged/pushed outside the frame eases back in
       .force("bounds",a=>{const m=enlarged?22:12;nodes.forEach(n=>{if(n.fx!=null||n.x==null)return;
         if(n.x<m)n.vx+=(m-n.x)*a*0.6;else if(n.x>st.w-m)n.vx+=(st.w-m-n.x)*a*0.6;
@@ -290,7 +288,7 @@ export function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpe
     cv.addEventListener("dblclick",onDbl);
     cv.addEventListener("pointerleave",onLeave);
     if(enlarged)cv.addEventListener("wheel",onWheel,{passive:false});
-    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(enlarged?.05:.055)).force("y",forceY(()=>st.h/2).strength(enlarged?.05:.055)).force("radial",forceRadial(d=>d.focal?0:d.targetR,st.w/2,st.h/2).strength(d=>d.focal?1:0.85));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
+    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(enlarged?.05:.055)).force("y",forceY(()=>st.h/2).strength(enlarged?.05:.055));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
     window.addEventListener("resize",onResize);
     return()=>{sim.stop();cv.removeEventListener("pointerdown",onDown);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerup",onUp);cv.removeEventListener("dblclick",onDbl);cv.removeEventListener("pointerleave",onLeave);cv.removeEventListener("wheel",onWheel);window.removeEventListener("resize",onResize);};
   },[graph,height,enlarged]);
@@ -434,7 +432,7 @@ export function YearNuggets({years,selYears,classByYear,onPick,onAll}){
 }
 
 /* ── InfoHint — small "i" badge that reveals an explanatory popover on hover ── */
-function InfoHint({text}){
+export function InfoHint({text}){
   const [open,setOpen]=React.useState(false);
   return(
     <span style={{position:"relative",display:"inline-flex",alignItems:"center",verticalAlign:"middle"}}
@@ -462,7 +460,7 @@ function InfoHint({text}){
    enlarged view a chip row overlays a rival's rating curve (dashed, no band)
    for direct comparison; clicking a dot opens a per-competition sidebar with
    the athlete's result and the rival cohort who sailed that same competition. */
-const PROGRESS_RIVAL_HINT="Think of this as a skill score, like a chess rating. Every athlete starts at 1200. Beat athletes rated above you and your score climbs; finish behind athletes rated below you and it drops — winning against stronger fleets counts for more. The shaded area shows how confident the score is: it's wide when someone competes rarely, and tightens the more they compete. Placings come straight from the official results and are never altered.";
+const PROGRESS_RIVAL_HINT="Think of this as a skill score, like a chess rating. Every athlete starts at 1200. Beat athletes rated above you and your score climbs; finish behind athletes rated below you and it drops — winning against stronger fleets counts for more. The shaded area shows how confident the score is: it's wide when someone competes rarely, and tightens the more they compete. Placings come straight from the official results and are never altered. The dashed line past the last competition is a 1-year forecast: it continues the athlete's recent trajectory (fading toward flat, since momentum never lasts) inside a cone that widens the further out we guess.";
 // Monotone cubic (Fritsch–Carlson) path through EXACTLY the given points — curves
 // the segments without ever overshooting a neighbouring point (the honesty
 // constraint). points=[[x,y],…] → "M…C…" string. <3 points → straight segments.
@@ -503,6 +501,17 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
   // Top-5 rival chips + top-15 cohort for the sidebar — memoised once (NOT per dot).
   const cohort5=React.useMemo(()=>enlarged?computeRivalCohort(name,events,5):null,[name,events,enlarged]);
   const cohort15=React.useMemo(()=>enlarged?computeRivalCohort(name,events,15):null,[name,events,enlarged]);
+  const [showFc,setShowFc]=React.useState(true);   // 1-yr forecast overlay toggle (enlarged only)
+  // 12-month projection — damped recent trend inside a widening uncertainty cone
+  // (projectRating). Hidden when the year window excludes the athlete's latest
+  // rated year: projecting forward off a filtered-away past would mislead.
+  const proj=React.useMemo(()=>{
+    if(!enlarged)return null;
+    const hist=getAthleteRatings(events).get(canonName(name))?.history||[];
+    if(!hist.length)return null;
+    if(sel&&!sel.has(+hist[hist.length-1].dk.slice(0,4)))return null;
+    return projectRating(hist,12);
+  },[name,events,sel,enlarged]);
   // Active overlay rival's rating history, clipped to the same selected years.
   const overlayPts=React.useMemo(()=>{
     if(!rivalKey)return null;
@@ -537,12 +546,18 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
     const yearsSel=sel?[...sel].sort((a,b)=>a-b):null;
     const y0=yearsSel?yearsSel[0]:+pts[0].dk.slice(0,4);
     const y1=yearsSel?yearsSel[yearsSel.length-1]:+pts[pts.length-1].dk.slice(0,4);
-    const t0=Date.UTC(y0,0,1), t1=Date.UTC(y1,11,31), span=Math.max(1,t1-t0);
     const tsOf=p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8));
+    // 1-yr forecast (enlarged + toggled on): the x-window stretches 12 months past
+    // the last rated event so the cone has room; addM is a UTC-safe month adder.
+    const fc=showFc&&proj?proj:null;
+    const addM=(dk,m)=>{const y=+dk.slice(0,4),mo=+dk.slice(4,6)-1+m;return Date.UTC(y+Math.floor(mo/12),((mo%12)+12)%12,+dk.slice(6,8));};
+    const fcEndTs=fc?addM(fc.base.dk,12):0;
+    const t0=Date.UTC(y0,0,1), t1=Math.max(Date.UTC(y1,11,31),fcEndTs), span=Math.max(1,t1-t0);
     const oShow=overlayPts?overlayPts.filter(p=>{const t=tsOf(p);return t>=t0&&t<=t1;}):null;
     let lo=Infinity, hi=-Infinity;
     pts.forEach(p=>{lo=Math.min(lo,p.r-p.rd);hi=Math.max(hi,p.r+p.rd);});
     if(oShow)oShow.forEach(p=>{lo=Math.min(lo,p.r);hi=Math.max(hi,p.r);});
+    if(fc)fc.points.forEach(p=>{lo=Math.min(lo,p.lo);hi=Math.max(hi,p.hi);});
     const padAmt=Math.max(10,(hi-lo)*0.05);
     lo=Math.floor((lo-padAmt)/50)*50; hi=Math.ceil((hi+padAmt)/50)*50;
     if(hi<=lo)hi=lo+50;
@@ -556,7 +571,8 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
     const ticks=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+0.5; v+=step)ticks.push(v);
     const xForTs=ts=>M.l+plotW*(ts-t0)/span;
     const xOf=p=>Math.min(Math.max(xForTs(tsOf(p)),M.l),w-M.r);
-    const nY=y1-y0+1, every=nY>12?3:nY>7?2:1;
+    const yEnd=fc?Math.max(y1,new Date(fcEndTs).getUTCFullYear()):y1;   // last gridline year incl. forecast
+    const nY=yEnd-y0+1, every=nY>12?3:nY>7?2:1;
     // Rating line + uncertainty band (band = actual points only, never interpolated in gaps).
     // Monotone-cubic curves pass EXACTLY through every point — no value smoothing.
     const lineXY=pts.map(p=>[xOf(p),yOf(p.r)]);
@@ -567,6 +583,22 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
     const bandLoPath=monoPath(pts.map(p=>[xOf(p),yOf(p.r-p.rd)]).reverse());
     const bandPath=`${bandUpPath}L${bandLoPath.slice(1)}Z`;
     const overlayPath=oShow&&oShow.length?monoPath(oShow.map(p=>[xOf(p),yOf(p.r)])):null;
+    // Forecast geometry: dashed damped-trend line inside its widening cone, both
+    // ANCHORED at the last rated event (the cone opens from today's band edge, so
+    // history and forecast join without a jump). Same monoPath, same honesty rules.
+    let fcLinePath=null,fcConePath=null,fcEnd=null,fcAnchorX=0;
+    if(fc){
+      const aP=pts[pts.length-1];
+      const fnodes=[{ts:tsOf(aP),r:aP.r,lo:aP.r-aP.rd,hi:aP.r+aP.rd},
+        ...fc.points.map(p=>({ts:addM(fc.base.dk,p.m),r:p.r,lo:p.lo,hi:p.hi}))];
+      const xF=n=>Math.min(Math.max(xForTs(n.ts),M.l),w-M.r);
+      fcAnchorX=xF(fnodes[0]);
+      fcLinePath=monoPath(fnodes.map(n=>[xF(n),yOf(n.r)]));
+      const fcUp=monoPath(fnodes.map(n=>[xF(n),yOf(n.hi)]));
+      const fcLo=monoPath(fnodes.map(n=>[xF(n),yOf(n.lo)]).reverse());
+      fcConePath=`${fcUp}L${fcLo.slice(1)}Z`;
+      fcEnd=fnodes[fnodes.length-1];
+    }
     body=(
       <svg width="100%" height={CH} viewBox={`0 0 ${w} ${CH}`} style={{display:"block"}}>
         <defs>
@@ -595,7 +627,7 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         {Array.from({length:nY},(_,i)=>y0+i).map((Y,idx)=>{
           const gx=xForTs(Date.UTC(Y,0,1));
           const cx=Math.min(Math.max(xForTs(Date.UTC(Y,5,15)),M.l),w-M.r);
-          const show=(idx%every===0)||Y===y1;
+          const show=(idx%every===0)||Y===yEnd;
           return(<g key={Y}>
             {Y>y0&&<line x1={gx} y1={M.t} x2={gx} y2={M.t+plotH} stroke="rgba(220,236,248,.07)" strokeWidth={S}/>}
             {show&&<text x={cx} y={CH-(enlarged?8:4)} textAnchor="middle" fontSize={AX} fill="#7fa0c0">{Y}</text>}
@@ -603,6 +635,15 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         })}
         {/* uncertainty band, under everything */}
         <path d={bandPath} fill="rgba(52,169,230,.13)" stroke="none"/>
+        {/* 1-yr forecast: widening cone + dashed damped-trend line, anchored at the
+            last rated event. Lighter than history so predicted never reads as fact. */}
+        {fcConePath&&<path d={fcConePath} fill="rgba(52,169,230,.07)" stroke="rgba(111,196,239,.30)" strokeWidth={S} strokeDasharray={`${3*S} ${3*S}`}/>}
+        {fcLinePath&&<path d={fcLinePath} fill="none" stroke="#6fc4ef" strokeWidth={1.8*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${6*S} ${5*S}`} opacity=".9"/>}
+        {fcEnd&&(<g>
+          <line x1={fcAnchorX} y1={M.t} x2={fcAnchorX} y2={M.t+plotH} stroke="rgba(220,236,248,.14)" strokeWidth={S} strokeDasharray="2 4"/>
+          <text x={fcAnchorX+4} y={M.t+9} fontSize={8.5} fill="#7fa0c0">forecast →</text>
+          <text x={Math.min(Math.max(xForTs(fcEnd.ts),M.l),w-M.r)-4} y={yOf(fcEnd.r)-8} textAnchor="end" fontSize={9.5} fontWeight="700" fill="#8fd0f5">in 1 yr ≈ {Math.round(fcEnd.r)} ±{Math.round((fcEnd.hi-fcEnd.lo)/2)}</text>
+        </g>)}
         {/* rival overlay: dashed muted line, no band, no dots, no glow */}
         {overlayPath&&<path d={overlayPath} fill="none" stroke="#8fa8c4" strokeWidth={1.6*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${5*S} ${4*S}`}/>}
         {/* the rating line: always shown, with a slow soft glow gliding left → right */}
@@ -621,6 +662,10 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
       {enlarged&&<div style={{flex:"none",display:"flex",justifyContent:"center",alignItems:"center",gap:6,color:"#9fbdd9",fontSize:13,lineHeight:1.35,margin:"3px 12px 6px"}}>
         <span>How {name}'s skill rating has developed over time.</span>
         <InfoHint text={PROGRESS_RIVAL_HINT}/>
+        {proj&&<button onClick={()=>setShowFc(v=>!v)} title="Toggle the 1-year rating projection"
+          style={{border:"1px solid "+(showFc?"var(--accent)":"rgba(120,160,210,.32)"),background:showFc?"rgba(13,142,207,.22)":"rgba(120,160,210,.1)",
+            color:showFc?"#cfe9fa":"#9fbdd9",borderRadius:980,padding:"2px 10px",fontSize:11,fontWeight:700,cursor:"pointer",lineHeight:1.3,marginLeft:4}}>
+          1-yr forecast</button>}
       </div>}
       {enlarged&&cohort5&&cohort5.rivals.length>0&&(
         <div style={{flex:"none",display:"flex",alignItems:"center",gap:8,justifyContent:"center",flexWrap:"wrap",margin:"0 12px 6px"}}>
@@ -636,6 +681,7 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Rating</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:9,height:9,borderRadius:"50%",background:"#fff",boxShadow:"0 0 0 1.5px var(--accent)"}}/>Competition</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:9,borderRadius:3,background:"rgba(52,169,230,.25)"}}/>Uncertainty</span>
+        {proj&&showFc&&<span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:0,borderTop:"2px dashed #6fc4ef"}}/>1-yr forecast</span>}
       </div>}
       {tip&&!enlarged&&(
         <div style={{position:"absolute",left:tip.x,top:Math.max(titleBlock,tip.y),transform:"translate(-50%,-100%)",pointerEvents:"none",zIndex:5,

@@ -24,6 +24,7 @@ import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect, Cl
 import { CalendarBody } from "./views/calendar.jsx";
 import { GLOBE_NAMES, SailingGlobe, FootprintLegend } from "./views/globe.jsx";
 import { AthleteWeb, YearNuggets, ProgressChart } from "./views/charts.jsx";
+import { UpcomingEventForecast } from "./views/forecast.jsx";
 import { SPORT_MODELS, SpmDuo, HomeShowcaseRotator } from "./views/models.jsx";
 import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
 import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
@@ -4922,6 +4923,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     </div>);
     if(!ev) return notFound("This competition couldn't be found — it may have just been updated or removed.");
     let s=null;try{s=scoreEvent(ev);}catch(err){console.error("event page: scoreEvent failed",err);}
+    // Upcoming: an entry list with nothing sailed yet ⇒ fleet forecast, not results.
+    if((ev.entries?.length||0)>1&&(!s||!s.rows?.length||!s.races))
+      return <UpcomingEventForecast ev={ev} events={events} onBack={navBack} onPick={n=>go({name:"profile",id:n,fromEvent:ev.id})}/>;
     if(!s) return notFound("Couldn't read this competition's scores.");
     const isDraft=ev.status==="Draft";
     return(<ErrorBoundary resetKey={ev.id} fallback={
