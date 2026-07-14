@@ -23,11 +23,19 @@ export const sports = [
     ),
   },
   {
-    id: "rowing",
-    name: "Rowing",
+    id: "tennis",
+    name: "Tennis",
     tagline: "Competitions & athlete profiles",
     Portal: React.lazy(() =>
-      import("@athlink/sport-rowing").then((m) => ({ default: m.default.Portal }))
+      import("@athlink/sport-tennis").then((m) => ({ default: m.default.Portal }))
+    ),
+  },
+  {
+    id: "triathlon",
+    name: "Triathlon",
+    tagline: "Swim, bike, run — competitions & athlete profiles",
+    Portal: React.lazy(() =>
+      import("@athlink/sport-triathlon").then((m) => ({ default: m.default.Portal }))
     ),
   },
   // __SPORTS_REGISTRY__ (generator inserts new sports above this line)

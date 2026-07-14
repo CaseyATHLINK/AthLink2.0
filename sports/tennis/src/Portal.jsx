@@ -1,4 +1,4 @@
-/* Rowing portal — starter homepage + results table.
+/* Tennis portal — starter homepage + results table.
    Everything here uses shared components so it matches every other sport.
    Replace the placeholder data with real data from @athlink/core (sbGet ...). */
 import React from "react";
@@ -20,7 +20,7 @@ export default function Portal() {
   const [view, setView] = React.useState("results");
   return (
     <div className="wrap" style={{ paddingTop: 24, paddingBottom: 60 }}>
-      <PageHeader title="Rowing" sub="Competitions & athlete profiles" />
+      <PageHeader title="Tennis" sub="Competitions & athlete profiles" />
 
       <div style={{ marginBottom: 16 }}>
         <Seg
