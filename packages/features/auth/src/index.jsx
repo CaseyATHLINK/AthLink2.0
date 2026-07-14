@@ -113,7 +113,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
 
   const fullNameStr=`${firstName.trim()} ${lastName.trim()}`.trim();
   const fallbackName=fullNameStr||email.split("@")[0];
-  const isHost=role!=="athlete";
+  // Scouts follow the athlete-style (3-step) path but claim no athlete profile —
+  // they are NOT hosts, so they never advance to the step-4 "find your club" flow.
+  const isHost=role!=="athlete"&&role!=="scout";
 
   // Which existing hosts to show in the "Find my ___" search, by role.
   const hostPool=role==="club"?clubs:role==="federation"?federations:associations;
@@ -257,6 +259,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
         }
         onAuthed({token:tok,user,profile:profilePayload});return;
       }
+
+      // ── Scout: no athlete claim, no host — straight in with a display name ──
+      if(role==="scout"){ onAuthed({token:tok,user,profile:profilePayload});return; }
 
       // ── Invite path: link token or code → immediate verified access ──
       const activeInvRow=resolvedInvite||localInviteCtx?.inv;
@@ -483,6 +488,7 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
           {mode==="signup"&&step===2&&(<>
             <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
               <RoleCard id="athlete" label="Athlete" icon="🏆" desc="Build your profile from your results."/>
+              <RoleCard id="scout" label="Scout" icon="🔭" desc="Track athletes, build watchlists, get scouting reports."/>
               <RoleCard id="association" label="Association" icon="⚓" desc="Manage results for your class association."/>
               <RoleCard id="club" label="Club" icon="🌊" desc="Host competitions for your yacht club."/>
               <RoleCard id="federation" label="Federation" icon="🏳️" desc="Govern your national sailing federation."/>
@@ -545,8 +551,8 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(isInviteMode?1:2)}>
                 <ArrowLeft size={15}/>Back
               </button>
-              {/* Athlete finishes here; host advances to step 4; invite mode finishes here */}
-              {(role==="athlete"||isInviteMode)
+              {/* Athlete & scout finish here; host advances to step 4; invite mode finishes here */}
+              {(role==="athlete"||role==="scout"||isInviteMode)
                 ? <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
                     <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">
                     {busy?<Loader2 size={15} className="spin"/>:null}

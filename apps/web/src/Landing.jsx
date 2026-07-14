@@ -725,7 +725,7 @@ export default function Landing({ sports = [] }) {
           <div className="tabs">
             <button className={tab === "hosts" ? "on" : ""} onClick={() => setTab("hosts")}>Hosts</button>
             <button className={tab === "athletes" ? "on" : ""} onClick={() => setTab("athletes")}>Athletes</button>
-            <button className={tab === "sponsors" ? "on" : ""} onClick={() => setTab("sponsors")}>Sponsors</button>
+            <button className={tab === "sponsors" ? "on" : ""} onClick={() => setTab("sponsors")}>Scouts</button>
           </div>
         </div>
         <div className="wrap panel-fade" key={tab}>
@@ -737,7 +737,7 @@ export default function Landing({ sports = [] }) {
       <section className="mission" id="mission">
         <div className="wrap">
           <div className="seclabel">{ed("mission.label", "Our mission")}</div>
-          <p className="mtext">{ed("mission.pre", "At AthLink, our mission is to become the")} {ed("mission.em", "ultimate data centre", "em")} {ed("mission.post", "for global sport: verifying every result, empowering every athlete, and giving sponsors the trusted foundation they need to back the next generation of champions.")}</p>
+          <p className="mtext">{ed("mission.pre", "At AthLink, our mission is to become the")} {ed("mission.em", "ultimate data centre", "em")} {ed("mission.post", "for global sport: verifying every result, empowering every athlete, and giving scouts and sponsors the trusted foundation they need to back the next generation of champions.")}</p>
         </div>
       </section>
 
@@ -745,7 +745,7 @@ export default function Landing({ sports = [] }) {
       <section style={{ paddingTop: 0 }}>
         <div className="wrap vision-wrap">
           <div className="seclabel center">{ed("vision.label", "Our vision")}</div>
-          <div className="vision-tag">{ed("vision.tag.g", "LinkedIn", "grad")} {ed("vision.tag.post", "for athletes and sponsors")}</div>
+          <div className="vision-tag">{ed("vision.tag.g", "LinkedIn", "grad")} {ed("vision.tag.post", "for athletes and scouts")}</div>
           <p className="mtext">{ed("vision.pre", "Revolutionizing sports sponsorship by")} {ed("vision.em", "connecting athletes with brands through AI-driven matchmaking", "em")}{ed("vision.post", ", empowering athletes to reach their potential and enabling companies to find authentic ambassadors.")}</p>
           <div className="stats">
             <div className="stat"><div className="n">{stats.hosts.toLocaleString()}</div><div className="l">{ed("stats.hosts", "Hosts & associations")}</div></div>
@@ -785,7 +785,7 @@ export default function Landing({ sports = [] }) {
           <div className="foot">
             <div>
               <div className="brand"><img className="foot-mark" src="/brand/icon-app.png" alt="" aria-hidden="true" />AthLink</div>
-              <p className="tag">{ed("foot.tag", "The ultimate data centre for sports results. LinkedIn for athletes and sponsors.")}</p>
+              <p className="tag">{ed("foot.tag", "The ultimate data centre for sports results. LinkedIn for athletes and scouts.")}</p>
             </div>
             <div className="foot-links">
               <div className="foot-col"><h5>Portals</h5><a onClick={goSailing}>Sailing</a><span className="dead">Golf — coming soon</span></div>
