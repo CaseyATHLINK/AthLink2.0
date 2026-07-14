@@ -29,7 +29,7 @@ export const DEFAULT_CLUBS=[
   {id:"rhkyc", type:"club", scope:"HK", name:"Royal Hong Kong Yacht Club"},
 ];
 export const DEFAULT_FEDERATIONS=[
-  {id:"hksf", type:"federation", scope:"HK", country:"HKG", name:"Hong Kong Sailing Federation"},
+  {id:"hksf", type:"federation", scope:"HK", country:"HKG", name:"Sailing Federation of Hong Kong, China"},
 ];
 // Mutable runtime registries (defaults + DB-added). Rebuilt by applyDbHosts.
 export let ASSOCIATIONS=[...DEFAULT_ASSOCIATIONS];
