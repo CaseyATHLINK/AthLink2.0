@@ -669,7 +669,8 @@ def detect_cols(header_rows):
         elif h in ('sailors','name','helmcrew','name(s)','helmandsailors','team'):
             # Sailwave-native "Team" holds the stacked helm/crew names.
             cols.setdefault('sailors', i)
-        elif h in ('sailno','sail','sailnum','sailnumber','no','boatno','number'):
+        elif h in ('sailno','sail','sailnum','sailnumber','no','boatno','number',
+                   'sn'):   # "Sn" — older Sailwave exports (2017-20 29er EuroCups/Worlds)
             cols.setdefault('sail', i)
         elif h in ('division','div','category','agegroup','agecategory','agecat',
                    'group','catgory'):
