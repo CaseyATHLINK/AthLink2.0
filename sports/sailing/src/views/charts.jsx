@@ -460,7 +460,7 @@ export function InfoHint({text}){
    enlarged view a chip row overlays a rival's rating curve (dashed, no band)
    for direct comparison; clicking a dot opens a per-competition sidebar with
    the athlete's result and the rival cohort who sailed that same competition. */
-const PROGRESS_RIVAL_HINT="Think of this as a skill score, like a chess rating. Every athlete starts at 1200. Beat athletes rated above you and your score climbs; finish behind athletes rated below you and it drops — winning against stronger fleets counts for more. The shaded area shows how confident the score is: it's wide when someone competes rarely, and tightens the more they compete. Placings come straight from the official results and are never altered. The grey line past the last competition is a 1-year forecast: it continues the athlete's recent trajectory (fading toward flat, since momentum never lasts) inside a lightly shaded cone that widens the further out we guess.";
+const PROGRESS_RIVAL_HINT="Think of this as a skill score, like a chess rating. Every athlete starts at 1200. Beat athletes rated above you and your score climbs; finish behind athletes rated below you and it drops — winning against stronger fleets counts for more. The shaded area shows how confident the score is: it's wide when someone competes rarely, and tightens the more they compete. Placings come straight from the official results and are never altered. The grey line past the last competition is a 1-year forecast: it continues the athlete's recent trajectory (fading toward flat, since momentum never lasts) inside a hatched grey cone that widens the further out we guess.";
 // Monotone cubic (Fritsch–Carlson) path through EXACTLY the given points — curves
 // the segments without ever overshooting a neighbouring point (the honesty
 // constraint). points=[[x,y],…] → "M…C…" string. <3 points → straight segments.
@@ -522,7 +522,7 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
   React.useEffect(()=>{if(deselectKey)setSelPt(null);},[deselectKey]);    // external deselect (popup header)
   React.useEffect(()=>{onSelectionChange&&onSelectionChange(selPt);},[selPt]); // report selection for the deselect button
   const S=w/260;                                             // scales the line / dot geometry with the chart width
-  const glowId="pgGlow"+Math.round(w), softId="pgSoft"+Math.round(w);
+  const glowId="pgGlow"+Math.round(w), softId="pgSoft"+Math.round(w), hatchId="pgHatch"+Math.round(w);
   const AX=9.5;                                              // axis label size — fixed, matching the Rating/Competition legend
   // Title removed (popup chrome already titles the view); its old 24px allowance
   // is folded into plot breathing room rather than being reclaimed as blank space.
@@ -609,6 +609,12 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
           <filter id={softId} x="-30%" y="-30%" width="160%" height="160%">
             <feGaussianBlur stdDeviation={3.4*S}/>
           </filter>
+          {/* grey diagonal hatch for the forecast cone — texture (not tint) is what
+              separates "projected" from the solid blue uncertainty band */}
+          <pattern id={hatchId} patternUnits="userSpaceOnUse" width={5*S} height={5*S} patternTransform="rotate(45)">
+            <rect width={5*S} height={5*S} fill="rgba(159,178,201,.05)"/>
+            <line x1={0} y1={0} x2={0} y2={5*S} stroke="rgba(159,178,201,.26)" strokeWidth={1*S}/>
+          </pattern>
         </defs>
         {/* faint horizontal gridlines at each y tick, under everything */}
         {ticks.map(v=>
@@ -635,9 +641,9 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         })}
         {/* uncertainty band, under everything */}
         <path d={bandPath} fill="rgba(52,169,230,.13)" stroke="none"/>
-        {/* 1-yr forecast: soft unstroked cone + solid grey trend line that mirrors
-            the rating line's look — grey (not blue) is what says "predicted". */}
-        {fcConePath&&<path d={fcConePath} fill="rgba(52,169,230,.07)" stroke="none"/>}
+        {/* 1-yr forecast: grey hatched cone + solid grey trend line that mirrors
+            the rating line's look — grey + hatching is what says "predicted". */}
+        {fcConePath&&<path d={fcConePath} fill={`url(#${hatchId})`} stroke="none"/>}
         {fcLinePath&&<path d={fcLinePath} fill="none" stroke="#9fb2c9" strokeWidth={1.05*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>}
         {fcEnd&&(<g>
           <line x1={fcAnchorX} y1={M.t} x2={fcAnchorX} y2={M.t+plotH} stroke="rgba(220,236,248,.14)" strokeWidth={S} strokeDasharray="1.5 3"/>
@@ -654,7 +660,7 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
             deliberately small; an invisible twin on top keeps the click/hover target
             finger-sized so shrinking the mark never shrinks the interaction. */}
         {pts.map((p,i)=>{const on=enlarged&&selPt===i;const cc=classColor(p.cls);return(<g key={i}>
-          <circle cx={xOf(p)} cy={yOf(p.r)} r={(on?2.3:1.2)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?1.2:0.8)*S} pointerEvents="none"/>
+          <circle cx={xOf(p)} cy={yOf(p.r)} r={(on?2.76:1.44)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?1.2:0.8)*S} pointerEvents="none"/>
           <circle cx={xOf(p)} cy={yOf(p.r)} r={5*S} fill="transparent" stroke="none" style={{cursor:"pointer"}}
             onClick={enlarged?()=>setSelPt(i===selPt?null:i):undefined}
             onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Rating ${Math.round(p.r)} (${fmtDelta(p.delta)})`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
