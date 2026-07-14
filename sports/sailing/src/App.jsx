@@ -16,14 +16,15 @@ import { DIV_COLOR, DIV_LABEL, parseDiv, divTokens, divToString, normGender, nor
 import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender, ATHLETE_USERNAMES, applyAthleteUsernames, usernameForName, nameForUsername, META, athleteNat, athleteBirthYear, buildHomeCountry } from "./data/athletes.js";
 import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, assocName, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed, MOCK_RESEARCH, mockResearchIdentity, mockResearchCompetitions, mockParse, mockProbe, eventCountryCode, governingFeds, eventAssocs, eventFingerprint, hostLocation } from "./data/hosts.js";
 import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeleteProfile, fetchProfileNames, fetchAllClaims, createClaim, decideClaim, profileNameKey, fetchAllAthleteProfiles, upsertAthleteProfile, uploadAthletePhoto, uploadAthleteMedia, fetchAllEventClaims, createEventClaim, decideEventClaim } from "./data/profiles.js";
-import { isCode, scoreEvent, scorePreview, aggregate, outstandingAchievementFor } from "./data/scoring.js";
+import { isCode, scoreEvent, scorePreview, aggregate, outstandingAchievementFor, isUpcomingEvent } from "./data/scoring.js";
 import { parseHtml } from "./data/parse-html.js";
-import { dbToApp, saveEventToDb, updateEventStatus, fetchDupDismissals, saveDupDismissals } from "./data/events.js";
+import { dbToApp, saveEventToDb, replaceEventResultsInDb, updateEventStatus, fetchDupDismissals, saveDupDismissals } from "./data/events.js";
 import { CountryTag, ConfirmModal, VerifyBadge, DivisionToggle, ClassPicker, HostClassPills, LiquidBackground, MagneticItem, ResultNuggets, WebIcon, ErrorBoundary, HostLogo } from "./views/atoms.jsx";
 import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect, ClassSelect, AddHostNugget } from "./views/forms.jsx";
 import { CalendarBody } from "./views/calendar.jsx";
 import { GLOBE_NAMES, SailingGlobe, FootprintLegend } from "./views/globe.jsx";
-import { AthleteWeb, YearNuggets, ProgressChart } from "./views/charts.jsx";
+import { AthleteWeb, YearNuggets, ProgressChart, ratingEngine } from "./views/charts.jsx";
+import { FleetForecast, UpcomingStrip } from "./views/forecast.jsx";
 import { SPORT_MODELS, SpmDuo, HomeShowcaseRotator } from "./views/models.jsx";
 import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
 import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
@@ -965,6 +966,7 @@ export default function AthLinkMVP(){
   const[pdfError,setPdfError]=useState("");
   const[liveUrl,setLiveUrl]=useState("");               // AI Entry: paste a results link
   const[importStep,setImportStep]=useState("upload");
+  const[importKind,setImportKind]=useState("past");   // mhead tab: "past" results vs "upcoming" entry lists
   // Drag-and-drop upload state. dragDepth is a counter: dragenter/dragleave fire on
   // child elements too, so a bare boolean flickers — count nested enters/leaves and
   // treat depth>0 as "dragging over the zone".
@@ -2099,7 +2101,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   const saveEditedResults=async(asDraft)=>{
     if(!previewEv||!editResultsEv) return;
-    const status=asDraft?"Draft":"Final";
+    // Editing an upcoming event's entry list keeps it Upcoming — it only becomes
+    // "Final" when real race scores are attached (see the results-attach path).
+    const stillUpcoming=previewEv.status==="Upcoming"&&(previewEv.entries||[]).every(e=>!(e.races||[]).length);
+    const status=asDraft?"Draft":(stillUpcoming?"Upcoming":"Final");
     // Resolve the (possibly changed) organizer host from the picker, mirroring
     // the import flow, so host re-assignment on an existing event persists.
     const importerHost=(portal&&!isClassPortal)?portal:null;
@@ -2137,7 +2142,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   /* ── PDF / import flow ────────────────────────────────────── */
   const resetImport=()=>{
-    setPdfError("");setImportStep("upload");
+    setPdfError("");setImportStep("upload");setImportKind("past");
     setFleetChoices([]);setPdfMeta(null);setPreviewEv(null);setPreviewEdit(null);
     setPending([]);setActivePending(null);
     setLiveUrl("");
@@ -2157,13 +2162,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     if(editResultsEv||(!hasLive&&!previewEv)){IMPORT_DRAFT=null;return;}
     // Fold the active editor (previewEv + subclass/collabs live in mf) into its slot.
     const snapPending=pending.map(p=>(p.id===activePending&&previewEv)?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
-    IMPORT_DRAFT={pending:snapPending,activePending,previewEv,mf,importStep,tab,fleetChoices,pdfMeta};
+    IMPORT_DRAFT={pending:snapPending,activePending,previewEv,mf,importStep,tab,importKind,fleetChoices,pdfMeta};
   };
   const restoreImportDraft=()=>{
     const d=IMPORT_DRAFT;if(!d) return false;
     setPending(d.pending||[]);setActivePending(d.activePending||null);
     setPreviewEv(d.previewEv||null);setMf(d.mf||emptyForm());
-    setImportStep(d.importStep||"upload");setTab(d.tab||"ai");
+    setImportStep(d.importStep||"upload");setTab(d.tab||"ai");setImportKind(d.importKind||"past");
     setFleetChoices(d.fleetChoices||[]);setPdfMeta(d.pdfMeta||null);
     return true;
   };
@@ -2495,6 +2500,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     };
   };
 
+  // Reshape a parsed preview into an UPCOMING entry list: no scores, no ranks, no
+  // discards. status:"Upcoming" is what flips the preview editor and the publish
+  // path into entry-list mode; the event page itself keys off the empty races.
+  const toUpcomingPreview=pv=>({...pv,status:"Upcoming",source:"Entry list",discards:0,scoring:"",
+    entries:(pv.entries||[]).map(e=>({...e,races:[],race_codes:null,pdf_rank:null,pdf_net:null}))});
+
   // ── MULTI-FILE: parse all chosen files into the pending list ──
   // Drag-and-drop: same code path as the file input's onChange (handleFiles). Depth
   // counter guards against dragleave firing when the pointer crosses child elements.
@@ -2514,8 +2525,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // APPEND to the hub queue — never clobber batches already parsing. The host can
     // keep adding files/links while earlier ones are still working.
     const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    const entriesMode=mode==="entries";
     const seed=files.map((f,i)=>({id:"pf_"+stamp+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],
-      notes:[mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]}));
+      ...(entriesMode?{kind:"upcoming"}:{}),
+      notes:[entriesMode?"Reading the entry list with AI…":mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]}));
     setPending(prev=>[...prev,...seed]);
     const note=(id,txt)=>setPending(prev=>prev.map(p=>p.id===id?{...p,notes:[txt]}:p));
     // Parse files concurrently. Total time ≈ slowest file, not the sum. Cap
@@ -2562,13 +2575,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         }else if(data.multi&&data.fleets?.length){
           const groupId="fg_"+stamp+"_"+i;
           const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
-          rows=data.fleets.map((fl,fi)=>({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-            previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
+          rows=data.fleets.map((fl,fi)=>{
+            let pv=previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||"");
+            if(entriesMode) pv=toUpcomingPreview(pv);
+            return{id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+            previewEv:pv,subclass:null,collabs:[],...(entriesMode?{kind:"upcoming"}:{}),
             fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc,
-            notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]}));
+            notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]};});
         }else{
-          rows=[{...seed[i],status:"ok",notes:data.notes||["Done."],
-            previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"")}];
+          let pv=previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"");
+          if(entriesMode) pv=toUpcomingPreview(pv);
+          rows=[{...seed[i],status:"ok",notes:data.notes||["Done."],previewEv:pv}];
         }
       }catch(err){
         // §6: one bad file must never fail the whole batch. Any unexpected throw
@@ -2594,19 +2611,26 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     setPdfError("");
     setLiveUrl("");   // clear the bar right away so the next link can be pasted while this one parses
     const id="link_"+Date.now()+"_"+Math.random().toString(36).slice(2,6);
-    setPending(prev=>[...prev,{id,name:u,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],notes:["Fetching the page server-side…"]}]);
+    const entriesMode=mode==="entries";
+    setPending(prev=>[...prev,{id,name:u,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],...(entriesMode?{kind:"upcoming"}:{}),
+      notes:[entriesMode?"Fetching the entries page server-side…":"Fetching the page server-side…"]}]);
     const data=await parseLink(u,mode);
     let rows;
     if(!data.ok){
       rows=[{id,name:u,status:"error",error:data.error,previewEv:null,subclass:null,collabs:[],notes:[data.error]}];
     }else if(data.multi&&data.fleets?.length){
       const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
-      rows=data.fleets.map((fl,fi)=>({id:id+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-        previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
-        fleetGroupId:id,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc,notes:data.notes||["Parsed."]}));
+      rows=data.fleets.map((fl,fi)=>{
+        let pv=previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||"");
+        if(entriesMode) pv=toUpcomingPreview(pv);
+        return{id:id+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+        previewEv:pv,subclass:null,collabs:[],...(entriesMode?{kind:"upcoming"}:{}),
+        fleetGroupId:id,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc,notes:data.notes||["Parsed."]};});
     }else{
+      let pv=previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"");
+      if(entriesMode) pv=toUpcomingPreview(pv);
       rows=[{id,name:data.name||u,status:"ok",error:null,notes:data.notes||["Parsed."],
-        previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[]}];
+        previewEv:pv,subclass:null,collabs:[],...(entriesMode?{kind:"upcoming"}:{})}];
     }
     // No auto-open — the result waits in the hub queue with a Review button.
     setPending(prev=>prev.flatMap(p=>p.id===id?rows:[p]));
@@ -2755,6 +2779,36 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     setPreviewEdit(null);
   };
 
+  // ── Announced-event matcher: does an imported RESULT correspond to an
+  // upcoming competition we already published as an entry list? Same class +
+  // similar name (token Jaccard ≥ .5) + dates within 45 days (when both known).
+  // Used to ATTACH results to the announced event instead of duplicating it.
+  const _nameTokens=s=>new Set(String(s||"").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z0-9 ]+/g," ").split(/\s+/).filter(Boolean));
+  const _dkTs=dk=>Date.UTC(+dk.slice(0,4),+dk.slice(4,6)-1,+dk.slice(6,8));
+  const findUpcomingMatch=(cand)=>{
+    const tks=_nameTokens(cand.name); if(!tks.size) return null;
+    const dkNew=dateKey(cand.date)||"";
+    let best=null,bestScore=0;
+    events.forEach(x=>{
+      if(x.status==="Draft"||!isUpcomingEvent(x)) return;
+      if((x.cls||"")!==(cand.cls||"")) return;
+      const xt=_nameTokens(x.name); if(!xt.size) return;
+      let inter=0; xt.forEach(t=>{if(tks.has(t))inter++;});
+      const jac=inter/(new Set([...xt,...tks]).size);
+      if(jac<0.5) return;
+      const dkOld=dateKey(x.date)||"";
+      let boost=0;
+      if(dkNew&&dkOld){
+        const days=Math.abs(_dkTs(dkNew)-_dkTs(dkOld))/86400000;
+        if(days>45) return;                 // same name but a different edition
+        if(days<=10) boost=0.15;
+      }
+      if(jac+boost>bestScore){best=x;bestScore=jac+boost;}
+    });
+    return best;
+  };
+
   // After a result is filed (published, drafted, or deduped): tick its queue item
   // off and drop back to the hub list — its editor tab closes automatically. The
   // legacy no-queue path (fleet picker) still closes the whole pop-up.
@@ -2771,7 +2825,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   };
   const importPreview=async(asDraft)=>{
     if(!previewEv) return;
-    const status=asDraft?"Draft":"Final";
+    const isUpcomingPublish=previewEv.status==="Upcoming";
+    const status=asDraft?"Draft":(isUpcomingPublish?"Upcoming":"Final");
     // Source ≠ organizer. Importing makes you the CONTRIBUTOR (imported_by);
     // you only become the ORGANIZER (owner) when you assert you ran it.
     const importerHost=(portal&&!isClassPortal)?portal:null;
@@ -2801,7 +2856,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // has no confirmed organizer — transfer confirmed ownership to them. Only
     // dedups when there's a real sail set (guards against blank/draft collisions).
     const fpSails=(ev.fingerprint||"").split("|")[3];
-    const dup=fpSails?events.find(x=>x.id!==ev.id&&eventFingerprint(x)===ev.fingerprint):null;
+    // When publishing RESULTS, an announced entry list with the same fingerprint is
+    // NOT a duplicate — it's the same event awaiting its results (attach path below).
+    const dup=fpSails?events.find(x=>x.id!==ev.id&&eventFingerprint(x)===ev.fingerprint&&(isUpcomingPublish||!isUpcomingEvent(x))):null;
     if(dup){
       const mergedSources=[...new Set([...(dup.sources||[]),...(ev.sources||[])])];
       const patch={sources:mergedSources};
@@ -2819,17 +2876,42 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       if(isSaved){(async()=>{try{await sbPatch("events",`id=eq.${dup.id}`,patch);}catch(err){console.error("importPreview dedup patch failed",err);}})();}
       return;
     }
+    // Phase B½ — attach to an announced upcoming competition. Publishing REAL
+    // results that match an entry-list event we announced earlier UPDATES that
+    // event in place (same id/URL — shared forecast links keep working) instead
+    // of creating a duplicate. The announced owner/collabs are kept; results,
+    // name, date and status replace the entry-list versions. The preview banner
+    // lets the host opt out (_noAttach) and publish separately.
+    const upMatch=(!asDraft&&!isUpcomingPublish&&!previewEv._noAttach)?findUpcomingMatch(ev):null;
+    delete ev._noAttach;
+    if(upMatch){
+      const merged={...upMatch,
+        name:ev.name,cls:ev.cls,subclass:ev.subclass||null,doublehanded:ev.doublehanded,
+        venue:ev.venue||upMatch.venue,country:ev.country||upMatch.country,date:ev.date||upMatch.date,
+        discards:ev.discards,scoring:ev.scoring,source:ev.source,status:"Final",
+        fingerprint:ev.fingerprint,
+        sources:[...new Set([...(upMatch.sources||[]),...(ev.sources||[])])],
+        entries:ev.entries};
+      setEvents(p=>p.map(x=>x.id===upMatch.id?merged:x));
+      clearImportDraft();
+      setNote({name:merged.name,matched:0,created:0,msg:"Results attached to your announced competition — its forecast page now shows the real results."});
+      setTimeout(()=>setNote(null),7000);
+      finishPublished("Results attached to announced event");
+      const isSaved=!String(upMatch.id).startsWith("imp_")&&!String(upMatch.id).startsWith("fg_");
+      if(isSaved){(async()=>{try{await replaceEventResultsInDb(upMatch.id,merged);}catch(err){console.error("importPreview: attach-results save failed",err);}})();}
+      return;
+    }
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
     // Optimistic: drop the event into the list and close the popup immediately
     setEvents(p=>[ev,...p.filter(x=>x.id!==ev.id)]);
     clearImportDraft();   // this result is filed — drop it from any stashed draft
-    setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":null});
+    setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":isUpcomingPublish?"Entry list published — the event page now shows the fleet forecast.":null});
     setTimeout(()=>setNote(null),7000);
     // The editor tab closes automatically; the item stays in the hub queue,
     // ticked off, so the host keeps a gauge of what's done vs still importing.
-    finishPublished(asDraft?"Saved as draft":"Published");
+    finishPublished(asDraft?"Saved as draft":isUpcomingPublish?"Entry list published":"Published");
     // Persist in the background; swap in the DB copy (with real ids) once saved.
     // DETACHED (not awaited) so importPreview resolves as soon as the optimistic
     // UI above is done — the Publish/Draft button's loading state then clears
@@ -2889,21 +2971,36 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const addRow=()=>setMf(f=>({...f,rows:[...f.rows,defRow(f.numRaces)]}));
   const delRow=i=>setMf(f=>({...f,rows:f.rows.filter((_,ri)=>ri!==i)}));
   const setNumRaces=n=>setMf(f=>({...f,numRaces:n,rows:f.rows.map(r=>({...r,scores:Array(n).fill("").map((_,i)=>r.scores[i]||"")}))}));
-  const buildManualEvent=()=>{
+  const buildManualEvent=(upcoming=false)=>{
     const rows=mf.rows.filter(r=>r.helm.trim());if(!rows.length)return null;
-    const disc=Math.min(mf.discards,Math.max(0,mf.numRaces-1));
+    const disc=upcoming?0:Math.min(mf.discards,Math.max(0,mf.numRaces-1));
     const evCls=assoc?.cls||mf.cls||"29er";
     const sh=evCls==="ilca"||evCls==="optimist";
     return{id:"imp_"+Date.now(),name:mf.name||"Imported Competition",cls:evCls,
       subclass:mf.subclass||null,owner:portal||null,collabs:mf.collabs||[],
       doublehanded:!sh&&rows.some(r=>r.crew.trim()),venue:mf.club||"—",country:mf.club||mf.country||"",
-      date:mf.date||"",discards:disc,scoring:'Appendix A',
-      source:"Manual import",status:"Final",
+      date:mf.date||"",discards:disc,scoring:upcoming?"":'Appendix A',
+      source:upcoming?"Entry list":"Manual import",status:upcoming?"Upcoming":"Final",
       entries:rows.map(r=>({helm:r.helm.trim(),crew:sh?"":r.crew.trim(),sail:r.sail.trim()||"—",nat:(r.nat||"").trim(),div:(r.div||"").trim(),
-        races:r.scores.map(s=>s.trim()).filter(Boolean).map(s=>/^\d+(\.\d+)?$/.test(s)?parseFloat(s):s.toUpperCase())}))};
+        races:upcoming?[]:r.scores.map(s=>s.trim()).filter(Boolean).map(s=>/^\d+(\.\d+)?$/.test(s)?parseFloat(s):s.toUpperCase())}))};
   };
-  const doImportManual=async()=>{
-    const ev=buildManualEvent();if(!ev)return;
+  const doImportManual=async(upcoming=false)=>{
+    const ev=buildManualEvent(upcoming);if(!ev)return;
+    // Manually-entered RESULTS that match an announced upcoming competition
+    // attach to it (same rule as the AI import path) — no duplicate event.
+    const upMatch=upcoming?null:findUpcomingMatch(ev);
+    if(upMatch){
+      const merged={...upMatch,name:ev.name,cls:ev.cls,subclass:ev.subclass||null,doublehanded:ev.doublehanded,
+        venue:ev.venue||upMatch.venue,country:ev.country||upMatch.country,date:ev.date||upMatch.date,
+        discards:ev.discards,scoring:ev.scoring,source:ev.source,status:"Final",entries:ev.entries};
+      setEvents(p=>p.map(x=>x.id===upMatch.id?merged:x));
+      clearImportDraft();setNote({name:merged.name,matched:0,created:0,msg:"Results attached to your announced competition."});
+      setOpen(false);setMf(emptyForm());
+      setTimeout(()=>setNote(null),6500);
+      const isSaved=!String(upMatch.id).startsWith("imp_")&&!String(upMatch.id).startsWith("fg_");
+      if(isSaved){try{await replaceEventResultsInDb(upMatch.id,merged);}catch(err){console.error("doImportManual: attach-results save failed",err);}}
+      return;
+    }
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
@@ -3356,6 +3453,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .x:hover{background:rgba(255,255,255,.26);}
     .mhead .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:34px;height:34px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;}
     .mhead .x:hover{background:rgba(255,255,255,.26);transform:scale(1.05);}
+    .mhead .mktab{font-family:'Barlow',sans-serif;font-weight:700;font-size:14.5px;border:0;color:rgba(255,255,255,.68);background:rgba(255,255,255,.1);padding:8px 16px;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.15s;white-space:nowrap;}
+    .mhead .mktab:hover{background:rgba(255,255,255,.2);color:#fff;}
+    .mhead .mktab.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:0 2px 10px rgba(0,0,0,.18);}
     /* Liquid-glass segmented tabs (was flat white tab shapes). */
     .mtabs{display:flex;gap:8px;padding:16px 22px 0;}
     .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;color:var(--mut);padding:8px 16px;border-radius:980px;cursor:pointer;display:flex;align-items:center;gap:7px;
@@ -4256,7 +4356,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const n=nuggetFor(ev.cls,ev.subclass);
           return(
           <div key={ev.id} className="strip-card" onClick={()=>go({name:"event",id:ev.id})}>
-            <div className="sc-top"><span className="sc-date">{formatDate(ev.date)}</span><span className="cls" style={{background:n.color}}>{n.label}</span></div>
+            <div className="sc-top"><span className="sc-date">{formatDate(ev.date)}</span>
+              {isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}}>UPCOMING</span>}
+              <span className="cls" style={{background:n.color}}>{n.label}</span></div>
             <p className="sc-name">{ev.name}</p>
             {host&&<p className="sc-sub">{host}</p>}
           </div>);
@@ -4388,9 +4490,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {hostName&&<span><Waves size={13}/>{hostName}</span>}
               <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
               <span className="ev-cal"><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={e=>{e.stopPropagation();openCalendarAt(ev.date);}}>{formatDate(ev.date)}</span></span>
-              <span className="ev-count"><Users size={13}/>{s.fleet} boats · {s.races} races</span>
+              <span className="ev-count"><Users size={13}/>{isUpcomingEvent(ev)?`${s.fleet} entered`:`${s.fleet} boats · ${s.races} races`}</span>
             </div>
           </div>
+          {isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}} title="Entry list published — results pending. Open for the fleet forecast.">UPCOMING</span>}
           {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
           <ChevronRight size={18} color="#9fb2c8"/>
         </div>);
@@ -5001,9 +5104,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div className="evmeta">
                     <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
                     <span className="ev-cal"><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-                    <span className="ev-count"><Users size={13}/>{s.fleet} boats · {s.races} races{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
+                    <span className="ev-count"><Users size={13}/>{isUpcomingEvent(ev)?`${s.fleet} entered`:`${s.fleet} boats · ${s.races} races`}{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
                   </div>
                 </div>
+                {!isDraft&&isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}} title="Entry list published — results pending. Open for the fleet forecast.">UPCOMING</span>}
                 {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
                 {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
                 {canEdit&&<button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>}
@@ -5032,6 +5136,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     let s=null;try{s=scoreEvent(ev);}catch(err){console.error("event page: scoreEvent failed",err);}
     if(!s) return notFound("Couldn't read this competition's scores.");
     const isDraft=ev.status==="Draft";
+    // Published entry list, nothing sailed yet → the page shows the public entry
+    // list AS a prediction ranking (FleetForecast) instead of a results table.
+    const isUpcoming=!isDraft&&s.races===0&&(ev.entries||[]).length>0;
     return(<ErrorBoundary resetKey={ev.id} fallback={
       <div className="wrap sec" style={{paddingTop:18}}>
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
@@ -5103,7 +5210,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             })()}
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
-            {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
+            {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>{isUpcoming?"Edit entry list":"Edit results"}</button>}
           </div>
         </div>);
         // Interactive models are scoped to home/association/global-class pages only — not here.
@@ -5129,6 +5236,37 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
         )}
       </div>
+      {isUpcoming&&(<>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14,
+          background:"rgba(232,146,26,.09)",borderRadius:14,padding:"10px 14px",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.28)"}}>
+          <Clock size={16} color="#b8860b" style={{flex:"none"}}/>
+          <span style={{fontSize:12,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"#b8860b"}}>Upcoming competition</span>
+          <span style={{fontSize:13,color:"var(--mut)"}}>{ev.entries.length} entered · no results yet — the table below is a forecast ranking from current skill ratings.</span>
+        </div>
+        <FleetForecast ev={ev} events={events}
+          onPick={n=>go({name:"profile",id:n,fromEvent:ev.id})}
+          boatCell={r=>(
+            <div className="boat">
+              {r.crew
+                ? <div style={{position:"relative",width:48,height:30,flex:"none"}}>
+                    {(()=>{const cp=athleteProfileOf(r.crew)?.photo_url;return cp
+                      ? <img className="av" src={cp} alt="" style={{position:"absolute",left:18,top:0,objectFit:"cover",boxShadow:"0 0 0 2px #fff"}}/>
+                      : <div className="av" style={{position:"absolute",left:18,top:0,background:avatarColor(r.crew),boxShadow:"0 0 0 2px #fff"}}>{initials(r.crew)}</div>;})()}
+                    {(()=>{const hp=athleteProfileOf(r.helm)?.photo_url;return hp
+                      ? <img className="av" src={hp} alt="" style={{position:"absolute",left:0,top:0,zIndex:2,objectFit:"cover",boxShadow:"0 0 0 2px #fff"}}/>
+                      : <div className="av" style={{position:"absolute",left:0,top:0,zIndex:2,background:avatarColor(r.helm),boxShadow:"0 0 0 2px #fff"}}>{initials(r.helm)}</div>;})()}
+                  </div>
+                : (()=>{const hp=athleteProfileOf(r.helm)?.photo_url;return hp
+                    ? <img className="av" src={hp} alt="" style={{objectFit:"cover"}}/>
+                    : <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>;})()}
+              <div>
+                <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
+                {r.crew&&<div className="cn">with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></div>}
+              </div>
+            </div>
+          )}/>
+      </>)}
+      {!isUpcoming&&(<>
       <div className="panel"><table>
         <thead><tr>
           <th>Pos</th><th className="l">Boat</th><th aria-label="Gender / Division"></th><th className="l">Sail #</th>
@@ -5195,6 +5333,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
         );
       })()}
+      </>)}
     </div></ErrorBoundary>);
   })()}
 
@@ -5627,7 +5766,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           )}
         </>);
       })()}
-      <div style={{marginTop:22}}>
+      {/* Upcoming competitions this athlete is entered in — forecast chips above the results history */}
+      <div style={{marginTop:18}}>
+        <UpcomingStrip name={name} events={events} onOpen={id=>go({name:"event",id,fromProfile:name})}/>
+      </div>
+      <div style={{marginTop:4}}>
         <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:10}}>
           <div className="ai-srch-wrap" style={{width:"100%"}}>
             <div className="ai-srch">
@@ -5740,7 +5883,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           {importStep==="preview"&&!editResultsEv&&<button className="x" onClick={backToHub} title="Back to the import list (keeps this result in the queue)" style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           {importStep==="preview"&&editResultsEv&&<button className="x" onClick={()=>{closeImport();setEditResultsEv(null);}} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           <Upload size={18}/>
-          <h3>{importStep==="picker"?"Select fleet":importStep==="preview"?"Preview & edit results":"Import a competition"}</h3>
+          {importStep==="upload"
+            ? <div style={{flex:1,display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                <button className={`mktab${importKind==="past"?" on":""}`} onClick={()=>setImportKind("past")} title="Import the results of a competition that has been sailed"><Trophy size={14}/>Past competitions</button>
+                <button className={`mktab${importKind==="upcoming"?" on":""}`} onClick={()=>setImportKind("upcoming")} title="Publish an upcoming competition's entry list — AthLink forecasts the fleet"><Calendar size={14}/>Upcoming competitions</button>
+              </div>
+            : <h3>{importStep==="picker"?"Select fleet":previewEv?.status==="Upcoming"?"Preview & edit entry list":"Preview & edit results"}</h3>}
           {(()=>{const n=pending.filter(p=>p.status==="parsing").length;return n>0&&(
             <span style={{display:"inline-flex",alignItems:"center",gap:7,marginLeft:10,color:"var(--accent)",fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif"}}>
               <Loader2 size={15} className="spin"/>
@@ -5755,7 +5903,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI Entry</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
           </div>
-          {(()=>{const fileTab=(tab==="ai"||tab==="rule");const dropMode=tab==="rule"?"rule":"ai";const dropActive=fileTab&&dragDepth>0;return(
+          {(()=>{const fileTab=(tab==="ai"||tab==="rule");const upKind=importKind==="upcoming";const dropMode=tab==="rule"?"rule":upKind?"entries":"ai";const dropActive=fileTab&&dragDepth>0;return(
           <div className="mbody" style={{position:"relative"}}
             onDragEnter={fileTab?onDragEnter:undefined}
             onDragOver={fileTab?onDragOver:undefined}
@@ -5779,36 +5927,38 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
             {tab==="ai"&&(<>
-              {/* ── Part 1: single competition ── */}
-              <div style={{fontSize:11,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--navy)",margin:"2px 0 7px",fontFamily:"'Barlow',sans-serif"}}>Import single competition result</div>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>
+              {/* ── Part 1: single competition (results) / entry list (upcoming) ── */}
+              <div style={{fontSize:11,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--navy)",margin:"2px 0 7px",fontFamily:"'Barlow',sans-serif"}}>{upKind?"Import an entry list":"Import single competition result"}</div>
+              {upKind
+                ? <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Announce a competition <strong style={{color:"var(--ink)"}}>before it's sailed</strong>. Drop in the entry list — a PDF, screenshot, or the entries page link — and AthLink reads who's racing. Once published, the event page shows a <strong style={{color:"var(--ink)"}}>fleet forecast</strong>: win, podium and top-10 chances for every boat, from current skill ratings. When the racing's done, import the results as usual and they attach to this event.</p>
+                : <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>}
               <label className="btn cta liquidGlass-wrapper" style={{cursor:"pointer"}}>
                 <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
                 <div className="liquidGlass-text"><Sparkles size={16}/>Choose files</div>
-                <input type="file" multiple style={{display:"none"}} onChange={e=>{handleFiles(e.target.files,"ai");e.target.value="";}}/>
+                <input type="file" multiple style={{display:"none"}} onChange={e=>{handleFiles(e.target.files,upKind?"entries":"ai");e.target.value="";}}/>
               </label>
               <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here{pdfLoading?" — you can keep adding while others parse":""}</span>
               <div style={{margin:"16px 0 6px",display:"flex",alignItems:"center",gap:10}}>
                 <div style={{flex:1,height:1,background:"var(--line)"}}/>
-                <span style={{fontSize:11,fontWeight:700,letterSpacing:".06em",color:"var(--mut)",textTransform:"uppercase"}}>or paste a results link</span>
+                <span style={{fontSize:11,fontWeight:700,letterSpacing:".06em",color:"var(--mut)",textTransform:"uppercase"}}>{upKind?"or paste the entries page link":"or paste a results link"}</span>
                 <div style={{flex:1,height:1,background:"var(--line)"}}/>
               </div>
               <div style={{display:"flex",gap:8}}>
                 <div className="glassbar" style={{flex:1,display:"flex",alignItems:"center",gap:8,padding:"0 12px"}}>
                   <Link2 size={15} color="#9fb2c8" style={{flex:"none"}}/>
                   <input value={liveUrl} onChange={e=>setLiveUrl(e.target.value)}
-                    onKeyDown={e=>{if(e.key==="Enter"&&liveUrl.trim())handleLink(liveUrl,"ai");}}
-                    placeholder="https://… Manage2sail / Clubspot / Sailwave results page"
+                    onKeyDown={e=>{if(e.key==="Enter"&&liveUrl.trim())handleLink(liveUrl,upKind?"entries":"ai");}}
+                    placeholder={upKind?"https://… the event's entries / entry list page":"https://… Manage2sail / Clubspot / Sailwave results page"}
                     style={{flex:1,border:0,outline:"none",font:"inherit",fontSize:13,padding:"10px 0",background:"transparent",boxShadow:"none"}}/>
                 </div>
-                <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={!liveUrl.trim()} onClick={()=>handleLink(liveUrl,"ai")}>
+                <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={!liveUrl.trim()} onClick={()=>handleLink(liveUrl,upKind?"entries":"ai")}>
                   <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Fetch &amp; parse</div>
                 </button>
               </div>
               <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0",lineHeight:1.5}}>Parsing the page's source is usually more accurate than a PDF. The link is fetched on our server (your browser can't, due to cross-origin rules).</p>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
-              {/* ── Part 2: result database (whole archive → discovery) ── */}
-              {portal&&!isClassPortal&&host&&(<>
+              {/* ── Part 2: result database (whole archive → discovery) — past results only ── */}
+              {!upKind&&portal&&!isClassPortal&&host&&(<>
                 <div style={{margin:"20px 0 12px",height:1,background:"var(--line)"}}/>
                 <div style={{fontSize:11,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--navy)",margin:"0 0 7px",fontFamily:"'Barlow',sans-serif"}}>Import result database</div>
                 <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.55}}>Point AthLink at the web pages that hold your results — <strong style={{color:"var(--ink)"}}>one link per line</strong>. We scan each site for the competitions you've run, check which we can read, and let you pick and publish them. Great for a results archive or a club's regatta page.</p>
@@ -5936,18 +6086,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <input value={mf.date} onChange={e=>updMeta("date",e.target.value)} placeholder="dd/mm/yyyy" maxLength={10}/>
                   {mf.date?.match(/^\d{1,2}\/\d{1,2}\/\d{4}$/)&&<span style={{fontSize:11.5,color:"var(--accent)",fontWeight:600,display:"block",marginTop:3}}>{formatDate(mf.date)}</span>}
                 </div>
-                <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
+                {!upKind&&<div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>}
               </div>
               <CollabPicker owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
               </>);})()}
-              <div className="race-ctrl">
+              {!upKind&&<div className="race-ctrl">
                 <span>Number of races</span>
                 <div className="stepper">
                   <button onClick={()=>mf.numRaces>1&&setNumRaces(mf.numRaces-1)}><Minus size={13}/></button>
                   <span>{mf.numRaces}</span>
                   <button onClick={()=>mf.numRaces<20&&setNumRaces(mf.numRaces+1)}><Plus size={13}/></button>
                 </div>
-              </div>
+              </div>}
               <div className="rtable-wrap">
                 <table className="rtable">
                   <thead><tr>
@@ -5956,9 +6106,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     <th style={{minWidth:46}}>Nat</th>
                     <th style={{minWidth:46}}>Sail</th>
                     <th style={{minWidth:140}}>Div</th>
-                    {Array.from({length:mf.numRaces}).map((_,i)=><th key={i} style={{minWidth:34}}>R{i+1}</th>)}
-                    <th className="calc" style={{minWidth:38}}>Total</th>
-                    <th className="calc" style={{minWidth:38}}>Net</th>
+                    {!upKind&&Array.from({length:mf.numRaces}).map((_,i)=><th key={i} style={{minWidth:34}}>R{i+1}</th>)}
+                    {!upKind&&<th className="calc" style={{minWidth:38}}>Total</th>}
+                    {!upKind&&<th className="calc" style={{minWidth:38}}>Net</th>}
                     <th style={{width:26}}></th>
                   </tr></thead>
                   <tbody>
@@ -5969,11 +6119,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                         <td><NatInput value={row.nat||""} onChange={v=>updRow(i,"nat",v)}/></td>
                         <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="···" style={{textAlign:"center"}}/></td>
                         <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)} noMix={(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist"}/></td>
-                        {Array.from({length:mf.numRaces}).map((_,j)=>(
+                        {!upKind&&Array.from({length:mf.numRaces}).map((_,j)=>(
                           <td key={j}><input value={row.scores[j]||""} onChange={e=>updScore(i,j,e.target.value)} placeholder="–" style={{textAlign:"center"}}/></td>
                         ))}
-                        <td className="calc-td" style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{manualCalc[i]?.total??<span style={{opacity:.3}}>—</span>}</td>
-                        <td className="calc-td" style={{fontSize:12,color:"var(--navy)",fontWeight:700}}>{manualCalc[i]?.net??<span style={{opacity:.3}}>—</span>}</td>
+                        {!upKind&&<td className="calc-td" style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{manualCalc[i]?.total??<span style={{opacity:.3}}>—</span>}</td>}
+                        {!upKind&&<td className="calc-td" style={{fontSize:12,color:"var(--navy)",fontWeight:700}}>{manualCalc[i]?.net??<span style={{opacity:.3}}>—</span>}</td>}
                         <td className="del-td"><button style={{background:"none",border:0,color:"#c0392b",cursor:"pointer",padding:4,opacity:.55}} onClick={()=>delRow(i)}><X size={13}/></button></td>
                       </tr>
                     ))}
@@ -5982,11 +6132,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                 <button className="btn ghost" style={{fontSize:13,padding:"7px 12px"}} onClick={addRow}><Plus size={14}/>Add boat</button>
-                <span style={{fontSize:11.5,color:"var(--mut)"}}>Codes: DNF DSQ UFD BFD DNC DNS OCS RET SCP STP DPI DNE NSC ZFP RDG</span>
+                {!upKind&&<span style={{fontSize:11.5,color:"var(--mut)"}}>Codes: DNF DSQ UFD BFD DNC DNS OCS RET SCP STP DPI DNE NSC ZFP RDG</span>}
               </div>
               <div className="mfoot">
                 <button className="btn ghost" onClick={closeImport}>Cancel</button>
-                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady} onClick={doImportManual}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>Import competition</div></button>
+                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady} onClick={()=>doImportManual(upKind)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>{upKind?"Publish entry list":"Import competition"}</div></button>
               </div>
             </>)}
           </div>);})()}
@@ -6023,13 +6173,25 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         )}
 
         {importStep==="preview"&&(pending.length>0||previewEv)&&(()=>{
-          const scored=previewScored;
-          const maxR=previewMaxRaces;
+          // Upcoming entry list: no scores exist, so no scoring pass (scorePreview
+          // would invent DNFs), no race columns, and a Rating column instead of Pos
+          // so the host can see which entrants matched an existing rated athlete.
+          const isUpEv=previewEv?.status==="Upcoming";
+          const scored=isUpEv?null:previewScored;
+          const maxR=isUpEv?0:previewMaxRaces;
+          const upRatings=isUpEv?(()=>{try{return ratingEngine.getAthleteRatings(events);}catch{return null;}})():null;
+          const upRatingOf=(members)=>{
+            if(!upRatings)return null;
+            const dk=dateKey(previewEv?.date)||"";
+            const rr=members.filter(Boolean).map(m=>ratingEngine.ratingAsOf(upRatings.get(canonName(m))||null,dk));
+            if(!rr.length)return null;
+            return{r:rr.reduce((a,x)=>a+x.r,0)/rr.length,rd:Math.sqrt(rr.reduce((a,x)=>a+x.rd*x.rd,0)/rr.length),provisional:rr.every(x=>x.provisional)};
+          };
           const active=pending.find(p=>p.id===activePending);
           const isError=active&&active.status==="error";
           // Editor tabs show only unpublished items — a published result's tab is closed.
           const openTabs=pending.filter(p=>p.status!=="published");
-          const missingCells=previewEv&&previewEv.entries.some(e=>!e.helm||(e.races||[]).length<maxR);
+          const missingCells=previewEv&&previewEv.entries.some(e=>!e.helm||(!isUpEv&&(e.races||[]).length<maxR));
           // Effective class for the table comes from the previewEv itself when set
           // by the per-result selector, else the portal association's class.
           const evCls=(previewEv?.cls)||assoc?.cls||"29er";
@@ -6112,22 +6274,45 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             )}
             {!isError&&previewEv&&(<>
             <div className="preview-meta wide" style={{marginBottom:8}}>
+              {isUpEv&&<div style={{gridColumn:"1/-1",marginBottom:6,display:"flex",alignItems:"center",gap:6,background:"rgba(232,146,26,.09)",border:"1px solid rgba(232,146,26,.35)",borderRadius:7,padding:"5px 10px"}}>
+                <Clock size={13} style={{color:"#b8860b",flex:"none"}}/>
+                <span style={{fontSize:12,fontWeight:600,color:"#b8860b"}}>Upcoming competition</span>
+                <span style={{fontSize:11,color:"#a8873a"}}>— publishing this entry list makes the event page show a fleet forecast. Rated entrants show their current skill rating; "new" entrants start at 1200 with the widest uncertainty.</span>
+              </div>}
               {previewEv?.ai_parsed&&<div style={{gridColumn:"1/-1",marginBottom:6,display:"flex",alignItems:"center",gap:6,background:"#f0f4ff",border:"1px solid #c5d3f8",borderRadius:7,padding:"5px 10px"}}>
                 <Sparkles size={13} style={{color:"#3b5bdb",flex:"none"}}/>
                 <span style={{fontSize:12,fontWeight:600,color:"#3b5bdb"}}>AI parsed</span>
-                <span style={{fontSize:11,color:"#6278b5"}}>— This result was parsed by Claude AI. Review all cells before publishing.</span>
+                <span style={{fontSize:11,color:"#6278b5"}}>— This {isUpEv?"entry list":"result"} was parsed by Claude AI. Review all cells before publishing.</span>
               </div>}
+              {/* Attach-to-announced-event notice: this result matches an upcoming
+                  competition already published as an entry list. Default = attach
+                  (no duplicate event); the host can opt out per result. */}
+              {!isUpEv&&!editResultsEv&&(()=>{
+                const m=findUpcomingMatch({name:previewEv.name,cls:evCls,date:previewEv.date});
+                if(!m) return null;
+                const off=!!previewEv._noAttach;
+                return(
+                  <div style={{gridColumn:"1/-1",marginBottom:6,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:off?"var(--grouped)":"rgba(46,164,79,.08)",border:"1px solid "+(off?"var(--line)":"rgba(46,164,79,.35)"),borderRadius:7,padding:"5px 10px"}}>
+                    <Link2 size={13} style={{color:off?"var(--mut)":"#1a7f37",flex:"none"}}/>
+                    <span style={{fontSize:12,fontWeight:600,color:off?"var(--mut)":"#1a7f37"}}>{off?"Publishing as a separate event":"Will attach to your announced competition"}</span>
+                    <span style={{fontSize:11,color:off?"var(--mut)":"#3d8054"}}>— {off?`"${m.name}" stays a separate upcoming event.`:`these results replace the entry list on "${m.name}" (same page & link, forecast becomes final results).`}</span>
+                    <button type="button" onClick={()=>updPMeta("_noAttach",!off)}
+                      style={{marginLeft:"auto",flex:"none",border:"1px solid "+(off?"#1a7f37":"var(--line)"),background:"transparent",color:off?"#1a7f37":"var(--mut)",borderRadius:6,fontSize:11,fontWeight:600,padding:"2px 8px",cursor:"pointer"}}>
+                      {off?"Attach instead":"Publish separately"}</button>
+                  </div>
+                );
+              })()}
               <div><label>Competition name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Competition name"/></div>
               <div><label>Host Country</label><CountrySelect glass value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
               <div><label>Date</label><DateField value={previewEv.date||""} onChange={v=>updSharedMeta("date",v)} className={!previewEv.date?"pmissing":""} markedDays={markedDays} dotColor={classColor(evCls)||"var(--navy2)"}/></div>
-              <div><label>Discards</label>
+              {!isUpEv&&<div><label>Discards</label>
                 {/* frameless ± stepper; functional updates so rapid clicks don't read a stale count */}
                 <div className="stepper" style={{gap:5,justifyContent:"center",height:35}}>
                   <button type="button" style={{width:26,height:26}} onClick={()=>setPreviewEv(ev=>ev?{...ev,discards:Math.max(0,(ev.discards??1)-1)}:ev)}><Minus size={12}/></button>
                   <span style={{minWidth:16,textAlign:"center",fontSize:13}}>{previewEv.discards??1}</span>
                   <button type="button" style={{width:26,height:26}} onClick={()=>setPreviewEv(ev=>ev?{...ev,discards:Math.min(20,(ev.discards??1)+1)}:ev)}><Plus size={12}/></button>
                 </div>
-              </div>
+              </div>}
               <div><label>Boat class{classLocked&&<span style={{textTransform:"none",letterSpacing:0}} title={`Fixed to ${assoc.name}'s class`}> 🔒</span>}</label>
                 <ClassSelect value={evCls} subValue={mf.subclass} locked={classLocked?assoc.cls:null}
                   classes={customClasses} onAdd={name=>addCustomClass(name)}
@@ -6270,7 +6455,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12.5px",minWidth:560}}>
                 <thead>
                   <tr>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Pos</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}} title={isUpEv?"Current skill rating ± uncertainty — 'new' means no rated results on AthLink yet":undefined}>{isUpEv?"Rating":"Pos"}</th>
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
                     {!singleHanded&&<th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>}
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
@@ -6291,7 +6476,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       </span>
                     </th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
-                    <th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>
+                    {!isUpEv&&<th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>}
                     <th style={{background:"var(--navy)",width:32,padding:"9px 4px"}} aria-label=""></th>
                   </tr>
                 </thead>
@@ -6301,7 +6486,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     .sort((a,b)=>{if(a.rank==null&&b.rank==null)return a.idx-b.idx;if(a.rank==null)return 1;if(b.rank==null)return -1;return a.rank-b.rank;})
                     .map(({entry,idx,scoredRow,rank,net})=>{
                     return(<tr key={idx} style={{borderBottom:"1px solid var(--line)"}}>
-                      <td style={{textAlign:"center",padding:"8px 5px",fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:14,color:rank===1?"var(--gold)":rank===2?"#7d8a98":rank===3?"#a86a32":"var(--ink)"}}>{rank||"—"}</td>
+                      {isUpEv
+                        ?<td style={{textAlign:"center",padding:"8px 6px",whiteSpace:"nowrap"}}>{(()=>{
+                            const rr=upRatingOf([entry.helm,entry.crew]);
+                            if(!rr) return <span style={{color:"var(--mut)"}}>—</span>;
+                            return rr.provisional
+                              ?<span title="No rated results on AthLink yet — forecast seeds them at 1200 with the widest uncertainty" style={{fontSize:10,fontWeight:800,letterSpacing:".05em",color:"#b8860b",textTransform:"uppercase",background:"rgba(232,146,26,.13)",borderRadius:6,padding:"2px 7px"}}>new</span>
+                              :<span style={{fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:13,color:"var(--navy)",fontVariantNumeric:"tabular-nums"}}>{Math.round(rr.r)}<span style={{color:"var(--mut)",fontWeight:600,fontSize:11}}> ±{Math.round(rr.rd)}</span></span>;
+                          })()}</td>
+                        :<td style={{textAlign:"center",padding:"8px 5px",fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:14,color:rank===1?"var(--gold)":rank===2?"#7d8a98":rank===3?"#a86a32":"var(--ink)"}}>{rank||"—"}</td>}
                       <td style={{padding:"4px 6px",minWidth:110}}>
                         {previewEdit?.type==="helm"&&previewEdit.idx===idx
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
@@ -6337,7 +6530,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                             </div>}
                         </td>);
                       })}
-                      <td style={{textAlign:"center",padding:"8px 6px",fontFamily:"'Barlow',sans-serif",fontWeight:700,color:"var(--navy)",fontSize:13}}>{net!==undefined?net:"—"}</td>
+                      {!isUpEv&&<td style={{textAlign:"center",padding:"8px 6px",fontFamily:"'Barlow',sans-serif",fontWeight:700,color:"var(--navy)",fontSize:13}}>{net!==undefined?net:"—"}</td>}
                       <td style={{textAlign:"center",padding:"4px 2px",width:32}}>
                         <button type="button" title="Remove this athlete"
                           onClick={()=>setPreviewEv(ev=>({...ev,entries:ev.entries.filter((_,i)=>i!==idx)}))}
@@ -6352,7 +6545,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </tbody>
               </table>
             </div>
-            <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
+            <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>{isUpEv?"Click any cell to edit · remove withdrawn boats with the bin · reopen this entry list any time via Edit entry list on the event page":"Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live"}</p>
             {/* ── Div-tag rename popover (fixed: the table wrap clips absolutes) ── */}
             {divHdrEdit&&(<>
               <div onClick={()=>setDivHdrEdit(null)} style={{position:"fixed",inset:0,zIndex:118}}/>
@@ -6379,8 +6572,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </>)}
             <div className="import-actionbar">
-              <button className="btn ghost" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>
-              <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":(pending.filter(p=>p.status!=="published").length>1?"Publish this result":"Confirm & Publish")}</div></button>
+              {!isUpEv&&<button className="btn ghost" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>}
+              <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":isUpEv?"Publish entry list":(pending.filter(p=>p.status!=="published").length>1?"Publish this result":"Confirm & Publish")}</div></button>
             </div>
             </>)}
           </div>);

@@ -6,11 +6,12 @@
    (PRNG seeded by the event id) so the page never flickers between renders. */
 
 import React from "react";
-import { ArrowLeft, TrendingUp } from "lucide-react";
+import { ArrowLeft, TrendingUp, Calendar } from "lucide-react";
 import { formatDate, dateKey } from "../util/date.js";
 import { canonName, ordinalOf } from "../util/name.js";
 import { iocFlag } from "../util/flag.js";
 import { nuggetFor } from "../util/class.js";
+import { isUpcomingEvent } from "../data/scoring.js";
 import { ratingEngine, InfoHint } from "./charts.jsx";
 
 const FORECAST_HINT="We simulate this competition thousands of times. Each run draws every entrant's true skill from their rating and its uncertainty band, adds race-day luck, and ranks the fleet — so an athlete with a wide band spreads across many finishes while a proven one clusters tight. Win / Podium / Top 10 are how often each boat landed there; 'likely finish' is the middle two-thirds of their simulated results. New or unrated entrants start at 1200 with the widest band. Ratings come from official results and are never altered by the forecast.";
@@ -55,7 +56,7 @@ function DistSpark({dist,p84}){
   </svg>);
 }
 
-export function FleetForecast({ev,events,onPick}){
+export function FleetForecast({ev,events,onPick,boatCell}){
   const [showAll,setShowAll]=React.useState(false);
   const sim=React.useMemo(()=>{
     const entrants=entrantsOf(ev,events);
@@ -96,8 +97,10 @@ export function FleetForecast({ev,events,onPick}){
           <tr key={r.key}>
             <td className={`rk ${r.p50<=3?"p"+r.p50:""}`}>{r.p50}</td>
             <td className="l">
-              <span className="namelink" onClick={()=>onPick&&onPick(r.helm)}>{r.helm}</span>
-              {r.crew&&<span style={{color:"var(--mut)"}}> / <span className="namelink" onClick={()=>onPick&&onPick(r.crew)}>{r.crew}</span></span>}
+              {boatCell?boatCell(r):(<>
+                <span className="namelink" onClick={()=>onPick&&onPick(r.helm)}>{r.helm}</span>
+                {r.crew&&<span style={{color:"var(--mut)"}}> / <span className="namelink" onClick={()=>onPick&&onPick(r.crew)}>{r.crew}</span></span>}
+              </>)}
             </td>
             <td className="l sailcol">{r.nat?<>{iocFlag(r.nat)} {r.nat} {r.sail}</>:r.sail}</td>
             <td className="l" style={{whiteSpace:"nowrap"}}>
@@ -144,6 +147,49 @@ export function UpcomingEventForecast({ev,events,onBack,onPick}){
         </div>
       </div>
       <FleetForecast ev={ev} events={events} onPick={onPick}/>
+    </div>
+  );
+}
+
+/* Profile strip: the upcoming competitions this athlete is entered in, each with
+   their own forecast line. Same deterministic sim as FleetForecast (seeded by
+   event id), memoised — so profiles stay cheap and never flicker. */
+export function UpcomingStrip({name,events,onOpen}){
+  const key=canonName(name);
+  const rows=React.useMemo(()=>{
+    const ups=(events||[]).filter(ev=>ev.status!=="Draft"&&isUpcomingEvent(ev)&&
+      (ev.entries||[]).some(e=>canonName(e.helm)===key||(e.crew&&canonName(e.crew)===key)));
+    return ups.map(ev=>{
+      let me=null;
+      try{
+        const entrants=entrantsOf(ev,events);
+        if(entrants.length>=2){
+          const sim=ratingEngine.simulateFleet(entrants,{seed:hashSeed(ev.id)});
+          me=sim.rows.find(r=>canonName(r.helm)===key||(r.crew&&canonName(r.crew)===key))||null;
+        }
+      }catch{/* forecast is decoration — the chip still shows without it */}
+      return{ev,me};
+    }).sort((a,b)=>dateKey(a.ev.date).localeCompare(dateKey(b.ev.date)));
+  },[events,key]);
+  if(!rows.length)return null;
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:8,margin:"0 0 16px"}}>
+      {rows.map(({ev,me})=>(
+        <div key={ev.id} onClick={()=>onOpen&&onOpen(ev.id)} title="Open the entry list & fleet forecast"
+          style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",cursor:"pointer",
+            background:"rgba(232,146,26,.09)",borderRadius:14,padding:"9px 14px",
+            boxShadow:"inset 0 0 0 1px rgba(232,146,26,.28)"}}>
+          <Calendar size={14} color="#b8860b" style={{flex:"none"}}/>
+          <span style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"#b8860b",flex:"none"}}>Upcoming</span>
+          <span style={{fontSize:13,fontWeight:700,color:"var(--ink)",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.name}</span>
+          {ev.date&&<span style={{fontSize:12,color:"var(--mut)",flex:"none"}}>{formatDate(ev.date)}</span>}
+          {me&&(
+            <span style={{marginLeft:"auto",fontSize:12,color:"var(--mut)",flex:"none",fontVariantNumeric:"tabular-nums"}}>
+              forecast: <b style={{color:"var(--ink)"}}>{pct(me.podium)}</b> podium · likely {me.p16===me.p84?ordinalOf(me.p16):`${ordinalOf(me.p16)}–${ordinalOf(me.p84)}`} of {ev.entries.length}
+            </span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
