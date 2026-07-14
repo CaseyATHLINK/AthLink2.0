@@ -2927,7 +2927,10 @@ _HOST_ALIASES = [
     (r'aberdeen\s+boat\s+club|\babclub\b',            'Aberdeen Boat Club'),
     (r'hebe\s+haven\s+yacht\s+club|\bhhyc\b',         'Hebe Haven Yacht Club'),
     (r'royal\s+yacht\s+club\s+victoria|\brycv\b',     'Royal Yacht Club Victoria'),
-    (r'hong\s+kong\s+sailing\s+federation|\bhksf\b',  'Hong Kong Sailing Federation'),
+    # HKSF renamed 2026: "Sailing Federation of Hong Kong, China". Old documents
+    # still print the old name/abbr, so both alias forms map to the new name.
+    (r'hong\s+kong\s+sailing\s+federation|sailing\s+federation\s+of\s+hong\s+kong|\bhksf\b|\bsfhkc\b',
+     'Sailing Federation of Hong Kong, China'),
 ]
 
 def detect_host(text):

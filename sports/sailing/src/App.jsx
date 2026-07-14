@@ -20,7 +20,7 @@ import { isCode, scoreEvent, scorePreview, aggregate, outstandingAchievementFor 
 import { parseHtml } from "./data/parse-html.js";
 import { dbToApp, saveEventToDb, updateEventStatus, fetchDupDismissals, saveDupDismissals } from "./data/events.js";
 import { CountryTag, ConfirmModal, VerifyBadge, DivisionToggle, ClassPicker, HostClassPills, LiquidBackground, MagneticItem, ResultNuggets, WebIcon, ErrorBoundary, HostLogo } from "./views/atoms.jsx";
-import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect, SubclassHover, HostPicker } from "./views/forms.jsx";
+import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect, ClassSelect, AddHostNugget } from "./views/forms.jsx";
 import { CalendarBody } from "./views/calendar.jsx";
 import { GLOBE_NAMES, SailingGlobe, FootprintLegend } from "./views/globe.jsx";
 import { AthleteWeb, YearNuggets, ProgressChart } from "./views/charts.jsx";
@@ -400,11 +400,12 @@ export default function AthLinkMVP(){
     const ok=(entries||[]).filter(e=>e&&e.previewEv);
     if(!ok.length) return;
     setShowDiscovery(false); setDiscoveryImport(null);
-    resetImport(); setTab("ai"); setImportStep("preview");
-    setPending(ok);
-    setActivePending(0);
-    setPreviewEv(ok[0].previewEv);
-    setMf(f=>({...f,subclass:ok[0].subclass||null,collabs:ok[0].collabs||[]}));
+    setEditResultsEv(null);
+    // Reopening: restore any stashed queue first so these results JOIN it.
+    if(!open&&!restoreImportDraft()) resetImport();
+    setTab("ai"); setImportStep("upload");
+    setActivePending(null); setPreviewEv(null);
+    setPending(prev=>[...prev,...ok]);   // append to the hub queue — review each via its Review button
     setOpen(true);
   };
   // Bulk "import": parse each selected discovered competition (small pool, live
@@ -867,11 +868,8 @@ export default function AthLinkMVP(){
       return{total,net:total-dropped};
     });
   },[mf]);
-  const[pdfLoading,setPdfLoading]=useState(false);
   const[pdfError,setPdfError]=useState("");
-  const[liveUrl,setLiveUrl]=useState("");               // AI parser: paste a results link
-  const[parseLog,setParseLog]=useState([]);             // [{name,status,notes:[]}] thinking stream
-  const[parseProgress,setParseProgress]=useState({done:0,total:0});
+  const[liveUrl,setLiveUrl]=useState("");               // AI Entry: paste a results link
   const[importStep,setImportStep]=useState("upload");
   // Drag-and-drop upload state. dragDepth is a counter: dragenter/dragleave fire on
   // child elements too, so a bare boolean flickers — count nested enters/leaves and
@@ -881,10 +879,18 @@ export default function AthLinkMVP(){
   const[pdfMeta,setPdfMeta]=useState(null);
   const[previewEv,setPreviewEv]=useState(null);
   const[previewEdit,setPreviewEdit]=useState(null);
-  // Multi-file import: each pending result = {id,name,status:'ok'|'error'|'parsing',
-  //   error, previewEv, subclass, collabs}. activePending = index being edited.
+  // Import queue: each pending result = {id,name,status:'parsing'|'ok'|'error'|'published',
+  //   error, previewEv, subclass, collabs, notes:[…], publishedMsg}. The import pop-up is
+  //   the hub: parses append here (never replace), items are reviewed via their own
+  //   editor tab and stay in the list — ticked off — once published.
+  // activePending = the ID of the item open in the editor (null = on the hub list).
+  //   IDs, not indexes: concurrent parses expand multi-fleet files in place, which
+  //   shifts positions under an open editor.
   const[pending,setPending]=useState([]);
-  const[activePending,setActivePending]=useState(0);
+  const[activePending,setActivePending]=useState(null);
+  // Busy = anything still parsing. Derived, so concurrent batches can't fight over
+  // a boolean; used for spinners only — the hub NEVER locks uploads while parsing.
+  const pdfLoading=pending.some(p=>p.status==="parsing");
   const[previewEditVal,setPreviewEditVal]=useState("");
   // Web-lookup enrichment suggestions, keyed by pending-item id →
   //   {date,country,source,dismissed}. Populated best-effort by the enrichment
@@ -2034,10 +2040,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   /* ── PDF / import flow ────────────────────────────────────── */
   const resetImport=()=>{
-    setPdfLoading(false);setPdfError("");setImportStep("upload");
+    setPdfError("");setImportStep("upload");
     setFleetChoices([]);setPdfMeta(null);setPreviewEv(null);setPreviewEdit(null);
-    setPending([]);setActivePending(0);
-    setLiveUrl("");setParseLog([]);setParseProgress({done:0,total:0});
+    setPending([]);setActivePending(null);
+    setLiveUrl("");
   };
   // ── Import-draft persistence (in-memory, session-scoped) ──
   // The import pop-up is inline JSX gated on `open` (not a separately-mounted
@@ -2048,15 +2054,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // fresh batch starts. NOT persisted to storage — a page reload clears it by design.
   const clearImportDraft=()=>{IMPORT_DRAFT=null;};
   const snapshotImportDraft=()=>{
-    // Nothing meaningful to keep? (no parsed batch / no preview) → drop any old draft.
-    if(editResultsEv||(!pending.length&&!previewEv)){IMPORT_DRAFT=null;return;}
+    // Nothing meaningful to keep? (no unpublished items / no preview) → drop any old
+    // draft. A queue that's ALL published is finished business — don't resurrect it.
+    const hasLive=pending.some(p=>p.status!=="published");
+    if(editResultsEv||(!hasLive&&!previewEv)){IMPORT_DRAFT=null;return;}
     // Fold the active editor (previewEv + subclass/collabs live in mf) into its slot.
-    const snapPending=pending.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
+    const snapPending=pending.map(p=>(p.id===activePending&&previewEv)?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
     IMPORT_DRAFT={pending:snapPending,activePending,previewEv,mf,importStep,tab,fleetChoices,pdfMeta};
   };
   const restoreImportDraft=()=>{
     const d=IMPORT_DRAFT;if(!d) return false;
-    setPending(d.pending||[]);setActivePending(d.activePending||0);
+    setPending(d.pending||[]);setActivePending(d.activePending||null);
     setPreviewEv(d.previewEv||null);setMf(d.mf||emptyForm());
     setImportStep(d.importStep||"upload");setTab(d.tab||"ai");
     setFleetChoices(d.fleetChoices||[]);setPdfMeta(d.pdfMeta||null);
@@ -2073,37 +2081,50 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   // Snapshot current editor (previewEv + class/subclass/collab) into the active pending slot.
   const syncActivePending=()=>{
-    setPending(prev=>prev.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p));
+    setPending(prev=>prev.map(p=>(p.id===activePending&&previewEv)?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p));
   };
-  // Switch to another pending result tab.
-  const switchPending=idx=>{
-    if(idx===activePending||idx<0||idx>=pending.length) return;
-    setPending(prev=>{
-      const next=prev.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
-      const target=next[idx];
-      if(target?.previewEv){
-        setPreviewEv(target.previewEv);
-        setMf(f=>({...f,subclass:target.subclass||null,collabs:target.collabs||[]}));
-      }
-      return next;
-    });
-    setActivePending(idx);
+  // Open one queued result in its own editor tab (the hub's "Review" portal button).
+  const openPendingEditor=id=>{
+    const t=pending.find(p=>p.id===id);
+    if(!t||!t.previewEv) return;
+    syncActivePending();   // fold whatever editor was open back into its slot first
+    setPreviewEv(t.previewEv);
+    setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));
+    setActivePending(id);
+    setImportStep("preview");
   };
-  // Remove a single pending result from the import (without discarding the rest).
-  const removePending=idx=>{
-    const remaining=pending.filter((_,i)=>i!==idx);
-    if(!remaining.length){closeImport();return;}
+  // Close the editor tab back to the hub list, keeping the queue intact.
+  const backToHub=()=>{
+    syncActivePending();
+    setActivePending(null);setPreviewEv(null);setImportStep("upload");
+  };
+  // Switch to another pending result tab (by id).
+  const switchPending=id=>{
+    if(id===activePending) return;
+    openPendingEditor(id);
+  };
+  // Remove a single pending result from the queue (without discarding the rest).
+  const removePending=id=>{
+    const idx=pending.findIndex(p=>p.id===id);
+    if(idx<0) return;
+    const remaining=pending.filter(p=>p.id!==id);
     setPending(remaining);
-    const ni=Math.min(idx<=activePending?activePending-1:activePending,remaining.length-1);
-    const safe=Math.max(0,ni);
-    setActivePending(safe);
-    const t=remaining[safe];
-    if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
-    else setPreviewEv(null);
+    if(id===activePending){
+      // Removed the open editor → jump to the next reviewable item, else back to the hub.
+      const next=remaining.find(p=>p.status==="ok");
+      if(next&&importStep==="preview"){
+        setPreviewEv(next.previewEv);
+        setMf(f=>({...f,subclass:next.subclass||null,collabs:next.collabs||[]}));
+        setActivePending(next.id);
+      }else{
+        setActivePending(null);setPreviewEv(null);setImportStep("upload");
+      }
+    }
   };
   // Merge all pending tabs that share a fleetGroupId into one combined tab.
+  // Only unpublished fleets combine — a fleet already ticked off stays published.
   const combineFleetGroup=(groupId)=>{
-    const groupItems=pending.filter(p=>p.fleetGroupId===groupId);
+    const groupItems=pending.filter(p=>p.fleetGroupId===groupId&&p.status!=="published");
     if(groupItems.length<2) return;
     const allEntries=groupItems.flatMap(p=>p.previewEv?.entries||[]);
     const seen=new Set();
@@ -2113,10 +2134,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const maxDisc=groupItems[0].fleetGroupDiscards||Math.max(...groupItems.map(p=>p.previewEv?.discards||1));
     const combinedPreview={...groupItems[0].previewEv,name:baseName,discards:maxDisc,entries:merged,ai_parsed:false};
     const combinedItem={id:"combined_"+groupId,name:baseName,status:"ok",error:null,previewEv:combinedPreview,subclass:groupItems[0].subclass,collabs:groupItems[0].collabs};
-    const newPending=[...pending.filter(p=>p.fleetGroupId!==groupId),combinedItem];
-    const newIdx=newPending.length-1;
+    const newPending=[...pending.filter(p=>p.fleetGroupId!==groupId||p.status==="published"),combinedItem];
     setPending(newPending);
-    setActivePending(newIdx);
+    setActivePending(combinedItem.id);
     setPreviewEv(combinedPreview);
     setMf(f=>({...f,subclass:combinedItem.subclass||null,collabs:combinedItem.collabs||[]}));
   };
@@ -2160,7 +2180,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         // B: when the built-in parser doesn't recognise a PDF, point to the AI parser.
         if(mode==="rule"&&/not found|unsupported|unknown|couldn'?t|supported:/i.test(err))
           err=err.replace(/\s*For other formats use Manual entry\.?/i,"")
-              +" — switch to the AI parser tab (it reads odd or non-standard layouts), or use Manual entry.";
+              +" — switch to the AI Entry tab (it reads odd or non-standard layouts), or use Manual entry.";
         return{ok:false,error:err};
       }
       // server reachable but couldn't read the HTML → try the browser parser below
@@ -2381,135 +2401,118 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // ── MULTI-FILE: parse all chosen files into the pending list ──
   // Drag-and-drop: same code path as the file input's onChange (handleFiles). Depth
   // counter guards against dragleave firing when the pointer crosses child elements.
-  const onDragEnter=e=>{e.preventDefault();e.stopPropagation();if(!pdfLoading)setDragDepth(d=>d+1);};
+  // No pdfLoading gate: the hub accepts new files while earlier ones still parse.
+  const onDragEnter=e=>{e.preventDefault();e.stopPropagation();setDragDepth(d=>d+1);};
   const onDragOver=e=>{e.preventDefault();e.stopPropagation();};
   const onDragLeave=e=>{e.preventDefault();e.stopPropagation();setDragDepth(d=>Math.max(0,d-1));};
   const onDropFiles=(e,mode)=>{
     e.preventDefault();e.stopPropagation();setDragDepth(0);
-    if(pdfLoading) return;
     const files=e.dataTransfer?.files;
     if(files&&files.length) handleFiles(files,mode);
   };
   const handleFiles=async(fileList,mode="ai")=>{
     const files=[...(fileList||[])];
     if(!files.length) return;
-    setPdfError("");setPdfLoading(true);
-    setParseProgress({done:0,total:files.length});
-    setParseLog(files.map(f=>({name:f.name,status:"parsing",notes:[mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]})));
-    const seed=files.map((f,i)=>({id:"pf_"+Date.now()+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]}));
-    setPending(seed);setActivePending(0);
-    // Parse files concurrently (was sequential). Total time ≈ slowest file, not the sum.
-    // Cap concurrency so a large batch doesn't fire dozens of simultaneous AI calls.
-    let done=0;
+    setPdfError("");
+    // APPEND to the hub queue — never clobber batches already parsing. The host can
+    // keep adding files/links while earlier ones are still working.
+    const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    const seed=files.map((f,i)=>({id:"pf_"+stamp+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],
+      notes:[mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]}));
+    setPending(prev=>[...prev,...seed]);
+    const note=(id,txt)=>setPending(prev=>prev.map(p=>p.id===id?{...p,notes:[txt]}:p));
+    // Parse files concurrently. Total time ≈ slowest file, not the sum. Cap
+    // concurrency so a large batch doesn't fire dozens of simultaneous AI calls.
     const handleOne=async(i)=>{
-     try{
-      const f=files[i];
-      const isPdf=f.name.toLowerCase().endsWith(".pdf")||f.type==="application/pdf";
-      let data;
-      if(mode==="ai"&&isPdf){
-        // Flow: built-in (rule) parser → per-page Claude for multi-page scans.
-        // parseOnePdfPaged tries the rule parser FIRST (handles Sailwave /
-        // Manage2sail / Sailti instantly, all pages, exact names), does ONE
-        // whole-file Claude call for single-page unknowns, and only chunks
-        // page-by-page for MULTI-PAGE image/unknown PDFs — where a single
-        // whole-file pass silently returns just page 1 (each page is often its
-        // own division). Most files finish in the rule parser with no AI at all.
-        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading with the built-in parser…"]}:l));
-        data=await parseOnePdfPaged(f,(p,t)=>{
-          setParseLog(prev=>prev.map((l,li)=>li===i
-            ?{...l,status:"parsing",notes:[t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"]}
-            :l));
-        });
-      }else{
-        data=await parseOneFile(f,mode);
-      }
-      // Flag-image nationalities: when the rule parser found a Nat column but it
-      // was empty (flags, not text), read them with one small AI call and merge
-      // by SAIL NUMBER (never by row order — so a flag can't land on the wrong
-      // boat). Best-effort: a failure leaves the result with blank nat.
-      if(data.ok&&data.nat_from_flags&&isPdf){
-        try{
-          setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading nationalities from flags…"]}:l));
-          const nr=await fetch(`/api/sailing/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
-          const nd=await nr.json();
-          if(nd.ok&&nd.nats&&Object.keys(nd.nats).length){
-            const norm=v=>String(v||"").replace(/\s+/g,"").toLowerCase();
-            const apply=ents=>(ents||[]).forEach(e=>{const code=nd.nats[norm(e.sail)];if(code&&!(e.nat||"").trim())e.nat=code;});
-            if(data.entries) apply(data.entries);
-            if(data.fleets) data.fleets.forEach(fl=>apply(fl.entries));
-          }
-        }catch(e){ /* best-effort — keep the parsed result without nationalities */ }
-      }
+      const id=seed[i].id;
       let rows;
-      if(!data.ok){
-        rows=[{...seed[i],status:"error",error:data.error}];
-        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"error",notes:[data.error]}:l));
-      }else if(data.multi&&data.fleets?.length){
-        const groupId="fg_"+Date.now()+"_"+i;
-        const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
-        rows=data.fleets.map((fl,fi)=>({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
-          fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc}));
-        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]}:l));
-      }else{
-        rows=[{...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"")}];
-        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:data.notes||["Done."]}:l));
+      try{
+        const f=files[i];
+        const isPdf=f.name.toLowerCase().endsWith(".pdf")||f.type==="application/pdf";
+        let data;
+        if(mode==="ai"&&isPdf){
+          // Flow: built-in (rule) parser → per-page Claude for multi-page scans.
+          // parseOnePdfPaged tries the rule parser FIRST (handles Sailwave /
+          // Manage2sail / Sailti instantly, all pages, exact names), does ONE
+          // whole-file Claude call for single-page unknowns, and only chunks
+          // page-by-page for MULTI-PAGE image/unknown PDFs — where a single
+          // whole-file pass silently returns just page 1 (each page is often its
+          // own division). Most files finish in the rule parser with no AI at all.
+          note(id,"Reading with the built-in parser…");
+          data=await parseOnePdfPaged(f,(p,t)=>note(id,t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"));
+        }else{
+          data=await parseOneFile(f,mode);
+        }
+        // Flag-image nationalities: when the rule parser found a Nat column but it
+        // was empty (flags, not text), read them with one small AI call and merge
+        // by SAIL NUMBER (never by row order — so a flag can't land on the wrong
+        // boat). Best-effort: a failure leaves the result with blank nat.
+        if(data.ok&&data.nat_from_flags&&isPdf){
+          try{
+            note(id,"Reading nationalities from flags…");
+            const nr=await fetch(`/api/sailing/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:files[i]});
+            const nd=await nr.json();
+            if(nd.ok&&nd.nats&&Object.keys(nd.nats).length){
+              const norm=v=>String(v||"").replace(/\s+/g,"").toLowerCase();
+              const apply=ents=>(ents||[]).forEach(e=>{const code=nd.nats[norm(e.sail)];if(code&&!(e.nat||"").trim())e.nat=code;});
+              if(data.entries) apply(data.entries);
+              if(data.fleets) data.fleets.forEach(fl=>apply(fl.entries));
+            }
+          }catch(e){ /* best-effort — keep the parsed result without nationalities */ }
+        }
+        if(!data.ok){
+          rows=[{...seed[i],status:"error",error:data.error,notes:[data.error]}];
+        }else if(data.multi&&data.fleets?.length){
+          const groupId="fg_"+stamp+"_"+i;
+          const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
+          rows=data.fleets.map((fl,fi)=>({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+            previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
+            fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc,
+            notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]}));
+        }else{
+          rows=[{...seed[i],status:"ok",notes:data.notes||["Done."],
+            previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"")}];
+        }
+      }catch(err){
+        // §6: one bad file must never fail the whole batch. Any unexpected throw
+        // becomes this file's own error row; siblings continue.
+        const msg=(err&&err.message)?err.message:"Couldn't read this file — try exporting it as PDF, Excel, or HTML.";
+        rows=[{...seed[i],status:"error",error:msg,notes:[msg]}];
       }
-      done++; setParseProgress({done,total:files.length});
-      return rows;
-     }catch(err){
-      // §6: one bad file must never fail the whole batch. Any unexpected throw
-      // becomes this file's own error row; siblings continue.
-      const msg=(err&&err.message)?err.message:"Couldn't read this file — try exporting it as PDF, Excel, or HTML.";
-      done++; setParseProgress({done,total:files.length});
-      setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"error",notes:[msg]}:l));
-      return[{...seed[i],status:"error",error:msg}];
-     }
+      // Swap the placeholder for its parsed row(s) in place — a multi-fleet file
+      // expands to one row per fleet. Id-keyed, so parallel batches can't collide.
+      setPending(prev=>prev.flatMap(p=>p.id===id?rows:[p]));
     };
-    const perFile=new Array(files.length);
     let next=0;
-    const worker=async()=>{ while(next<files.length){ const i=next++; perFile[i]=await handleOne(i); } };
+    const worker=async()=>{ while(next<files.length){ const i=next++; await handleOne(i); } };
     await Promise.all(Array.from({length:Math.min(3,files.length)},worker));
-    const results=perFile.flat();
-    setPending(results);setActivePending(0);
-    const firstOk=results.findIndex(r=>r.status==="ok");
-    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);setImportStep("preview");}
-    // If every file errored, stay on the upload screen so the error list is visible.
-    setPdfLoading(false);
+    // No auto-open: parsed results wait in the hub queue — the host opens each
+    // via its Review button, in any order, whenever it suits them.
   };
 
-  // ── LIVE LINK: fetch + parse a results URL server-side, add to pending ──
+  // ── LIVE LINK: fetch + parse a results URL server-side, append to the queue ──
   const handleLink=async(url,mode="ai")=>{
     const u=(url||"").trim();
     if(!u) return;
-    setPdfError("");setPdfLoading(true);
-    setParseProgress({done:0,total:1});
-    setParseLog([{name:u,status:"parsing",notes:["Fetching the page server-side…"]}]);
+    setPdfError("");
+    setLiveUrl("");   // clear the bar right away so the next link can be pasted while this one parses
+    const id="link_"+Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    setPending(prev=>[...prev,{id,name:u,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],notes:["Fetching the page server-side…"]}]);
     const data=await parseLink(u,mode);
+    let rows;
     if(!data.ok){
-      setPending([{id:"link_"+Date.now(),name:u,status:"error",error:data.error,previewEv:null,subclass:null,collabs:[]}]);
-      setParseLog([{name:u,status:"error",notes:[data.error]}]);
-      setActivePending(0);setParseProgress({done:1,total:1});setPdfLoading(false);
-      return;
-    }
-    const results=[];
-    if(data.multi&&data.fleets?.length){
-      const groupId="fg_link_"+Date.now();
+      rows=[{id,name:u,status:"error",error:data.error,previewEv:null,subclass:null,collabs:[],notes:[data.error]}];
+    }else if(data.multi&&data.fleets?.length){
       const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
-      data.fleets.forEach((fl,fi)=>{
-        results.push({id:groupId+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
-          fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc});
-      });
+      rows=data.fleets.map((fl,fi)=>({id:id+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+        previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
+        fleetGroupId:id,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc,notes:data.notes||["Parsed."]}));
     }else{
-      results.push({id:"link_"+Date.now(),name:data.name||u,status:"ok",error:null,
-        previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[]});
+      rows=[{id,name:data.name||u,status:"ok",error:null,notes:data.notes||["Parsed."],
+        previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[]}];
     }
-    setPending(results);
-    const firstOk=results.findIndex(r=>r.status==="ok");
-    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);setImportStep("preview");}
-    setParseLog([{name:u,status:"ok",notes:data.notes||["Parsed."]}]);
-    setParseProgress({done:1,total:1});setPdfLoading(false);
+    // No auto-open — the result waits in the hub queue with a Review button.
+    setPending(prev=>prev.flatMap(p=>p.id===id?rows:[p]));
   };
 
   const handlePdf=async file=>{
@@ -2524,10 +2527,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // applied to all fleets of that file. Other fields stay per-tab via updPMeta.
   const updSharedMeta=(k,v)=>{
     setPreviewEv(ev=>ev?{...ev,[k]:v}:ev);            // active (live editor)
-    const gid=pending[activePending]?.fleetGroupId;
+    const gid=pending.find(p=>p.id===activePending)?.fleetGroupId;
     if(!gid) return;                                  // single-file → nothing to sync
-    setPending(prev=>prev.map((p,i)=>
-      (i!==activePending&&p.fleetGroupId===gid&&p.previewEv)
+    setPending(prev=>prev.map(p=>
+      (p.id!==activePending&&p.fleetGroupId===gid&&p.previewEv)
         ? {...p,previewEv:{...p.previewEv,[k]:v}}
         : p));
   };
@@ -2536,7 +2539,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // to all fleets of that event (same behaviour as Host Country / Date above).
   const updSharedCollabs=(v)=>{
     updMeta("collabs",v);                              // active editor (mf)
-    const gid=pending[activePending]?.fleetGroupId;
+    const gid=pending.find(p=>p.id===activePending)?.fleetGroupId;
     if(!gid) return;                                   // single-file → nothing to sync
     setPending(prev=>prev.map(p=>p.fleetGroupId===gid?{...p,collabs:v}:p));
   };
@@ -2565,7 +2568,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // (guarded by item._enriched), never auto-applies — it only stores a
   // low-confidence suggestion the strip below the fields can offer.
   useEffect(()=>{
-    const item=pending[activePending];
+    const item=pending.find(p=>p.id===activePending);
     if(!item||item.status!=="ok"||!item.previewEv||item._enriched) return;
     const pv=item.previewEv;
     const missing=[];
@@ -2638,6 +2641,20 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     setPreviewEdit(null);
   };
 
+  // After a result is filed (published, drafted, or deduped): tick its queue item
+  // off and drop back to the hub list — its editor tab closes automatically. The
+  // legacy no-queue path (fleet picker) still closes the whole pop-up.
+  const finishPublished=(msg)=>{
+    if(activePending&&pending.some(p=>p.id===activePending)){
+      // Keep the competition's display name on the ticked nugget; drop the heavy
+      // entries payload (a published item is never reopened in the editor).
+      const finalName=previewEv?.name||null;
+      setPending(prev=>prev.map(p=>p.id===activePending?{...p,status:"published",publishedMsg:msg,name:finalName||p.previewEv?.name||p.name,previewEv:null}:p));
+      setActivePending(null);setPreviewEv(null);setImportStep("upload");
+    }else{
+      closeImport();
+    }
+  };
   const importPreview=async(asDraft)=>{
     if(!previewEv) return;
     const status=asDraft?"Draft":"Final";
@@ -2683,17 +2700,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       clearImportDraft();   // this result is filed — drop it from any stashed draft
       setNote({name:dup.name,matched:0,created:0,msg:`Already on AthLink — linked ${who} as an additional source (no duplicate created).`});
       setTimeout(()=>setNote(null),7000);
-      if(pending.length){
-        const remaining=pending.filter((_,i)=>i!==activePending);
-        if(remaining.length){
-          setPending(remaining);
-          const nextIdx=Math.min(activePending,remaining.length-1);
-          const firstOk=remaining[nextIdx]?.status==="ok"?nextIdx:remaining.findIndex(r=>r.status==="ok");
-          setActivePending(firstOk<0?0:firstOk);
-          const t=remaining[firstOk<0?0:firstOk];
-          if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
-        } else { closeImport(); }
-      } else { closeImport(); }
+      finishPublished("Already on AthLink — linked as a source");
       const isSaved=!String(dup.id).startsWith("imp_")&&!String(dup.id).startsWith("fg_");
       if(isSaved){(async()=>{try{await sbPatch("events",`id=eq.${dup.id}`,patch);}catch(err){console.error("importPreview dedup patch failed",err);}})();}
       return;
@@ -2706,22 +2713,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     clearImportDraft();   // this result is filed — drop it from any stashed draft
     setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":null});
     setTimeout(()=>setNote(null),7000);
-    // Multi-file: remove this published tab; advance to the next pending one, or close.
-    if(pending.length){
-      const remaining=pending.filter((_,i)=>i!==activePending);
-      if(remaining.length){
-        setPending(remaining);
-        const nextIdx=Math.min(activePending,remaining.length-1);
-        const firstOk=remaining[nextIdx]?.status==="ok"?nextIdx:remaining.findIndex(r=>r.status==="ok");
-        setActivePending(firstOk<0?0:firstOk);
-        const t=remaining[firstOk<0?0:firstOk];
-        if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
-      } else {
-        closeImport();
-      }
-    } else {
-      closeImport();
-    }
+    // The editor tab closes automatically; the item stays in the hub queue,
+    // ticked off, so the host keeps a gauge of what's done vs still importing.
+    finishPublished(asDraft?"Saved as draft":"Published");
     // Persist in the background; swap in the DB copy (with real ids) once saved.
     // DETACHED (not awaited) so importPreview resolves as soon as the optimistic
     // UI above is done — the Publish/Draft button's loading state then clears
@@ -3213,7 +3207,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .fleet-card .fcount{font-size:13px;color:var(--mut);}
     /* Preview modal */
     .preview-meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;}
-    .preview-meta.wide{grid-template-columns:2fr 1fr 1fr 1fr;}
+    /* One-row import header: name · date · host country · discards stepper · class dropdown */
+    .preview-meta.wide{grid-template-columns:1.7fr 1.15fr 1.15fr auto minmax(118px,.9fr);align-items:end;}
+    @media(max-width:860px){.preview-meta.wide{grid-template-columns:1fr 1fr;}}
     .preview-meta label{font-size:11px;color:var(--mut);display:block;margin-bottom:3px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;}
     .preview-meta input{width:100%;border:0;border-radius:12px;padding:8px 11px;font:inherit;font-size:13px;background:var(--grouped);outline:none;transition:box-shadow .15s;}
     .preview-meta input:focus{box-shadow:0 0 0 4px var(--halo);}
@@ -3252,10 +3248,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     /* Floating save/publish bar — pinned to the bottom of the modal's scroll
        container (.mbody) so it stays visible while the preview scrolls. Liquid-glass
        material consistent with .draft-banner. */
-    .import-actionbar{position:sticky;bottom:0;left:0;right:0;z-index:40;display:flex;gap:10px;justify-content:flex-end;align-items:center;
-      margin:16px -28px -28px;padding:14px 28px;border-top:1px solid var(--line);
-      background:rgba(252,253,255,0.72);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);
-      box-shadow:inset 0 1px 0 rgba(255,255,255,.5);}
+    .import-actionbar{position:sticky;bottom:14px;z-index:40;display:flex;gap:10px;justify-content:flex-end;align-items:center;
+      margin:12px 0 0;padding:0;pointer-events:none;}
+    .import-actionbar>*{pointer-events:auto;}
+    .import-actionbar .btn{box-shadow:0 10px 26px -10px rgba(8,30,60,.45);}
+    .import-actionbar .btn.ghost{background:rgba(252,253,255,.88);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);}
     /* Reclaim space beneath the sticky bar so the last table rows aren't hidden. */
     .mbody.has-actionbar{padding-bottom:0;}
     .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
@@ -3522,7 +3519,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       .histrow{padding:12px 13px;gap:11px;margin-bottom:8px;}
       .hrk{width:40px;font-size:18px;}
       .mbody{padding:16px 16px 20px;}
-      .import-actionbar{margin:16px -16px -20px;padding:12px 16px;}
+      .import-actionbar{margin:12px 0 0;padding:0;bottom:10px;}
       .team-summary{padding:10px 12px;}
       .x{width:40px;height:40px;}
       .np-srchbtn,.np-menubtn{width:44px;height:44px;}
@@ -5632,26 +5629,25 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className={`modal${importStep==="preview"?" wide":""}`} onClick={e=>e.stopPropagation()}>
         <div className="mhead">
           {importStep==="picker"&&<button className="x" onClick={()=>setImportStep("upload")} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
-          {importStep==="preview"&&!editResultsEv&&<button className="x" onClick={()=>{setPending([]);setActivePending(0);setPreviewEv(null);setImportStep(fleetChoices.length?"picker":"upload");}} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
+          {importStep==="preview"&&!editResultsEv&&<button className="x" onClick={backToHub} title="Back to the import list (keeps this result in the queue)" style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           {importStep==="preview"&&editResultsEv&&<button className="x" onClick={()=>{closeImport();setEditResultsEv(null);}} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           <Upload size={18}/>
           <h3>{importStep==="picker"?"Select fleet":importStep==="preview"?"Preview & edit results":"Import a competition"}</h3>
-          {pdfLoading&&importStep==="preview"&&(
+          {(()=>{const n=pending.filter(p=>p.status==="parsing").length;return n>0&&(
             <span style={{display:"inline-flex",alignItems:"center",gap:7,marginLeft:10,color:"var(--accent)",fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif"}}>
               <Loader2 size={15} className="spin"/>
-              {parseProgress.total>1?`Parsing ${parseProgress.done}/${parseProgress.total}…`:"Parsing…"}
+              {n>1?`Parsing ${n}…`:"Parsing…"}
             </span>
-          )}
+          );})()}
           <button className="x" onClick={closeImport}><X size={16}/></button>
         </div>
 
         {importStep==="upload"&&(<>
           <div className="mtabs">
-            <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI parser</button>
+            <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI Entry</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
-            {portal&&!isClassPortal&&host&&<button className={tab==="scrape"?"on":""} onClick={()=>setTab("scrape")}><Globe size={15}/>Scrape website</button>}
           </div>
-          {(()=>{const fileTab=(tab==="ai"||tab==="rule");const dropMode=tab==="rule"?"rule":"ai";const dropActive=fileTab&&dragDepth>0&&!pdfLoading;return(
+          {(()=>{const fileTab=(tab==="ai"||tab==="rule");const dropMode=tab==="rule"?"rule":"ai";const dropActive=fileTab&&dragDepth>0;return(
           <div className="mbody" style={{position:"relative"}}
             onDragEnter={fileTab?onDragEnter:undefined}
             onDragOver={fileTab?onDragOver:undefined}
@@ -5666,7 +5662,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             )}
             {tab==="rule"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>For known formats — <strong style={{color:"var(--ink)"}}>Sailwave</strong>, Sailwave HTML, <strong style={{color:"var(--ink)"}}>Manage2sail</strong>, SailingResults.net and Clubspot. Fast and exact, no AI. Select one or more PDF/HTML files; multi-fleet files split into a tab per fleet. If a file isn't recognised, switch to the AI parser.</p>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>For known formats — <strong style={{color:"var(--ink)"}}>Sailwave</strong>, Sailwave HTML, <strong style={{color:"var(--ink)"}}>Manage2sail</strong>, SailingResults.net and Clubspot. Fast and exact, no AI. Select one or more PDF/HTML files; multi-fleet files split into a tab per fleet. If a file isn't recognised, switch to AI Entry.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose files</>}
                 <input type="file" multiple style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"rule")}/>
@@ -5675,12 +5671,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
             {tab==="ai"&&(<>
+              {/* ── Part 1: single competition ── */}
+              <div style={{fontSize:11,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--navy)",margin:"2px 0 7px",fontFamily:"'Barlow',sans-serif"}}>Import single competition result</div>
               <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
-                {pdfLoading?<><Loader2 size={16} className="spin"/>Working…</>:<><Sparkles size={16}/>Choose files</>}
-                <input type="file" multiple style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"ai")}/>
+                <Sparkles size={16}/>Choose files
+                <input type="file" multiple style={{display:"none"}} onChange={e=>{handleFiles(e.target.files,"ai");e.target.value="";}}/>
               </label>
-              <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here</span>
+              <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here{pdfLoading?" — you can keep adding while others parse":""}</span>
               <div style={{margin:"16px 0 6px",display:"flex",alignItems:"center",gap:10}}>
                 <div style={{flex:1,height:1,background:"var(--line)"}}/>
                 <span style={{fontSize:11,fontWeight:700,letterSpacing:".06em",color:"var(--mut)",textTransform:"uppercase"}}>or paste a results link</span>
@@ -5689,73 +5687,94 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div style={{display:"flex",gap:8}}>
                 <div style={{flex:1,display:"flex",alignItems:"center",gap:8,border:"1px solid var(--line)",borderRadius:9,padding:"0 11px",background:"#fff"}}>
                   <Link2 size={15} color="#9fb2c8" style={{flex:"none"}}/>
-                  <input value={liveUrl} onChange={e=>setLiveUrl(e.target.value)} disabled={pdfLoading}
-                    onKeyDown={e=>{if(e.key==="Enter"&&liveUrl.trim()&&!pdfLoading)handleLink(liveUrl,"ai");}}
+                  <input value={liveUrl} onChange={e=>setLiveUrl(e.target.value)}
+                    onKeyDown={e=>{if(e.key==="Enter"&&liveUrl.trim())handleLink(liveUrl,"ai");}}
                     placeholder="https://… Manage2sail / Clubspot / Sailwave results page"
                     style={{flex:1,border:0,outline:"none",font:"inherit",fontSize:13,padding:"10px 0",background:"transparent"}}/>
                 </div>
-                <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={pdfLoading||!liveUrl.trim()} onClick={()=>handleLink(liveUrl,"ai")}>
-                  <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{pdfLoading?<Loader2 size={15} className="spin"/>:<>Fetch &amp; parse</>}</div>
+                <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={!liveUrl.trim()} onClick={()=>handleLink(liveUrl,"ai")}>
+                  <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Fetch &amp; parse</div>
                 </button>
               </div>
               <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0",lineHeight:1.5}}>Parsing the page's source is usually more accurate than a PDF. The link is fetched on our server (your browser can't, due to cross-origin rules).</p>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
+              {/* ── Part 2: result database (whole archive → discovery) ── */}
+              {portal&&!isClassPortal&&host&&(<>
+                <div style={{margin:"20px 0 12px",height:1,background:"var(--line)"}}/>
+                <div style={{fontSize:11,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--navy)",margin:"0 0 7px",fontFamily:"'Barlow',sans-serif"}}>Import result database</div>
+                <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.55}}>Point AthLink at the web pages that hold your results — <strong style={{color:"var(--ink)"}}>one link per line</strong>. We scan each site for the competitions you've run, check which we can read, and let you pick and publish them. Great for a results archive or a club's regatta page.</p>
+                <textarea value={scrapeText} onChange={e=>setScrapeText(e.target.value)}
+                  placeholder={"https://www.mysailingclub.org/results\nhttps://www.regattanetwork.com/club/1234\nhttps://…"}
+                  rows={3} spellCheck={false}
+                  style={{width:"100%",boxSizing:"border-box",border:"1px solid var(--line)",borderRadius:10,padding:"11px 13px",font:"inherit",fontSize:13,lineHeight:1.6,resize:"vertical",outline:"none",background:"#fff",color:"var(--ink)"}}
+                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10}}>
+                  <button className="btn cta liquidGlass-wrapper" disabled={!scrapeText.trim()}
+                    onClick={()=>{
+                      const urls=[...new Set(scrapeText.split(/[\s,]+/).map(s=>s.trim()).filter(u=>u&&(/^https?:\/\//i.test(u)||/\.[a-z]{2,}/i.test(u))))];
+                      if(!urls.length) return;
+                      closeImport(); setDiscoverySeed(urls); setDiscoveryReview(false); setShowDiscovery(true);
+                    }}
+                    style={{...(scrapeText.trim()?{}:{opacity:.55,cursor:"not-allowed"})}}>
+                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                    <div className="liquidGlass-text"><Globe size={16}/>Find results</div>
+                  </button>
+                  <span style={{fontSize:12,color:"var(--mut)"}}>We fetch each page on our server — your browser can't (cross-origin).</span>
+                </div>
+              </>)}
             </>)}
-            {tab==="scrape"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Paste the web pages that hold your results — <strong style={{color:"var(--ink)"}}>one link per line</strong>. AthLink scrapes each site for the competitions you've run, checks which it can read, and lets you pick and publish them. Great for a results archive or a club's regatta page.</p>
-              <textarea value={scrapeText} onChange={e=>setScrapeText(e.target.value)}
-                placeholder={"https://www.mysailingclub.org/results\nhttps://www.regattanetwork.com/club/1234\nhttps://…"}
-                rows={5} spellCheck={false}
-                style={{width:"100%",boxSizing:"border-box",border:"1px solid var(--line)",borderRadius:10,padding:"11px 13px",font:"inherit",fontSize:13,lineHeight:1.6,resize:"vertical",outline:"none",background:"#fff",color:"var(--ink)"}}
-                onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginTop:12}}>
-                <button className="btn cta liquidGlass-wrapper" disabled={!scrapeText.trim()}
-                  onClick={()=>{
-                    const urls=[...new Set(scrapeText.split(/[\s,]+/).map(s=>s.trim()).filter(u=>u&&(/^https?:\/\//i.test(u)||/\.[a-z]{2,}/i.test(u))))];
-                    if(!urls.length) return;
-                    closeImport(); setDiscoverySeed(urls); setDiscoveryReview(false); setShowDiscovery(true);
-                  }}
-                  style={{...(scrapeText.trim()?{}:{opacity:.55,cursor:"not-allowed"})}}>
-                  <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
-                  <div className="liquidGlass-text"><Globe size={16}/>Find results</div>
-                </button>
-                <span style={{fontSize:12,color:"var(--mut)"}}>We fetch each page on our server — your browser can't (cross-origin).</span>
-              </div>
-            </>)}
-            {(tab==="rule"||tab==="ai")&&(pdfLoading||parseLog.length>0)&&(
-              <div style={{marginTop:16,border:"1px solid var(--line)",borderRadius:11,background:"#f7fafd",padding:"13px 15px"}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:parseProgress.total>0?9:0}}>
-                  {pdfLoading?<Loader2 size={14} className="spin" color="var(--accent)"/>:<CheckCircle size={14} color="#0f8a7e"/>}
-                  <span style={{fontSize:12.5,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
-                    {pdfLoading?(tab==="ai"?"AI is reading your files…":"Parsing…"):"Finished"}
+            {/* ── Import queue: the hub. Every file/link lands here as a compact nugget;
+                   parsed ones carry a Review portal into their own editor tab; published
+                   ones tick off and sink to the bottom. Visible on every tab. ── */}
+            {pending.length>0&&(()=>{
+              const act=pending.filter(p=>p.status!=="published");
+              const done=pending.filter(p=>p.status==="published");
+              const ordered=[...act,...done];   // published sink to the bottom
+              const nP=act.filter(p=>p.status==="parsing").length;
+              const nR=act.filter(p=>p.status==="ok").length;
+              const nE=act.filter(p=>p.status==="error").length;
+              return(
+              <div style={{marginTop:16,border:"1px solid var(--line)",borderRadius:11,background:"#f7fafd",padding:"11px 13px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  {nP>0?<Loader2 size={14} className="spin" color="var(--accent)"/>:<CheckCircle size={14} color="#0f8a7e"/>}
+                  <span style={{fontSize:12.5,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>Import queue</span>
+                  <span style={{marginLeft:"auto",fontSize:11.5,color:"var(--mut)",fontWeight:600}}>
+                    {[nP?`${nP} parsing`:null,nR?`${nR} ready`:null,nE?`${nE} failed`:null,done.length?`${done.length} published`:null].filter(Boolean).join(" · ")}
                   </span>
-                  {parseProgress.total>0&&<span style={{marginLeft:"auto",fontSize:11.5,color:"var(--mut)",fontWeight:600}}>{parseProgress.done}/{parseProgress.total}</span>}
                 </div>
-                {parseProgress.total>0&&(
-                  <div style={{height:6,borderRadius:4,background:"#e3edf6",overflow:"hidden",marginBottom:11}}>
-                    <div style={{height:"100%",width:`${Math.round((parseProgress.done/Math.max(parseProgress.total,1))*100)}%`,background:"linear-gradient(90deg,var(--accent),#0f8a7e)",borderRadius:4,transition:"width .3s ease"}}/>
-                  </div>
-                )}
-                <div style={{display:"flex",flexDirection:"column",gap:7,maxHeight:190,overflowY:"auto"}}>
-                  {parseLog.map((l,li)=>(
-                    <div key={li} style={{fontSize:12,lineHeight:1.5}}>
-                      <div style={{display:"flex",alignItems:"center",gap:6}}>
-                        {l.status==="parsing"?<Loader2 size={12} className="spin" color="var(--accent)" style={{flex:"none"}}/>
-                          :l.status==="error"?<AlertCircle size={12} color="#c0392b" style={{flex:"none"}}/>
-                          :l.status==="ok"?<CheckCircle size={12} color="#0f8a7e" style={{flex:"none"}}/>
-                          :<Clock size={12} color="#9fb2c8" style={{flex:"none"}}/>}
-                        <span style={{fontWeight:600,color:"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.name}</span>
-                      </div>
-                      {(l.notes||[]).length>0&&(
-                        <div style={{paddingLeft:18,color:l.status==="error"?"#c0392b":"var(--mut)"}}>
-                          {l.notes.map((n,ni)=><div key={ni} style={{display:"flex",gap:5}}><span style={{opacity:.5}}>›</span><span>{n}</span></div>)}
-                        </div>
+                <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:236,overflowY:"auto"}}>
+                  {ordered.map(p=>{
+                    const pub=p.status==="published";
+                    return(
+                    <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,border:"1px solid "+(pub?"transparent":"var(--line)"),background:pub?"transparent":"#fff",borderRadius:8,padding:"5px 6px 5px 9px",opacity:pub?.6:1,minHeight:26}}>
+                      {p.status==="parsing"?<Loader2 size={13} className="spin" color="var(--accent)" style={{flex:"none"}}/>
+                        :p.status==="error"?<AlertCircle size={13} color="#c0392b" style={{flex:"none"}}/>
+                        :pub?<CheckCircle size={13} color="#0f8a7e" style={{flex:"none"}}/>
+                        :<FileText size={13} color="var(--accent)" style={{flex:"none"}}/>}
+                      <span style={{fontSize:12.5,fontWeight:600,color:pub?"var(--mut)":"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:"none",maxWidth:"44%",textDecoration:pub?"line-through":"none"}}>{p.previewEv?.name||p.name}</span>
+                      <span title={p.status==="error"?(p.error||""):undefined} style={{fontSize:11.5,color:p.status==="error"?"#c0392b":"var(--mut)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>
+                        {p.status==="parsing"?((p.notes||[]).slice(-1)[0]||"Parsing…")
+                          :p.status==="error"?(p.error||"Couldn't parse this file.")
+                          :pub?(p.publishedMsg||"Published")
+                          :`${p.previewEv?.entries?.length||0} competitors · ready to review`}
+                      </span>
+                      {p.status==="ok"&&(
+                        <button onClick={()=>openPendingEditor(p.id)} title="Open this result to review & publish"
+                          style={{flex:"none",display:"inline-flex",alignItems:"center",gap:3,border:"1px solid var(--accent)",background:"var(--accent)",color:"#fff",borderRadius:7,padding:"3px 9px 3px 11px",fontSize:11.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",cursor:"pointer"}}>
+                          Review<ChevronRight size={12}/>
+                        </button>
                       )}
-                    </div>
-                  ))}
+                      {!pub&&p.status!=="parsing"&&(
+                        <button onClick={()=>removePending(p.id)} title="Remove from the queue"
+                          style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:20,height:20,borderRadius:6,border:0,cursor:"pointer",background:"transparent",color:"#9aa7b6"}}>
+                          <X size={12}/>
+                        </button>
+                      )}
+                    </div>);
+                  })}
                 </div>
-              </div>
-            )}
+              </div>);
+            })()}
             {tab==="manual"&&(<>
               {(()=>{const evCls=assoc?.cls||mf.cls;return(<>
               <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:10,flexWrap:"wrap"}}>
@@ -5872,8 +5891,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {importStep==="preview"&&(pending.length>0||previewEv)&&(()=>{
           const scored=previewScored;
           const maxR=previewMaxRaces;
-          const active=pending[activePending];
+          const active=pending.find(p=>p.id===activePending);
           const isError=active&&active.status==="error";
+          // Editor tabs show only unpublished items — a published result's tab is closed.
+          const openTabs=pending.filter(p=>p.status!=="published");
           const missingCells=previewEv&&previewEv.entries.some(e=>!e.helm||(e.races||[]).length<maxR);
           // Effective class for the table comes from the previewEv itself when set
           // by the per-result selector, else the portal association's class.
@@ -5882,7 +5903,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           // Associations may only host their own class; clubs (and edit mode) host any.
           const classLocked=!!assoc&&!editResultsEv;
           // Detect fleet groups in pending (same fleetGroupId = same multi-fleet source file)
-          const fleetGroupIds=[...new Set(pending.filter(p=>p.fleetGroupId).map(p=>p.fleetGroupId))];
+          const fleetGroupIds=[...new Set(openTabs.filter(p=>p.fleetGroupId).map(p=>p.fleetGroupId))];
           // Days on which the importing host already has competitions — reference/collision
           // info for the date picker. Keyed by the event's DD/MM/YYYY date → competition names.
           // Scope to the resolved host (self-organizing importer, else attributed host); if
@@ -5903,29 +5924,29 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             return out;
           })();
           return(<div className="mbody has-actionbar">
-            {/* ── Pending result tabs (multi-file import) ── */}
-            {pending.length>1&&(
+            {/* ── Open editor tabs (unpublished results; published tabs auto-close) ── */}
+            {openTabs.length>1&&(
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,borderBottom:"1px solid var(--line)",paddingBottom:10}}>
-                {pending.map((p,i)=>(
+                {openTabs.map(p=>{const on=p.id===activePending;return(
                   <span key={p.id}
-                    style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:220,border:"1px solid "+(i===activePending?"var(--accent)":"var(--line)"),
-                      background:i===activePending?"var(--accent)":(p.status==="error"?"#fdeceA":"#fff"),color:i===activePending?"#fff":(p.status==="error"?"#b3261e":"var(--navy)"),
+                    style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:220,border:"1px solid "+(on?"var(--accent)":"var(--line)"),
+                      background:on?"var(--accent)":(p.status==="error"?"#fdeceA":"#fff"),color:on?"#fff":(p.status==="error"?"#b3261e":"var(--navy)"),
                       borderRadius:8,padding:"6px 6px 6px 10px",fontSize:12,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden"}}>
-                    <button onClick={()=>switchPending(i)} title="Edit this result"
+                    <button onClick={()=>switchPending(p.id)} title="Edit this result"
                       style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:170,background:"none",border:0,padding:0,margin:0,cursor:"pointer",color:"inherit",font:"inherit",fontWeight:600,overflow:"hidden"}}>
                       {p.status==="error"?<AlertCircle size={12} style={{flex:"none"}}/>:p.status==="parsing"?<Loader2 size={12} className="spin" style={{flex:"none"}}/>:<FileText size={12} style={{flex:"none"}}/>}
                       <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{p.previewEv?.name||p.name}</span>
                     </button>
-                    <button onClick={()=>removePending(i)} title="Remove this result from the import"
+                    <button onClick={()=>removePending(p.id)} title="Remove this result from the import"
                       style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,borderRadius:5,border:0,cursor:"pointer",
-                        background:i===activePending?"rgba(255,255,255,.22)":"transparent",color:i===activePending?"#fff":"#9aa7b6"}}>
+                        background:on?"rgba(255,255,255,.22)":"transparent",color:on?"#fff":"#9aa7b6"}}>
                       <X size={12}/>
                     </button>
                   </span>
-                ))}
+                );})}
                 {/* Combine fleets button — shown per fleet group */}
                 {fleetGroupIds.map(gid=>{
-                  const gItems=pending.filter(p=>p.fleetGroupId===gid);
+                  const gItems=openTabs.filter(p=>p.fleetGroupId===gid);
                   if(gItems.length<2) return null;
                   // Event title = longest common prefix of the fleet names, trimmed
                   // of any trailing separator (e.g. "29er World Championship — 1-Gold"
@@ -5951,13 +5972,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:6}}/>
                 <b>Couldn't parse "{active.name}".</b> {active.error||""} Try exporting this result in a different format (Sailwave <b>HTML</b> or a text-based <b>PDF</b>) and uploading again.
                 <div style={{marginTop:10}}>
-                  <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} onClick={()=>{
-                    const remaining=pending.filter((_,i)=>i!==activePending);
-                    setPending(remaining);
-                    if(!remaining.length){closeImport();return;}
-                    const ni=Math.min(activePending,remaining.length-1);setActivePending(ni);
-                    const t=remaining[ni];if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
-                  }}>Dismiss this file</button>
+                  <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} onClick={()=>removePending(active.id)}>Dismiss this file</button>
                 </div>
               </div>
             )}
@@ -5971,7 +5986,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div><label>Competition name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Competition name"/></div>
               <div><label>Date</label><DateField value={previewEv.date||""} onChange={v=>updSharedMeta("date",v)} className={!previewEv.date?"pmissing":""} markedDays={markedDays} dotColor={classColor(evCls)||"var(--navy2)"}/></div>
               <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
-              <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
+              <div><label>Discards</label>
+                <div className="stepper" style={{background:"var(--grouped)",borderRadius:12,padding:"3px 5px",gap:5,justifyContent:"center"}}>
+                  {/* functional updates so rapid clicks don't read a stale count */}
+                  <button type="button" style={{width:26,height:26}} onClick={()=>setPreviewEv(ev=>ev?{...ev,discards:Math.max(0,(ev.discards??1)-1)}:ev)}><Minus size={12}/></button>
+                  <span style={{minWidth:16,textAlign:"center",fontSize:13}}>{previewEv.discards??1}</span>
+                  <button type="button" style={{width:26,height:26}} onClick={()=>setPreviewEv(ev=>ev?{...ev,discards:Math.min(20,(ev.discards??1)+1)}:ev)}><Plus size={12}/></button>
+                </div>
+              </div>
+              <div><label>Boat class{classLocked&&<span style={{textTransform:"none",letterSpacing:0}} title={`Fixed to ${assoc.name}'s class`}> 🔒</span>}</label>
+                <ClassSelect value={evCls} subValue={mf.subclass} locked={classLocked?assoc.cls:null}
+                  classes={customClasses} onAdd={name=>addCustomClass(name)}
+                  onPick={(cid,sid)=>{updPMeta("cls",cid);updMeta("subclass",sid);}}/>
+              </div>
             </div>
             {/* ── Web-lookup suggestion strip: low-confidence date/country found
                  online for a document that printed none. Never auto-applied —
@@ -6016,62 +6043,64 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </div>
               );
             })()}
-            {/* ── Two-column: boat classes (left) · organiser controls (right) ── */}
-            <div style={{display:"flex",gap:20,flexWrap:"wrap",alignItems:"flex-start",marginBottom:10}}>
-              {/* LEFT — per-result class selector (reshapes the table). Subclass options
-                  (ILCA/Optimist/49er) are revealed on hover/focus of the parent class button. */}
-              <div style={{flex:"1 1 300px",minWidth:260}}>
-                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Boat class{classLocked&&<span style={{fontWeight:500,opacity:.7}}> — fixed to {assoc.name}'s class</span>}</label>
-                <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
-                  {CLASSES.map(c=>{
-                    const on=evCls===c.id;
-                    const disabled=classLocked&&c.id!==assoc.cls;
-                    const btn=<button type="button" disabled={disabled}
-                      onClick={()=>{if(disabled)return;updPMeta("cls",c.id);updMeta("subclass",null);}}
-                      style={{border:"1px solid "+(on?classColor(c.id):"var(--line)"),background:on?classColor(c.id):"transparent",
-                        color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
-                        cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1}}>{c.short}</button>;
-                    return SUBCLASSES[c.id]
-                      ? <SubclassHover key={c.id} cls={c.id} value={mf.subclass} active={on&&!disabled}
-                          onChange={v=>updMeta("subclass",v)} classBtn={btn}/>
-                      : <React.Fragment key={c.id}>{btn}</React.Fragment>;
-                  })}
-                  <CustomClassPicker classes={customClasses} value={evCls} disabled={classLocked}
-                    onSelect={id=>{updPMeta("cls",id);updMeta("subclass",null);}}
-                    onAdd={name=>addCustomClass(name)}/>
+            {/* ── Organizer row: addable nuggets. First nugget = the organizer (the
+                 importing host by default; X on it demotes the import to an external
+                 CONTRIBUTION). Extra nuggets = collab hosts. "+" adds an existing
+                 association/club/federation — it fills the empty organizer slot
+                 first, then adds collabs. ── */}
+            {(()=>{
+              const importerHost=(portal&&!isClassPortal)?portal:null;
+              const editing=!!editResultsEv;
+              const orgMode=previewEv._orgMode||"self";
+              const selfOrg=!editing&&!!importerHost&&orgMode!=="external";
+              const ownerId=editing?previewEv.owner:(selfOrg?importerHost:(previewEv._orgHost||null));
+              const orgName=!editing&&!ownerId?(previewEv._orgName||""):"";
+              const collabs=mf.collabs||[];
+              const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
+              const nug=(key,label,{dark=false,dashed=false,onX=null,tag=null})=>(
+                <span key={key} style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:260,
+                  border:dashed?"1.5px dashed var(--line)":"1px solid "+(dark?"var(--navy)":"var(--line)"),
+                  background:dark?"var(--navy)":"#fff",color:dark?"#fff":"var(--navy)",
+                  borderRadius:9,padding:"5px 7px 5px 11px",fontSize:12.5,fontWeight:600,whiteSpace:"nowrap"}}>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{label}</span>
+                  {tag&&<span style={{flex:"none",fontSize:10,fontWeight:700,letterSpacing:".04em",opacity:.75,
+                    border:"1px solid "+(dark?"rgba(255,255,255,.4)":"var(--line)"),borderRadius:5,padding:"1px 5px"}}>{tag}</span>}
+                  {onX
+                    ?<button type="button" onClick={onX} title="Remove"
+                      style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,
+                        borderRadius:5,border:0,cursor:"pointer",background:dark?"rgba(255,255,255,.22)":"transparent",
+                        color:dark?"#fff":"#9aa7b6"}}><X size={12}/></button>
+                    :<span style={{width:2}}/>}
+                </span>);
+              // "+" picks: the importer itself → back to self-organized; any host into an
+              // empty organizer slot → attributed organizer; otherwise → collab.
+              const addHost=id=>{
+                if(!editing&&id===importerHost){updSharedMeta("_orgMode","self");updSharedMeta("_orgHost",null);updSharedMeta("_orgName","");return;}
+                if(!editing&&!ownerId){updSharedMeta("_orgHost",id);updSharedMeta("_orgName","");return;}
+                if(!collabs.includes(id)&&id!==ownerId)updSharedCollabs([...collabs,id]);
+              };
+              return(
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:11,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600,letterSpacing:".04em",textTransform:"uppercase"}}>Organizer</label>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {ownerId&&nug("owner",hostById(ownerId)?.name||"Unknown host",{dark:true,tag:"Organizer",
+                    onX:editing?null:()=>{selfOrg?updSharedMeta("_orgMode","external"):updSharedMeta("_orgHost",null);}})}
+                  {!ownerId&&orgName&&nug("orgname",orgName,{dashed:true,tag:"Organizer — not on AthLink",
+                    onX:()=>updSharedMeta("_orgName","")})}
+                  {collabs.map(id=>nug(id,hostById(id)?.name||id,{onX:()=>updSharedCollabs(collabs.filter(x=>x!==id))}))}
+                  <AddHostNugget hosts={allHosts} exclude={[ownerId,...collabs].filter(Boolean)}
+                    allowOther={!editing&&!ownerId&&!orgName}
+                    onOtherName={v=>updSharedMeta("_orgName",v)}
+                    onPick={addHost}
+                    title={(!editing&&!ownerId&&!orgName)?"Add the organizer":"Add a collab association or club"}/>
                 </div>
-              </div>
-              {/* RIGHT — organiser controls (self-organized / host picker / free-text) */}
-              {!editResultsEv&&(()=>{
-                const importerHost=(portal&&!isClassPortal)?portal:null;
-                const orgMode=previewEv._orgMode||"self";
-                const external=!importerHost||orgMode==="external";
-                const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
-                return <div style={{flex:"1 1 260px",minWidth:260}}>
-                  <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Organizer</label>
-                  {importerHost&&<div style={{display:"inline-flex",gap:6,marginBottom:external?8:0,flexWrap:"wrap"}}>
-                    {[["self",`We organized this — ${hostById(importerHost)?.name||"this host"}`],["external","Another organizer"]].map(([m,lbl])=>(
-                      <button key={m} type="button" onClick={()=>updSharedMeta("_orgMode",m)}
-                        style={{border:"1px solid "+(orgMode===m?"var(--navy)":"var(--line)"),background:orgMode===m?"var(--navy)":"transparent",
-                          color:orgMode===m?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",cursor:"pointer"}}>{lbl}</button>
-                    ))}
-                  </div>}
-                  {external&&<div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-                    <HostPicker hosts={allHosts} value={previewEv._orgHost||null}
-                      onChange={id=>{updSharedMeta("_orgHost",id||null);if(id)updSharedMeta("_orgName","");}}
-                      orgName={previewEv._orgName||""} onOrgName={v=>updSharedMeta("_orgName",v)}/>
-                  </div>}
-                  <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>
-                    {external
-                      ?"This competition will be filed as externally contributed — it stays off your page and the organizer can claim it later."
-                      :"You'll be recorded as the organizer; the competition appears on your page."}
-                  </p>
-                </div>;
-              })()}
-            </div>
-            <div style={{marginBottom:10}}>
-              <CollabPicker owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updSharedCollabs(v)}/>
-            </div>
+                {!editing&&<p style={{fontSize:11.5,color:"var(--mut)",margin:"6px 0 0"}}>
+                  {(!ownerId&&!orgName)?"No organizer set — this will be filed as an external contribution"+(importerHost?` by ${hostById(importerHost)?.name||"you"}`:"")+"; the organizer can claim it later."
+                    :selfOrg?"You'll be recorded as the organizer; the competition appears on your page. Collab hosts show it on their pages too."
+                    :`Filed as externally contributed${importerHost?` by ${hostById(importerHost)?.name||"you"}`:""} — it stays off your page and the organizer can claim it later.`}
+                </p>}
+              </div>);
+            })()}
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}</>)}
             {!isError&&previewEv&&(<>
             <div className="preview-table-wrap">
@@ -6148,7 +6177,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
             <div className="import-actionbar">
               <button className="btn ghost" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>
-              <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</div></button>
+              <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":(pending.filter(p=>p.status!=="published").length>1?"Publish this result":"Confirm & Publish")}</div></button>
             </div>
             </>)}
           </div>);

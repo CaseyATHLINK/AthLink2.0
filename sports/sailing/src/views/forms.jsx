@@ -4,10 +4,10 @@
    only by these inputs). Verbatim from App.jsx. */
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { Calendar, ChevronRight, Search, X } from "lucide-react";
+import { Calendar, ChevronRight, Search, X, Plus } from "lucide-react";
 import { MON } from "../util/date.js";
 import { iocFlag, IOC_ISO } from "../util/flag.js";
-import { classColor, classLabel, SUBCLASSES } from "../util/class.js";
+import { classColor, classLabel, CLASSES, SUBCLASSES } from "../util/class.js";
 import { ASSOCIATIONS, CLUBS, assocName } from "../data/hosts.js";
 
 // Compact inline nationality input: type an IOC code (e.g. HKG); once valid it
@@ -81,9 +81,16 @@ export function DateField({value,onChange,markedDays={},dotColor="var(--navy2)",
     <div style={{position:"relative"}} ref={ref}>
       <div style={{position:"relative",display:"flex",alignItems:"center"}}>
         <input value={value||""} onChange={e=>onChange(e.target.value)} className={className}
-          placeholder="dd/mm/yyyy" maxLength={10} style={{paddingRight:74}}/>
-        <span aria-hidden style={{position:"absolute",right:34,pointerEvents:"none",fontSize:10.5,fontWeight:700,
-          letterSpacing:".03em",color:"var(--mut)",opacity:.7}}>DD/MM/YYYY</span>
+          maxLength={10} style={{paddingRight:36}}/>
+        {/* Progressive DD/MM/YYYY mask: the typed part is rendered transparent (it
+            only reserves width); the REST of the mask ghosts after the caret and
+            shrinks as the user types — "05/01/20" leaves just "YY" showing. */}
+        {(value||"").length<10&&(
+          <span aria-hidden style={{position:"absolute",left:11,pointerEvents:"none",fontSize:13,
+            fontFamily:"inherit",whiteSpace:"pre",color:"transparent"}}>
+            {value||""}<span style={{color:"var(--mut)",opacity:.6}}>{"DD/MM/YYYY".slice((value||"").length)}</span>
+          </span>
+        )}
         <button type="button" title="Pick a date" onClick={()=>setOpen(o=>!o)}
           style={{position:"absolute",right:5,display:"inline-flex",alignItems:"center",justifyContent:"center",
             width:26,height:26,border:0,borderRadius:7,background:open?"var(--accent)":"transparent",
@@ -382,7 +389,9 @@ export function SubclassHover({cls,value,onChange,classBtn,active}){
   const[hover,setHover]=React.useState(false);
   const timer=React.useRef(null);
   if(!opts) return classBtn;   // no subclasses → just the plain class button
-  const open=active&&(hover||!!value);   // reveal only for the active class row
+  // Reveal only while hovered/focused — a picked subclass shows on the parent
+  // nugget itself, so keeping the popover pinned open just blocked the UI.
+  const open=active&&hover;
   const enter=()=>{if(timer.current){clearTimeout(timer.current);timer.current=null;}setHover(true);};
   const leave=()=>{if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setHover(false),200);};
   return(
@@ -471,4 +480,165 @@ export function HostPicker({hosts,value,onChange,orgName,onOrgName}){
         style={{flex:"1 1 180px",minWidth:160,padding:"7px 9px",borderRadius:8,border:"1px solid var(--line)",background:"var(--card)",color:"var(--ink)",fontSize:12.5}}/>
     )}
   </>);
+}
+
+/* ── Compact boat-class dropdown (import preview) ──────────────────────────
+   One nugget-styled button showing the CURRENT selection — subclass short name
+   when one is picked ("OPTI Inter"), else the class short — and a dropdown of
+   main classes with their subclass options indented beneath. Replaces the old
+   all-tabs pill row + hover subclass popover in the preview step.
+   • value/subValue: current class id / subclass id (subclass lives in mf).
+   • locked: association portals fix the class — other classes are disabled,
+     but the locked class's own subclasses stay pickable.
+   • onPick(clsId, subId|null) — one setter for both levels.
+   • classes/onAdd: custom classes (same contract as CustomClassPicker). */
+export function ClassSelect({value,subValue,locked,onPick,classes=[],onAdd}){
+  const[open,setOpen]=React.useState(false);
+  const[adding,setAdding]=React.useState(false);
+  const[name,setName]=React.useState("");
+  const ref=React.useRef();
+  React.useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target)){setOpen(false);setAdding(false);}};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+  const sub=(SUBCLASSES[value]||[]).find(s=>s.id===subValue);
+  const main=CLASSES.find(c=>c.id===value);
+  const custom=classes.find(c=>c.id===value);
+  const label=sub?(sub.short||sub.label):(main?main.short:(custom?.short||classLabel(value)));
+  const color=sub?.color||classColor(value);
+  const pick=(cid,sid)=>{onPick(cid,sid);setOpen(false);setAdding(false);};
+  const submitAdd=()=>{const id=onAdd&&onAdd(name);if(id)pick(id,null);setName("");setAdding(false);};
+  const row=(on,disabled)=>({padding:"7px 12px",cursor:disabled?"not-allowed":"pointer",fontSize:12.5,fontWeight:600,
+    display:"flex",alignItems:"center",gap:8,background:on?"var(--sky)":"transparent",opacity:disabled?.35:1,transition:".1s"});
+  return(
+    <div style={{position:"relative"}} ref={ref}>
+      <button type="button" onClick={()=>setOpen(o=>!o)}
+        style={{width:"100%",border:"1px solid "+color,background:color,color:"#fff",borderRadius:12,
+          fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"8px 11px",cursor:"pointer",
+          display:"inline-flex",alignItems:"center",gap:7,justifyContent:"space-between"}}>
+        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label}</span>
+        <ChevronRight size={13} style={{flex:"none",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
+      </button>
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 4px)",right:0,zIndex:95,minWidth:190,background:"var(--card)",
+          border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 14px 34px -12px rgba(0,0,0,.25)",maxHeight:280,overflowY:"auto"}}>
+          {CLASSES.map(c=>{
+            const disabled=!!locked&&c.id!==locked;
+            const onMain=value===c.id&&!sub;
+            return(<React.Fragment key={c.id}>
+              <div onClick={()=>{if(!disabled)pick(c.id,null);}} style={row(onMain,disabled)}
+                onMouseEnter={e=>{if(!disabled)e.currentTarget.style.background="var(--sky)";}}
+                onMouseLeave={e=>e.currentTarget.style.background=onMain?"var(--sky)":"transparent"}>
+                <span style={{width:10,height:10,borderRadius:3,background:classColor(c.id),flex:"none"}}/>
+                <span style={{color:"var(--ink)"}}>{c.short}</span>
+              </div>
+              {(SUBCLASSES[c.id]||[]).map(s=>{
+                const onSub=value===c.id&&subValue===s.id;
+                return(
+                  <div key={s.id} onClick={()=>{if(!disabled)pick(c.id,s.id);}} style={{...row(onSub,disabled),padding:"6px 12px 6px 30px",fontWeight:500}}
+                    onMouseEnter={e=>{if(!disabled)e.currentTarget.style.background="var(--sky)";}}
+                    onMouseLeave={e=>e.currentTarget.style.background=onSub?"var(--sky)":"transparent"}>
+                    <span style={{width:8,height:8,borderRadius:2,background:s.color,flex:"none"}}/>
+                    <span style={{color:"var(--ink)"}}>{s.label}</span>
+                  </div>);
+              })}
+            </React.Fragment>);
+          })}
+          {classes.map(c=>(
+            <div key={c.id} onClick={()=>{if(!locked)pick(c.id,null);}} style={row(value===c.id,!!locked)}
+              onMouseEnter={e=>{if(!locked)e.currentTarget.style.background="var(--sky)";}}
+              onMouseLeave={e=>e.currentTarget.style.background=value===c.id?"var(--sky)":"transparent"}>
+              <span style={{width:10,height:10,borderRadius:3,background:c.color,flex:"none"}}/>
+              <span style={{color:"var(--ink)"}}>{c.short}</span>
+            </div>
+          ))}
+          {!locked&&onAdd&&(adding
+            ?<div style={{padding:"7px 10px",borderTop:"1px solid var(--line)",display:"flex",gap:6,alignItems:"center"}}>
+              <input autoFocus value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. 2.4 mR"
+                onKeyDown={e=>{if(e.key==="Enter"&&name.trim())submitAdd();if(e.key==="Escape"){setAdding(false);setName("");}}}
+                style={{flex:1,minWidth:0,border:"1px solid var(--line)",borderRadius:7,padding:"5px 8px",font:"inherit",fontSize:12.5,outline:"none"}}/>
+              <button type="button" disabled={!name.trim()} onClick={submitAdd}
+                style={{border:0,background:name.trim()?"var(--accent)":"var(--line)",color:"#fff",borderRadius:7,padding:"5px 10px",fontSize:12,fontWeight:700,cursor:name.trim()?"pointer":"not-allowed"}}>Add</button>
+            </div>
+            :<div onClick={()=>setAdding(true)}
+              style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:700,color:"var(--accent)",borderTop:"1px solid var(--line)",transition:".1s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+              onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              + Add new class
+            </div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── "+" host nugget (organizer row, import preview) ───────────────────────
+   A small dashed + chip that opens a searchable popover of hosts. Picking one
+   calls onPick(id); when allowOther (organizer slot empty) an "Other host —
+   not listed" row switches to a free-text name → onOtherName(name). */
+export function AddHostNugget({hosts,exclude=[],onPick,allowOther=false,onOtherName,title="Add an association or club"}){
+  const[open,setOpen]=React.useState(false);
+  const[q,setQ]=React.useState("");
+  const[other,setOther]=React.useState(false);
+  const[otherName,setOtherName]=React.useState("");
+  const ref=React.useRef();
+  React.useEffect(()=>{
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target)){setOpen(false);setOther(false);setQ("");}};
+    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
+  },[]);
+  const ex=new Set(exclude);
+  const pool=hosts.filter(h=>!ex.has(h.id));
+  const filtered=q?pool.filter(h=>(h.name||"").toLowerCase().includes(q.toLowerCase())):pool;
+  const typeTag=h=>h.type==="federation"?"Fed":h.type==="club"?"Club":"Assoc";
+  return(
+    <div style={{position:"relative",display:"inline-block"}} ref={ref}>
+      <button type="button" title={title} onClick={()=>{setOpen(o=>!o);setOther(false);}}
+        style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:28,height:28,
+          border:"1.5px dashed var(--line)",borderRadius:9,background:open?"var(--sky)":"transparent",
+          color:"var(--accent)",cursor:"pointer",transition:".12s"}}>
+        <Plus size={14}/>
+      </button>
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 5px)",left:0,zIndex:95,width:250,background:"var(--card)",
+          border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 14px 34px -12px rgba(0,0,0,.25)",
+          maxHeight:260,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+          {other
+            ?<div style={{padding:"9px 10px",display:"flex",gap:6,alignItems:"center"}}>
+              <input autoFocus value={otherName} onChange={e=>setOtherName(e.target.value)} placeholder="Organizer's name…"
+                onKeyDown={e=>{if(e.key==="Enter"&&otherName.trim()){onOtherName(otherName.trim());setOpen(false);setOther(false);setOtherName("");}}}
+                style={{flex:1,minWidth:0,border:"1px solid var(--line)",borderRadius:7,padding:"6px 8px",font:"inherit",fontSize:12.5,outline:"none"}}/>
+              <button type="button" disabled={!otherName.trim()}
+                onClick={()=>{onOtherName(otherName.trim());setOpen(false);setOther(false);setOtherName("");}}
+                style={{border:0,background:otherName.trim()?"var(--accent)":"var(--line)",color:"#fff",borderRadius:7,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:otherName.trim()?"pointer":"not-allowed"}}>Add</button>
+            </div>
+            :<>
+              <div style={{padding:"8px 10px",borderBottom:"1px solid var(--line)"}}>
+                <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search hosts…"
+                  style={{width:"100%",border:0,outline:0,font:"inherit",fontSize:12.5,color:"var(--ink)",background:"transparent"}}/>
+              </div>
+              <div style={{overflowY:"auto",flex:1}}>
+                {allowOther&&(
+                  <div onClick={()=>setOther(true)}
+                    style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:600,color:"var(--navy)",borderBottom:"1px solid var(--line)"}}
+                    onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    Other host — not listed
+                  </div>
+                )}
+                {filtered.map(h=>(
+                  <div key={h.id} onClick={()=>{onPick(h.id);setOpen(false);setQ("");}}
+                    style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,color:"var(--ink)",display:"flex",alignItems:"center",gap:8,transition:".1s"}}
+                    onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.name}</span>
+                    <span style={{flex:"none",fontSize:10,fontWeight:700,letterSpacing:".04em",color:"var(--mut)",border:"1px solid var(--line)",borderRadius:5,padding:"1px 5px"}}>{typeTag(h)}</span>
+                  </div>
+                ))}
+                {!filtered.length&&<div style={{padding:"8px 12px",fontSize:12,color:"var(--mut)"}}>No matching hosts</div>}
+              </div>
+            </>}
+        </div>
+      )}
+    </div>
+  );
 }
