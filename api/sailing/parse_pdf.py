@@ -26,7 +26,7 @@ v5 additions:
 """
 
 from http.server import BaseHTTPRequestHandler
-import json, io, re, os, base64
+import json, io, re, os, base64, time
 try:
     from urllib.request import urlopen, Request as UrlRequest
     from urllib.error import HTTPError
@@ -3291,12 +3291,18 @@ def _vision_model():
 
 
 def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 30,
-                       mime_type: str = "application/pdf", thinking_budget: int = None):
+                       mime_type: str = "application/pdf", thinking_budget: int = None,
+                       total_budget_s: int = None):
     """Vision parse via Gemini (native PDF/image ingest, no rasterisation).
     text/* inputs (e.g. an HTML results page with no <table>) are sent as a
     plain-text part — Gemini rejects HTML/text bytes labelled as a PDF.
     thinking_budget=0 disables flash reasoning — entry-list transcription needs
-    none, and thinking burned both the clock and the output-token budget."""
+    none, and thinking burned both the clock and the output-token budget.
+    total_budget_s caps the WHOLE ladder's wall-clock (Hobby's function ceiling
+    is a hard 60s — a per-rung timeout that a slow rung-1 fully consumes would
+    leave a doomed rung-2 to be killed mid-flight and the edge RSTs the client
+    with no body). Each rung gets min(timeout, remaining); when the budget is
+    spent we raise a clean error instead of starting a call that can't finish."""
     if mime_type.startswith("text/"):
         parts = [{"text": prompt + "\n\n----- PAGE TEXT -----\n"
                   + file_bytes.decode("utf-8", "replace")}]
@@ -3314,12 +3320,22 @@ def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 
     for m in ("gemini-3-flash-preview", "gemini-2.5-flash"):
         if m not in ladder:
             ladder.append(m)
+    deadline = (time.monotonic() + total_budget_s) if total_budget_s else None
     resp = None
     for i, model in enumerate(ladder):
+        call_timeout = timeout
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining < 4:          # not enough left to finish another call
+                if resp is not None:
+                    break
+                raise ValueError("AI parser ran out of time on this list — try again, "
+                                 "paste the entries page URL, or split the list.")
+            call_timeout = int(min(timeout, remaining))
         try:
             # 16k output: a dense 60-row page overflows 8k and used to
             # hard-fail with "too much data".
-            resp = call_gemini(key, model, parts, max_tokens=16384, timeout=timeout,
+            resp = call_gemini(key, model, parts, max_tokens=16384, timeout=call_timeout,
                                thinking_budget=thinking_budget)
             break
         except Exception as exc:
@@ -3366,7 +3382,7 @@ def _kimi_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, key: str, t
 
 
 def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeout_s: int = None,
-                thinking_budget: int = None):
+                thinking_budget: int = None, total_budget_s: int = None):
     """Route the vision parse to Gemini — the ONLY AI provider for parsing
     (Casey's call 2026-07-14: never fall back to the Anthropic API here). A
     Gemini failure raises; the escalation callers catch it and return the rule
@@ -3380,7 +3396,8 @@ def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeout_s: int =
     if gkey and call_gemini is not None:
         return _gemini_vision_raw(file_bytes, prompt, gkey,
                                   timeout=timeout_s or (40 if mime_type.startswith("image/") else 38),
-                                  mime_type=mime_type, thinking_budget=thinking_budget)
+                                  mime_type=mime_type, thinking_budget=thinking_budget,
+                                  total_budget_s=total_budget_s)
     if mime_type.startswith("image/"):
         kkey = os.environ.get("KIMI_API_KEY", "")
         if kkey and call_openai_compat is not None:
@@ -3450,14 +3467,15 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
         prompt = prompt + _GEMINI_PAGE_HINT.format(header=header_hint)
 
     # Gemini only (image-only Kimi when no Gemini key); no Anthropic fallback.
-    # Entry lists run under the long entries window (112s self-deadline) and
-    # need one big generation (150-250 rows): 52s per rung lets a slow/spiking
-    # primary time out and STILL leave a full second rung before the deadline.
-    # thinking_budget=0: transcription needs no reasoning — with thinking ON,
-    # flash burned the whole clock AND the 16k output budget on big lists.
+    # Entry lists: one big generation (150-250 rows) under Hobby's hard 60s
+    # function cap. total_budget_s=50 governs the WHOLE ladder's wall-clock so a
+    # spiking rung-1 can't run past the cap (→ 60s edge RST, empty body); it
+    # instead yields a clean retryable error at ~50s. thinking_budget=0:
+    # transcription needs no reasoning — thinking burned clock + output budget.
     raw, stop = _vision_raw(file_bytes, mime_type, prompt,
-                            timeout_s=52 if entries_mode else None,
-                            thinking_budget=0 if entries_mode else None)
+                            timeout_s=48 if entries_mode else None,
+                            thinking_budget=0 if entries_mode else None,
+                            total_budget_s=50 if entries_mode else None)
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
         data = json.loads(raw)
@@ -5216,42 +5234,49 @@ def _parse_entries_html(text: str, src: str, base: str) -> dict:
         if extra_note:
             notes.insert(1, extra_note)
         return out
-    try:
-        # A near-empty text body is a JS shell — the entries can't be in it, so
-        # don't burn a long model call proving that; go straight to the hops.
-        if len(_html_to_text(text).strip()) < 3000:   # 29er.org's shell is ~2.3k chars
-            raise ValueError("JS shell — following embedded entry endpoints.")
-        return _ai_entries(text)
-    except ValueError as first_err:
-        tried = {src, base}
-        frontier = _entry_list_urls(text, base)
-        for _hop in range(2):
-            nxt = []
-            for u in frontier:
-                if u in tried or not u.lower().startswith(("http://", "https://")):
-                    continue
-                tried.add(u)
+    # Descend to the DATA endpoint before spending any model call. Event sites
+    # nest: landing shell → event page → entries fragment. Parsing an
+    # intermediate summary page burns a ~10s Gemini call for nothing and, on
+    # Hobby's hard 60s function cap, that wasted call is what tips a 170-row
+    # parse past the wall. So: if a page still links to deeper entry endpoints,
+    # follow those FIRST; only run the model on a leaf (no deeper links). Fetch
+    # budget is tight (6s each, ≤4 pages) so the model gets the bulk of the 60s.
+    def _entry_dense(t):   # a real entry table has many short repeated-shape lines
+        return len(_html_to_text(t).strip()) >= 3000
+    tried = set()
+    queue = [(text, src, base, False)]
+    last_err = ValueError("Couldn't find an entry list on this page.")
+    fetches = 0
+    while queue:
+        t, u_src, u_base, is_leaf = queue.pop(0)
+        deeper = [x for x in _entry_list_urls(t, u_base)
+                  if x.lower().startswith(("http://", "https://")) and x not in tried]
+        # Parse now only when this page has entries AND no deeper endpoint to try.
+        if _entry_dense(t) and (is_leaf or not deeper):
+            try:
+                note = None if u_src == src else ("The page loads its entries by "
+                    f"script; followed {u_src} and read them there.")
+                return _ai_entries(t, note)
+            except ValueError as e:
+                last_err = e
+        for u in deeper:
+            if fetches >= 4:
+                break
+            tried.add(u); fetches += 1
+            try:
+                d2, _c2 = fetch_url_bytes(u, timeout=6)
+            except Exception:
+                continue
+            if d2[:4] == b'%PDF':
                 try:
-                    d2, _c2 = fetch_url_bytes(u, timeout=20)
+                    return parse_pdf_bytes(d2, mode='entries')
                 except Exception:
                     continue
-                if d2[:4] == b'%PDF':
-                    try:
-                        return parse_pdf_bytes(d2, mode='entries')
-                    except Exception:
-                        continue
-                t2 = _decode_html_bytes(d2)
-                if len(_html_to_text(t2).strip()) > 200:
-                    try:
-                        return _ai_entries(t2, "The page loads its entries by script; "
-                                               f"followed {u} and read them there.")
-                    except ValueError:
-                        pass
-                nxt.extend(x for x in _entry_list_urls(t2, u) if x not in tried)
-            frontier = nxt
-            if not frontier:
-                break
-        raise first_err
+            t2 = _decode_html_bytes(d2)
+            # A leaf (no further entry links of its own) is parsed even if short.
+            leaf = not [x for x in _entry_list_urls(t2, u) if x not in tried]
+            queue.append((t2, u, u, leaf))
+    raise last_err
 
 
 def parse_url(url: str, mode: str = 'ai') -> dict:
@@ -6088,14 +6113,14 @@ class handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         ctype = (self.headers.get('Content-Type') or '').lower()
 
-        # Raise _Deadline BEFORE the platform hard-kill so we always answer with
-        # JSON instead of a bare connection drop. Results keep the tight 52s
-        # budget (their rule parse is the fast, good answer). Entry lists have
-        # NO rule parse and need one long Gemini generation (150-250 rows) —
-        # they get the widest HONEST window: vercel.json asks for 300s but the
-        # Python runtime is observed to hard-kill at 120s (measured 2026-07-15),
-        # so arm at 112.
-        _arm_deadline(112 if mode == 'entries' else 52)
+        # Raise _Deadline a few seconds BEFORE the platform hard-kill so we
+        # answer with JSON instead of a bare connection drop. This project runs
+        # on Vercel Hobby — a HARD 60s function cap (vercel.json maxDuration is
+        # clamped to it; the edge RSTs the client at 60s with no body, measured
+        # 2026-07-15). So the SIGALRM must fire under 60s for BOTH lanes;
+        # entries additionally carries a tighter wall-clock budget (50s) inside
+        # the Gemini ladder so a spiking model yields a clean error, not a hang.
+        _arm_deadline(55)
         try:
             # ?count=1 → just return the PDF page count (instant; no parsing)
             if want_count and 'application/json' not in ctype:
