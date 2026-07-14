@@ -6,6 +6,7 @@
   "functions": {
     "api/sailing/parse_pdf.py": {
       "maxDuration": 60,
+      "memory": 2048,
       "includeFiles": "api/_shared/**"
     },
     "api/enrich.py": {
