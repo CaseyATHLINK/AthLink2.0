@@ -86,7 +86,7 @@ export function DateField({value,onChange,markedDays={},dotColor="var(--navy2)",
             only reserves width); the REST of the mask ghosts after the caret and
             shrinks as the user types — "05/01/20" leaves just "YY" showing. */}
         {(value||"").length<10&&(
-          <span aria-hidden style={{position:"absolute",left:11,pointerEvents:"none",fontSize:13,
+          <span aria-hidden style={{position:"absolute",left:12,pointerEvents:"none",fontSize:13,
             fontFamily:"inherit",whiteSpace:"pre",color:"transparent"}}>
             {value||""}<span style={{color:"var(--mut)",opacity:.6}}>{"DD/MM/YYYY".slice((value||"").length)}</span>
           </span>
@@ -351,9 +351,10 @@ export function CountrySelect({value,onChange,placeholder="Select country...",in
   // glass: match the liquid-glass bars of the import preview (same material as
   // .preview-meta inputs) instead of the default white bordered box.
   const triggerStyle=glass
-    ?{border:0,borderRadius:12,padding:"8px 12px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none",
+    ?{border:0,borderRadius:12,padding:"0 12px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none",
       background:"rgba(255,255,255,.55)",backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
-      boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",minHeight:35,boxSizing:"border-box"}
+      boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",
+      height:35,boxSizing:"border-box",overflow:"hidden",whiteSpace:"nowrap"}
     :{border:"1px solid var(--line)",borderRadius:7,padding:"9px 12px",fontSize:13,background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"};
   return(
     <div style={{position:"relative",...(fullWidth?{width:"100%"}:{})}} ref={ref}>
@@ -523,8 +524,8 @@ export function ClassSelect({value,subValue,locked,onPick,classes=[],onAdd}){
   return(
     <div style={{position:"relative"}} ref={ref}>
       <button type="button" onClick={()=>setOpen(o=>{if(o)setExpanded(null);return !o;})}
-        style={{width:"100%",border:0,background:color,color:"#fff",borderRadius:12,minHeight:35,boxSizing:"border-box",
-          fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"8px 12px",cursor:"pointer",
+        style={{width:"100%",border:0,background:color,color:"#fff",borderRadius:12,height:35,boxSizing:"border-box",
+          fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"0 12px",cursor:"pointer",
           boxShadow:"inset 0 1px 0 rgba(255,255,255,.35),inset 0 0 0 .5px rgba(255,255,255,.25),0 1px 3px rgba(0,0,0,.12)",
           display:"inline-flex",alignItems:"center",gap:7,justifyContent:"space-between"}}>
         <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label}</span>

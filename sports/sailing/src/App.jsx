@@ -3309,7 +3309,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .preview-meta label{font-size:11px;color:var(--mut);display:block;margin-bottom:3px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;}
     /* Liquid-glass bar — the ONE material every preview control shares (inputs,
        country picker, class nugget, organizer chips) so shapes/colours line up. */
-    .preview-meta input,.glassbar{width:100%;border:0;border-radius:12px;padding:8px 12px;font:inherit;font-size:13px;outline:none;transition:box-shadow .15s;
+    .preview-meta input,.glassbar{width:100%;border:0;border-radius:12px;padding:0 12px;height:35px;box-sizing:border-box;font:inherit;font-size:13px;outline:none;transition:box-shadow .15s;
       background:rgba(255,255,255,.55);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);
       box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05);}
     .preview-meta input:focus{box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 0 0 4px var(--halo);}
@@ -3338,9 +3338,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .x:hover{background:rgba(255,255,255,.26);}
     .mhead .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:34px;height:34px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;}
     .mhead .x:hover{background:rgba(255,255,255,.26);transform:scale(1.05);}
-    .mtabs{display:flex;gap:6px;padding:14px 22px 0;}
-    .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;background:none;color:var(--mut);padding:9px 14px;border-radius:9px 9px 0 0;cursor:pointer;display:flex;align-items:center;gap:7px;}
-    .mtabs button.on{color:var(--navy);background:#fff;border:1px solid var(--line);border-bottom:0;}
+    /* Liquid-glass segmented tabs (was flat white tab shapes). */
+    .mtabs{display:flex;gap:8px;padding:16px 22px 0;}
+    .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;color:var(--mut);padding:8px 16px;border-radius:980px;cursor:pointer;display:flex;align-items:center;gap:7px;
+      background:rgba(255,255,255,.3);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);
+      box-shadow:inset 0 0 0 .5px rgba(255,255,255,.4);transition:.15s;}
+    .mtabs button:hover{background:rgba(255,255,255,.5);}
+    .mtabs button.on{color:var(--navy);background:rgba(255,255,255,.85);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 .5px rgba(255,255,255,.6),0 2px 10px -2px rgba(8,30,60,.18);}
     .mbody{padding:22px 28px 28px;max-height:88vh;overflow-y:auto;}
     .prev.ok{background:#d8f0e3;color:#0a6b41;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .prev.err{background:#fbe7e4;color:#a8362a;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
@@ -5759,8 +5764,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {/* ── Part 1: single competition ── */}
               <div style={{fontSize:11,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--navy)",margin:"2px 0 7px",fontFamily:"'Barlow',sans-serif"}}>Import single competition result</div>
               <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>
-              <label className="btn cta" style={{cursor:"pointer"}}>
-                <Sparkles size={16}/>Choose files
+              <label className="btn cta liquidGlass-wrapper" style={{cursor:"pointer"}}>
+                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                <div className="liquidGlass-text"><Sparkles size={16}/>Choose files</div>
                 <input type="file" multiple style={{display:"none"}} onChange={e=>{handleFiles(e.target.files,"ai");e.target.value="";}}/>
               </label>
               <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here{pdfLoading?" — you can keep adding while others parse":""}</span>
@@ -5770,12 +5776,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <div style={{flex:1,height:1,background:"var(--line)"}}/>
               </div>
               <div style={{display:"flex",gap:8}}>
-                <div style={{flex:1,display:"flex",alignItems:"center",gap:8,border:"1px solid var(--line)",borderRadius:9,padding:"0 11px",background:"#fff"}}>
+                <div className="glassbar" style={{flex:1,display:"flex",alignItems:"center",gap:8,padding:"0 12px"}}>
                   <Link2 size={15} color="#9fb2c8" style={{flex:"none"}}/>
                   <input value={liveUrl} onChange={e=>setLiveUrl(e.target.value)}
                     onKeyDown={e=>{if(e.key==="Enter"&&liveUrl.trim())handleLink(liveUrl,"ai");}}
                     placeholder="https://… Manage2sail / Clubspot / Sailwave results page"
-                    style={{flex:1,border:0,outline:"none",font:"inherit",fontSize:13,padding:"10px 0",background:"transparent"}}/>
+                    style={{flex:1,border:0,outline:"none",font:"inherit",fontSize:13,padding:"10px 0",background:"transparent",boxShadow:"none"}}/>
                 </div>
                 <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={!liveUrl.trim()} onClick={()=>handleLink(liveUrl,"ai")}>
                   <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Fetch &amp; parse</div>
@@ -5791,8 +5797,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <textarea value={scrapeText} onChange={e=>setScrapeText(e.target.value)}
                   placeholder={"https://www.mysailingclub.org/results\nhttps://www.regattanetwork.com/club/1234\nhttps://…"}
                   rows={3} spellCheck={false}
-                  style={{width:"100%",boxSizing:"border-box",border:"1px solid var(--line)",borderRadius:10,padding:"11px 13px",font:"inherit",fontSize:13,lineHeight:1.6,resize:"vertical",outline:"none",background:"#fff",color:"var(--ink)"}}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+                  style={{width:"100%",boxSizing:"border-box",border:0,borderRadius:12,padding:"11px 13px",font:"inherit",fontSize:13,lineHeight:1.6,resize:"vertical",outline:"none",color:"var(--ink)",
+                    background:"rgba(255,255,255,.55)",backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
+                    boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)"}}
+                  onFocus={e=>e.target.style.boxShadow="inset 0 1px 0 rgba(255,255,255,.7),0 0 0 4px var(--halo)"}
+                  onBlur={e=>e.target.style.boxShadow="inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)"}/>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10}}>
                   <button className="btn cta liquidGlass-wrapper" disabled={!scrapeText.trim()}
                     onClick={()=>{
@@ -5859,8 +5868,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       )}
                       {!pub&&p.status!=="parsing"&&(
                         <button onClick={()=>removePending(p.id)} title="Remove from the queue"
-                          style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:20,height:20,borderRadius:6,border:0,cursor:"pointer",background:"transparent",color:"#9aa7b6"}}>
-                          <X size={12}/>
+                          style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:22,height:22,borderRadius:6,border:0,cursor:"pointer",background:"transparent",color:"#c0392b",transition:".12s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.background="rgba(192,57,43,.1)";}}
+                          onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+                          <Trash2 size={13}/>
                         </button>
                       )}
                     </div>);
@@ -6150,8 +6161,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               const orgName=!editing&&!ownerId?(previewEv._orgName||""):"";
               const collabs=mf.collabs||[];
               const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
-              const nug=(key,label,{dark=false,dashed=false,onX=null,tag=null,onToggle=null,toggleTitle=""})=>(
-                <span key={key} onClick={onToggle||undefined} title={onToggle?toggleTitle:undefined}
+              // Chips go by the host's URL short name (its slug, e.g. RHKYC) when one is
+              // set — long official names would truncate; the tooltip keeps the full name.
+              const hostShort=id=>{const h=hostById(id);return h?.slug||h?.name||id;};
+              const hostFull=id=>hostById(id)?.name||id;
+              const nug=(key,label,{dark=false,dashed=false,onX=null,tag=null,onToggle=null,toggleTitle="",full=""})=>(
+                <span key={key} onClick={onToggle||undefined} title={[full,onToggle?toggleTitle:""].filter(Boolean).join(" — ")||undefined}
                   style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:260,
                   border:dashed?"1.5px dashed var(--line)":0,
                   background:dark?"var(--navy)":"rgba(255,255,255,.55)",color:dark?"#fff":"var(--navy)",
@@ -6198,13 +6213,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <div style={{marginBottom:10}}>
                 <label style={{fontSize:11,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600,letterSpacing:".04em",textTransform:"uppercase"}}>Organizer</label>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                  {ownerId&&nug("owner",hostById(ownerId)?.name||"Unknown host",{dark:true,tag:"Organizer",
-                    onToggle:editing?null:demoteOrganizer,toggleTitle:"Click to make this host a collab instead",
+                  {ownerId&&nug("owner",hostShort(ownerId),{dark:true,tag:"Organizer",full:hostFull(ownerId),
+                    onToggle:editing?null:demoteOrganizer,toggleTitle:"click to make this host a collab instead",
                     onX:editing?null:()=>{selfOrg?updSharedMeta("_orgMode","external"):updSharedMeta("_orgHost",null);}})}
                   {!ownerId&&orgName&&nug("orgname",orgName,{dashed:true,tag:"Organizer — not on AthLink",
                     onX:()=>updSharedMeta("_orgName","")})}
-                  {collabs.map(id=>nug(id,hostById(id)?.name||id,{tag:"Collab",
-                    onToggle:editing?null:()=>promoteToOrganizer(id),toggleTitle:"Click to make this host the organizer",
+                  {collabs.map(id=>nug(id,hostShort(id),{tag:"Collab",full:hostFull(id),
+                    onToggle:editing?null:()=>promoteToOrganizer(id),toggleTitle:"click to make this host the organizer",
                     onX:()=>updSharedCollabs(collabs.filter(x=>x!==id))}))}
                   <AddHostNugget hosts={allHosts} exclude={[ownerId,...collabs].filter(Boolean)}
                     allowOther={!editing&&!ownerId&&!orgName}
