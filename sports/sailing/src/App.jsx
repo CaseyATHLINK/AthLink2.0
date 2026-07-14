@@ -28,7 +28,7 @@ import { UpcomingEventForecast } from "./views/forecast.jsx";
 import { SPORT_MODELS, SpmDuo, HomeShowcaseRotator } from "./views/models.jsx";
 import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
 import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
-import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey, hgRunPool } from "./views/host.jsx";
+import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey, hgRunPool, _hg_norm } from "./views/host.jsx";
 import { SignInModal } from "./views/auth.jsx";
 import { fetchProfile, upsertProfile, authGoogleOAuth } from "@athlink/auth";
 
@@ -384,15 +384,8 @@ export default function AthLinkMVP(){
       }
     }catch(e){console.error("saveHost persist",e);}
   };
-  // Host auto-grab: permanently dismiss the "We found your organisation" invitation
-  // for this host (persists dossier.grab_dismissed). Reset to false when the host
-  // sets/changes their website in Edit page, so the offer returns for the new site.
-  const dismissHostGrab=(hostId=portal)=>{
-    if(!hostId) return;
-    const base=hostById(hostId)?.dossier||{};
-    if(base.grab_dismissed) return;
-    saveHost(hostId,{dossier:{...base,grab_dismissed:true}});
-  };
+  // (dismissHostGrab removed with the auto-grab invitation banner — hosts' home
+  //  websites are no longer scraped automatically.)
   // Host auto-grab: open one OR MORE parsed results in the STANDARD import
   // preview/publish modal (identical to drag-drop). The host reviews and publishes
   // each — nothing is auto-committed, so there are no silent imports and no
@@ -455,6 +448,89 @@ export default function AthLinkMVP(){
   const openReviewInImport=(item)=>{
     if(!item?.previewEv) return;
     openPreviewsInImport([{id:"nr_"+Date.now(),name:item.name||"Competition",status:"ok",error:null,previewEv:item.previewEv,subclass:null,collabs:[]}]);
+  };
+  // Fuzzy "is this competition already on AthLink?" — same conservative matcher
+  // the discovery modal uses (name + year + class must not disagree).
+  const eventAlreadyOnAthLink=(c)=>{
+    const cn=_hg_norm(c.name); if(!cn) return null;
+    const cy=c.year?String(c.year):""; const cc=c.class?canonClass(c.class):"";
+    return events.find(ev=>{
+      const en=_hg_norm(ev.name); if(!en) return false;
+      const nameHit=en===cn||(cn.length>=6&&(en.includes(cn)||cn.includes(en)));
+      if(!nameHit) return false;
+      const ey=(dateKey(ev.date)||"").slice(0,4);
+      if(cy&&ey&&cy!==ey) return false;
+      const ec=ev.cls?canonClass(ev.cls):"";
+      if(cc&&ec&&cc!==ec) return false;
+      return true;
+    })||null;
+  };
+  // ── "Import result database": research the pasted sites and feed every found
+  //    competition through the SAME import queue as single results — no separate
+  //    discovery pop-up. Each site appears as a scanning nugget, then expands into
+  //    one nugget per competition: parsed → ready to review, already imported →
+  //    ticked off, unreadable → failed with the reason. Runs inside the import
+  //    modal, concurrently with any file/link parses.
+  const discoverIntoQueue=async(urls)=>{
+    const hostObj=(portal&&!isClassPortal)?hostById(portal):null;
+    const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    const siteSeeds=urls.map((u,i)=>({id:"site_"+stamp+"_"+i,name:u,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],
+      notes:["Scanning this site for competitions…"]}));
+    setPending(prev=>[...prev,...siteSeeds]);
+    const fail=(id,msg)=>setPending(prev=>prev.map(p=>p.id===id?{...p,status:"error",error:msg,notes:[msg]}:p));
+    const researchOne=async(i)=>{
+      const url=urls[i], sid=siteSeeds[i].id;
+      let comps=[];
+      try{
+        let d;
+        if(MOCK_RESEARCH) d=mockResearchCompetitions(hostObj?.name||"",hostObj?.type||"club",hostObj?.country||"",url);
+        else{
+          const r=await fetch("/api/research_host",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({name:hostObj?.name||"",type:hostObj?.type||"club",
+              country_hint:(hostObj?.country||"").length===3?hostObj.country:"",
+              website:url,mode:"competitions"})});
+          d=await r.json();
+        }
+        if(!d||!d.ok) throw new Error(d?.error||"Couldn't scan this site.");
+        comps=Array.isArray(d.competitions)?d.competitions:[];
+      }catch(e){ fail(sid,(e&&e.message)||"Couldn't scan this site."); return; }
+      const seen=new Set();
+      comps=comps.filter(c=>{const k=hgCompKey(c); if(seen.has(k))return false; seen.add(k); return true;});
+      if(!comps.length){ fail(sid,"No competitions found on this site."); return; }
+      // Expand the site's scanning nugget into one nugget per competition, in place.
+      const rows=comps.map((c,ci)=>{
+        const base={id:sid+"_c"+ci,name:c.name||"Competition",status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]};
+        if(eventAlreadyOnAthLink(c)) return {...base,status:"published",publishedMsg:"Already on AthLink",notes:[]};
+        if(!c.url) return {...base,status:"error",error:"No results link found — upload its file above.",notes:["No results link found — upload its file above."]};
+        return {...base,notes:["Reading the results page…"],_comp:c};
+      });
+      setPending(prev=>prev.flatMap(p=>p.id===sid?rows:[p]));
+      // Parse the readable ones (2 at a time) → ready-to-review queue items.
+      await hgRunPool(rows.filter(r=>r._comp).map(row=>async()=>{
+        const c=row._comp;
+        let out;
+        try{
+          const data=MOCK_RESEARCH?mockParse({url:c.url,name:c.name,class:c.class}):await parseLink(c.url,"ai");
+          if(!data||!data.ok) throw new Error(data?.error||"Couldn't read this results page.");
+          const withUrl=pv=>{pv.sources=[...new Set([...(pv.sources||[]),c.url].filter(Boolean))];return pv;};
+          if(data.multi&&Array.isArray(data.fleets)&&data.fleets.length){
+            const gdisc=Math.max(...data.fleets.map(f=>f.discards||1));
+            out=data.fleets.map((fl,fi)=>({id:row.id+"_f"+fi,name:`${data.name||c.name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+              previewEv:withUrl(previewFromData(data.name||c.name,data.date||"",fl,!!data.ai_parsed,data.detected_class||c.class||"",data.detected_host||hostObj?.name||"")),
+              subclass:null,collabs:[],fleetGroupId:row.id,fleetGroupBaseName:data.name||c.name,fleetGroupDiscards:gdisc,notes:data.notes||["Parsed."]}));
+          }else{
+            out=[{id:row.id,name:data.name||c.name,status:"ok",error:null,notes:data.notes||["Parsed."],
+              previewEv:withUrl(previewFromData(data.name||c.name,data.date||"",{name:"",entries:data.entries||[],discards:data.discards},!!data.ai_parsed,data.detected_class||c.class||"",data.detected_host||hostObj?.name||"")),
+              subclass:null,collabs:[]}];
+          }
+        }catch(e){
+          const msg=(e&&e.message)||"Couldn't read this results page.";
+          out=[{...row,_comp:undefined,status:"error",error:msg,notes:[msg]}];
+        }
+        setPending(prev=>prev.flatMap(p=>p.id===row.id?out:[p]));
+      }),2);
+    };
+    await hgRunPool(urls.map((_,i)=>()=>researchOne(i)),2);
   };
   // ── Save a username to the user's profile (unique, lowercase, alnum + underscore) ──
   const saveUsername=async()=>{
@@ -4759,24 +4835,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
           </div>
         )}
-        {/* Host auto-grab: "We found your organisation on the web" invitation — shown
-            to the host (managers/members) on EVERY host page until dismissed. Clicking
-            opens discovery AND dismisses it for good. The website used to scrape lives
-            in Edit page → "Host website". */}
-        {!isClassPortal&&(canManageMembers||!!myPortalMembership)&&!host?.dossier?.grab_dismissed&&(()=>{
-          const nComp=(host?.dossier?.competitions||[]).length;
-          return(
-            <div style={{display:"flex",alignItems:"center",gap:12,background:"rgba(13,142,207,.08)",border:"1px solid rgba(13,142,207,.28)",borderRadius:14,padding:"14px 18px",marginBottom:18}}>
-              <Sparkles size={20} color="var(--accent)" style={{flex:"none"}}/>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:700,color:"var(--navy)",fontSize:14}}>We found {nComp>0?`${nComp} past ${nComp===1?"competition":"competitions"}`:"your organisation"} on the web</div>
-                <div style={{fontSize:13,color:"var(--mut)",marginTop:2,lineHeight:1.5}}>Let AthLink pull your past competitions from the web — no manual entry. Set or change the site we scrape in <b>Edit page → Host website</b>.</div>
-              </div>
-              <button className="btn cta" style={{flex:"none",whiteSpace:"nowrap"}} onClick={()=>{setDiscoverySeed(null);setDiscoveryReview(false);setShowDiscovery(true);dismissHostGrab();}}>See what we found <ChevronRight size={15}/></button>
-              <button className="x" title="Dismiss" style={{flex:"none"}} onClick={()=>dismissHostGrab()}><X size={15}/></button>
-            </div>
-          );
-        })()}
+        {/* Host auto-grab invitation banner REMOVED: a host's home website is never
+            scraped automatically — competitions are found only from sites the host
+            pastes into Import a competition → Import result database. */}
         {fed&&(()=>{
           const feAssoc=ASSOCIATIONS.filter(a=>a.scope===fed.scope);
           if(!feAssoc.length) return null;
@@ -5717,13 +5778,16 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     onClick={()=>{
                       const urls=[...new Set(scrapeText.split(/[\s,]+/).map(s=>s.trim()).filter(u=>u&&(/^https?:\/\//i.test(u)||/\.[a-z]{2,}/i.test(u))))];
                       if(!urls.length) return;
-                      closeImport(); setDiscoverySeed(urls); setDiscoveryReview(false); setShowDiscovery(true);
+                      setScrapeText("");
+                      // Same hub as single results: every found competition lands in the
+                      // import queue below — no separate discovery pop-up.
+                      discoverIntoQueue(urls);
                     }}
                     style={{...(scrapeText.trim()?{}:{opacity:.55,cursor:"not-allowed"})}}>
                     <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
                     <div className="liquidGlass-text"><Globe size={16}/>Find results</div>
                   </button>
-                  <span style={{fontSize:12,color:"var(--mut)"}}>We fetch each page on our server — your browser can't (cross-origin).</span>
+                  <span style={{fontSize:12,color:"var(--mut)"}}>Found competitions appear in the import queue below, ready to review one by one.</span>
                 </div>
               </>)}
             </>)}
