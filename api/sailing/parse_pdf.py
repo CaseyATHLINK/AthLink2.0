@@ -3327,7 +3327,11 @@ def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 
             # request problem; the next rung is usually idle (seen live on
             # gemini-3.5-flash the day it became the default).
             overloaded = "503" in s or "high demand" in s.lower() or "UNAVAILABLE" in s or "overloaded" in s.lower()
-            if (quota or notfound or overloaded) and i < len(ladder) - 1:
+            # Socket timeouts step down too: a saturated primary generates
+            # slowly, the next rung's pool is usually fine. The self-deadline
+            # (BaseException) still cuts the whole ladder off honestly.
+            timedout = "timed out" in s.lower() or "timeout" in s.lower()
+            if (quota or notfound or overloaded or timedout) and i < len(ladder) - 1:
                 continue
             raise
     raw = (gemini_text(resp) or "").strip()
@@ -3442,10 +3446,11 @@ def _gemini_parse(file_bytes: bytes, mime_type: str = "application/pdf", header_
         prompt = prompt + _GEMINI_PAGE_HINT.format(header=header_hint)
 
     # Gemini only (image-only Kimi when no Gemini key); no Anthropic fallback.
-    # Entry lists run under the long entries window (maxDuration 300) and need
-    # one big generation (150-250 rows); results keep the tight default budget.
+    # Entry lists run under the long entries window (112s self-deadline) and
+    # need one big generation (150-250 rows): 52s per rung lets a slow/spiking
+    # primary time out and STILL leave a full second rung before the deadline.
     raw, stop = _vision_raw(file_bytes, mime_type, prompt,
-                            timeout_s=110 if entries_mode else None)
+                            timeout_s=52 if entries_mode else None)
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
         data = json.loads(raw)
@@ -5773,6 +5778,17 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
         if mime.startswith("image/"):
             return _gemini_parse(file_bytes, mime, entries_mode=True)
         if file_bytes[:4] == b'%PDF':
+            # Text-first: print-to-PDF entry pages carry real text but megabytes
+            # of decoration (map tiles, hero images) that make native PDF ingest
+            # crawl past the time window. Rich extracted text goes as plain text
+            # (fast); only thin/scanned PDFs fall back to vision ingest.
+            try:
+                with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                    txt = "\n".join((p.extract_text() or "") for p in pdf.pages)
+            except Exception:
+                txt = ""
+            if len(txt.strip()) > 3000:
+                return _gemini_parse(txt.encode("utf-8"), "text/plain", entries_mode=True)
             return _gemini_parse(file_bytes, "application/pdf", entries_mode=True)
         # Anything text-ish (csv, plain text paste exported as file) → text prompt.
         return _gemini_parse(file_bytes, "text/plain", entries_mode=True)
@@ -6065,13 +6081,14 @@ class handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         ctype = (self.headers.get('Content-Type') or '').lower()
 
-        # Raise _Deadline BEFORE the maxDuration hard-kill so the AI escalation
-        # paths can return the rule parse instead of a bare 504. Results keep
-        # the tight 52s budget (their rule parse is the fast, good answer);
-        # entry lists have NO rule parse and legitimately need one long Gemini
-        # generation (150-250 rows), so they get the full Fluid window
-        # (vercel.json maxDuration 300).
-        _arm_deadline(290 if mode == 'entries' else 52)
+        # Raise _Deadline BEFORE the platform hard-kill so we always answer with
+        # JSON instead of a bare connection drop. Results keep the tight 52s
+        # budget (their rule parse is the fast, good answer). Entry lists have
+        # NO rule parse and need one long Gemini generation (150-250 rows) —
+        # they get the widest HONEST window: vercel.json asks for 300s but the
+        # Python runtime is observed to hard-kill at 120s (measured 2026-07-15),
+        # so arm at 112.
+        _arm_deadline(112 if mode == 'entries' else 52)
         try:
             # ?count=1 → just return the PDF page count (instant; no parsing)
             if want_count and 'application/json' not in ctype:
