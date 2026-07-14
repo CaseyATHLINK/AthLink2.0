@@ -211,10 +211,12 @@ def clean_score_with_code(raw):
 def is_race_hdr(cell):
     s = fix_doubled(str(cell or '')).strip().upper()
     # Sailwave "combined series" exports label a finals race by its finals number
-    # AND its overall race number: "F1(R6)", "Q3(R3)", or a bare "(R6)". Strip a
-    # trailing "(R<n>)" annotation so the base label (F1/Q3) — or the bare (R6) —
-    # still resolves as a race column.
+    # AND its overall race number, in either a parenthesised form ("F1(R6)",
+    # "Q3(R3)", or a bare "(R6)") or a slash form ("F1/R10", "F2/R11"). Strip a
+    # trailing "(R<n>)" or "/R<n>" annotation so the base label (F1/Q3) — or the
+    # bare (R6) — still resolves as a race column.
     s = re.sub(r'\((?:R\s*)?\d{1,2}\)$', '', s).strip()
+    s = re.sub(r'/\s*R\s*\d{1,2}$', '', s).strip()   # "F1/R10" → "F1"
     if s == '':                                 # was a bare "(R6)" annotation
         return bool(re.match(r'^\(\s*R?\s*\d{1,2}\s*\)$',
                              fix_doubled(str(cell or '')).strip().upper()))
@@ -707,9 +709,11 @@ def detect_cols(header_rows):
         elif h in ('crewage',):
             cols['crewage'] = i
         elif h in ('cf','cfps','ps','carryforward','cfpts','carriedfwd',
-                   'carriedforward','carriedfw'):
+                   'carriedforward','carriedfw','q-seriespoints','qseriespoints',
+                   'f-seriespoints','fseriespoints'):
             # Sailti carry-forward / points-situation columns (and Sailwave's
-            # "Carried Fwd" combined-series column) are cumulative carried points,
+            # "Carried Fwd" / "Q-Series Points" combined-series columns) are
+            # cumulative carried points,
             # NOT individual races — skip in the race loop but count towards the
             # printed Total so the completeness checksum stays exact.
             cols.setdefault('_skip', set()).add(i)
