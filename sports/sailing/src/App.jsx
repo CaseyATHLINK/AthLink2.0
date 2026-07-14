@@ -288,7 +288,10 @@ export default function AthLinkMVP(){
     if(!devEligible){ setDevMode(false); return; }
     const onKey=(e)=>{ if((e.ctrlKey||e.metaKey)&&e.shiftKey&&(e.key==="D"||e.key==="d")){
       e.preventDefault();
-      setDevMode(d=>!d);
+      setDevMode(d=>{
+        if(d) return false; // already on → toggle off, no password
+        return window.prompt("Enter dev mode password:")==="123456789"; // wrong/cancelled → stay in guest mode
+      });
     }};
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
   },[devEligible]);
