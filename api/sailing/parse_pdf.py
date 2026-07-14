@@ -87,6 +87,8 @@ CODES = {
     'SCP','NSC','PRP','TAL','ZFP','STP','DPI','TP5','TPP','TPN',
     # TopYacht legend codes (single-letter suffixes translated to these):
     'ARB','MED','ESP','ENP','LATE','DUT','EXC','TLE','UFP','AVG','PRO',
+    # RRS post-race penalty codes (racescore / ČSJ): T1B/T1A = RRS T1(b)/(a).
+    'T1B','T1A',
 }
 
 def fix_doubled(s):
@@ -133,8 +135,13 @@ def clean_score(raw):
     num = None
     code = None
     for p in parts:
-        up = re.sub(r'[^A-Z]', '', p.upper())
-        if up in CODES:
+        pu = p.upper().rstrip('*')
+        up = re.sub(r'[^A-Z]', '', pu)
+        # Alphanumeric penalty codes (T1B, T1A) must be matched BEFORE the digit
+        # is stripped — else "T1B" would read as the number 1.
+        if pu in CODES:
+            code = pu
+        elif up in CODES:
             code = up
         else:
             ns = re.sub(r'[^\d.]', '', p)
@@ -176,8 +183,11 @@ def clean_score_with_code(raw):
     num = None
     code = None
     for p in parts:
-        up = re.sub(r'[^A-Z]', '', p.upper())
-        if up in CODES:
+        pu = p.upper().rstrip('*')
+        up = re.sub(r'[^A-Z]', '', pu)
+        if pu in CODES:
+            code = pu
+        elif up in CODES:
             code = up
         else:
             ns = re.sub(r'[^\d.]', '', p)
@@ -200,6 +210,14 @@ def clean_score_with_code(raw):
 # ── header helpers ─────────────────────────────────────────────────────────
 def is_race_hdr(cell):
     s = fix_doubled(str(cell or '')).strip().upper()
+    # Sailwave "combined series" exports label a finals race by its finals number
+    # AND its overall race number: "F1(R6)", "Q3(R3)", or a bare "(R6)". Strip a
+    # trailing "(R<n>)" annotation so the base label (F1/Q3) — or the bare (R6) —
+    # still resolves as a race column.
+    s = re.sub(r'\((?:R\s*)?\d{1,2}\)$', '', s).strip()
+    if s == '':                                 # was a bare "(R6)" annotation
+        return bool(re.match(r'^\(\s*R?\s*\d{1,2}\s*\)$',
+                             fix_doubled(str(cell or '')).strip().upper()))
     return bool(
         re.match(r'^[RFOQ]\d{1,2}$', s) or   # Q1-Q6, F1-F7, O1, R1
         re.match(r'^[FQ]\d{1,2}$', s) or
@@ -688,10 +706,19 @@ def detect_cols(header_rows):
             cols.setdefault('age', i)
         elif h in ('crewage',):
             cols['crewage'] = i
-        elif h in ('cf','cfps','ps','carryforward','cfpts'):
-            # Sailti carry-forward / points-situation columns are cumulative,
-            # NOT individual races — mark them to skip in the race loop.
+        elif h in ('cf','cfps','ps','carryforward','cfpts','carriedfwd',
+                   'carriedforward','carriedfw'):
+            # Sailti carry-forward / points-situation columns (and Sailwave's
+            # "Carried Fwd" combined-series column) are cumulative carried points,
+            # NOT individual races — skip in the race loop but count towards the
+            # printed Total so the completeness checksum stays exact.
             cols.setdefault('_skip', set()).add(i)
+            cols.setdefault('_carry', set()).add(i)
+        elif h in ('penalties','penalty','pen','penaltie','penalts'):
+            # A penalty-points column sitting inside the race band (between the last
+            # race and Total). Not a race; counts towards Total → skip + carry.
+            cols.setdefault('_skip', set()).add(i)
+            cols.setdefault('_carry', set()).add(i)
         if is_series_pts_hdr(cell):
             # Q-SP / F-SP carried series subtotals — inside the race band but not a
             # race, so skip them when scoring (they'd otherwise be a phantom race).
@@ -721,6 +748,11 @@ def parse_row_with_cols(row, cols, open_division=False):
     crew_raw = get('crew')
     sail_raw = get('sail')
     nat_raw  = get('nat')
+    # A Sailwave nat cell stacks a flag <img title="GER"> over a <span>GER</span>,
+    # harvested as "GER\nGER"; and some exports print the IOC code twice. Collapse
+    # to the first non-empty line so flag_from_ioc sees a single clean code.
+    if nat_raw and '\n' in nat_raw:
+        nat_raw = next((ln.strip() for ln in nat_raw.split('\n') if ln.strip()), nat_raw)
     div_raw  = re.sub(r'\s+', ' ', get('div')).strip()
     cat_raw  = get('category')
     # A recovered combined division/gender column ('Youth/M', 'Open/Female' packed
@@ -2308,6 +2340,100 @@ def try_overall_results(full_text):
                 e['category'] = norm_category(cat)
             entries.append(e)
     return entries or None
+
+# ── racescore / ČSJ (pdfmake) two-line results ───────────────────────────────
+# Czech-sailing "racescore" exports (Producer=pdfmake): pdfplumber can't tabulate
+# the grid, so parse from text. Each competitor is TWO lines:
+#   "<n>. <NAT> <sail> <helm names> <reg.no HHHH-DDDD> [cat] <born> <club> <r1..rN> <points>"
+#   "<crew names> [reg.no] [born] <club>"
+# Anchors: the rank line starts "<int>. "; a "HHHH-DDDD" reg-no ends the helm name;
+# a 4-digit born year and the club run precede the trailing N races + net points.
+# N (races) is read from the header ("… club 1. 2. … 7. points"). '*' marks the
+# discard on a score; codes (DNF/UFD/DNC/TLE/T1B) are kept as-is.
+_RACESCORE_HDR   = re.compile(r'\bord\.\s+sail\b.*\bclub\b.*\bpoints\b', re.IGNORECASE)
+_RACESCORE_RANK  = re.compile(r'^(\d+)\.\s+([A-Z]{3})\s+(\S+)\s+(.*)$')
+_RACESCORE_REGNO = re.compile(r'^\d{3,4}-\d{3,4}$')
+_RACESCORE_CAT   = re.compile(r'^(U\d{2}[MWX]?|M|W|X)[,]?$', re.IGNORECASE)
+
+def _racescore_scores(tokens):
+    """Split a trailing "<r1..rN> <points>" run into (race_tokens, points_token).
+    Each race token is a number or a code, optionally suffixed with '*' (discard).
+    Points is the final float. `tokens` are the score-run tokens only."""
+    if not tokens:
+        return [], None
+    return tokens[:-1], tokens[-1]
+
+def try_racescore(full_text):
+    if not _RACESCORE_HDR.search(full_text):
+        return None
+    lines = full_text.split('\n')
+    hdr = next((l for l in lines if _RACESCORE_HDR.search(l)), '')
+    # Number of race columns = count of "1. 2. … N." tokens between "club" and
+    # "points" in the header.
+    tail = re.split(r'\bclub\b', hdr, maxsplit=1, flags=re.IGNORECASE)
+    n_races = len(re.findall(r'\b\d+\.', tail[-1])) if len(tail) > 1 else 0
+    if n_races < 1:
+        return None
+    # A single event-wide class label (e.g. "Class: 29er"); racescore prints one
+    # class per document, so it is the fleet for every row.
+    cm = re.search(r'\bClass:\s*([^\n]+?)\s+Number of Competitors', full_text, re.IGNORECASE)
+    div = re.sub(r'\s+', ' ', cm.group(1)).strip() if cm else ''
+
+    entries = []
+    for i, line in enumerate(lines):
+        m = _RACESCORE_RANK.match(line.strip())
+        if not m:
+            continue
+        rank = int(m.group(1)); nat = m.group(2); sail = m.group(3)
+        rest = m.group(4).split()
+        # The trailing (n_races + 1) tokens are the race scores + net points.
+        if len(rest) < n_races + 2:      # need at least 1 name token + scores + net
+            continue
+        score_run = rest[-(n_races + 1):]
+        head = rest[:-(n_races + 1)]     # helm names, reg.no, [cat], born, club
+        race_toks, net_tok = _racescore_scores(score_run)
+
+        # Locate the helm's reg-no (ends the helm name) and born year in `head`.
+        reg_i = next((k for k, t in enumerate(head) if _RACESCORE_REGNO.match(t)), None)
+        if reg_i is None or reg_i == 0:
+            continue
+        helm = ' '.join(head[:reg_i])
+        after = head[reg_i + 1:]
+        # optional category token(s), then the born year, then the club run
+        cat = ''
+        while after and _RACESCORE_CAT.match(after[0]):
+            cat = (cat + ' ' + after[0].rstrip(',')).strip()
+            after = after[1:]
+        # (a bare 4-digit born year — the club run follows it, unused here)
+
+        # Crew is the NEXT non-empty line (the continuation), up to its own reg-no
+        # or born year (whichever ends the name run).
+        crew = ''
+        j = i + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j < len(lines):
+            nxt = lines[j].strip()
+            # Skip repeated page headers / provisional banners.
+            if (not _RACESCORE_RANK.match(nxt) and not _RACESCORE_HDR.search(nxt)
+                    and 'provisional results' not in nxt.lower()
+                    and not nxt.lower().startswith('page')):
+                ctoks = nxt.split()
+                cend = next((k for k, t in enumerate(ctoks)
+                             if _RACESCORE_REGNO.match(t) or re.match(r'^(19|20)\d\d$', t)),
+                            len(ctoks))
+                crew = ' '.join(ctoks[:cend])
+
+        e = _text_line_entry(rank, helm, crew, sail, nat, div, race_toks, net_tok)
+        # Discard marker: racescore appends '*' to the dropped score.
+        e['_disc'] = sum(1 for t in race_toks if str(t).rstrip().endswith('*'))
+        if cat:
+            e['category'] = norm_category(cat)
+            e['gender'] = ('F' if re.search(r'W', cat.upper()) and 'X' not in cat.upper()
+                           else 'M' if re.search(r'\bM', cat.upper()) else '')
+        entries.append(e)
+    return entries or None
+
 
 # ── aspose-bilingual-cn (Aspose.PDF Chinese notice-board results) ────────────
 # Qinhuangdao ILCA events printed by "Aspose.PDF for .NET". The results grid is
@@ -4131,6 +4257,27 @@ def _rule_based_parse(pdf_bytes: bytes) -> dict:
         if orr:
             all_parsed = orr
 
+    # racescore / ČSJ (pdfmake): two-line "<n>. NAT sail helm regno cat born club
+    # <races> points" rows that pdfplumber can't tabulate. Signature-gated on the
+    # "ord. sail … club … points" header; parse from text when the table path is
+    # empty (or too thin to match the printed competitor count).
+    if _RACESCORE_HDR.search(full_text):
+        declared = max([int(x) for x in
+                        re.findall(r'Number of Competitors:\s*(\d+)', full_text)] or [0])
+        deficient = (not all_parsed) or len(all_parsed) < max(5, 0.5 * declared)
+        if deficient:
+            rs = try_racescore(full_text)
+            if rs and len(rs) > len(all_parsed):
+                all_parsed = rs
+                # Clean event name: the "Event: <name> Event held from <d> to <d>"
+                # line, keeping only the name; date from that same range (M/D/Y).
+                _em = re.search(r'Event:\s*(.+?)\s+Event held from\s+'
+                                r'(\d{1,2})/(\d{1,2})/(\d{4})', full_text)
+                if _em:
+                    ev_name = re.sub(r'\s+', ' ', _em.group(1)).strip()
+                    ev_date = (f"{int(_em.group(3)):02d}/{int(_em.group(2)):02d}/"
+                               f"{_em.group(4)}")
+
     # ioda-word-notice (IODA General Notice Word doc): prose "First/Second/Third:
     # Name (Country)" podium, no score grid. Last-resort text extract → a tiny
     # placements-only result rather than erroring (§3c).
@@ -4757,6 +4904,17 @@ def _parse_html_string(html_text: str) -> dict:
             all_parsed.extend(parsed['entries'])
 
     if not all_parsed:
+        # An EVENT-INDEX page (RacingRulesOfSailing.org / manage2sail) has no
+        # results table in its HTML — only a Documents list linking to the real
+        # result files. Detect those links and raise an actionable error naming
+        # them (the network path in fetch_and_parse follows them automatically).
+        doc_links = _result_doc_links(html_text)
+        if doc_links:
+            labels = ', '.join(f'"{lbl}"' for lbl, _ in doc_links[:6])
+            raise ValueError(
+                "This is an event page, not a results page — its results are in "
+                f"linked documents ({labels}). Open one of those result files' "
+                "links directly, or upload the results file.")
         raise ValueError("Found tables in the page, but none looked like a results table.")
 
     ym = re.search(r'\b(20[0-2]\d|19[5-9]\d)\b', (ev_date or '') + ' ' + (ev_name or '') + ' ' + plain[:400])
@@ -4893,6 +5051,43 @@ def _embedded_result_urls(html_text: str, base_url: str):
     return out
 
 
+# A results-document link on an EVENT-INDEX page (manage2sail / RacingRulesOf
+# Sailing.org) whose HTML has no results table at all — only a "Documents" list
+# pointing at the real result files: <a href="/documents/135252">Final results -
+# GOLD</a>. Match anchors whose visible text mentions results/standings/ranking.
+_RESULT_DOC_LINK_RE = re.compile(
+    r'''<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>\s*(.*?)\s*</a>''',
+    re.IGNORECASE | re.DOTALL)
+_RESULT_DOC_TEXT_RE = re.compile(
+    r'(?i)\b(final\s+results?|overall\s+results?|results?|standings?|ranking|'
+    r'classifica|resultat|ergebnis|wyniki|výsledky)\b')
+
+def _result_doc_links(html_text: str, base_url: str = ''):
+    """Result-document links on an event-index page with no results table.
+    Returns [(label, absolute_or_relative_url)] in document order, de-duplicated.
+    Empty when the page isn't a documents-index (i.e. it has no such links)."""
+    try:
+        from urllib.parse import urljoin
+    except Exception:
+        urljoin = lambda b, u: u  # noqa: E731
+    seen, out = set(), []
+    for m in _RESULT_DOC_LINK_RE.finditer(html_text or ''):
+        href = (m.group(1) or '').strip()
+        label = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', m.group(2) or '')).strip()
+        if not href or not label or not _RESULT_DOC_TEXT_RE.search(label):
+            continue
+        # Skip nav/menu links ("My Results", "Results Inquiry", "Live Results")
+        # and non-document targets — a real result file link points at a document.
+        if re.search(r'(?i)\b(my|inquir|live|protest|request|notice)\b', label):
+            continue
+        absu = urljoin(base_url, href) if base_url else href
+        key = absu.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append((label, absu))
+    return out
+
+
 def _html_to_text(html_text: str) -> str:
     """Flatten an HTML results page to line-per-row plain text for the AI parser.
     Drops <script>/<style>, turns row/block boundaries into newlines (so each
@@ -4959,6 +5154,38 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
                             f"fleet(s); fetched them but the AI parser couldn't finish "
                             f"({ai_err}). Try importing a single fleet's results page, or "
                             "upload the results file directly.")
+            # (1b) Event-index page (RacingRulesOfSailing.org / manage2sail): the
+            #      HTML has NO results table, only a Documents list linking to the
+            #      real result files ("Final results - GOLD" → /documents/135252).
+            #      Follow those links and parse each; merge the fleets. Works with
+            #      no AI (the linked files are normal PDFs/HTML).
+            doc_links = _result_doc_links(text, url)
+            if doc_links:
+                merged, notes_seen = [], []
+                for label, durl in doc_links[:12]:
+                    try:
+                        sub = parse_url(durl, mode=mode)
+                    except Exception:
+                        continue
+                    subents = sub.get('entries') or []
+                    for f in sub.get('fleets') or []:
+                        subents = subents + (f.get('entries') or [])
+                    for e in subents:
+                        # Tag each row with the document's fleet label when the
+                        # file didn't carry its own (e.g. "Final results - GOLD").
+                        if not (e.get('div') or '').strip():
+                            fl = re.sub(r'(?i)\bfinal\b|\bresults?\b|[-–]', ' ', label)
+                            e['div'] = re.sub(r'\s+', ' ', fl).strip()
+                    merged.extend(subents)
+                if merged:
+                    out = _finalize(
+                        merged,
+                        extract_event_name(re.sub(r'<[^>]+>', ' ', text)) or "Imported Competition",
+                        '', 0,
+                        [f"Loaded {url}",
+                         "This event page had no results table; followed its "
+                         f"{len(doc_links)} linked result document(s) and parsed them."])
+                    return out
             # (2) Static table-less HTML (each result in <div>/<span>): send the
             #     page's own readable text to the AI parser.
             if have_ai:
