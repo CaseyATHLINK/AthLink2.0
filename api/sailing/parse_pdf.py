@@ -5189,8 +5189,8 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
     if mode == 'entries':
         if not is_html or 'pdf' in ctype:
             return parse_pdf_bytes(data, mode='entries')
-        if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
-            raise ValueError("Entry lists are read by the AI parser, but no AI key is configured.")
+        if not _gemini_key():
+            raise ValueError("Entry lists are read by the Gemini parser, but no Gemini key is configured.")
         text = _decode_html_bytes(data)
         def _ai_entries(html_text, extra_note=None):
             out = _gemini_parse(_html_to_text(html_text).encode("utf-8"), "text/plain", entries_mode=True)
@@ -5731,9 +5731,9 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
     mime = _detect_mime(file_bytes)
 
     if mode == 'entries':
-        if not (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY", "")):
-            raise ValueError("Entry lists are read by the AI parser, but no AI key is configured "
-                             "(set Gemini_API_Key_Universal, or ANTHROPIC_API_KEY as fallback).")
+        if not _gemini_key():
+            raise ValueError("Entry lists are read by the Gemini parser, but no Gemini key is "
+                             "configured (set Gemini_API_Key_Universal).")
         if mime == "text/html":
             blob = _html_to_text(_decode_html_bytes(file_bytes)).encode("utf-8")
             return _gemini_parse(blob, "text/plain", entries_mode=True)
