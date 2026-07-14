@@ -31,6 +31,21 @@ export async function createBinder(owner,name){
   const r=await sbPost("scout_binders",{owner,name});
   return r?.[0]||null;
 }
+// Default binder, single-flight per owner: concurrent first-watch toggles share
+// one creation, and an existing binder is reused — the DB has no unique(owner,name),
+// so idempotency has to live here.
+const _defBinder={};
+export function ensureDefaultBinder(owner){
+  if(!_defBinder[owner]) _defBinder[owner]=(async()=>{
+    const ex=await fetchBinders(owner);
+    const hit=ex.find(b=>b.name==="My watchlist")||ex[0];
+    if(hit) return hit;
+    const b=await createBinder(owner,"My watchlist");
+    if(!b) delete _defBinder[owner];               // failed create → allow retry
+    return b;
+  })().catch(e=>{ delete _defBinder[owner]; throw e; });
+  return _defBinder[owner];
+}
 export async function renameBinder(id,name){
   return sbPatch("scout_binders",`id=eq.${enc(id)}`,{name});
 }

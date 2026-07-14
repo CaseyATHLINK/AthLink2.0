@@ -256,6 +256,7 @@ export default function AthLinkMVP(){
   };
   const[auth,setAuth]=useState(null);
   const[showSignIn,setShowSignIn]=useState(false);
+  const[signupRole,setSignupRole]=useState(null); // preselected signup role from ?role= deep-link
   const[accountOpen,setAccountOpen]=useState(false);
   const[myMemberships,setMyMemberships]=useState([]);  // host_members rows for the signed-in user
   const[showMembers,setShowMembers]=useState(false);   // members-management panel open
@@ -301,6 +302,8 @@ export default function AthLinkMVP(){
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
   },[devEligible]);
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
+  const viewerTypeOf=r=>r==="athlete"?"athlete":r==="scout"?"scout":r==="club"||r==="association"||r==="federation"?"host":"fan"; // 4 viewer types: athlete|host|scout|fan (guest browses as fan)
+  const viewerType=viewerTypeOf(effectiveRole);
   const role=effectiveRole;
   const canEditRole=effectiveRole==="association";
   // A profile is "verified-claimed" if any approved claim exists for that name.
@@ -359,9 +362,10 @@ export default function AthLinkMVP(){
     const rows=await fetchMyMemberships(a2.user.id,a2.token);
     if(rows) setMyMemberships(rows);
   };
-  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null);
+  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null); setSignupRole(null);
     if(a2.pendingHostId) setPendingHostNotice(a2.pendingHostId);
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{}
+    if(a2.profile?.role==="scout") goTop("scout"); // scouts land in the scout workspace; athletes/fans/hosts keep current behavior
     loadMembershipsFor(a2); };
   const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
   // Save host portal edits (name + location). Persists to the hosts table and
@@ -865,8 +869,10 @@ export default function AthLinkMVP(){
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
     if(params.get("signup")!=="1") return;
-    const clean=new URL(window.location.href); clean.searchParams.delete("signup");
+    const rl=params.get("role"); // athlete|scout|fan|host|club|association|federation
+    const clean=new URL(window.location.href); clean.searchParams.delete("signup"); clean.searchParams.delete("role");
     window.history.replaceState(null,"",clean.pathname+(clean.search||""));
+    if(rl) setSignupRole(rl);
     setShowSignIn(true);
   },[]);
 
@@ -4055,7 +4061,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>{myHostNames.length>1?"Hosts":"Host"}: <b style={{color:"var(--navy)"}}>{myHostNames.join(", ")}</b></div>
                       : role==="athlete"
                         ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}><b style={{color:"var(--navy)"}}>Athlete</b></div>
-                        : null}
+                        : role==="scout"
+                          ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}><b style={{color:"var(--navy)"}}>Scout</b></div>
+                          : role==="fan"
+                            ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}><b style={{color:"var(--navy)"}}>Fan</b></div>
+                            : null}
                 </>);
               })()}
               {/* Username reminder — gentle nudge, only if they haven't set one */}
@@ -4102,10 +4112,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     </div>
   )}
   <div style={{height:74}}/>
-  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
+  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);setSignupRole(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
     clubs={CLUBS} associations={ASSOCIATIONS} federations={FEDERATIONS}
     onCreateHost={createHostFromSignup} onClaimHost={claimHostFromSignup}
-    pendingInviteToken={pendingInviteToken}/>}
+    initialRole={signupRole} pendingInviteToken={pendingInviteToken}/>}
   {showMembers&&host&&!isClassPortal&&(()=>{
     // Athlete names appearing in this host's events (for vouching scope)
     const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));
