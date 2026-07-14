@@ -2976,7 +2976,10 @@ def _class_of(text):
     if 'nacra' in s:
         m = re.search(r'nacra\s*(\d+)', s)
         return 'Nacra ' + m.group(1) if m else 'Nacra'
-    if '49erfx' in s or '49er fx' in s or '49fx' in s:
+    # Match the FX variant first. Accept the common wrapper/class spellings a
+    # host page uses: "49erFX", "49er FX", "49fx", and the plural-stem form
+    # "49ersFX"/"49ers-fx" (49er.org wraps its FX table in <div class="result-49ersFX">).
+    if re.search(r'49er[s]?\W*fx', s) or '49fx' in s:
         return '49erFX'
     if '49er' in s:
         return '49er'
@@ -4851,10 +4854,12 @@ class _TableHarvester(_HTMLParser):
         self._heading_tag = None
         self._heading_buf = []
         self._table_anchor_text = []   # text seen just before each table (fleet label)
+        self._table_container = []     # nearest enclosing container class/id naming a fleet
         self._recent_text = []
         self._last_heading = ''        # most recent heading (best fleet/class anchor)
         self._hidden_depth = 0         # >0 while inside a display:none element
         self._hidden_stack = []        # tag names that opened a hidden region
+        self._cls_stack = []           # class+id of every open element (fleet-wrapper lookup)
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -4869,12 +4874,29 @@ class _TableHarvester(_HTMLParser):
             self._hidden_stack.append(tag if hide else None)
             if hide:
                 self._hidden_depth += 1
+            # Track the class+id of every open element so a table can find the
+            # nearest ancestor that NAMES its fleet. Many results pages wrap each
+            # fleet's table in a container whose class/id encodes the class, e.g.
+            # 49er.org's <div class="result-49ers"> / <div class="result-49ersFX">,
+            # or <div id="results-gold">. This is a more reliable fleet anchor than
+            # a stray preceding heading when several fleets are tabbed on one page.
+            cid = ((a.get('class') or '') + ' ' + (a.get('id') or '')).strip()
+            self._cls_stack.append(cid)
         if tag == 'table':
             self._tbl = []
             # The closest preceding heading (e.g. "Klasa: 49erFX") is the most
             # reliable fleet/class label; fall back to recent stray text.
             self._table_anchor_text.append(
                 self._last_heading or ' '.join(self._recent_text[-4:]))
+            # Innermost ancestor container whose class/id resolves to a class or
+            # colour fleet (skip the table's own entry at [-1]).
+            container = ''
+            for c in reversed(self._cls_stack[:-1]):
+                if c and (_class_of(c) or re.search(
+                        r'(gold|silver|bronze|emerald)[\s_-]*(fleet|flight)', c, re.I)):
+                    container = c
+                    break
+            self._table_container.append(container)
         elif tag == 'tr' and self._tbl is not None:
             self._row = []
         elif tag in ('td', 'th') and self._row is not None:
@@ -4900,6 +4922,8 @@ class _TableHarvester(_HTMLParser):
                 and self._hidden_stack:
             if self._hidden_stack.pop() is not None:
                 self._hidden_depth = max(0, self._hidden_depth - 1)
+            if self._cls_stack:
+                self._cls_stack.pop()
         if tag in ('td', 'th') and self._cell is not None:
             # collapse runs of spaces/tabs but KEEP newlines (they mark stacked
             # helm/crew names or score+code), then trim each line.
@@ -4964,12 +4988,32 @@ def _parse_html_string(html_text: str) -> dict:
     # came up empty (Sailwave-native / pya h5). Pure text, no global pattern change.
     if not ev_date:
         ev_date = extract_date(' '.join(t for (_tag, t) in hv.headings))
+    # Some event pages (e.g. 49er.org) print the date as "Start Date <Month D, YYYY>"
+    # well past extract_date's 3000-char leading window (a huge inline <style>/JS
+    # block pushes the visible content out). When the scan came up empty, look for a
+    # "Start Date"/"Date" cue anywhere in the page followed by a "Month D, YYYY"
+    # (US) or "D Month YYYY" date and take the FIRST (start) one.
+    if not ev_date:
+        cue = re.search(r'(?:start\s*date|event\s*date|\bdates?\b)\D{0,20}?'
+                        r'([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})',
+                        plain, re.IGNORECASE)
+        if cue:
+            frag = cue.group(1)
+            m = re.match(r'([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})', frag)
+            if m and _MONTHS.get(m.group(1)[:3].lower()):
+                ev_date = f"{int(m.group(2)):02d}/{_MONTHS[m.group(1)[:3].lower()]:02d}/{m.group(3)}"
+            else:
+                ev_date = _textual_date(frag) or ev_date
     discards = extract_discards(plain)
     detected_fleets = detect_fleets_in_text(plain)
 
     all_parsed = []
     for ti, tbl in enumerate(hv.tables):
-        anchor = hv._table_anchor_text[ti] if ti < len(hv._table_anchor_text) else ''
+        # A fleet-naming container class (e.g. "result-49ersFX") is a far more
+        # reliable anchor than a stray preceding heading; prefer it when present.
+        container = hv._table_container[ti] if ti < len(hv._table_container) else ''
+        anchor = container or (
+            hv._table_anchor_text[ti] if ti < len(hv._table_anchor_text) else '')
         # Sailwave calls a split fleet a "Fleet" or a "Flight" (e.g. HKRW 2017
         # prints 'Gold Flight'/'Silver Flight'); match both so the two per-flight
         # tables stay distinct instead of collapsing into one with duplicate ranks.
