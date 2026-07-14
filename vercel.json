@@ -5,7 +5,7 @@
   "outputDirectory": "apps/web/dist",
   "functions": {
     "api/sailing/parse_pdf.py": {
-      "maxDuration": 300,
+      "maxDuration": 60,
       "memory": 2048,
       "includeFiles": "api/_shared/**"
     },
