@@ -460,7 +460,7 @@ export function InfoHint({text}){
    enlarged view a chip row overlays a rival's rating curve (dashed, no band)
    for direct comparison; clicking a dot opens a per-competition sidebar with
    the athlete's result and the rival cohort who sailed that same competition. */
-const PROGRESS_RIVAL_HINT="Think of this as a skill score, like a chess rating. Every athlete starts at 1200. Beat athletes rated above you and your score climbs; finish behind athletes rated below you and it drops — winning against stronger fleets counts for more. The shaded area shows how confident the score is: it's wide when someone competes rarely, and tightens the more they compete. Placings come straight from the official results and are never altered. The dashed line past the last competition is a 1-year forecast: it continues the athlete's recent trajectory (fading toward flat, since momentum never lasts) inside a cone that widens the further out we guess.";
+const PROGRESS_RIVAL_HINT="Think of this as a skill score, like a chess rating. Every athlete starts at 1200. Beat athletes rated above you and your score climbs; finish behind athletes rated below you and it drops — winning against stronger fleets counts for more. The shaded area shows how confident the score is: it's wide when someone competes rarely, and tightens the more they compete. Placings come straight from the official results and are never altered. The grey line past the last competition is a 1-year forecast: it continues the athlete's recent trajectory (fading toward flat, since momentum never lasts) inside a lightly shaded cone that widens the further out we guess.";
 // Monotone cubic (Fritsch–Carlson) path through EXACTLY the given points — curves
 // the segments without ever overshooting a neighbouring point (the honesty
 // constraint). points=[[x,y],…] → "M…C…" string. <3 points → straight segments.
@@ -583,7 +583,7 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
     const bandLoPath=monoPath(pts.map(p=>[xOf(p),yOf(p.r-p.rd)]).reverse());
     const bandPath=`${bandUpPath}L${bandLoPath.slice(1)}Z`;
     const overlayPath=oShow&&oShow.length?monoPath(oShow.map(p=>[xOf(p),yOf(p.r)])):null;
-    // Forecast geometry: dashed damped-trend line inside its widening cone, both
+    // Forecast geometry: grey damped-trend line inside its widening cone, both
     // ANCHORED at the last rated event (the cone opens from today's band edge, so
     // history and forecast join without a jump). Same monoPath, same honesty rules.
     let fcLinePath=null,fcConePath=null,fcEnd=null,fcAnchorX=0;
@@ -614,13 +614,13 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         {ticks.map(v=>
           <line key={"g"+v} x1={M.l} y1={yOf(v)} x2={w-M.r} y2={yOf(v)} stroke="rgba(220,236,248,.06)" strokeWidth={S}/>)}
         {/* y axis: skill-rating ticks at round values */}
-        <text transform={`rotate(-90 ${enlarged?14:10} ${M.t+plotH/2})`} x={enlarged?14:10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fill="#7fa0c0">Skill rating</text>
+        <text transform={`rotate(-90 ${enlarged?14:10} ${M.t+plotH/2})`} x={enlarged?14:10} y={M.t+plotH/2} textAnchor="middle" fontSize={AX} fontWeight="700" letterSpacing=".04em" fill="#9fbdd9">Skill rating</text>
         {ticks.map(v=>
           <text key={v} x={M.l-4} y={yOf(v)+3} textAnchor="end" fontSize={AX} fill="#7fa0c0">{v}</text>)}
         <line x1={M.l} y1={M.t+plotH} x2={w-M.r} y2={M.t+plotH} stroke="rgba(220,236,248,.18)" strokeWidth={S}/>
         {/* start·1200 anchor: dashed reference line only when 1200 sits in-domain */}
         {1200>=lo&&1200<=hi&&(<g>
-          <line x1={M.l} y1={yOf(1200)} x2={w-M.r} y2={yOf(1200)} stroke="rgba(220,236,248,.25)" strokeWidth={S} strokeDasharray="3 3"/>
+          <line x1={M.l} y1={yOf(1200)} x2={w-M.r} y2={yOf(1200)} stroke="rgba(220,236,248,.25)" strokeWidth={S} strokeDasharray="1.5 2.5"/>
           <text x={w-M.r} y={yOf(1200)-3} textAnchor="end" fontSize={8.5} fill="#7fa0c0">start · 1200</text>
         </g>)}
         {/* x axis: a gridline + label per year (thinned if the window is wide) */}
@@ -635,26 +635,31 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         })}
         {/* uncertainty band, under everything */}
         <path d={bandPath} fill="rgba(52,169,230,.13)" stroke="none"/>
-        {/* 1-yr forecast: widening cone + dashed damped-trend line, anchored at the
-            last rated event. Lighter than history so predicted never reads as fact. */}
-        {fcConePath&&<path d={fcConePath} fill="rgba(52,169,230,.07)" stroke="rgba(111,196,239,.30)" strokeWidth={S} strokeDasharray={`${3*S} ${3*S}`}/>}
-        {fcLinePath&&<path d={fcLinePath} fill="none" stroke="#6fc4ef" strokeWidth={1.8*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${6*S} ${5*S}`} opacity=".9"/>}
+        {/* 1-yr forecast: soft unstroked cone + solid grey trend line that mirrors
+            the rating line's look — grey (not blue) is what says "predicted". */}
+        {fcConePath&&<path d={fcConePath} fill="rgba(52,169,230,.07)" stroke="none"/>}
+        {fcLinePath&&<path d={fcLinePath} fill="none" stroke="#9fb2c9" strokeWidth={1.05*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>}
         {fcEnd&&(<g>
-          <line x1={fcAnchorX} y1={M.t} x2={fcAnchorX} y2={M.t+plotH} stroke="rgba(220,236,248,.14)" strokeWidth={S} strokeDasharray="2 4"/>
+          <line x1={fcAnchorX} y1={M.t} x2={fcAnchorX} y2={M.t+plotH} stroke="rgba(220,236,248,.14)" strokeWidth={S} strokeDasharray="1.5 3"/>
           <text x={fcAnchorX+4} y={M.t+9} fontSize={8.5} fill="#7fa0c0">forecast →</text>
-          <text x={Math.min(Math.max(xForTs(fcEnd.ts),M.l),w-M.r)-4} y={yOf(fcEnd.r)-8} textAnchor="end" fontSize={9.5} fontWeight="700" fill="#8fd0f5">in 1 yr ≈ {Math.round(fcEnd.r)} ±{Math.round((fcEnd.hi-fcEnd.lo)/2)}</text>
+          {/* label sits at the BOTTOM of the cone, clear of every line */}
+          <text x={Math.min(Math.max(xForTs(fcEnd.ts),M.l),w-M.r)-4} y={Math.min(yOf(fcEnd.lo)+11,M.t+plotH-4)} textAnchor="end" fontSize={9.5} fontWeight="700" fill="#9fb2c9">in 1 yr ≈ {Math.round(fcEnd.r)} ±{Math.round((fcEnd.hi-fcEnd.lo)/2)}</text>
         </g>)}
         {/* rival overlay: dashed muted line, no band, no dots, no glow */}
-        {overlayPath&&<path d={overlayPath} fill="none" stroke="#8fa8c4" strokeWidth={1.6*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${5*S} ${4*S}`}/>}
+        {overlayPath&&<path d={overlayPath} fill="none" stroke="#8fa8c4" strokeWidth={1.05*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${2.5*S} ${2.5*S}`}/>}
         {/* the rating line: always shown, with a slow soft glow gliding left → right */}
-        <path d={linePath} fill="none" stroke="#34a9e6" strokeWidth={2.1*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
-        <path className="pg-pulse" pathLength="1" d={linePath} fill="none" stroke="#a9e0ff" strokeWidth={3.4*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
-        {/* per-competition dots ringed in their boat-class colour */}
-        {pts.map((p,i)=>{const on=enlarged&&selPt===i;const cc=classColor(p.cls);return(
-          <circle key={i} cx={xOf(p)} cy={yOf(p.r)} r={(on?4.6:2.4)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?2:1.4)*S} style={{cursor:"pointer"}}
+        <path d={linePath} fill="none" stroke="#34a9e6" strokeWidth={1.05*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
+        <path className="pg-pulse" pathLength="1" d={linePath} fill="none" stroke="#a9e0ff" strokeWidth={1.7*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
+        {/* per-competition dots ringed in their boat-class colour. The visible dot is
+            deliberately small; an invisible twin on top keeps the click/hover target
+            finger-sized so shrinking the mark never shrinks the interaction. */}
+        {pts.map((p,i)=>{const on=enlarged&&selPt===i;const cc=classColor(p.cls);return(<g key={i}>
+          <circle cx={xOf(p)} cy={yOf(p.r)} r={(on?2.3:1.2)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?1.2:0.8)*S} pointerEvents="none"/>
+          <circle cx={xOf(p)} cy={yOf(p.r)} r={5*S} fill="transparent" stroke="none" style={{cursor:"pointer"}}
             onClick={enlarged?()=>setSelPt(i===selPt?null:i):undefined}
             onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Rating ${Math.round(p.r)} (${fmtDelta(p.delta)})`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
-            onMouseLeave={enlarged?undefined:()=>setTip(null)}/>);})}
+            onMouseLeave={enlarged?undefined:()=>setTip(null)}/>
+        </g>);})}
       </svg>);
   }
   const chartCol=(
@@ -681,7 +686,7 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Rating</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:9,height:9,borderRadius:"50%",background:"#fff",boxShadow:"0 0 0 1.5px var(--accent)"}}/>Competition</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:9,borderRadius:3,background:"rgba(52,169,230,.25)"}}/>Uncertainty</span>
-        {proj&&showFc&&<span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:0,borderTop:"2px dashed #6fc4ef"}}/>1-yr forecast</span>}
+        {proj&&showFc&&<span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#9fb2c9"}}/>1-yr forecast</span>}
       </div>}
       {tip&&!enlarged&&(
         <div style={{position:"absolute",left:tip.x,top:Math.max(titleBlock,tip.y),transform:"translate(-50%,-100%)",pointerEvents:"none",zIndex:5,
