@@ -464,6 +464,54 @@ export default function AthLinkMVP(){
       return true;
     })||null;
   };
+  // ── Shared tail of discovery: turn researched competitions ({name,url,year,class})
+  //    into import-queue nuggets — already imported → ticked off, no URL → failed,
+  //    the rest parsed (2 at a time) into ready-to-review previews. `placeRows`
+  //    decides how the initial rows enter the queue (append, or replace a site seed).
+  const compsIntoQueue=async(comps,idPrefix,hostObj,placeRows)=>{
+    const rows=comps.map((c,ci)=>{
+      const base={id:idPrefix+"_c"+ci,name:c.name||"Competition",status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]};
+      if(eventAlreadyOnAthLink(c)) return {...base,status:"published",publishedMsg:"Already on AthLink",notes:[]};
+      if(!c.url) return {...base,status:"error",error:"No results link found — upload its file above.",notes:["No results link found — upload its file above."]};
+      return {...base,notes:["Reading the results page…"],_comp:c};
+    });
+    placeRows(rows);
+    // Parse the readable ones (2 at a time) → ready-to-review queue items.
+    await hgRunPool(rows.filter(r=>r._comp).map(row=>async()=>{
+      const c=row._comp;
+      let out;
+      try{
+        const data=MOCK_RESEARCH?mockParse({url:c.url,name:c.name,class:c.class}):await parseLink(c.url,"ai");
+        if(!data||!data.ok) throw new Error(data?.error||"Couldn't read this results page.");
+        const withUrl=pv=>{pv.sources=[...new Set([...(pv.sources||[]),c.url].filter(Boolean))];return pv;};
+        if(data.multi&&Array.isArray(data.fleets)&&data.fleets.length){
+          const gdisc=Math.max(...data.fleets.map(f=>f.discards||1));
+          out=data.fleets.map((fl,fi)=>({id:row.id+"_f"+fi,name:`${data.name||c.name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
+            previewEv:withUrl(previewFromData(data.name||c.name,data.date||"",fl,!!data.ai_parsed,data.detected_class||c.class||"",data.detected_host||hostObj?.name||"")),
+            subclass:null,collabs:[],fleetGroupId:row.id,fleetGroupBaseName:data.name||c.name,fleetGroupDiscards:gdisc,notes:data.notes||["Parsed."]}));
+        }else{
+          out=[{id:row.id,name:data.name||c.name,status:"ok",error:null,notes:data.notes||["Parsed."],
+            previewEv:withUrl(previewFromData(data.name||c.name,data.date||"",{name:"",entries:data.entries||[],discards:data.discards},!!data.ai_parsed,data.detected_class||c.class||"",data.detected_host||hostObj?.name||"")),
+            subclass:null,collabs:[]}];
+        }
+      }catch(e){
+        const msg=(e&&e.message)||"Couldn't read this results page.";
+        out=[{...row,_comp:undefined,status:"error",error:msg,notes:[msg]}];
+      }
+      setPending(prev=>prev.flatMap(p=>p.id===row.id?out:[p]));
+    }),2);
+  };
+  // ── Saved discoveries: feed hosts.dossier.competitions (researched earlier, with
+  //    known result URLs) straight into the import queue — no re-scan of any site.
+  const dossierIntoQueue=async()=>{
+    const hostObj=(portal&&!isClassPortal)?hostById(portal):null;
+    const comps=hostObj?.dossier?.competitions||[];
+    if(!comps.length) return;
+    const seen=new Set();
+    const uniq=comps.filter(c=>{const k=hgCompKey(c); if(seen.has(k))return false; seen.add(k); return true;});
+    const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    await compsIntoQueue(uniq,"dossier_"+stamp,hostObj,rows=>setPending(prev=>[...prev,...rows]));
+  };
   // ── "Import result database": research the pasted sites and feed every found
   //    competition through the SAME import queue as single results — no separate
   //    discovery pop-up. Each site appears as a scanning nugget, then expands into
@@ -497,37 +545,7 @@ export default function AthLinkMVP(){
       comps=comps.filter(c=>{const k=hgCompKey(c); if(seen.has(k))return false; seen.add(k); return true;});
       if(!comps.length){ fail(sid,"No competitions found on this site."); return; }
       // Expand the site's scanning nugget into one nugget per competition, in place.
-      const rows=comps.map((c,ci)=>{
-        const base={id:sid+"_c"+ci,name:c.name||"Competition",status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]};
-        if(eventAlreadyOnAthLink(c)) return {...base,status:"published",publishedMsg:"Already on AthLink",notes:[]};
-        if(!c.url) return {...base,status:"error",error:"No results link found — upload its file above.",notes:["No results link found — upload its file above."]};
-        return {...base,notes:["Reading the results page…"],_comp:c};
-      });
-      setPending(prev=>prev.flatMap(p=>p.id===sid?rows:[p]));
-      // Parse the readable ones (2 at a time) → ready-to-review queue items.
-      await hgRunPool(rows.filter(r=>r._comp).map(row=>async()=>{
-        const c=row._comp;
-        let out;
-        try{
-          const data=MOCK_RESEARCH?mockParse({url:c.url,name:c.name,class:c.class}):await parseLink(c.url,"ai");
-          if(!data||!data.ok) throw new Error(data?.error||"Couldn't read this results page.");
-          const withUrl=pv=>{pv.sources=[...new Set([...(pv.sources||[]),c.url].filter(Boolean))];return pv;};
-          if(data.multi&&Array.isArray(data.fleets)&&data.fleets.length){
-            const gdisc=Math.max(...data.fleets.map(f=>f.discards||1));
-            out=data.fleets.map((fl,fi)=>({id:row.id+"_f"+fi,name:`${data.name||c.name} · ${fl.name||"Fleet "+(fi+1)}`,status:"ok",error:null,
-              previewEv:withUrl(previewFromData(data.name||c.name,data.date||"",fl,!!data.ai_parsed,data.detected_class||c.class||"",data.detected_host||hostObj?.name||"")),
-              subclass:null,collabs:[],fleetGroupId:row.id,fleetGroupBaseName:data.name||c.name,fleetGroupDiscards:gdisc,notes:data.notes||["Parsed."]}));
-          }else{
-            out=[{id:row.id,name:data.name||c.name,status:"ok",error:null,notes:data.notes||["Parsed."],
-              previewEv:withUrl(previewFromData(data.name||c.name,data.date||"",{name:"",entries:data.entries||[],discards:data.discards},!!data.ai_parsed,data.detected_class||c.class||"",data.detected_host||hostObj?.name||"")),
-              subclass:null,collabs:[]}];
-          }
-        }catch(e){
-          const msg=(e&&e.message)||"Couldn't read this results page.";
-          out=[{...row,_comp:undefined,status:"error",error:msg,notes:[msg]}];
-        }
-        setPending(prev=>prev.flatMap(p=>p.id===row.id?out:[p]));
-      }),2);
+      await compsIntoQueue(comps,sid,hostObj,rows=>setPending(prev=>prev.flatMap(p=>p.id===sid?rows:[p])));
     };
     await hgRunPool(urls.map((_,i)=>()=>researchOne(i)),2);
   };
@@ -5816,6 +5834,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
                     <div className="liquidGlass-text"><Globe size={16}/>Find results</div>
                   </button>
+                  {/* Saved discoveries: earlier research stored in hosts.dossier — import
+                      those directly (known result URLs), skipping the site re-scan. */}
+                  {(host?.dossier?.competitions?.length>0)&&(()=>{
+                    const queued=pending.some(p=>String(p.id).startsWith("dossier_"));
+                    return(
+                    <button className="btn cta liquidGlass-wrapper" disabled={queued}
+                      onClick={()=>dossierIntoQueue()}
+                      style={{flex:"none",...(queued?{opacity:.55,cursor:"not-allowed"}:{})}}>
+                      <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                      <div className="liquidGlass-text"><Sparkles size={16}/>Import {host.dossier.competitions.length} saved discoveries</div>
+                    </button>);
+                  })()}
                   <span style={{fontSize:12,color:"var(--mut)"}}>Found competitions appear in the import queue below, ready to review one by one.</span>
                 </div>
               </>)}
