@@ -3124,7 +3124,7 @@ _AI_MODEL = _anthropic_fallback_model()
 # Gemini 3 Flash ingests PDFs natively (no rasterisation) and is the primary
 # vision model. Override via env (VISION_MODEL / legacy GEMINI_VISION_MODEL,
 # honoured through llm.route('vision')) without a code change.
-_PARSE_GEMINI_MODEL = os.environ.get("VISION_MODEL", "") or os.environ.get("PARSE_GEMINI_MODEL", "gemini-3-flash")
+_PARSE_GEMINI_MODEL = os.environ.get("VISION_MODEL", "") or os.environ.get("PARSE_GEMINI_MODEL", "gemini-3.5-flash")
 # Kimi handles IMAGES natively (png/jpeg/webp/gif) — but NOT PDFs — so it only
 # serves image uploads. k2.5 is vision-capable.
 _VISION_KIMI_MODEL = os.environ.get("VISION_KIMI_MODEL", "kimi-k2.5")
@@ -3305,6 +3305,9 @@ def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 
     # Model ladder: the free tier caps each model PER DAY, so a busy import day
     # can exhaust the primary. Quota 429s fail in <1s, so stepping down the
     # ladder costs nothing; real errors/timeouts still raise immediately.
+    # Model-404s also step down: Google renames/retires ids (gemini-3-flash
+    # never went GA — that default 404'd every AI lane in prod), so a stale
+    # pinned/env model must degrade to the next rung, not kill the parse.
     ladder = [_vision_model()]
     for m in ("gemini-3-flash-preview", "gemini-2.5-flash"):
         if m not in ladder:
@@ -3319,7 +3322,8 @@ def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 
         except Exception as exc:
             s = str(exc)
             quota = "429" in s or "quota" in s.lower() or "RESOURCE_EXHAUSTED" in s
-            if quota and i < len(ladder) - 1:
+            notfound = ("404" in s and "not found" in s.lower()) or "NOT_FOUND" in s
+            if (quota or notfound) and i < len(ladder) - 1:
                 continue
             raise
     raw = (gemini_text(resp) or "").strip()
@@ -5176,6 +5180,55 @@ def _entry_list_urls(text: str, base: str) -> list:
     return out[:8]
 
 
+def _parse_entries_html(text: str, src: str, base: str) -> dict:
+    """AI-parse an UPCOMING event's entry list out of page HTML. If the page is
+    a JS shell (entries loaded by script — 29er.org shows a spinner), follow
+    embedded entry-ish endpoints up to two hops (page → event page → entries
+    AJAX fragment). `src` labels the notes; `base` resolves relative candidate
+    paths (a live URL, or a saved file's <base href>)."""
+    if not _gemini_key():
+        raise ValueError("Entry lists are read by the Gemini parser, but no Gemini key is configured.")
+    def _ai_entries(html_text, extra_note=None):
+        out = _gemini_parse(_html_to_text(html_text).encode("utf-8"), "text/plain", entries_mode=True)
+        notes = out.setdefault('notes', [])
+        notes.insert(0, f"Loaded {src}")
+        if extra_note:
+            notes.insert(1, extra_note)
+        return out
+    try:
+        return _ai_entries(text)
+    except ValueError as first_err:
+        tried = {src, base}
+        frontier = _entry_list_urls(text, base)
+        for _hop in range(2):
+            nxt = []
+            for u in frontier:
+                if u in tried or not u.lower().startswith(("http://", "https://")):
+                    continue
+                tried.add(u)
+                try:
+                    d2, _c2 = fetch_url_bytes(u, timeout=20)
+                except Exception:
+                    continue
+                if d2[:4] == b'%PDF':
+                    try:
+                        return parse_pdf_bytes(d2, mode='entries')
+                    except Exception:
+                        continue
+                t2 = _decode_html_bytes(d2)
+                if len(_html_to_text(t2).strip()) > 200:
+                    try:
+                        return _ai_entries(t2, "The page loads its entries by script; "
+                                               f"followed {u} and read them there.")
+                    except ValueError:
+                        pass
+                nxt.extend(x for x in _entry_list_urls(t2, u) if x not in tried)
+            frontier = nxt
+            if not frontier:
+                break
+        raise first_err
+
+
 def parse_url(url: str, mode: str = 'ai') -> dict:
     """Fetch a results link and parse it. HTML pages are parsed from source
     (most accurate); PDFs go through the normal byte pipeline."""
@@ -5183,54 +5236,11 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
     mime = _detect_mime(data)
     is_html = ('html' in ctype) or (mime == 'text/html')
     # Entry-list mode: the page text goes straight to the AI entries prompt —
-    # results-table rules don't apply to a who's-racing list. If the page is a
-    # JS shell (no entries in its own HTML), follow embedded entry-ish endpoints
-    # up to two hops (page → event page → entries AJAX fragment).
+    # results-table rules don't apply to a who's-racing list.
     if mode == 'entries':
         if not is_html or 'pdf' in ctype:
             return parse_pdf_bytes(data, mode='entries')
-        if not _gemini_key():
-            raise ValueError("Entry lists are read by the Gemini parser, but no Gemini key is configured.")
-        text = _decode_html_bytes(data)
-        def _ai_entries(html_text, extra_note=None):
-            out = _gemini_parse(_html_to_text(html_text).encode("utf-8"), "text/plain", entries_mode=True)
-            notes = out.setdefault('notes', [])
-            notes.insert(0, f"Loaded {url}")
-            if extra_note:
-                notes.insert(1, extra_note)
-            return out
-        try:
-            return _ai_entries(text)
-        except ValueError as first_err:
-            tried = {url}
-            frontier = _entry_list_urls(text, url)
-            for _hop in range(2):
-                nxt = []
-                for u in frontier:
-                    if u in tried:
-                        continue
-                    tried.add(u)
-                    try:
-                        d2, _c2 = fetch_url_bytes(u, timeout=20)
-                    except Exception:
-                        continue
-                    if d2[:4] == b'%PDF':
-                        try:
-                            return parse_pdf_bytes(d2, mode='entries')
-                        except Exception:
-                            continue
-                    t2 = _decode_html_bytes(d2)
-                    if len(_html_to_text(t2).strip()) > 200:
-                        try:
-                            return _ai_entries(t2, "The page loads its entries by script; "
-                                                   f"followed {u} and read them there.")
-                        except ValueError:
-                            pass
-                    nxt.extend(x for x in _entry_list_urls(t2, u) if x not in tried)
-                frontier = nxt
-                if not frontier:
-                    break
-            raise first_err
+        return _parse_entries_html(_decode_html_bytes(data), url, url)
     if is_html and 'pdf' not in ctype:
         text = _decode_html_bytes(data)
         try:
@@ -5454,7 +5464,7 @@ def _gemini_read_nationalities(file_bytes: bytes, key: str, timeout: int = 25) -
     """Flag-image nationality read via Gemini (ingests the PDF natively as
     inline_data). Returns {normalised_sail: 'IOC'}. Raises on any error so the
     caller can fall back to Anthropic."""
-    model = "gemini-3-flash"
+    model = "gemini-3.5-flash"
     if _llm_route is not None:
         try:
             model = (_llm_route("nat") or {}).get("model") or model
@@ -5735,8 +5745,12 @@ def parse_pdf_bytes(file_bytes: bytes, mode: str = 'ai') -> dict:
             raise ValueError("Entry lists are read by the Gemini parser, but no Gemini key is "
                              "configured (set Gemini_API_Key_Universal).")
         if mime == "text/html":
-            blob = _html_to_text(_decode_html_bytes(file_bytes)).encode("utf-8")
-            return _gemini_parse(blob, "text/plain", entries_mode=True)
+            # Saved event pages are often JS shells (the entries panel is a
+            # spinner) — _parse_entries_html follows their embedded entry
+            # endpoints, resolving relative paths via the page's <base href>.
+            text = _decode_html_bytes(file_bytes)
+            m = re.search(r'<base\s+[^>]*href=["\']([^"\']+)', text, re.I)
+            return _parse_entries_html(text, "the uploaded HTML file", m.group(1) if m else "")
         if mime in ("image/heic", "image/heif"):
             jpeg = _heic_to_jpeg(file_bytes)
             if jpeg is None:

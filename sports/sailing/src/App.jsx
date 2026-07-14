@@ -2268,7 +2268,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   // Parse a single file → {ok, name, date, entries, discards, multi, fleets, notes, error}
   const parseOneFile=async(file,mode="ai")=>{
-    const isHtml=file.name.toLowerCase().endsWith(".html")||file.type==="text/html";
+    // Entry lists are server-only: the in-browser HTML parser is results-shaped
+    // (it would answer "No results table" and mask the real entries error).
+    const isHtml=mode!=="entries"&&(file.name.toLowerCase().endsWith(".html")||file.type==="text/html");
     // Server parser handles PDF, HTML and images, and carries the full format
     // support (fleet splitting, crew columns, Sailti, sail-number headers…), so
     // send everything there first. For HTML, fall back to the in-browser parser

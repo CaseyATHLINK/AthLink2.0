@@ -24,9 +24,9 @@ Task router (see §5b of PROMPT_parser_v3.md)
     filter    -> Gemini gemini-3.1-flash-lite   (search-bar suggestions; latency)
     overview  -> Gemini gemini-3.1-flash-lite   (athlete overview blurbs)
     hover     -> Gemini gemini-3.1-flash-lite   (hover summaries)
-    nat       -> Gemini gemini-3-flash          (flag/nationality vision reads)
-    vision    -> Gemini gemini-3-flash          (photo/scan results parsing)
-    enrich    -> Gemini gemini-3-flash + Google Search grounding
+    nat       -> Gemini gemini-3.5-flash          (flag/nationality vision reads)
+    vision    -> Gemini gemini-3.5-flash          (photo/scan results parsing)
+    enrich    -> Gemini gemini-3.5-flash + Google Search grounding
     <other>   -> Anthropic Sonnet 5 (default + universal fallback)
 """
 
@@ -77,16 +77,16 @@ ROUTES = {
     "hover":    {"provider": "gemini", "base_url": GEMINI_BASE,
                  "model": "gemini-3.1-flash-lite", "model_env": "HOVER_MODEL"},
     "nat":      {"provider": "gemini", "base_url": GEMINI_BASE,
-                 "model": "gemini-3-flash", "model_env": "NAT_MODEL",
+                 "model": "gemini-3.5-flash", "model_env": "NAT_MODEL",
                  "model_env_legacy": "GEMINI_NAT_MODEL"},
     "vision":   {"provider": "gemini", "base_url": GEMINI_BASE,
-                 "model": "gemini-3-flash", "model_env": "VISION_MODEL",
+                 "model": "gemini-3.5-flash", "model_env": "VISION_MODEL",
                  "model_env_legacy": "GEMINI_VISION_MODEL"},
     "enrich":   {"provider": "gemini", "base_url": GEMINI_BASE,
-                 "model": "gemini-3-flash", "model_env": "ENRICH_MODEL",
+                 "model": "gemini-3.5-flash", "model_env": "ENRICH_MODEL",
                  "grounding": True},
     "research": {"provider": "gemini", "base_url": GEMINI_BASE,
-                 "model": "gemini-3-flash", "model_env": "RESEARCH_MODEL",
+                 "model": "gemini-3.5-flash", "model_env": "RESEARCH_MODEL",
                  "grounding": True},
 }
 

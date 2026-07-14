@@ -14,7 +14,7 @@ auto-applied — the user explicitly confirms the card.
 
 Provider ladder mirrors enrich.py: **Gemini + Google Search grounding** is
 primary (one paid key via _gemini_key(), routed as task 'research' →
-gemini-3-flash). Anthropic Sonnet 5 with server-side web_search is the fallback,
+gemini-3.5-flash). Anthropic Sonnet 5 with server-side web_search is the fallback,
 firing only on a Gemini error. Keys stay server-side. Pure urllib via llm.py (no
 SDK) to stay under the 60s Vercel ceiling.
 
@@ -49,11 +49,11 @@ _VALID_MODES = ("identity", "competitions")
 
 def _research_model():
     """Gemini model for research via llm.route('research') (honours RESEARCH_MODEL
-    env override), defaulting to gemini-3-flash."""
+    env override), defaulting to gemini-3.5-flash."""
     try:
-        return (_llm_route("research") or {}).get("model") or "gemini-3-flash"
+        return (_llm_route("research") or {}).get("model") or "gemini-3.5-flash"
     except Exception:
-        return "gemini-3-flash"
+        return "gemini-3.5-flash"
 
 
 def _build_prompt(name, org_type, country_hint, mode, website=""):
