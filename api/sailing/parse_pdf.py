@@ -3047,20 +3047,27 @@ def _anthropic_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, timeou
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         raise ValueError("ANTHROPIC_API_KEY not configured.")
-    if mime_type == "application/pdf":
-        media_block = {"type": "document",
-                       "source": {"type": "base64", "media_type": "application/pdf",
-                                  "data": base64.b64encode(file_bytes).decode()}}
+    if mime_type.startswith("text/"):
+        # text/* (e.g. a table-less HTML results page) → plain text, no media block.
+        content = [{"type": "text",
+                    "text": prompt + "\n\n----- PAGE TEXT -----\n"
+                            + file_bytes.decode("utf-8", "replace")}]
     else:
-        media_block = {"type": "image",
-                       "source": {"type": "base64", "media_type": mime_type,
-                                  "data": base64.b64encode(file_bytes).decode()}}
+        if mime_type == "application/pdf":
+            media_block = {"type": "document",
+                           "source": {"type": "base64", "media_type": "application/pdf",
+                                      "data": base64.b64encode(file_bytes).decode()}}
+        else:
+            media_block = {"type": "image",
+                           "source": {"type": "base64", "media_type": mime_type,
+                                      "data": base64.b64encode(file_bytes).decode()}}
+        content = [media_block, {"type": "text", "text": prompt}]
     payload = json.dumps({
         # NB: no "temperature" — claude-sonnet-5 (the current _AI_MODEL) 400s on
         # it ("`temperature` is deprecated for this model"). Omitting it uses the
         # model default; sending it breaks the whole Anthropic fallback lane.
         "model": _AI_MODEL, "max_tokens": 8192,
-        "messages": [{"role": "user", "content": [media_block, {"type": "text", "text": prompt}]}],
+        "messages": [{"role": "user", "content": content}],
     }).encode()
     req = UrlRequest(_ANTHROPIC_URL, data=payload,
                      headers={"Content-Type": "application/json", "x-api-key": key,
@@ -3100,10 +3107,16 @@ def _vision_model():
 
 def _gemini_vision_raw(file_bytes: bytes, prompt: str, key: str, timeout: int = 30,
                        mime_type: str = "application/pdf"):
-    """Vision parse via Gemini (native PDF/image ingest, no rasterisation)."""
-    parts = [{"inline_data": {"mime_type": mime_type,
-                              "data": base64.b64encode(file_bytes).decode()}},
-             {"text": prompt}]
+    """Vision parse via Gemini (native PDF/image ingest, no rasterisation).
+    text/* inputs (e.g. an HTML results page with no <table>) are sent as a
+    plain-text part — Gemini rejects HTML/text bytes labelled as a PDF."""
+    if mime_type.startswith("text/"):
+        parts = [{"text": prompt + "\n\n----- PAGE TEXT -----\n"
+                  + file_bytes.decode("utf-8", "replace")}]
+    else:
+        parts = [{"inline_data": {"mime_type": mime_type,
+                                  "data": base64.b64encode(file_bytes).decode()}},
+                 {"text": prompt}]
     # Model ladder: the free tier caps each model PER DAY, so a busy import day
     # can exhaust the primary. Quota 429s fail in <1s, so stepping down the
     # ladder costs nothing; real errors/timeouts still raise immediately.
@@ -3185,7 +3198,8 @@ def _vision_raw(file_bytes: bytes, mime_type: str, prompt: str):
     gkey = _gemini_key()
     if gkey and call_gemini is not None:
         try:
-            return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=35)
+            return _gemini_vision_raw(file_bytes, prompt, gkey, timeout=35,
+                                      mime_type=mime_type)
         except Exception:
             return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=14)
     return _anthropic_vision_raw(file_bytes, mime_type, prompt, timeout=50)
@@ -4780,19 +4794,46 @@ def fetch_url_bytes(url: str, timeout: int = 45):
     u = (url or '').strip()
     if not u.lower().startswith(_ALLOWED_FETCH_SCHEMES):
         raise ValueError("Please paste a full http(s) results link.")
-    req = UrlRequest(u, headers={
-        "User-Agent": "Mozilla/5.0 (compatible; AthLinkBot/1.0; +https://athlink20.vercel.app)",
-        "Accept": "text/html,application/xhtml+xml,application/pdf,*/*",
-    }, method="GET")
-    try:
-        with urlopen(req, timeout=timeout) as resp:
-            ctype = (resp.headers.get('Content-Type') or '').lower()
-            data = resp.read(20 * 1024 * 1024)   # cap 20 MB
-    except Exception as exc:
-        raise ValueError(f"Couldn't fetch that link: {exc}")
-    if not data:
-        raise ValueError("The link returned no content.")
-    return data, ctype
+    # Present as a real browser. Many results hosts (e.g. 420sailing.org's
+    # Apache setup) return 404/403 to ANY User-Agent containing "bot" — the old
+    # "AthLinkBot" UA silently 404'd every link fetch and every discovery probe
+    # (so every competition showed "Needs the file"). Send a normal Chrome UA and,
+    # if the host still refuses, retry once with a second realistic UA.
+    _FETCH_UAS = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    )
+    last_exc = None
+    for ua in _FETCH_UAS:
+        req = UrlRequest(u, headers={
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                      "application/pdf,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }, method="GET")
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                ctype = (resp.headers.get('Content-Type') or '').lower()
+                data = resp.read(20 * 1024 * 1024)   # cap 20 MB
+            if not data:
+                raise ValueError("The link returned no content.")
+            return data, ctype
+        except HTTPError as exc:
+            # 403/404/406/451 are the usual "we don't like your client" codes —
+            # worth one retry with a different UA. Other codes won't change.
+            last_exc = exc
+            if exc.code in (403, 404, 406, 451):
+                continue
+            raise ValueError(f"Couldn't fetch that link: HTTP {exc.code} {exc.reason}")
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Couldn't fetch that link: {exc}")
+    if isinstance(last_exc, HTTPError):
+        raise ValueError(f"Couldn't fetch that link: HTTP {last_exc.code} {last_exc.reason}")
+    raise ValueError(f"Couldn't fetch that link: {last_exc}")
 
 
 def _decode_html_bytes(data: bytes) -> str:
@@ -4821,6 +4862,50 @@ def _decode_html_bytes(data: bytes) -> str:
         return data.decode('cp1252', errors='replace')
 
 
+# AJAX result endpoints embedded in a "Loading results …" shell page. The
+# raceresults CMS (420sailing.org and friends) pulls each fleet's table from
+# url: '/…/resultsajax?…' inside an inline $.ajax() call; the static HTML has no
+# table at all. We match any inline `url: '…result…'` / `url: "…result…"`.
+_EMBEDDED_RESULT_URL_RE = re.compile(
+    r'''url\s*:\s*['"]([^'"]*result[^'"]*)['"]''', re.IGNORECASE)
+
+def _embedded_result_urls(html_text: str, base_url: str):
+    """Pull results-AJAX endpoint URLs out of a JS-rendered results shell page,
+    resolved to absolute URLs and de-duplicated in document order. Empty list
+    when the page has none (i.e. it isn't one of these JS-loaded pages)."""
+    try:
+        from urllib.parse import urljoin
+    except Exception:
+        return []
+    seen, out = set(), []
+    for m in _EMBEDDED_RESULT_URL_RE.finditer(html_text or ''):
+        raw = (m.group(1) or '').strip()
+        # Skip the cookie/consent AJAX and other non-results endpoints.
+        if not raw or 'cookie' in raw.lower() or 'consent' in raw.lower():
+            continue
+        absu = urljoin(base_url, raw)
+        if absu.lower().startswith(_ALLOWED_FETCH_SCHEMES) and absu not in seen:
+            seen.add(absu)
+            out.append(absu)
+    return out
+
+
+def _html_to_text(html_text: str) -> str:
+    """Flatten an HTML results page to line-per-row plain text for the AI parser.
+    Drops <script>/<style>, turns row/block boundaries into newlines (so each
+    competitor stays on its own line), strips remaining tags and unescapes
+    entities. Used when a page has no <table> the built-in parser can read
+    (e.g. 420sailing.org renders each result as <div>/<span>)."""
+    t = re.sub(r'(?is)<(script|style)[^>]*>.*?</\1>', ' ', html_text)
+    t = re.sub(r'(?i)<br\s*/?>', '\n', t)
+    t = re.sub(r'(?i)</(tr|div|p|li|h[1-6]|section|article)\s*>', '\n', t)
+    t = re.sub(r'<[^>]+>', ' ', t)
+    t = _unescape(t)
+    t = re.sub(r'[ \t ]+', ' ', t)
+    lines = [ln.strip() for ln in t.splitlines()]
+    return '\n'.join(ln for ln in lines if ln)
+
+
 def parse_url(url: str, mode: str = 'ai') -> dict:
     """Fetch a results link and parse it. HTML pages are parsed from source
     (most accurate); PDFs go through the normal byte pipeline."""
@@ -4834,10 +4919,52 @@ def parse_url(url: str, mode: str = 'ai') -> dict:
             out.setdefault('notes', []).insert(0, f"Loaded {url}")
             return out
         except ValueError as html_err:
-            if mode == 'ai' and (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY")):
-                # Some 'HTML' pages are really embedded PDFs / JS apps — let AI try the bytes.
+            have_ai = mode == 'ai' and (_gemini_key() or os.environ.get("ANTHROPIC_API_KEY"))
+            # (1) JS-loaded results: the page is a "Loading results …" shell that
+            #     pulls each fleet's real table over AJAX (e.g. 420sailing.org's
+            #     /races/resultsajax). Fetch those endpoints and parse them — as a
+            #     proper <table> via the built-in parser when possible, else via AI.
+            ajax_urls = _embedded_result_urls(text, url)
+            if ajax_urls:
+                blob = []
+                for au in ajax_urls[:12]:
+                    try:
+                        adata, actype = fetch_url_bytes(au, timeout=20)
+                        atext = _decode_html_bytes(adata)
+                    except Exception:
+                        continue
+                    try:
+                        sub = _parse_html_string(atext)   # real <table>? parse it
+                        if sub.get('entries'):
+                            sub.setdefault('notes', []).insert(0, f"Loaded {url}")
+                            return sub
+                    except ValueError:
+                        pass
+                    blob.append(_html_to_text(atext))
+                combined = "\n\n".join(t for t in blob if t.strip())
+                if have_ai and combined:
+                    try:
+                        out = _gemini_parse(combined.encode("utf-8"), "text/plain")
+                        notes = out.setdefault('notes', [])
+                        notes.insert(0, f"Loaded {url}")
+                        notes.insert(1, "Results are loaded on the page by script; "
+                                        "fetched them and read the text with the AI parser.")
+                        return out
+                    except Exception as ai_err:
+                        raise ValueError(
+                            f"This page loads its results by script across {len(ajax_urls)} "
+                            f"fleet(s); fetched them but the AI parser couldn't finish "
+                            f"({ai_err}). Try importing a single fleet's results page, or "
+                            "upload the results file directly.")
+            # (2) Static table-less HTML (each result in <div>/<span>): send the
+            #     page's own readable text to the AI parser.
+            if have_ai:
                 try:
-                    return _gemini_parse(data, "application/pdf")
+                    out = _gemini_parse(_html_to_text(text).encode("utf-8"), "text/plain")
+                    notes = out.setdefault('notes', [])
+                    notes.insert(0, f"Loaded {url}")
+                    notes.insert(1, "No results table in the page HTML; read the text with the AI parser.")
+                    return out
                 except Exception:
                     raise html_err
             raise
