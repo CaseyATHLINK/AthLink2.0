@@ -24,7 +24,6 @@ import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect, Cl
 import { CalendarBody } from "./views/calendar.jsx";
 import { GLOBE_NAMES, SailingGlobe, FootprintLegend } from "./views/globe.jsx";
 import { AthleteWeb, YearNuggets, ProgressChart } from "./views/charts.jsx";
-import { UpcomingEventForecast } from "./views/forecast.jsx";
 import { SPORT_MODELS, SpmDuo, HomeShowcaseRotator } from "./views/models.jsx";
 import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
 import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
@@ -969,6 +968,9 @@ export default function AthLinkMVP(){
   // a boolean; used for spinners only — the hub NEVER locks uploads while parsing.
   const pdfLoading=pending.some(p=>p.status==="parsing");
   const[previewEditVal,setPreviewEditVal]=useState("");
+  // Div-header rename popover: {x,y,rows:[{from,val}]} — rename a division tag
+  // (e.g. "Jr" → "U18") across EVERY row of the active preview at once.
+  const[divHdrEdit,setDivHdrEdit]=useState(null);
   // Web-lookup enrichment suggestions, keyed by pending-item id →
   //   {date,country,source,dismissed}. Populated best-effort by the enrichment
   //   effect when a parsed preview still lacks a date/country. UI-only, never
@@ -2691,6 +2693,23 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>
       i!==idx?e:{...e,div:v,gender:g,category})}));
   };
+  // The division tag of one entry, exactly as the row's toggle displays it.
+  const _divCatOf=(e)=>{
+    const parts=String(divFromEntry(e)||"").split(/\s+/).filter(Boolean);
+    return parts.find(t=>!/^(m|f|mix)$/i.test(t))||"";
+  };
+  // Rename a division tag across EVERY row of the active preview (Jr → U18 …).
+  const renameDivToken=(from,to)=>{
+    const t=String(to||"").trim().replace(/\s+/g,"");
+    if(!t||t===from) return;
+    setPreviewEv(ev=>({...ev,entries:ev.entries.map(e=>{
+      if(_divCatOf(e)!==from) return e;
+      const parts=String(divFromEntry(e)||"").split(/\s+/).filter(Boolean);
+      const gTok=parts.find(x=>/^(m|f|mix)$/i.test(x))||"";
+      const g=/mix/i.test(gTok)?"Mix":gTok.toUpperCase();
+      return {...e,category:t,gender:g,div:[g,t].filter(Boolean).join(" ")};
+    })}));
+  };
 
   const startPreviewEdit=(type,idx,raceIdx,val)=>{
     setPreviewEdit({type,idx,raceIdx});
@@ -3284,13 +3303,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .fleet-card .fcount{font-size:13px;color:var(--mut);}
     /* Preview modal */
     .preview-meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;}
-    /* One-row import header: name · date · host country · discards stepper · class dropdown */
-    .preview-meta.wide{grid-template-columns:1.7fr 1.15fr 1.15fr auto minmax(118px,.9fr);align-items:end;}
+    /* One-row import header: name · host country · date · discards stepper · class dropdown */
+    .preview-meta.wide{grid-template-columns:1.7fr 1.2fr 1.1fr auto minmax(118px,.9fr);align-items:end;}
     @media(max-width:860px){.preview-meta.wide{grid-template-columns:1fr 1fr;}}
     .preview-meta label{font-size:11px;color:var(--mut);display:block;margin-bottom:3px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;}
-    .preview-meta input{width:100%;border:0;border-radius:12px;padding:8px 11px;font:inherit;font-size:13px;background:var(--grouped);outline:none;transition:box-shadow .15s;}
-    .preview-meta input:focus{box-shadow:0 0 0 4px var(--halo);}
-    .preview-meta input.pmissing{box-shadow:0 0 0 1.5px #e8921a;background:rgba(255,149,0,.08);}
+    /* Liquid-glass bar — the ONE material every preview control shares (inputs,
+       country picker, class nugget, organizer chips) so shapes/colours line up. */
+    .preview-meta input,.glassbar{width:100%;border:0;border-radius:12px;padding:8px 12px;font:inherit;font-size:13px;outline:none;transition:box-shadow .15s;
+      background:rgba(255,255,255,.55);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05);}
+    .preview-meta input:focus{box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 0 0 4px var(--halo);}
+    .preview-meta input.pmissing{box-shadow:inset 0 0 0 1.5px #e8921a,0 1px 3px rgba(0,0,0,.05);background:rgba(255,149,0,.08);}
     .pmissing-hint{font-size:11px;color:#e8921a;margin-bottom:10px;display:flex;align-items:center;gap:5px;}
     .preview-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:52vh;}
     .pe-input{width:100%;border:0;border-bottom:1.5px solid var(--accent);background:#fffbec;font:inherit;font-size:12px;text-align:center;padding:3px 2px;outline:none;}
@@ -4984,9 +5007,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     </div>);
     if(!ev) return notFound("This competition couldn't be found — it may have just been updated or removed.");
     let s=null;try{s=scoreEvent(ev);}catch(err){console.error("event page: scoreEvent failed",err);}
-    // Upcoming: an entry list with nothing sailed yet ⇒ fleet forecast, not results.
-    if((ev.entries?.length||0)>1&&(!s||!s.rows?.length||!s.races))
-      return <UpcomingEventForecast ev={ev} events={events} onBack={navBack} onPick={n=>go({name:"profile",id:n,fromEvent:ev.id})}/>;
     if(!s) return notFound("Couldn't read this competition's scores.");
     const isDraft=ev.status==="Draft";
     return(<ErrorBoundary resetKey={ev.id} fallback={
@@ -5802,7 +5822,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               const nR=act.filter(p=>p.status==="ok").length;
               const nE=act.filter(p=>p.status==="error").length;
               return(
-              <div style={{marginTop:16,border:"1px solid var(--line)",borderRadius:11,background:"#f7fafd",padding:"11px 13px"}}>
+              <div style={{marginTop:16,border:0,borderRadius:14,padding:"11px 13px",
+                background:"rgba(255,255,255,.45)",backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
+                boxShadow:"inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.45),0 1px 4px rgba(0,0,0,.06)"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                   {nP>0?<Loader2 size={14} className="spin" color="var(--accent)"/>:<CheckCircle size={14} color="#0f8a7e"/>}
                   <span style={{fontSize:12.5,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>Import queue</span>
@@ -5814,7 +5836,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   {ordered.map(p=>{
                     const pub=p.status==="published";
                     return(
-                    <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,border:"1px solid "+(pub?"transparent":"var(--line)"),background:pub?"transparent":"#fff",borderRadius:8,padding:"5px 6px 5px 9px",opacity:pub?.6:1,minHeight:26}}>
+                    <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,border:0,
+                      background:pub?"transparent":"rgba(255,255,255,.6)",
+                      boxShadow:pub?"none":"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",
+                      borderRadius:10,padding:"5px 6px 5px 10px",opacity:pub?.6:1,minHeight:26}}>
                       {p.status==="parsing"?<Loader2 size={13} className="spin" color="var(--accent)" style={{flex:"none"}}/>
                         :p.status==="error"?<AlertCircle size={13} color="#c0392b" style={{flex:"none"}}/>
                         :pub?<CheckCircle size={13} color="#0f8a7e" style={{flex:"none"}}/>
@@ -6052,11 +6077,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <span style={{fontSize:11,color:"#6278b5"}}>— This result was parsed by Claude AI. Review all cells before publishing.</span>
               </div>}
               <div><label>Competition name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Competition name"/></div>
+              <div><label>Host Country</label><CountrySelect glass value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
               <div><label>Date</label><DateField value={previewEv.date||""} onChange={v=>updSharedMeta("date",v)} className={!previewEv.date?"pmissing":""} markedDays={markedDays} dotColor={classColor(evCls)||"var(--navy2)"}/></div>
-              <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
               <div><label>Discards</label>
-                <div className="stepper" style={{background:"var(--grouped)",borderRadius:12,padding:"3px 5px",gap:5,justifyContent:"center"}}>
-                  {/* functional updates so rapid clicks don't read a stale count */}
+                {/* frameless ± stepper; functional updates so rapid clicks don't read a stale count */}
+                <div className="stepper" style={{gap:5,justifyContent:"center",height:35}}>
                   <button type="button" style={{width:26,height:26}} onClick={()=>setPreviewEv(ev=>ev?{...ev,discards:Math.max(0,(ev.discards??1)-1)}:ev)}><Minus size={12}/></button>
                   <span style={{minWidth:16,textAlign:"center",fontSize:13}}>{previewEv.discards??1}</span>
                   <button type="button" style={{width:26,height:26}} onClick={()=>setPreviewEv(ev=>ev?{...ev,discards:Math.min(20,(ev.discards??1)+1)}:ev)}><Plus size={12}/></button>
@@ -6125,21 +6150,43 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               const orgName=!editing&&!ownerId?(previewEv._orgName||""):"";
               const collabs=mf.collabs||[];
               const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
-              const nug=(key,label,{dark=false,dashed=false,onX=null,tag=null})=>(
-                <span key={key} style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:260,
-                  border:dashed?"1.5px dashed var(--line)":"1px solid "+(dark?"var(--navy)":"var(--line)"),
-                  background:dark?"var(--navy)":"#fff",color:dark?"#fff":"var(--navy)",
-                  borderRadius:9,padding:"5px 7px 5px 11px",fontSize:12.5,fontWeight:600,whiteSpace:"nowrap"}}>
+              const nug=(key,label,{dark=false,dashed=false,onX=null,tag=null,onToggle=null,toggleTitle=""})=>(
+                <span key={key} onClick={onToggle||undefined} title={onToggle?toggleTitle:undefined}
+                  style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:260,
+                  border:dashed?"1.5px dashed var(--line)":0,
+                  background:dark?"var(--navy)":"rgba(255,255,255,.55)",color:dark?"#fff":"var(--navy)",
+                  backdropFilter:dark?undefined:"blur(24px) saturate(190%)",WebkitBackdropFilter:dark?undefined:"blur(24px) saturate(190%)",
+                  boxShadow:dark?"inset 0 1px 0 rgba(255,255,255,.28),0 1px 3px rgba(0,0,0,.15)"
+                    :dashed?undefined:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",
+                  borderRadius:12,padding:"6px 8px 6px 12px",fontSize:12.5,fontWeight:600,whiteSpace:"nowrap",
+                  cursor:onToggle?"pointer":"default",userSelect:"none",transition:".12s"}}>
                   <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{label}</span>
-                  {tag&&<span style={{flex:"none",fontSize:10,fontWeight:700,letterSpacing:".04em",opacity:.75,
-                    border:"1px solid "+(dark?"rgba(255,255,255,.4)":"var(--line)"),borderRadius:5,padding:"1px 5px"}}>{tag}</span>}
+                  {tag&&<span style={{flex:"none",fontSize:10,fontWeight:700,letterSpacing:".04em",opacity:.8,
+                    border:"1px solid "+(dark?"rgba(255,255,255,.4)":"var(--line)"),borderRadius:6,padding:"1px 6px"}}>{tag}</span>}
                   {onX
-                    ?<button type="button" onClick={onX} title="Remove"
+                    ?<button type="button" onClick={e=>{e.stopPropagation();onX();}} title="Remove"
                       style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,
-                        borderRadius:5,border:0,cursor:"pointer",background:dark?"rgba(255,255,255,.22)":"transparent",
+                        borderRadius:6,border:0,cursor:"pointer",background:dark?"rgba(255,255,255,.22)":"transparent",
                         color:dark?"#fff":"#9aa7b6"}}><X size={12}/></button>
                     :<span style={{width:2}}/>}
                 </span>);
+              // Organizer ↔ Collab toggling. Every host is a nugget; the ORGANIZER one is
+              // dark with a tag. Click the organizer → it steps down to a collab (the
+              // import becomes an external contribution). Click a collab → it becomes THE
+              // organizer (any previous organizer steps down to collab). × removes.
+              const demoteOrganizer=()=>{
+                if(editing||!ownerId) return;
+                if(selfOrg)updSharedMeta("_orgMode","external"); else updSharedMeta("_orgHost",null);
+                if(!collabs.includes(ownerId))updSharedCollabs([...collabs,ownerId]);
+              };
+              const promoteToOrganizer=(id)=>{
+                if(editing) return;
+                const rest=collabs.filter(x=>x!==id);
+                updSharedCollabs(ownerId&&ownerId!==id&&!rest.includes(ownerId)?[...rest,ownerId]:rest);
+                if(id===importerHost){updSharedMeta("_orgMode","self");updSharedMeta("_orgHost",null);}
+                else{updSharedMeta("_orgMode","external");updSharedMeta("_orgHost",id);}
+                updSharedMeta("_orgName","");
+              };
               // "+" picks: the importer itself → back to self-organized; any host into an
               // empty organizer slot → attributed organizer; otherwise → collab.
               const addHost=id=>{
@@ -6152,10 +6199,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <label style={{fontSize:11,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600,letterSpacing:".04em",textTransform:"uppercase"}}>Organizer</label>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                   {ownerId&&nug("owner",hostById(ownerId)?.name||"Unknown host",{dark:true,tag:"Organizer",
+                    onToggle:editing?null:demoteOrganizer,toggleTitle:"Click to make this host a collab instead",
                     onX:editing?null:()=>{selfOrg?updSharedMeta("_orgMode","external"):updSharedMeta("_orgHost",null);}})}
                   {!ownerId&&orgName&&nug("orgname",orgName,{dashed:true,tag:"Organizer — not on AthLink",
                     onX:()=>updSharedMeta("_orgName","")})}
-                  {collabs.map(id=>nug(id,hostById(id)?.name||id,{onX:()=>updSharedCollabs(collabs.filter(x=>x!==id))}))}
+                  {collabs.map(id=>nug(id,hostById(id)?.name||id,{tag:"Collab",
+                    onToggle:editing?null:()=>promoteToOrganizer(id),toggleTitle:"Click to make this host the organizer",
+                    onX:()=>updSharedCollabs(collabs.filter(x=>x!==id))}))}
                   <AddHostNugget hosts={allHosts} exclude={[ownerId,...collabs].filter(Boolean)}
                     allowOther={!editing&&!ownerId&&!orgName}
                     onOtherName={v=>updSharedMeta("_orgName",v)}
@@ -6164,7 +6214,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </div>
                 {!editing&&<p style={{fontSize:11.5,color:"var(--mut)",margin:"6px 0 0"}}>
                   {(!ownerId&&!orgName)?"No organizer set — this will be filed as an external contribution"+(importerHost?` by ${hostById(importerHost)?.name||"you"}`:"")+"; the organizer can claim it later."
-                    :selfOrg?"You'll be recorded as the organizer; the competition appears on your page. Collab hosts show it on their pages too."
+                    :selfOrg?"Click a host to switch it between Organizer and Collab · × removes it. Collab hosts show the competition on their pages too."
                     :`Filed as externally contributed${importerHost?` by ${hostById(importerHost)?.name||"you"}`:""} — it stays off your page and the organizer can claim it later.`}
                 </p>}
               </div>);
@@ -6179,7 +6229,22 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
                     {!singleHanded&&<th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>}
                     <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:160}}>Gender / Div</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:160}}>
+                      <span style={{display:"inline-flex",alignItems:"center",gap:5}}>
+                        Gender / Div
+                        {/* Rename a division tag (Jr → U18 …) across every row at once. */}
+                        <button type="button" title="Rename a division tag across all rows (e.g. Jr → U18)"
+                          onClick={e=>{
+                            const r=e.currentTarget.getBoundingClientRect();
+                            const toks=[...new Set(previewEv.entries.map(_divCatOf).filter(Boolean))];
+                            setDivHdrEdit({x:Math.round(r.left-70),y:Math.round(r.bottom+6),rows:toks.map(t=>({from:t,val:t}))});
+                          }}
+                          style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,border:0,borderRadius:5,
+                            background:"rgba(255,255,255,.18)",color:"#fff",cursor:"pointer",padding:0}}>
+                          <Pencil size={10}/>
+                        </button>
+                      </span>
+                    </th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
                     <th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>
                     <th style={{background:"var(--navy)",width:32,padding:"9px 4px"}} aria-label=""></th>
@@ -6243,6 +6308,31 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </table>
             </div>
             <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
+            {/* ── Div-tag rename popover (fixed: the table wrap clips absolutes) ── */}
+            {divHdrEdit&&(<>
+              <div onClick={()=>setDivHdrEdit(null)} style={{position:"fixed",inset:0,zIndex:118}}/>
+              <div style={{position:"fixed",left:Math.max(10,divHdrEdit.x),top:divHdrEdit.y,zIndex:119,width:250,background:"var(--card)",
+                border:"1px solid var(--line)",borderRadius:12,boxShadow:"0 18px 44px -14px rgba(0,0,0,.32)",padding:"11px 13px"}}>
+                <div style={{fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",color:"var(--navy)",marginBottom:8}}>Rename division tags</div>
+                {!divHdrEdit.rows.length&&<p style={{fontSize:12,color:"var(--mut)",margin:0}}>No division tags on these results yet — tag a row first (click Jr on any row).</p>}
+                {divHdrEdit.rows.map((row,ri)=>(
+                  <div key={row.from} style={{display:"flex",alignItems:"center",gap:7,marginBottom:ri<divHdrEdit.rows.length-1?7:0}}>
+                    <span style={{flex:"none",background:DIV_COLOR[row.from]||DIV_COLOR.Jr,color:"#fff",borderRadius:5,fontSize:10,fontWeight:700,
+                      fontFamily:"'Barlow',sans-serif",padding:"2px 7px"}}>{row.from}</span>
+                    <ChevronRight size={12} style={{flex:"none",color:"var(--mut)"}}/>
+                    <input value={row.val} autoFocus={ri===0} maxLength={8}
+                      onChange={e=>setDivHdrEdit(d=>({...d,rows:d.rows.map((x,i)=>i===ri?{...x,val:e.target.value}:x)}))}
+                      onKeyDown={e=>{if(e.key==="Enter"&&row.val.trim()){renameDivToken(row.from,row.val);setDivHdrEdit(null);}if(e.key==="Escape")setDivHdrEdit(null);}}
+                      style={{flex:1,minWidth:0,border:"1px solid var(--line)",borderRadius:7,padding:"5px 8px",font:"inherit",fontSize:12.5,outline:"none"}}/>
+                    <button type="button" disabled={!row.val.trim()||row.val.trim()===row.from}
+                      onClick={()=>{renameDivToken(row.from,row.val);setDivHdrEdit(null);}}
+                      style={{flex:"none",border:0,background:(row.val.trim()&&row.val.trim()!==row.from)?"var(--accent)":"var(--line)",color:"#fff",
+                        borderRadius:7,padding:"5px 10px",fontSize:11.5,fontWeight:700,cursor:(row.val.trim()&&row.val.trim()!==row.from)?"pointer":"not-allowed"}}>Apply</button>
+                  </div>
+                ))}
+                <p style={{fontSize:10.5,color:"var(--mut)",margin:"9px 0 0",lineHeight:1.45}}>Applies to every row of this result — e.g. Jr → U18.</p>
+              </div>
+            </>)}
             <div className="import-actionbar">
               <button className="btn ghost" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>
               <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":(pending.filter(p=>p.status!=="published").length>1?"Publish this result":"Confirm & Publish")}</div></button>

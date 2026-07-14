@@ -337,7 +337,7 @@ export const COUNTRIES=[
 export const INTL_OPTION={code:"INT",name:"International"};
 export const csFlag=code=>code==="INT"?"🌐":iocFlag(code);
 
-export function CountrySelect({value,onChange,placeholder="Select country...",intl=false,fullWidth=false}){
+export function CountrySelect({value,onChange,placeholder="Select country...",intl=false,fullWidth=false,glass=false}){
   const[open,setOpen]=React.useState(false);
   const[q,setQ]=React.useState("");
   const OPTS=intl?[INTL_OPTION,...COUNTRIES]:COUNTRIES;
@@ -348,9 +348,16 @@ export function CountrySelect({value,onChange,placeholder="Select country...",in
     const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
     document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
   },[]);
+  // glass: match the liquid-glass bars of the import preview (same material as
+  // .preview-meta inputs) instead of the default white bordered box.
+  const triggerStyle=glass
+    ?{border:0,borderRadius:12,padding:"8px 12px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none",
+      background:"rgba(255,255,255,.55)",backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
+      boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",minHeight:35,boxSizing:"border-box"}
+    :{border:"1px solid var(--line)",borderRadius:7,padding:"9px 12px",fontSize:13,background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"};
   return(
     <div style={{position:"relative",...(fullWidth?{width:"100%"}:{})}} ref={ref}>
-      <div onClick={()=>setOpen(o=>!o)} style={{border:"1px solid var(--line)",borderRadius:7,padding:"9px 12px",fontSize:13,background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"}}>
+      <div onClick={()=>setOpen(o=>!o)} style={triggerStyle}>
         {sel?<>{csFlag(sel.code)} {sel.code!=="INT"&&<b>{sel.code}</b>} {sel.name}</>:<span style={{color:"var(--mut)"}}>{placeholder}</span>}
         <ChevronRight size={12} style={{marginLeft:"auto",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
       </div>
@@ -496,9 +503,12 @@ export function ClassSelect({value,subValue,locked,onPick,classes=[],onAdd}){
   const[open,setOpen]=React.useState(false);
   const[adding,setAdding]=React.useState(false);
   const[name,setName]=React.useState("");
+  // Accordion: the dropdown lists ONLY main classes; clicking a class that has
+  // subclasses expands them in place (declutters the closed list).
+  const[expanded,setExpanded]=React.useState(null);
   const ref=React.useRef();
   React.useEffect(()=>{
-    const fn=e=>{if(ref.current&&!ref.current.contains(e.target)){setOpen(false);setAdding(false);}};
+    const fn=e=>{if(ref.current&&!ref.current.contains(e.target)){setOpen(false);setAdding(false);setExpanded(null);}};
     document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
   },[]);
   const sub=(SUBCLASSES[value]||[]).find(s=>s.id===subValue);
@@ -506,15 +516,16 @@ export function ClassSelect({value,subValue,locked,onPick,classes=[],onAdd}){
   const custom=classes.find(c=>c.id===value);
   const label=sub?(sub.short||sub.label):(main?main.short:(custom?.short||classLabel(value)));
   const color=sub?.color||classColor(value);
-  const pick=(cid,sid)=>{onPick(cid,sid);setOpen(false);setAdding(false);};
+  const pick=(cid,sid)=>{onPick(cid,sid);setOpen(false);setAdding(false);setExpanded(null);};
   const submitAdd=()=>{const id=onAdd&&onAdd(name);if(id)pick(id,null);setName("");setAdding(false);};
   const row=(on,disabled)=>({padding:"7px 12px",cursor:disabled?"not-allowed":"pointer",fontSize:12.5,fontWeight:600,
     display:"flex",alignItems:"center",gap:8,background:on?"var(--sky)":"transparent",opacity:disabled?.35:1,transition:".1s"});
   return(
     <div style={{position:"relative"}} ref={ref}>
-      <button type="button" onClick={()=>setOpen(o=>!o)}
-        style={{width:"100%",border:"1px solid "+color,background:color,color:"#fff",borderRadius:12,
-          fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"8px 11px",cursor:"pointer",
+      <button type="button" onClick={()=>setOpen(o=>{if(o)setExpanded(null);return !o;})}
+        style={{width:"100%",border:0,background:color,color:"#fff",borderRadius:12,minHeight:35,boxSizing:"border-box",
+          fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"8px 12px",cursor:"pointer",
+          boxShadow:"inset 0 1px 0 rgba(255,255,255,.35),inset 0 0 0 .5px rgba(255,255,255,.25),0 1px 3px rgba(0,0,0,.12)",
           display:"inline-flex",alignItems:"center",gap:7,justifyContent:"space-between"}}>
         <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label}</span>
         <ChevronRight size={13} style={{flex:"none",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
@@ -524,15 +535,32 @@ export function ClassSelect({value,subValue,locked,onPick,classes=[],onAdd}){
           border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 14px 34px -12px rgba(0,0,0,.25)",maxHeight:280,overflowY:"auto"}}>
           {CLASSES.map(c=>{
             const disabled=!!locked&&c.id!==locked;
+            const subs=SUBCLASSES[c.id]||[];
+            const hasSubs=subs.length>0;
+            const isOpen=expanded===c.id;
             const onMain=value===c.id&&!sub;
+            // A "plain <class>" row inside the expansion, but only when no subclass
+            // already stands for the plain class (Optimist→"OPTI", 49er→"49er" do;
+            // ILCA has none, so it gets an explicit plain "ILCA" row).
+            const hasPlainSub=subs.some(s=>(s.short||s.label)===c.short);
             return(<React.Fragment key={c.id}>
-              <div onClick={()=>{if(!disabled)pick(c.id,null);}} style={row(onMain,disabled)}
+              <div onClick={()=>{if(disabled)return; if(hasSubs)setExpanded(x=>x===c.id?null:c.id); else pick(c.id,null);}}
+                style={row(onMain&&!hasSubs,disabled)}
                 onMouseEnter={e=>{if(!disabled)e.currentTarget.style.background="var(--sky)";}}
-                onMouseLeave={e=>e.currentTarget.style.background=onMain?"var(--sky)":"transparent"}>
+                onMouseLeave={e=>e.currentTarget.style.background=(onMain&&!hasSubs)?"var(--sky)":"transparent"}>
                 <span style={{width:10,height:10,borderRadius:3,background:classColor(c.id),flex:"none"}}/>
-                <span style={{color:"var(--ink)"}}>{c.short}</span>
+                <span style={{color:"var(--ink)",flex:1}}>{c.short}</span>
+                {hasSubs&&<ChevronRight size={12} style={{flex:"none",color:"var(--mut)",transform:isOpen?"rotate(90deg)":"none",transition:".15s"}}/>}
               </div>
-              {(SUBCLASSES[c.id]||[]).map(s=>{
+              {isOpen&&!hasPlainSub&&(
+                <div onClick={()=>{if(!disabled)pick(c.id,null);}} style={{...row(onMain,disabled),padding:"6px 12px 6px 30px",fontWeight:500}}
+                  onMouseEnter={e=>{if(!disabled)e.currentTarget.style.background="var(--sky)";}}
+                  onMouseLeave={e=>e.currentTarget.style.background=onMain?"var(--sky)":"transparent"}>
+                  <span style={{width:8,height:8,borderRadius:2,background:classColor(c.id),flex:"none"}}/>
+                  <span style={{color:"var(--ink)"}}>{c.short}</span>
+                </div>
+              )}
+              {isOpen&&subs.map(s=>{
                 const onSub=value===c.id&&subValue===s.id;
                 return(
                   <div key={s.id} onClick={()=>{if(!disabled)pick(c.id,s.id);}} style={{...row(onSub,disabled),padding:"6px 12px 6px 30px",fontWeight:500}}
