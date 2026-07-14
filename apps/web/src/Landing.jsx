@@ -547,7 +547,16 @@ export default function Landing({ sports = [] }) {
   const [ov, setOv] = useState({});
   const [saveSt, setSaveSt] = useState("");
   useEffect(() => {
-    const onKey = (e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "D" || e.key === "d")) { e.preventDefault(); setDev(d => !d); } };
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "D" || e.key === "d")) {
+        e.preventDefault();
+        setDev(d => {
+          if (d) return false; // already on → toggle off, no password
+          const pass = window.prompt("Enter dev mode password:");
+          return pass === "123456789"; // only unlock on correct password
+        });
+      }
+    };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   }, []);
   useEffect(() => { (async () => { const o = await fetchLandingOverrides(); if (o && Object.keys(o).length) setOv(o); })(); }, []);
