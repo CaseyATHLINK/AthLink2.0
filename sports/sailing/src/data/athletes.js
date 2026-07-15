@@ -7,7 +7,7 @@
 
 import { dateKey } from "../util/date.js";
 import { canonName, pascalSlug } from "../util/name.js";
-import { genderCatOf, lockedGenderOf } from "../util/gender.js";
+import { genderCatOf } from "../util/gender.js";
 import { IOC_ISO } from "../util/flag.js";
 
 // ── Per-athlete attribute memory (gender, birth year, recent class) ──────────
@@ -52,26 +52,13 @@ export function buildAthleteAttrs(evList){
 export function rememberedGender(name){
   const a=ATHLETE_ATTRS.get(canonName(name)); return a?.gender||null;
 }
-// Resolve the gender to SHOW for an entry, given a specific viewpoint:
-//   - singlehanded / solo: the helm's remembered/ stated gender
-//   - doublehanded: combine helm + crew remembered genders → M / F / Mix
-// Falls back to whatever the entry itself states.
-export function resolvedEntryGender(e,doublehanded){
-  // A gender-locked class/division (e.g. 49erFX = women) is authoritative for the
-  // whole boat and overrides any stated OR remembered gender — the latter can be
-  // stale/wrong (a mis-parsed source carried over from another event).
-  const locked=lockedGenderOf(e&&(e.div||e.cls||""));
-  if(locked) return locked;
-  const stated=genderCatOf(e).gender;
-  if(doublehanded&&e.crew){
-    const gh=rememberedGender(e.helm)||(stated&&stated!=="Mix"?stated:null);
-    const gc=rememberedGender(e.crew)||(stated&&stated!=="Mix"?stated:null);
-    if(gh&&gc) return gh===gc?gh:"Mix";
-    if(stated) return stated;          // fall back to the entry's own div if we can't pin both
-    return gh||gc||null;
-  }
-  // Solo (or no crew): prefer the person's remembered gender, else stated.
-  return rememberedGender(e.helm)||stated||null;
+// Gender to SHOW for an entry: ONLY what the source stated for this boat.
+//   - We never assume it from the class (49erFX carries junior-men / mixed crews).
+//   - We never borrow a gender remembered from another event — a single wrong or
+//     mislabelled source would otherwise propagate onto every event the athlete
+//     appears in. If the source didn't state a gender, we show no badge.
+export function resolvedEntryGender(e/*, doublehanded */){
+  return genderCatOf(e).gender || null;
 }
 
 /* ── Public athlete usernames (name_key ⇄ username) ───────────────────────
