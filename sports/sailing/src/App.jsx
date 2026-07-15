@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY, forceRadial } from "d3-force";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
@@ -30,6 +30,8 @@ import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
 import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
 import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey, hgRunPool, _hg_norm } from "./views/host.jsx";
 import { SignInModal } from "./views/auth.jsx";
+import ScoutPortal, { SaveButton, HighlightsStrip } from "./views/scout.jsx";
+import { scoutOwnerId, logActivity } from "./data/scout.js";
 import { fetchProfile, upsertProfile, authGoogleOAuth } from "@athlink/auth";
 
 
@@ -82,6 +84,7 @@ const stateToPath=(portal,view)=>{
   if(v.name==="event")   return "/competition/"+encodeURIComponent(v.id||"");
   if(v.name==="competitions") return v.cls?"/class/"+encodeURIComponent(v.cls):"/competitions";
   if(v.name==="hosts")   return "/hosts";
+  if(v.name==="scout")   return "/scout";
   if(v.name==="ranking") return "/rankings";
   const isClassPortal=portal&&String(portal).startsWith("class:");
   if(v.name==="athletes"){
@@ -102,6 +105,7 @@ const pathToState=(pathname,athleteNames)=>{
   if(seg.length===0||s0==="sailing") return {portal:null,view:{name:"portals"}};
   if(s0==="athletes") return {portal:null,view:{name:"athletes"}};
   if(s0==="hosts")    return {portal:null,view:{name:"hosts"}};
+  if(s0==="scout")    return {portal:null,view:{name:"scout"}};
   if(s0==="competitions") return {portal:null,view:{name:"competitions"}};
   if(s0==="ranking"||s0==="rankings")  return {portal:null,view:{name:"ranking"}};
   // "/competition/<id>" is canonical; "/event/<id>" kept as an alias so old shared links never break.
@@ -252,6 +256,7 @@ export default function AthLinkMVP(){
   };
   const[auth,setAuth]=useState(null);
   const[showSignIn,setShowSignIn]=useState(false);
+  const[signupRole,setSignupRole]=useState(null); // preselected signup role from ?role= deep-link
   const[accountOpen,setAccountOpen]=useState(false);
   const[myMemberships,setMyMemberships]=useState([]);  // host_members rows for the signed-in user
   const[showMembers,setShowMembers]=useState(false);   // members-management panel open
@@ -297,6 +302,8 @@ export default function AthLinkMVP(){
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
   },[devEligible]);
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
+  const viewerTypeOf=r=>r==="athlete"?"athlete":r==="scout"?"scout":r==="club"||r==="association"||r==="federation"?"host":"fan"; // 4 viewer types: athlete|host|scout|fan (guest browses as fan)
+  const viewerType=viewerTypeOf(effectiveRole);
   const role=effectiveRole;
   const canEditRole=effectiveRole==="association";
   // A profile is "verified-claimed" if any approved claim exists for that name.
@@ -355,9 +362,10 @@ export default function AthLinkMVP(){
     const rows=await fetchMyMemberships(a2.user.id,a2.token);
     if(rows) setMyMemberships(rows);
   };
-  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null);
+  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null); setSignupRole(null);
     if(a2.pendingHostId) setPendingHostNotice(a2.pendingHostId);
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{}
+    if(a2.profile?.role==="scout") goTop("scout"); // scouts land in the scout workspace; athletes/fans/hosts keep current behavior
     loadMembershipsFor(a2); };
   const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
   // Save host portal edits (name + location). Persists to the hosts table and
@@ -861,8 +869,10 @@ export default function AthLinkMVP(){
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
     if(params.get("signup")!=="1") return;
-    const clean=new URL(window.location.href); clean.searchParams.delete("signup");
+    const rl=params.get("role"); // athlete|scout|fan|host|club|association|federation
+    const clean=new URL(window.location.href); clean.searchParams.delete("signup"); clean.searchParams.delete("role");
     window.history.replaceState(null,"",clean.pathname+(clean.search||""));
+    if(rl) setSignupRole(rl);
     setShowSignIn(true);
   },[]);
 
@@ -1544,6 +1554,7 @@ export default function AthLinkMVP(){
   const goTop=(name,extra)=>{pushNav();setPortal(null);setView({name,...(extra||{})});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   // Which of the 4 nav doors the current page lives behind (drives the .on state).
   const navOn=view.name==="ranking"?"ranking"
+    :view.name==="scout"?"scout"
     :(view.name==="competitions"||view.name==="event")?"competitions"
     :(view.name==="hosts"||(portal&&!String(portal).startsWith("class:")))?"hosts"
     :((view.name==="athletes"&&!portal)||view.name==="profile")?"athletes"
@@ -1596,7 +1607,7 @@ export default function AthLinkMVP(){
     const path=window.location.pathname;
     const seg=decodeURIComponent(path).split("/").filter(Boolean);
     const s0=(seg[0]||"").toLowerCase();
-    const RESERVED=["","sailing","athletes","ranking","rankings","event","competition","competitions","hosts","class"];
+    const RESERVED=["","sailing","athletes","ranking","rankings","event","competition","competitions","hosts","scout","class"];
     // Athlete slugs can only be resolved after events (hence names) have loaded.
     const needsAthlete=seg.length>0&&!RESERVED.includes(s0)&&!hostBySlug(seg[0]);
     if(needsAthlete&&events.length===0) return; // wait for events, effect re-runs on load
@@ -1640,11 +1651,26 @@ export default function AthLinkMVP(){
     else if(v.name==="ranking") t="Rankings";
     else if(v.name==="competitions") t=v.cls?`${classLabel(v.cls)} — Competitions`:"Competitions";
     else if(v.name==="hosts") t="Hosts";
+    else if(v.name==="scout") t="Scout · AthLink";
     else if(v.name==="athletes")t=portal?`${hostName(portal)||"Sailing"} — Athletes`:(v.cls?`${classLabel(v.cls)} — Athletes`:"Athletes");
     else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else sailing home
     else                        t="AthLink"; // portals home
     document.title=t||"AthLink";
   },[portal,view,events]);
+
+  // ── Scout activity ledger: log ONE "viewed_profile" per profile visit. The ref
+  //    holds the last-logged athlete key so re-renders (hover, tab switches) don't
+  //    re-fire; only a change of the viewed profile (or leaving it) logs again.
+  const _viewedProfileRef=useRef(null);
+  useEffect(()=>{
+    if(view.name==="profile"&&view.id){
+      const key=canonName(view.id);
+      if(_viewedProfileRef.current!==key){
+        _viewedProfileRef.current=key;
+        logActivity(scoutOwnerId(auth),key,"viewed_profile");
+      }
+    } else _viewedProfileRef.current=null;
+  },[view.name,view.id]);
 
   const navBack=()=>{
     // Drive the in-app Back button through real browser history so it stays in
@@ -1912,7 +1938,7 @@ Partial query: "${q}"`;
   const[eventSummaries,setEventSummaries]=useState({}); // key=event.id → competition blurb
   const[eventSummaryOpen,setEventSummaryOpen]=useState({}); // key=event.id → revealed?
 
-  const SPONSOR_LENS=`Write for a prospective SPONSOR/INVESTOR evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-fleet finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the fleet, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
+  const SCOUT_LENS=`Write for a talent scout or sponsor evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-fleet finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the fleet, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
 
   // POST to the AI summary endpoint with a hard timeout. Throws on a non-2xx
   // response (e.g. a 504 HTML gateway page that res.json() would choke on) or a
@@ -1935,8 +1961,8 @@ Partial query: "${q}"`;
     try{
       const sc=scoreEvent(ev);
       const yr=ev.date?.split('/')?.[2]||"";
-      const prompt=`${SPONSOR_LENS}
-In 2-4 sentences, summarize this sailing competition for a sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical fleet strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club regatta) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
+      const prompt=`${SCOUT_LENS}
+In 2-4 sentences, summarize this sailing competition for a talent scout or sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical fleet strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club regatta) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
 Event name: "${ev.name}". Boat class: ${ev.cls}. Year: ${yr}. Host country: ${ev.country||"unknown"}. Fleet size: ${sc.fleet} boats. Races sailed: ${sc.races}.`;
       const data=await aiFilter("overview",prompt,220);
       if(data.ok) setEventSummaries(m=>({...m,[ev.id]:cleanAISummary(data.text)}));
@@ -3971,6 +3997,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <button className="nd-row" onClick={()=>goTop("ranking")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
                 </div>
               </div>
+              {/* Scout — talent-scouting workspace (no dropdown) */}
+              <div className="np-item">
+                <button className={`np-link${navOn==="scout"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("scout");}}>Scout</button>
+              </div>
               <button className="np-srchbtn" title="Search" onClick={()=>setNavSearchOpen(true)}><Search size={16}/></button>
               {navMenuOpen&&(
                 <div className="np-menu">
@@ -3978,6 +4008,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <button className={`np-mrow${navOn==="competitions"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("competitions");}}><Anchor size={16}/>Competitions</button>
                   <button className={`np-mrow${navOn==="hosts"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("hosts");}}><Waves size={16}/>Hosts</button>
                   <button className={`np-mrow${navOn==="ranking"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("ranking");}}><Trophy size={16}/>Rankings</button>
+                  <button className={`np-mrow${navOn==="scout"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("scout");}}><Eye size={16}/>Scout</button>
                 </div>
               )}
             </div>}
@@ -4030,7 +4061,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>{myHostNames.length>1?"Hosts":"Host"}: <b style={{color:"var(--navy)"}}>{myHostNames.join(", ")}</b></div>
                       : role==="athlete"
                         ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}><b style={{color:"var(--navy)"}}>Athlete</b></div>
-                        : null}
+                        : role==="scout"
+                          ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}><b style={{color:"var(--navy)"}}>Scout</b></div>
+                          : role==="fan"
+                            ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}><b style={{color:"var(--navy)"}}>Fan</b></div>
+                            : null}
                 </>);
               })()}
               {/* Username reminder — gentle nudge, only if they haven't set one */}
@@ -4077,10 +4112,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     </div>
   )}
   <div style={{height:74}}/>
-  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
+  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);setSignupRole(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
     clubs={CLUBS} associations={ASSOCIATIONS} federations={FEDERATIONS}
     onCreateHost={createHostFromSignup} onClaimHost={claimHostFromSignup}
-    pendingInviteToken={pendingInviteToken}/>}
+    initialRole={signupRole} pendingInviteToken={pendingInviteToken}/>}
   {showMembers&&host&&!isClassPortal&&(()=>{
     // Athlete names appearing in this host's events (for vouching scope)
     const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));
@@ -4587,6 +4622,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     );
   })()}
 
+  {/* ── SCOUT: talent-scouting workspace ── */}
+  {!portal&&view.name==="scout"&&(
+    <div className="wrap sec" style={{paddingTop:16}}>
+      <ScoutPortal events={events} auth={auth} hostById={hostById}
+        onPick={name=>go({name:"profile",id:name})}
+        onOpenEvent={id=>go({name:"event",id})}/>
+    </div>
+  )}
+
   {/* ── HOME: Ranking ── */}
   {!portal&&view.name==="ranking"&&(()=>{
     const yearOf=ev=>{const m=(ev.date||"").match(/(\d{4})/);return m?m[1]:null;};
@@ -4975,6 +5019,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         })()}
       </div></div>
       <div className="wrap sec" style={{paddingTop:0}}>
+        {!isClassPortal&&(
+          <div style={{marginBottom:18}}>
+            <HighlightsStrip ownerKind="host" ownerKey={portal} events={events} canEdit={canManageMembers}
+              onOpenEvent={id=>go({name:"event",id})}/>
+          </div>
+        )}
         {isPendingHostHere&&(
           <div style={{display:"flex",alignItems:"center",gap:12,background:"rgba(255,149,0,.09)",border:"1px solid rgba(255,149,0,.32)",borderRadius:14,padding:"14px 18px",marginBottom:18}}>
             <Clock size={20} color="#c8860a" style={{flex:"none"}}/>
@@ -5212,13 +5262,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             })()}
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
+            <SaveButton owner={scoutOwnerId(auth)} events={events} kind={isUpcomingEvent(ev)?"upcoming":"event"} eventId={ev.id} title={ev.name}
+              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}}/>
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>{isUpcoming?"Edit entry list":"Edit results"}</button>}
           </div>
         </div>);
         // Interactive models are scoped to home/association/global-class pages only — not here.
         return head;
       })()}
-      {/* Revealable, sponsor-focused competition summary */}
+      {/* Revealable, scout-focused competition summary */}
       <div style={{marginBottom:16}}>
         <button onClick={()=>{const open=!eventSummaryOpen[ev.id];setEventSummaryOpen(m=>({...m,[ev.id]:open}));if(open)fetchEventSummary(ev);}}
           style={{display:"inline-flex",alignItems:"center",gap:7,background:"rgba(10,132,255,.12)",backdropFilter:"blur(18px) saturate(185%)",WebkitBackdropFilter:"blur(18px) saturate(185%)",color:"var(--navy)",border:"0",borderRadius:980,boxShadow:"inset 0 1px 0 rgba(255,255,255,.5)",
@@ -5273,7 +5325,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         <thead><tr>
           <th>Pos</th><th className="l">Boat</th><th aria-label="Gender / Division"></th><th className="l">Sail #</th>
           {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
-          <th>Net</th>
+          <th>Net</th><th aria-label="Save"></th>
         </tr></thead>
         <tbody>{s.rows.map(r=>(
           <React.Fragment key={r.sail+r.helm}>
@@ -5318,6 +5370,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </td>;
             })}
             <td className="net">{r.net}</td>
+            <td style={{textAlign:"center",whiteSpace:"nowrap"}}><SaveButton size="sm" owner={scoutOwnerId(auth)} events={events} kind="result"
+              athleteKey={canonName(r.helm)} eventId={ev.id} entryId={r._dbId} title={r.helm}
+              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls,rank:r.rank,fleet:s.fleet,athlete:r.helm}}/></td>
           </tr>
           </React.Fragment>
         ))}</tbody>
@@ -5571,6 +5626,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className="wrap sec" style={{paddingTop:22}}>
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
         <button className="back" onClick={navBack} style={{marginBottom:0}}><ArrowLeft size={16}/>Back</button>
+        <SaveButton owner={scoutOwnerId(auth)} events={events} kind="athlete" athleteKey={canonName(name)} title={name}
+          snapshot={{athlete:name}}/>
         {!devMode&&(()=>{
           // Claim-my-profile control. Rules: one claim per user, one claim per
           // profile (denied claims don't count). Any host the athlete competed
@@ -5768,6 +5825,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           )}
         </>);
       })()}
+      {/* Result Highlights — scout/athlete-pinned results (renders nothing when empty & !canEdit) */}
+      <div style={{marginTop:18}}>
+        <HighlightsStrip ownerKind="athlete" ownerKey={canonName(name)} events={events}
+          canEdit={devMode||(auth?.profile?.athlete_name&&canonName(auth.profile.athlete_name)===canonName(name))}
+          onOpenEvent={id=>go({name:"event",id,fromProfile:name})}/>
+      </div>
       {/* Upcoming competitions this athlete is entered in — forecast chips above the results history */}
       <div style={{marginTop:18}}>
         <UpcomingStrip name={name} events={events} onOpen={id=>go({name:"event",id,fromProfile:name})}/>

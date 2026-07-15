@@ -102,6 +102,7 @@ const CSS = `
 .tabs button.on{background:rgba(255,255,255,.95);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
 .panel-fade{animation:al-fade .35s ease;}
 @keyframes al-fade{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+.tab-cta{display:flex;justify-content:center;margin-top:56px;}
 
 .frow{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;margin-top:64px;}
 .frow:first-child{margin-top:44px;}
@@ -187,6 +188,9 @@ const CSS = `
   .frow,.frow.flip{grid-template-columns:1fr;gap:22px;} .frow.flip .ftext{order:1;} .frow.flip .fshot{order:2;}
   .stats{grid-template-columns:1fr;max-width:340px;} .quotes{grid-template-columns:1fr;gap:26px;}
 }
+@media(max-width:480px){ /* 4 audience tabs must fit a phone */
+  .tabs{gap:2px;padding:4px;} .tabs button{font-size:13px;padding:9px 12px;}
+}
 `;
 
 /* Feature rows. demo:"globe"|"web" renders the live interactive component
@@ -202,10 +206,15 @@ const ATHLETES = [
   { title: "See who you've raced", pain: "your competitive network is invisible", value: "The web.", desc: "A living force-directed web of the athletes you've competed against most. Your rivals, mapped by shared competitions and colour-coded by class. Drag the nodes around.", demo: "web", Icon: Share2 },
   { title: "Track your progress", pain: "no way to see if you're actually improving", value: "Your trajectory, charted.", desc: "AthLink charts your progress across your whole career — and measures it by how you performed against your rivals, the athletes you actually race, not just your raw finishing place. Watch your trajectory climb as you start beating a stronger field.", demo: "progress", Icon: TrendingUp },
 ];
-const SPONSORS = [
-  { title: "Interactive models", pain: "athlete CVs tell you nothing at a glance", value: "Understand an athlete in seconds.", desc: "Every profile comes with quick interactive explainers — the globe, the rivals web, the progress chart — that let you understand an athlete in seconds by playing with the data instead of reading a CV.", demo: "web", Icon: MousePointerClick },
-  { title: "100% verified. Zero fakes.", pain: "fake accounts and inflated claims", value: "Vetted at the source.", desc: "Every result is vetted by the host that ran the event. No self-reported records, no fake athlete accounts, just verified results traceable to the original PDF.", img: "/landing/sponsor-2.png", gif: true, Icon: ShieldCheck },
-  { title: "Ranked, not just results", pain: "hard to compare athletes objectively", value: "Level-adjusted rankings.", desc: "Rank athletes by results weighted for the strength of the field. Add or remove the competitions that count and watch relative positions change. Find the best, fast.", img: "/landing/sponsor-3.png", gif: true, Icon: Trophy },
+const SCOUTS = [
+  { title: "Watchlists with real analytics", pain: "gut-feel picks with no evidence to back them", value: "Every pick, evidenced.", desc: "Build watchlist binders and open any athlete card to 11 results-only metrics — steadiness, blow-up rate, bullet rate, travels-well, big-stage delta and more — next to their rating trend and cohort percentile. No self-reported claims, just what the results say.", img: "/landing/scout-1.png", gif: true, Icon: BarChart3 },
+  { title: "Discover breakout talent", pain: "only ever hearing about athletes you already know", value: "The field, surfaced.", desc: "The Discover feed computes On fire, Streaks, Beat-the-forecast and Radar from every published result — so the athlete quietly overperforming their forecast lands in front of you before anyone else notices.", img: "/landing/scout-2.png", gif: true, Icon: Sparkles },
+  { title: "Reports you can defend", pain: "justifying a pick to a club or federation", value: "One click, full trail.", desc: "Turn any watched athlete into a scout report with the whole evidence trail attached — rating curve, the 11 metrics, and your own notes. Something you can put in front of a selection panel and stand behind.", img: "/landing/scout-3.png", gif: true, Icon: ShieldCheck },
+];
+const FANS = [
+  { title: "Follow the racing live", pain: "refreshing club PDF pages waiting for results", value: "One clean feed.", desc: "Every regatta lands in a single clean feed the moment the host publishes it — no more hunting through club websites for a PDF that may or may not be there.", img: "/landing/fan-1.png", gif: true, Icon: Clock },
+  { title: "Your sailors, one tap away", pain: "losing track of athletes across events", value: "They find you.", desc: "Bookmark the athletes, events and classes you care about. When their new results come in, they find you — no checking back, no missing a result.", img: "/landing/fan-2.png", gif: true, Icon: Share2 },
+  { title: "Understand the story", pain: "results tables that mean nothing without context", value: "Context, free.", desc: "Rankings, head-to-heads and career progress curves for every athlete — the context behind the finishing places, so a results table finally tells you something. Free, always.", demo: "progress", Icon: TrendingUp },
 ];
 
 const EMAIL = "casey@athlink.win";
@@ -540,7 +549,7 @@ export default function Landing({ sports = [] }) {
   const bgRef = useRef(null);
   const heroRef = useRef(null);
   const results = useHeroSearch(q);
-  const demo = useSailingDemo(tab === "athletes" || tab === "sponsors");
+  const demo = useSailingDemo(tab === "athletes" || tab === "scouts" || tab === "fans");
 
   // ── Dev copy editor: session-only toggle + overrides map (see EdText above) ──
   const [dev, setDev] = useState(false); // never auto-on — keyboard shortcut only
@@ -617,7 +626,14 @@ export default function Landing({ sports = [] }) {
     } else { legacy(); }
   };
 
-  const rows = { hosts: HOSTS, athletes: ATHLETES, sponsors: SPONSORS }[tab];
+  const rows = { hosts: HOSTS, athletes: ATHLETES, scouts: SCOUTS, fans: FANS }[tab];
+  // Per-tab CTA — one liquid-glass primary action per audience panel.
+  const TAB_CTA = {
+    hosts: { label: "Get your club on AthLink", path: "/sailing?signup=1&role=host" },
+    athletes: { label: "Claim your profile", path: "/sailing?signup=1&role=athlete" },
+    scouts: { label: "Start scouting free", path: "/sailing?signup=1&role=scout" },
+    fans: { label: "Join as a fan", path: "/sailing?signup=1&role=fan" },
+  }[tab];
   const goSailing = () => goPath("/sailing");
   const onSearchKey = async (e) => {
     if (e.key === "Escape") { setQ(""); e.target.blur(); }
@@ -725,11 +741,17 @@ export default function Landing({ sports = [] }) {
           <div className="tabs">
             <button className={tab === "hosts" ? "on" : ""} onClick={() => setTab("hosts")}>Hosts</button>
             <button className={tab === "athletes" ? "on" : ""} onClick={() => setTab("athletes")}>Athletes</button>
-            <button className={tab === "sponsors" ? "on" : ""} onClick={() => setTab("sponsors")}>Sponsors</button>
+            <button className={tab === "scouts" ? "on" : ""} onClick={() => setTab("scouts")}>Scouts</button>
+            <button className={tab === "fans" ? "on" : ""} onClick={() => setTab("fans")}>Fans</button>
           </div>
         </div>
         <div className="wrap panel-fade" key={tab}>
           {rows.map((f, i) => <FeatureRow key={f.title} f={f} flip={i % 2 === 1} demo={demo} ed={ed} kbase={`${tab}.${i}`} />)}
+          {TAB_CTA && (
+            <div className="tab-cta">
+              <button className="pbtn" onClick={() => goPath(TAB_CTA.path)}>{TAB_CTA.label}<ArrowRight size={16} /></button>
+            </div>
+          )}
         </div>
       </section>
 
@@ -737,7 +759,7 @@ export default function Landing({ sports = [] }) {
       <section className="mission" id="mission">
         <div className="wrap">
           <div className="seclabel">{ed("mission.label", "Our mission")}</div>
-          <p className="mtext">{ed("mission.pre", "At AthLink, our mission is to become the")} {ed("mission.em", "ultimate data centre", "em")} {ed("mission.post", "for global sport: verifying every result, empowering every athlete, and giving sponsors the trusted foundation they need to back the next generation of champions.")}</p>
+          <p className="mtext">{ed("mission.pre", "At AthLink, our mission is to become the")} {ed("mission.em", "ultimate data centre", "em")} {ed("mission.post", "for global sport: verifying every result, empowering every athlete, and giving scouts and sponsors the trusted foundation they need to back the next generation of champions.")}</p>
         </div>
       </section>
 
@@ -745,7 +767,7 @@ export default function Landing({ sports = [] }) {
       <section style={{ paddingTop: 0 }}>
         <div className="wrap vision-wrap">
           <div className="seclabel center">{ed("vision.label", "Our vision")}</div>
-          <div className="vision-tag">{ed("vision.tag.g", "LinkedIn", "grad")} {ed("vision.tag.post", "for athletes and sponsors")}</div>
+          <div className="vision-tag">{ed("vision.tag.g", "LinkedIn", "grad")} {ed("vision.tag.post", "for athletes and scouts")}</div>
           <p className="mtext">{ed("vision.pre", "Revolutionizing sports sponsorship by")} {ed("vision.em", "connecting athletes with brands through AI-driven matchmaking", "em")}{ed("vision.post", ", empowering athletes to reach their potential and enabling companies to find authentic ambassadors.")}</p>
           <div className="stats">
             <div className="stat"><div className="n">{stats.hosts.toLocaleString()}</div><div className="l">{ed("stats.hosts", "Hosts & associations")}</div></div>
@@ -785,7 +807,7 @@ export default function Landing({ sports = [] }) {
           <div className="foot">
             <div>
               <div className="brand"><img className="foot-mark" src="/brand/icon-app.png" alt="" aria-hidden="true" />AthLink</div>
-              <p className="tag">{ed("foot.tag", "The ultimate data centre for sports results. LinkedIn for athletes and sponsors.")}</p>
+              <p className="tag">{ed("foot.tag", "The ultimate data centre for sports results. LinkedIn for athletes and scouts.")}</p>
             </div>
             <div className="foot-links">
               <div className="foot-col"><h5>Portals</h5><a onClick={goSailing}>Sailing</a><span className="dead">Golf — coming soon</span></div>
