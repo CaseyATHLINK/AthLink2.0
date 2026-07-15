@@ -7,7 +7,7 @@ import {
   CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram,
   Award, TrendingUp, Pin, GripVertical
 } from "lucide-react";
-import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, authSignUp, authSignIn, authUser } from "@athlink/core";
+import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, setSbUserToken, authSignUp, authSignIn, authUser } from "@athlink/core";
 import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
 import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
 import { canonName, eventKey, ordinalOf, initials, pascalSlug, avatarColor } from "./util/name.js";
@@ -30,7 +30,7 @@ import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
 import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
 import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey, hgRunPool, _hg_norm } from "./views/host.jsx";
 import { SignInModal } from "./views/auth.jsx";
-import ScoutPortal, { SaveButton } from "./views/scout.jsx";
+import ScoutPortal, { SaveButton, ScoutLocked } from "./views/scout.jsx";
 import { scoutOwnerId, logActivity, fetchPins, addPin, removePin, reorderPins } from "./data/scout.js";
 import { fetchProfile, upsertProfile, authGoogleOAuth } from "@athlink/auth";
 
@@ -255,6 +255,9 @@ export default function AthLinkMVP(){
     return cc.id;
   };
   const[auth,setAuth]=useState(null);
+  // Keep the core REST wrappers on the signed-in JWT — RLS (0015) scopes writes
+  // `to authenticated`, so sbPost/sbPatch must carry the user token, not the anon key.
+  useEffect(()=>{setSbUserToken(auth?.token||null);},[auth]);
   const[showSignIn,setShowSignIn]=useState(false);
   const[signupRole,setSignupRole]=useState(null); // preselected signup role from ?role= deep-link
   const[accountOpen,setAccountOpen]=useState(false);
@@ -314,6 +317,7 @@ export default function AthLinkMVP(){
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
   const viewerTypeOf=r=>r==="athlete"?"athlete":r==="scout"?"scout":r==="club"||r==="association"||r==="federation"?"host":"guest"; // 3 viewer types: athlete|host|scout (everyone else browses as guest)
   const viewerType=viewerTypeOf(effectiveRole);
+  const isScout=effectiveRole==="scout"||devMode; // scout workspace is scout-only; devMode keeps access for admin/testing
   const role=effectiveRole;
   const canEditRole=effectiveRole==="association";
   // A profile is "verified-claimed" if any approved claim exists for that name.
@@ -4106,10 +4110,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <button className="nd-row" onClick={()=>goTop("ranking")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
                 </div>
               </div>
-              {/* Scout — talent-scouting workspace (no dropdown) */}
-              <div className="np-item">
+              {/* Scout — talent-scouting workspace (no dropdown); scout-only */}
+              {isScout&&<div className="np-item">
                 <button className={`np-link${navOn==="scout"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("scout");}}>Scout</button>
-              </div>
+              </div>}
               <button className="np-srchbtn" title="Search" onClick={()=>setNavSearchOpen(true)}><Search size={16}/></button>
               {navMenuOpen&&(
                 <div className="np-menu">
@@ -4117,7 +4121,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <button className={`np-mrow${navOn==="competitions"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("competitions");}}><Anchor size={16}/>Competitions</button>
                   <button className={`np-mrow${navOn==="hosts"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("hosts");}}><Waves size={16}/>Hosts</button>
                   <button className={`np-mrow${navOn==="ranking"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("ranking");}}><Trophy size={16}/>Rankings</button>
-                  <button className={`np-mrow${navOn==="scout"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("scout");}}><Eye size={16}/>Scout</button>
+                  {isScout&&<button className={`np-mrow${navOn==="scout"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("scout");}}><Eye size={16}/>Scout</button>}
                 </div>
               )}
             </div>}
@@ -4732,9 +4736,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   {/* ── SCOUT: talent-scouting workspace ── */}
   {!portal&&view.name==="scout"&&(
     <div className="wrap sec" style={{paddingTop:16}}>
-      <ScoutPortal events={events} auth={auth} hostById={hostById}
-        onPick={name=>go({name:"profile",id:name})}
-        onOpenEvent={id=>go({name:"event",id})}/>
+      {isScout
+        ? <ScoutPortal events={events} auth={auth} hostById={hostById}
+            onPick={name=>go({name:"profile",id:name})}
+            onOpenEvent={id=>go({name:"event",id})}/>
+        : <ScoutLocked onSignUp={()=>{setSignupRole("scout");setShowSignIn(true);}}/>}
     </div>
   )}
 
@@ -5394,8 +5400,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             })()}
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
-            <SaveButton owner={scoutOwnerId(auth)} events={events} kind={isUpcomingEvent(ev)?"upcoming":"event"} eventId={ev.id} title={ev.name}
-              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}}/>
+            {isScout&&<SaveButton owner={scoutOwnerId(auth)} events={events} kind={isUpcomingEvent(ev)?"upcoming":"event"} eventId={ev.id} title={ev.name}
+              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}}/>}
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>{isUpcoming?"Edit entry list":"Edit results"}</button>}
           </div>
         </div>);
@@ -5502,9 +5508,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </td>;
             })}
             <td className="net">{r.net}</td>
-            <td style={{textAlign:"center",whiteSpace:"nowrap"}}><SaveButton size="sm" owner={scoutOwnerId(auth)} events={events} kind="result"
+            <td style={{textAlign:"center",whiteSpace:"nowrap"}}>{isScout&&<SaveButton size="sm" owner={scoutOwnerId(auth)} events={events} kind="result"
               athleteKey={canonName(r.helm)} eventId={ev.id} entryId={r._dbId} title={r.helm}
-              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls,rank:r.rank,fleet:s.fleet,athlete:r.helm}}/></td>
+              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls,rank:r.rank,fleet:s.fleet,athlete:r.helm}}/>}</td>
           </tr>
           </React.Fragment>
         ))}</tbody>
@@ -5758,8 +5764,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className="wrap sec" style={{paddingTop:22}}>
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
         <button className="back" onClick={navBack} style={{marginBottom:0}}><ArrowLeft size={16}/>Back</button>
-        <SaveButton owner={scoutOwnerId(auth)} events={events} kind="athlete" athleteKey={canonName(name)} title={name}
-          snapshot={{athlete:name}}/>
+        {isScout&&<SaveButton owner={scoutOwnerId(auth)} events={events} kind="athlete" athleteKey={canonName(name)} title={name}
+          snapshot={{athlete:name}}/>}
         {!devMode&&(()=>{
           // Claim-my-profile control. Rules: one claim per user, one claim per
           // profile (denied claims don't count). Any host the athlete competed
