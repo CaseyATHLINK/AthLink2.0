@@ -9,6 +9,16 @@ const baseHeaders = (SB_URL && SB_KEY)
   ? { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" }
   : null;
 
+// Signed-in user JWT for the REST wrappers below. RLS hardening (migration 0015)
+// scopes write policies `to authenticated`, so requests must carry the USER token
+// — not the anon key — for PostgREST to resolve auth.uid(). The app syncs this on
+// every auth change (App.jsx effect); null falls back to the anon key (public
+// reads still work, tightened writes correctly fail). No refresh handling yet:
+// tokens expire ~1h, same limitation as the existing hostRest(tok) paths.
+let sbUserTok = null;
+export const setSbUserToken = (t) => { sbUserTok = t || null; };
+const hdrs = () => sbUserTok ? { ...baseHeaders, Authorization: `Bearer ${sbUserTok}` } : baseHeaders;
+
 export const sbConfigured = !!baseHeaders;
 // Exposed under the sailing app's historical name so App.jsx can import it as-is.
 export const sbH = baseHeaders;
@@ -16,7 +26,7 @@ export const sbH = baseHeaders;
 export async function sbGet(path) {
   if (!baseHeaders) return null;
   try {
-    const r = await fetch(`${SB_URL}/rest/v1/${path}`, { headers: baseHeaders });
+    const r = await fetch(`${SB_URL}/rest/v1/${path}`, { headers: hdrs() });
     if (!r.ok) { console.error("Supabase GET error", r.status, await r.text()); return null; }
     return r.json();
   } catch (e) { console.error("Supabase GET network error", e); return null; }
@@ -25,7 +35,7 @@ export async function sbGet(path) {
 export async function sbPost(table, body) {
   if (!baseHeaders) return null;
   try {
-    const r = await fetch(`${SB_URL}/rest/v1/${table}`, { method: "POST", headers: baseHeaders, body: JSON.stringify(body) });
+    const r = await fetch(`${SB_URL}/rest/v1/${table}`, { method: "POST", headers: hdrs(), body: JSON.stringify(body) });
     if (!r.ok) { console.error("Supabase POST error", r.status, await r.text()); return null; }
     return r.json();
   } catch (e) { console.error("Supabase POST network error", e); return null; }
@@ -34,7 +44,7 @@ export async function sbPost(table, body) {
 export async function sbPatch(table, filter, body) {
   if (!baseHeaders) return null;
   try {
-    const r = await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { method: "PATCH", headers: baseHeaders, body: JSON.stringify(body) });
+    const r = await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { method: "PATCH", headers: hdrs(), body: JSON.stringify(body) });
     if (!r.ok) { console.error("Supabase PATCH error", r.status, await r.text()); return null; }
     const txt = await r.text(); return txt ? JSON.parse(txt) : [];
   } catch (e) { console.error("Supabase PATCH network error", e); return null; }
@@ -42,7 +52,7 @@ export async function sbPatch(table, filter, body) {
 
 export async function sbDel(table, filter) {
   if (!baseHeaders) return;
-  await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: { ...baseHeaders, Prefer: "" } });
+  await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: { ...hdrs(), Prefer: "" } });
 }
 
 /* ── Auth (Supabase GoTrue) ── */

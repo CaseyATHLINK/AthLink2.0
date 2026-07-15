@@ -261,6 +261,31 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
    results lists (App.jsx) — a pin icon on each row + a "Pinned" section at the
    top, backed by the same pinned_results table (data/scout.js pin API). */
 
+/* ══════════════════════════════════════════════════════════════════════════
+   ScoutLocked — gate shown at /scout to non-scout viewers. Liquid-glass panel
+   (matches .sc-panel language) inviting them to sign up as a Scout.
+   ════════════════════════════════════════════════════════════════════════ */
+export function ScoutLocked({onSignUp}){
+  return (
+    <div style={{minHeight:"52vh",display:"grid",placeItems:"center",padding:"32px 16px"}}>
+      <div style={{width:"100%",maxWidth:440,textAlign:"center",padding:"38px 30px 34px",
+        background:"rgba(255,255,255,0.85)",backdropFilter:"blur(30px) saturate(190%)",WebkitBackdropFilter:"blur(30px) saturate(190%)",
+        borderRadius:16,boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 10px 30px -12px rgba(0,0,0,.18)"}}>
+        <div style={{fontSize:44,lineHeight:1,marginBottom:14}}>🔭</div>
+        <h2 style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:24,color:"var(--ink)",lineHeight:1.15,margin:"0 0 10px"}}>Scout tools are for scouts</h2>
+        <p style={{fontSize:14,color:"var(--mut)",lineHeight:1.55,margin:"0 0 22px"}}>Watchlists, results-only analytics, printable reports and the Discover feed are part of the Scout workspace.</p>
+        <button type="button" onClick={onSignUp}
+          style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:7,border:0,cursor:"pointer",
+            borderRadius:980,padding:"12px 26px",fontSize:14,fontWeight:800,fontFamily:"'Barlow',sans-serif",color:"#fff",
+            background:"linear-gradient(135deg,rgba(10,132,255,.95),rgba(10,132,255,.82))",backdropFilter:"blur(18px) saturate(180%)",WebkitBackdropFilter:"blur(18px) saturate(180%)",
+            boxShadow:"0 10px 30px -8px rgba(10,132,255,.55),inset 0 1px 0 rgba(255,255,255,.4)",transition:".15s"}}>
+          Sign up as a Scout</button>
+        <div style={{fontSize:12,color:"var(--mut)",marginTop:14}}>Already a scout? Sign in with your scout account.</div>
+      </div>
+    </div>
+  );
+}
+
 /* ── collapsible discovery section ───────────────────────────────────────── */
 function Section({icon:Ic,title,count,hint,defaultOpen=true,children}){
   const [open,setOpen]=React.useState(defaultOpen);
