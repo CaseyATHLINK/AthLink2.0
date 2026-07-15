@@ -3,7 +3,7 @@
    views/ module, mirroring sports/golf/src/views/. Verbatim from App.jsx. */
 
 import React, { useState, useEffect, useRef } from "react";
-import { AlertCircle, Trash2, CheckCircle, BadgeCheck } from "lucide-react";
+import { AlertCircle, Trash2, CheckCircle, BadgeCheck, Loader2 } from "lucide-react";
 import { iocFlag } from "../util/flag.js";
 import { classColor, classLabel } from "../util/class.js";
 import { DIV_COLOR, DIV_LABEL, GENDER_COLOR, divTokens, genderCatOf } from "../util/gender.js";
@@ -20,10 +20,20 @@ export function CountryTag({code,size=14,style={}}){
 /* ── ConfirmModal: in-app replacement for window.confirm (liquid-glass) ──────
    Render when `state` is set; state = {title?, message, confirmLabel?, danger?, onConfirm}. */
 export function ConfirmModal({state,onClose}){
+  // Show a spinner on the confirm button while its (often async, DB-writing)
+  // onConfirm runs, so the user gets feedback instead of a dead-looking button.
+  const [busy,setBusy]=useState(false);
   if(!state) return null;
   const {title="Are you sure?",message,confirmLabel="Confirm",danger=true,onConfirm}=state;
+  const doConfirm=async()=>{
+    if(busy) return;
+    setBusy(true);
+    try{ await onConfirm?.(); }
+    catch(err){ console.error("ConfirmModal onConfirm failed",err); }
+    finally{ setBusy(false); onClose(); }
+  };
   return(
-    <div className="ov" onClick={onClose} style={{zIndex:120}}>
+    <div className="ov" onClick={busy?undefined:onClose} style={{zIndex:120}}>
       <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:400,overflow:"visible"}}>
         <div className="mhead" style={{padding:"16px 22px"}}>
           <AlertCircle size={18}/><h3 style={{flex:1}}>{title}</h3>
@@ -31,10 +41,10 @@ export function ConfirmModal({state,onClose}){
         <div style={{padding:"18px 22px 22px"}}>
           <p style={{margin:"0 0 18px",fontSize:14,lineHeight:1.5,color:"var(--ink)",whiteSpace:"pre-line"}}>{message}</p>
           <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-            <button className="btn ghost" style={{fontSize:13}} onClick={onClose}>Cancel</button>
+            <button className="btn ghost" style={{fontSize:13}} disabled={busy} onClick={onClose}>Cancel</button>
             <button className="btn" style={{fontSize:13,background:danger?"#e74c3c":"var(--accent)",color:"#fff",
               boxShadow:"inset 0 1px 0 rgba(255,255,255,.3),0 1px 3px rgba(0,0,0,.18)"}}
-              onClick={()=>{onClose();onConfirm&&onConfirm();}}>{danger?<Trash2 size={14}/>:<CheckCircle size={14}/>}{confirmLabel}</button>
+              disabled={busy} onClick={doConfirm}>{busy?<Loader2 size={14} className="spin"/>:(danger?<Trash2 size={14}/>:<CheckCircle size={14}/>)}{confirmLabel}</button>
           </div>
         </div>
       </div>
