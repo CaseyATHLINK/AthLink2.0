@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useDeferredValue } from "react";
 import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY, forceRadial } from "d3-force";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
@@ -265,6 +265,16 @@ export default function AthLinkMVP(){
   const[allEventClaims,setAllEventClaims]=useState([]);// every event_claims row (host claims on contributed events)
   const[claimNote,setClaimNote]=useState(null);        // toast after submitting a claim
   const[showClaimModal,setShowClaimModal]=useState(false); // guided claim modal open
+  // Shared "which button is mid-DB-write" flag so any async action can show a
+  // spinner + guard against double-clicks. runBusy(id, fn) sets it for the run.
+  const[busyAction,setBusyAction]=useState(null);
+  const runBusy=async(id,fn)=>{
+    if(busyAction) return;
+    setBusyAction(id);
+    try{ return await fn(); }
+    catch(err){ console.error("runBusy["+id+"] failed",err); }
+    finally{ setBusyAction(null); }
+  };
   const[athleteProfiles,setAthleteProfiles]=useState({});  // name_key -> athlete_profiles row (owner extras)
   const[showAthEdit,setShowAthEdit]=useState(null);        // profile name being edited by its owner
   const[showMedia,setShowMedia]=useState(null);            // profile name whose media gallery is open
@@ -1168,6 +1178,15 @@ export default function AthLinkMVP(){
   },[]);
 
   /* ── derived ──────────────────────────────────────────────── */
+  // The athlete-directory / stats aggregations below are O(all events × all
+  // entries) — ~300ms to rebuild on this dataset. They must NOT re-run
+  // synchronously on every `events` mutation, or a bulk import (which changes
+  // `events` twice per published fleet) freezes the UI for seconds at a time.
+  // Deferring `events` for those memos lets React recompute them at low
+  // priority: rapid successive imports collapse into ONE trailing recompute,
+  // and interaction (clicks, typing, navigation) stays responsive. The
+  // directory just shows the previous frame's data until the work lands.
+  const evDir=useDeferredValue(events);
   const isClassPortal=typeof portal==="string"&&portal.startsWith("class:");
   const portalCls=isClassPortal?portal.slice(6):null; // base class id for a class portal
   // Membership of the CURRENT portal for the signed-in user (if any).
@@ -1208,14 +1227,14 @@ export default function AthLinkMVP(){
   const classEvents=useMemo(()=>{
     if(!portal) return [];
     const scoped=isClassPortal
-      ? events.filter(e=>e.cls===portalCls)            // global class portal
-      : events.filter(e=>eventAssocs(e).includes(portal)); // association portal
+      ? evDir.filter(e=>e.cls===portalCls)            // global class portal
+      : evDir.filter(e=>eventAssocs(e).includes(portal)); // association portal
     return dedupEvents(scoped);
-  },[events,portal,isClassPortal,portalCls]);
-  const homeCountry=useMemo(()=>buildHomeCountry(events),[events]);
+  },[evDir,portal,isClassPortal,portalCls]);
+  const homeCountry=useMemo(()=>buildHomeCountry(evDir),[evDir]);
   // Rebuild the per-athlete attribute memory (gender/birth-year/recent class)
   // whenever events change. Downstream gender chips read ATHLETE_ATTRS.
-  useMemo(()=>buildAthleteAttrs(events),[events]);
+  useMemo(()=>buildAthleteAttrs(evDir),[evDir]);
   // Pick the best display variant for a canonical group: the raw name that
   // appears in the most events (ties → the more "normal" mixed-case spelling).
   const displayNameFor=useMemo(()=>{
@@ -1255,7 +1274,7 @@ export default function AthLinkMVP(){
     return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
   };
   const people=useMemo(()=>buildPeople(classEvents),[classEvents,displayNameFor]);
-  const allPeople=useMemo(()=>buildPeople(events),[events,displayNameFor]);
+  const allPeople=useMemo(()=>buildPeople(evDir),[evDir,displayNameFor]);
 
   // ── Host competition footprint (for the clickable title globe) ──
   // countryCounts (ISO → # competitions) drives the globe; hostHistory feeds the
@@ -1361,7 +1380,7 @@ export default function AthLinkMVP(){
       }
     }
     return groups;
-  },[allPeople,displayNameFor,events,canEdit,filter]);
+  },[allPeople,displayNameFor,evDir,canEdit,filter]);
 
   const myAssoc=auth?.profile?.class_id||null;
   // Persist "don't merge" dismissals across reloads (localStorage).
@@ -1428,7 +1447,7 @@ export default function AthLinkMVP(){
   // Precompute every athlete's card stats in ONE pass (events count, best rank,
   // nationality, most-recent class/subclass). Avoids calling aggregate()/athleteNat()
   // — each O(events) — once per card, which was making All Athletes very slow.
-  const statScope=isGlobal?events:classEvents;
+  const statScope=isGlobal?evDir:classEvents;
   const cardStats=useMemo(()=>{
     const m=new Map();
     for(const ev of statScope){
@@ -1460,9 +1479,9 @@ export default function AthLinkMVP(){
   const athClsSet=useMemo(()=>{
     if(!athCls) return null;
     const s2=new Set();
-    events.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
+    evDir.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
     return s2;
-  },[events,athCls]);
+  },[evDir,athCls]);
   // Memoised so an active class/country lens doesn't produce a NEW filtered array
   // on every render — that fresh reference used to invalidate athleteGridContent's
   // memo on unrelated state changes (e.g. every keystroke/click in the import
@@ -1490,7 +1509,7 @@ export default function AthLinkMVP(){
   // on every scroll-driven state update.
   const athleteGridContent=useMemo(()=>{
     if(filter==="duplicates") return null;
-    const evScope=isGlobal?events:classEvents;
+    const evScope=isGlobal?evDir:classEvents;
     const qlc=q.trim().toLowerCase();
     const shown=lensPeople
       .filter(p=>true)
@@ -1553,7 +1572,7 @@ export default function AthLinkMVP(){
     }
     out.push(<div key="__sentinel" ref={athSentinelRef} style={{height:1}}/>);
     return out;
-  },[filter,isGlobal,events,classEvents,q,lensPeople,athleteSmart,cardStats,athLimit]);
+  },[filter,isGlobal,evDir,classEvents,q,lensPeople,athleteSmart,cardStats,athLimit]);
 
   /* ── navigation ───────────────────────────────────────────── */
   // ── Navigation with universal history ───────────────────────
@@ -1771,10 +1790,12 @@ export default function AthLinkMVP(){
     // Delete this event AND every duplicate row of the same competition, so no
     // ghost copy survives on the global class page or another association.
     const victims=target?events.filter(ev=>eventKey(ev)===eventKey(target)):events.filter(ev=>ev.id===deleteConfirm.id);
-    for(const v of victims) await sbDel("events",`id=eq.${v.id}`);
     const ids=new Set(victims.map(v=>v.id));
+    // Optimistic: drop the rows from the UI + close the popover immediately, then
+    // delete from the DB in the background so the click never blocks.
     setEvents(p=>p.filter(ev=>!ids.has(ev.id)));
     setDeleteConfirm(null);
+    (async()=>{ for(const v of victims){ try{await sbDel("events",`id=eq.${v.id}`);}catch(err){console.error("confirmDelete: DB delete failed",err);} } })();
   };
   const confirmDraft=async(evId)=>{
     await updateEventStatus(evId,"Final");
@@ -3097,9 +3118,25 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
-    await saveEventToDb(ev);setEvents(p=>[ev,...p]);
+    // Optimistic: show the event + close the popup immediately, then persist in
+    // the BACKGROUND so the UI never blocks on the DB round-trip. Swap in the
+    // saved copy (with real ids) once it lands.
+    setEvents(p=>[ev,...p]);
     clearImportDraft();setNote({name:ev.name,matched,created});setOpen(false);setMf(emptyForm());
     setTimeout(()=>setNote(null),6500);
+    (async()=>{
+      try{
+        const saved=await saveEventToDb(ev);
+        if(saved?.[0]?.id){
+          const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
+          if(fresh?.[0]){
+            const dbEv=dbToApp(fresh[0]);
+            setEvents(p=>p.map(x=>x.id===ev.id?dbEv:x));
+            setView(v=>(v.name==="event"&&v.id===ev.id)?{...v,id:dbEv.id}:v);
+          }
+        }
+      }catch(err){ console.error("doImportManual: background save failed",err); }
+    })();
   };
 
   /* ── sail display helper ───────────────────────────────────── */
@@ -5300,7 +5337,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <strong>Draft results — not yet official</strong>
             <p style={{fontSize:13}}>These results are provisional and excluded from athlete profiles until confirmed.</p>
           </div>
-          <button className="btn green" onClick={()=>confirmDraft(ev.id)}><CheckCircle size={16}/>Confirm Results</button>
+          <button className="btn green" disabled={busyAction==="confirmDraft_"+ev.id} onClick={()=>runBusy("confirmDraft_"+ev.id,()=>confirmDraft(ev.id))}>{busyAction==="confirmDraft_"+ev.id?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}Confirm Results</button>
         </div>
       )}
       {(()=>{
@@ -6325,7 +6362,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               <div className="mfoot">
                 <button className="btn ghost" onClick={closeImport}>Cancel</button>
-                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady} onClick={()=>doImportManual(upKind)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>{upKind?"Publish entry list":"Import competition"}</div></button>
+                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady||busyAction==="manualImport"} onClick={()=>runBusy("manualImport",()=>doImportManual(upKind))}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busyAction==="manualImport"?<Loader2 size={16} className="spin"/>:<Upload size={16}/>}{upKind?"Publish entry list":"Import competition"}</div></button>
               </div>
             </>)}
           </div>);})()}
@@ -6898,7 +6935,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         <p>Remove <span className="del-name">"{deleteConfirm.name}"</span>?</p>
         <div className="del-confirm-btns">
           <button className="btn ghost" style={{flex:1,fontSize:12,padding:"6px 10px"}} onClick={()=>setDeleteConfirm(null)}>Cancel</button>
-          <button className="btn" style={{flex:1,fontSize:12,padding:"6px 10px",background:"#e74c3c",color:"#fff"}} onClick={confirmDelete}><Trash2 size={13}/>Delete</button>
+          <button className="btn" style={{flex:1,fontSize:12,padding:"6px 10px",background:"#e74c3c",color:"#fff"}} disabled={busyAction==="delEvent"} onClick={()=>runBusy("delEvent",confirmDelete)}>{busyAction==="delEvent"?<Loader2 size={13} className="spin"/>:<Trash2 size={13}/>}Delete</button>
         </div>
       </div>
     </div>
@@ -6923,7 +6960,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
           <div className="mfoot" style={{marginTop:16}}>
             <button className="btn ghost" onClick={()=>setEditEvMeta(null)}>Cancel</button>
-            <button className="btn cta liquidGlass-wrapper" onClick={saveEvMeta}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><CheckCircle size={15}/>Save changes</div></button>
+            <button className="btn cta liquidGlass-wrapper" disabled={busyAction==="evMeta"} onClick={()=>runBusy("evMeta",saveEvMeta)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busyAction==="evMeta"?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes</div></button>
           </div>
         </div>
       </div>
