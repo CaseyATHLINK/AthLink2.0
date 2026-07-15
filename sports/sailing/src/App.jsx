@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useDeferredValue } from "react";
 import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY, forceRadial } from "d3-force";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
@@ -1178,6 +1178,15 @@ export default function AthLinkMVP(){
   },[]);
 
   /* ── derived ──────────────────────────────────────────────── */
+  // The athlete-directory / stats aggregations below are O(all events × all
+  // entries) — ~300ms to rebuild on this dataset. They must NOT re-run
+  // synchronously on every `events` mutation, or a bulk import (which changes
+  // `events` twice per published fleet) freezes the UI for seconds at a time.
+  // Deferring `events` for those memos lets React recompute them at low
+  // priority: rapid successive imports collapse into ONE trailing recompute,
+  // and interaction (clicks, typing, navigation) stays responsive. The
+  // directory just shows the previous frame's data until the work lands.
+  const evDir=useDeferredValue(events);
   const isClassPortal=typeof portal==="string"&&portal.startsWith("class:");
   const portalCls=isClassPortal?portal.slice(6):null; // base class id for a class portal
   // Membership of the CURRENT portal for the signed-in user (if any).
@@ -1218,14 +1227,14 @@ export default function AthLinkMVP(){
   const classEvents=useMemo(()=>{
     if(!portal) return [];
     const scoped=isClassPortal
-      ? events.filter(e=>e.cls===portalCls)            // global class portal
-      : events.filter(e=>eventAssocs(e).includes(portal)); // association portal
+      ? evDir.filter(e=>e.cls===portalCls)            // global class portal
+      : evDir.filter(e=>eventAssocs(e).includes(portal)); // association portal
     return dedupEvents(scoped);
-  },[events,portal,isClassPortal,portalCls]);
-  const homeCountry=useMemo(()=>buildHomeCountry(events),[events]);
+  },[evDir,portal,isClassPortal,portalCls]);
+  const homeCountry=useMemo(()=>buildHomeCountry(evDir),[evDir]);
   // Rebuild the per-athlete attribute memory (gender/birth-year/recent class)
   // whenever events change. Downstream gender chips read ATHLETE_ATTRS.
-  useMemo(()=>buildAthleteAttrs(events),[events]);
+  useMemo(()=>buildAthleteAttrs(evDir),[evDir]);
   // Pick the best display variant for a canonical group: the raw name that
   // appears in the most events (ties → the more "normal" mixed-case spelling).
   const displayNameFor=useMemo(()=>{
@@ -1265,7 +1274,7 @@ export default function AthLinkMVP(){
     return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
   };
   const people=useMemo(()=>buildPeople(classEvents),[classEvents,displayNameFor]);
-  const allPeople=useMemo(()=>buildPeople(events),[events,displayNameFor]);
+  const allPeople=useMemo(()=>buildPeople(evDir),[evDir,displayNameFor]);
 
   // ── Host competition footprint (for the clickable title globe) ──
   // countryCounts (ISO → # competitions) drives the globe; hostHistory feeds the
@@ -1371,7 +1380,7 @@ export default function AthLinkMVP(){
       }
     }
     return groups;
-  },[allPeople,displayNameFor,events,canEdit,filter]);
+  },[allPeople,displayNameFor,evDir,canEdit,filter]);
 
   const myAssoc=auth?.profile?.class_id||null;
   // Persist "don't merge" dismissals across reloads (localStorage).
@@ -1438,7 +1447,7 @@ export default function AthLinkMVP(){
   // Precompute every athlete's card stats in ONE pass (events count, best rank,
   // nationality, most-recent class/subclass). Avoids calling aggregate()/athleteNat()
   // — each O(events) — once per card, which was making All Athletes very slow.
-  const statScope=isGlobal?events:classEvents;
+  const statScope=isGlobal?evDir:classEvents;
   const cardStats=useMemo(()=>{
     const m=new Map();
     for(const ev of statScope){
@@ -1470,9 +1479,9 @@ export default function AthLinkMVP(){
   const athClsSet=useMemo(()=>{
     if(!athCls) return null;
     const s2=new Set();
-    events.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
+    evDir.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
     return s2;
-  },[events,athCls]);
+  },[evDir,athCls]);
   // Memoised so an active class/country lens doesn't produce a NEW filtered array
   // on every render — that fresh reference used to invalidate athleteGridContent's
   // memo on unrelated state changes (e.g. every keystroke/click in the import
@@ -1500,7 +1509,7 @@ export default function AthLinkMVP(){
   // on every scroll-driven state update.
   const athleteGridContent=useMemo(()=>{
     if(filter==="duplicates") return null;
-    const evScope=isGlobal?events:classEvents;
+    const evScope=isGlobal?evDir:classEvents;
     const qlc=q.trim().toLowerCase();
     const shown=lensPeople
       .filter(p=>true)
@@ -1563,7 +1572,7 @@ export default function AthLinkMVP(){
     }
     out.push(<div key="__sentinel" ref={athSentinelRef} style={{height:1}}/>);
     return out;
-  },[filter,isGlobal,events,classEvents,q,lensPeople,athleteSmart,cardStats,athLimit]);
+  },[filter,isGlobal,evDir,classEvents,q,lensPeople,athleteSmart,cardStats,athLimit]);
 
   /* ── navigation ───────────────────────────────────────────── */
   // ── Navigation with universal history ───────────────────────
