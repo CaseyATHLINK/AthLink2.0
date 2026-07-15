@@ -302,7 +302,7 @@ export default function AthLinkMVP(){
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
   },[devEligible]);
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
-  const viewerTypeOf=r=>r==="athlete"?"athlete":r==="scout"?"scout":r==="club"||r==="association"||r==="federation"?"host":"fan"; // 4 viewer types: athlete|host|scout|fan (guest browses as fan)
+  const viewerTypeOf=r=>r==="athlete"?"athlete":r==="scout"?"scout":r==="club"||r==="association"||r==="federation"?"host":"guest"; // 3 viewer types: athlete|host|scout (everyone else browses as guest)
   const viewerType=viewerTypeOf(effectiveRole);
   const role=effectiveRole;
   const canEditRole=effectiveRole==="association";
@@ -4063,9 +4063,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                         ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}><b style={{color:"var(--navy)"}}>Athlete</b></div>
                         : role==="scout"
                           ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}><b style={{color:"var(--navy)"}}>Scout</b></div>
-                          : role==="fan"
-                            ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}><b style={{color:"var(--navy)"}}>Fan</b></div>
-                            : null}
+                          : null}
                 </>);
               })()}
               {/* Username reminder — gentle nudge, only if they haven't set one */}

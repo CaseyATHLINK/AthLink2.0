@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   Search, Sparkles, ArrowRight, Copy, Check, X, Loader2,
-  Upload, Database, BarChart3, Globe2, Share2, Clock, ShieldCheck, Trophy,
+  Upload, Database, BarChart3, Globe2, Share2, ShieldCheck, Trophy,
   User, Landmark, Flag, TrendingUp, MousePointerClick,
 } from "lucide-react";
 
@@ -211,12 +211,6 @@ const SCOUTS = [
   { title: "Discover breakout talent", pain: "only ever hearing about athletes you already know", value: "The field, surfaced.", desc: "The Discover feed computes On fire, Streaks, Beat-the-forecast and Radar from every published result — so the athlete quietly overperforming their forecast lands in front of you before anyone else notices.", img: "/landing/scout-2.png", gif: true, Icon: Sparkles },
   { title: "Reports you can defend", pain: "justifying a pick to a club or federation", value: "One click, full trail.", desc: "Turn any watched athlete into a scout report with the whole evidence trail attached — rating curve, the 11 metrics, and your own notes. Something you can put in front of a selection panel and stand behind.", img: "/landing/scout-3.png", gif: true, Icon: ShieldCheck },
 ];
-const FANS = [
-  { title: "Follow the racing live", pain: "refreshing club PDF pages waiting for results", value: "One clean feed.", desc: "Every regatta lands in a single clean feed the moment the host publishes it — no more hunting through club websites for a PDF that may or may not be there.", img: "/landing/fan-1.png", gif: true, Icon: Clock },
-  { title: "Your sailors, one tap away", pain: "losing track of athletes across events", value: "They find you.", desc: "Bookmark the athletes, events and classes you care about. When their new results come in, they find you — no checking back, no missing a result.", img: "/landing/fan-2.png", gif: true, Icon: Share2 },
-  { title: "Understand the story", pain: "results tables that mean nothing without context", value: "Context, free.", desc: "Rankings, head-to-heads and career progress curves for every athlete — the context behind the finishing places, so a results table finally tells you something. Free, always.", demo: "progress", Icon: TrendingUp },
-];
-
 const EMAIL = "casey@athlink.win";
 const DEMO_ATHLETE = "Casey Law";
 
@@ -549,7 +543,7 @@ export default function Landing({ sports = [] }) {
   const bgRef = useRef(null);
   const heroRef = useRef(null);
   const results = useHeroSearch(q);
-  const demo = useSailingDemo(tab === "athletes" || tab === "scouts" || tab === "fans");
+  const demo = useSailingDemo(tab === "athletes" || tab === "scouts");
 
   // ── Dev copy editor: session-only toggle + overrides map (see EdText above) ──
   const [dev, setDev] = useState(false); // never auto-on — keyboard shortcut only
@@ -626,13 +620,12 @@ export default function Landing({ sports = [] }) {
     } else { legacy(); }
   };
 
-  const rows = { hosts: HOSTS, athletes: ATHLETES, scouts: SCOUTS, fans: FANS }[tab];
+  const rows = { hosts: HOSTS, athletes: ATHLETES, scouts: SCOUTS }[tab];
   // Per-tab CTA — one liquid-glass primary action per audience panel.
   const TAB_CTA = {
     hosts: { label: "Get your club on AthLink", path: "/sailing?signup=1&role=host" },
     athletes: { label: "Claim your profile", path: "/sailing?signup=1&role=athlete" },
     scouts: { label: "Start scouting free", path: "/sailing?signup=1&role=scout" },
-    fans: { label: "Join as a fan", path: "/sailing?signup=1&role=fan" },
   }[tab];
   const goSailing = () => goPath("/sailing");
   const onSearchKey = async (e) => {
@@ -742,7 +735,6 @@ export default function Landing({ sports = [] }) {
             <button className={tab === "hosts" ? "on" : ""} onClick={() => setTab("hosts")}>Hosts</button>
             <button className={tab === "athletes" ? "on" : ""} onClick={() => setTab("athletes")}>Athletes</button>
             <button className={tab === "scouts" ? "on" : ""} onClick={() => setTab("scouts")}>Scouts</button>
-            <button className={tab === "fans" ? "on" : ""} onClick={() => setTab("fans")}>Fans</button>
           </div>
         </div>
         <div className="wrap panel-fade" key={tab}>
