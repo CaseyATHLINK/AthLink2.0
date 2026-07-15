@@ -6,7 +6,7 @@
    is TEXT — auth.uid() when signed in, else a per-browser anon id (0013/0014
    app-gated stance). All filter values are URL-encoded like the core helpers. */
 
-import { sbGet, sbPost, sbPatch, sbDel } from "@athlink/core";
+import { sbGet, sbPost, sbPatch, sbDel, SB_URL, SB_KEY, authHeaders } from "@athlink/core";
 
 const enc = encodeURIComponent;
 
@@ -89,20 +89,37 @@ export async function deleteNote(id){
   return sbDel("scout_notes",`id=eq.${enc(id)}`);
 }
 
-/* ── pinned_results — public "Result Highlights", max 3 slots (0-2) per profile.
-   DB has unique(owner_kind,owner_key,sort_order); setPin clears the slot first
-   so a re-pin replaces rather than collides. ──────────────────────────────── */
-export async function fetchPins(ownerKind,ownerKey){
-  return (await sbGet(`pinned_results?owner_kind=eq.${enc(ownerKind)}&owner_key=eq.${enc(ownerKey)}&select=*&order=sort_order.asc`))||[];
+/* ── pinned_results — owner-pinned results shown at the top of a profile's /
+   host's results list. Free-form ordering: sort_order is any int (asc), no
+   slot cap (migration 0015 dropped the 0-2 check + unique slot constraint).
+   A new pin goes ABOVE existing ones (sort_order = min-1); reorderPins
+   rewrites the whole sequence 0..n-1 after a drag.
+   Reads are public; WRITES run under the caller's session token — the RLS
+   owner-write policy (0015_role_rls_hardening) only lets the verified owner
+   (approved athlete claim / verified host member / admin) touch pins, so the
+   anon-key sbPost/sbPatch/sbDel wrappers can't be used here. ───────────────── */
+async function pinWrite(path,opts,tok){
+  if(!SB_URL||!SB_KEY) return null;
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${path}`,{...opts,
+      headers:{...authHeaders(tok),Prefer:"return=representation",...(opts.headers||{})}});
+    if(!r.ok){console.error("pinned_results write error",r.status,await r.text().catch(()=>""));return null;}
+    const txt=await r.text(); return txt?JSON.parse(txt):[];
+  }catch(e){console.error("pinned_results write network error",e);return null;}
 }
-export async function setPin(ownerKind,ownerKey,slot,{entry_id,event_id,snapshot}={}){
-  await sbDel("pinned_results",`owner_kind=eq.${enc(ownerKind)}&owner_key=eq.${enc(ownerKey)}&sort_order=eq.${enc(slot)}`);
-  const r=await sbPost("pinned_results",{owner_kind:ownerKind,owner_key:ownerKey,sort_order:slot,
-    entry_id:entry_id||null,event_id:event_id||null,snapshot:snapshot||{}});
+export async function fetchPins(ownerKind,ownerKey){
+  return (await sbGet(`pinned_results?owner_kind=eq.${enc(ownerKind)}&owner_key=eq.${enc(ownerKey)}&select=*&order=sort_order.asc,created_at.asc`))||[];
+}
+export async function addPin(ownerKind,ownerKey,{entry_id,event_id,snapshot,sort_order=0}={},tok){
+  const r=await pinWrite("pinned_results",{method:"POST",body:JSON.stringify({owner_kind:ownerKind,owner_key:ownerKey,
+    sort_order,entry_id:entry_id||null,event_id:event_id||null,snapshot:snapshot||{}})},tok);
   return r?.[0]||null;
 }
-export async function clearPin(ownerKind,ownerKey,slot){
-  return sbDel("pinned_results",`owner_kind=eq.${enc(ownerKind)}&owner_key=eq.${enc(ownerKey)}&sort_order=eq.${enc(slot)}`);
+export async function removePin(id,tok){
+  return pinWrite(`pinned_results?id=eq.${enc(id)}`,{method:"DELETE"},tok);
+}
+export async function reorderPins(orderedIds,tok){
+  await Promise.all((orderedIds||[]).map((id,i)=>pinWrite(`pinned_results?id=eq.${enc(id)}`,{method:"PATCH",body:JSON.stringify({sort_order:i})},tok)));
 }
 
 /* ── activity ledger (scout_activity) — fire-and-forget append; never throws,
