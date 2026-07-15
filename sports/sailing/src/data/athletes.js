@@ -7,7 +7,7 @@
 
 import { dateKey } from "../util/date.js";
 import { canonName, pascalSlug } from "../util/name.js";
-import { genderCatOf } from "../util/gender.js";
+import { genderCatOf, lockedGenderOf } from "../util/gender.js";
 import { IOC_ISO } from "../util/flag.js";
 
 // ── Per-athlete attribute memory (gender, birth year, recent class) ──────────
@@ -57,6 +57,11 @@ export function rememberedGender(name){
 //   - doublehanded: combine helm + crew remembered genders → M / F / Mix
 // Falls back to whatever the entry itself states.
 export function resolvedEntryGender(e,doublehanded){
+  // A gender-locked class/division (e.g. 49erFX = women) is authoritative for the
+  // whole boat and overrides any stated OR remembered gender — the latter can be
+  // stale/wrong (a mis-parsed source carried over from another event).
+  const locked=lockedGenderOf(e&&(e.div||e.cls||""));
+  if(locked) return locked;
   const stated=genderCatOf(e).gender;
   if(doublehanded&&e.crew){
     const gh=rememberedGender(e.helm)||(stated&&stated!=="Mix"?stated:null);
