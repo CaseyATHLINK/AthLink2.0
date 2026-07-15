@@ -2191,7 +2191,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const saveEvMeta=async()=>{
     if(!editEvMeta) return;
     const{id,name,date,country,discards}=editEvMeta;
-    await sbPatch("events",`id=eq.${id}`,{name,date,country:country||null,discards:parseInt(discards)||1});
+    // RLS filters unauthorised PATCHes to zero rows (200 + empty body) — treat
+    // that as a failure instead of pretending the edit stuck until refresh.
+    const res=await sbPatch("events",`id=eq.${id}`,{name,date,country:country||null,discards:parseInt(discards)||1});
+    if(!res||res.length===0){
+      setConfirmState({title:"Couldn't save changes",message:"The database rejected this edit — make sure you're signed in with an account that can edit this competition, then try again.",confirmLabel:"OK",danger:false,onConfirm:()=>setConfirmState(null)});
+      return;
+    }
     setEvents(p=>p.map(ev=>ev.id===id?{...ev,name,date,country,discards:parseInt(discards)||1}:ev));
     setEditEvMeta(null);
   };
@@ -2232,12 +2238,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       owner:attributedHost||null,
       organizer_name:attributedHost?null:(previewEv._orgName||previewEv.organizer_name||null),
       doublehanded};
-    // Update event metadata
-    await sbPatch("events",`id=eq.${editResultsEv}`,{
+    // Update event metadata. RLS filters unauthorised PATCHes to zero rows
+    // (200 + empty body) — bail out BEFORE touching entries and tell the user,
+    // instead of showing a "Results updated." toast for an edit that never stuck.
+    const patched=await sbPatch("events",`id=eq.${editResultsEv}`,{
       name:ev.name,date:ev.date,country:ev.country||null,
       discards:ev.discards,status,subclass:ev.subclass,collabs:ev.collabs,
       cls:ev.cls,owner:ev.owner,organizer_name:ev.organizer_name,doublehanded:ev.doublehanded,
     });
+    if(!patched||patched.length===0){
+      setConfirmState({title:"Couldn't save changes",message:"The database rejected this edit — make sure you're signed in with an account that can edit this competition, then try again.",confirmLabel:"OK",danger:false,onConfirm:()=>setConfirmState(null)});
+      return;
+    }
     // Update entries (delete old, insert new)
     if(sbH){
       await sbDel("entries",`event_id=eq.${editResultsEv}`);
