@@ -1,8 +1,9 @@
 /* Scout portal — a scout's private workspace over the public results data:
    watchlist binders, saved clips, scouting notes + rubric, results-only
    discovery (on fire / streaks / beat-the-forecast / on the radar) and a weekly
-   digest inbox. Plus two shared controls the rest of the app embeds: SaveButton
-   (bookmark a result/event/athlete) and HighlightsStrip (public pinned results).
+   digest inbox. Plus one shared control the rest of the app embeds: SaveButton
+   (bookmark a result/event/athlete). Pinned results render inline in App.jsx's
+   results lists (pin icon per row + "Pinned" section) via data/scout.js.
 
    Data layer: data/scout.js (Supabase CRUD, all failure-tolerant) + the pure
    analytics in data/scoutMetrics.js. Ratings come from the shared engine in
@@ -14,7 +15,7 @@ import React from "react";
 import ReactDOM from "react-dom";
 import { Telescope, Bookmark, BookmarkCheck, Plus, X, Trash2, Pencil, Check,
   Flame, ListChecks, CalendarClock, Sparkles, Radar, TrendingUp, TrendingDown,
-  ChevronDown, ChevronRight, StickyNote, Pin, Search, ExternalLink, FolderPlus,
+  ChevronDown, ChevronRight, StickyNote, Search, ExternalLink, FolderPlus,
   FileText, Printer, Columns3, ArrowUpDown,
   LoaderCircle as Loader2 } from "lucide-react";
 import { canonName } from "../util/name.js";
@@ -28,7 +29,6 @@ import {
   scoutOwnerId, fetchBinders, createBinder, ensureDefaultBinder, renameBinder, deleteBinder,
   fetchClips, addClip, removeClip,
   fetchNotes, addNote, updateNote, deleteNote,
-  fetchPins, setPin, clearPin,
   logActivity, fetchDigestPrefs, upsertDigestPref,
 } from "../data/scout.js";
 import {
@@ -257,164 +257,9 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   HighlightsStrip — public "Result Highlights" (max 3 pins) for athlete + host
-   pages. Read-only for visitors; owner sees empty "+ Pin" slots and a picker.
-   ════════════════════════════════════════════════════════════════════════ */
-export function HighlightsStrip({ownerKind,ownerKey,events,canEdit,onOpenEvent}){
-  const [pins,setPins]=React.useState(null);         // null = loading
-  const [picker,setPicker]=React.useState(null);     // slot index being filled
-  const evById=React.useMemo(()=>{const m=new Map();(events||[]).forEach(e=>m.set(String(e.id),e));return m;},[events]);
-
-  React.useEffect(()=>{
-    let alive=true;
-    fetchPins(ownerKind,ownerKey).then(p=>{ if(alive) setPins(p||[]); });
-    return()=>{alive=false;};
-  },[ownerKind,ownerKey]);
-
-  if(pins===null) return null;
-  const hasAny=pins.length>0;
-  if(!hasAny && !canEdit) return null;                // visitors see nothing when empty
-
-  const bySlot=new Map(pins.map(p=>[p.sort_order,p]));
-  const slots=[0,1,2];
-
-  // Resolve a pin to display data: prefer the live event, fall back to snapshot.
-  function resolve(pin){
-    const ev=pin.event_id!=null?evById.get(String(pin.event_id)):null;
-    const snap=pin.snapshot||{};
-    if(ev){
-      // entry-scoped (athlete) pin carries a rank in the snapshot; host pins omit it
-      return {evName:ev.name, evDate:ev.date, cls:ev.cls, subclass:ev.subclass,
-        rank:snap.rank??null, fleet:snap.fleet??(ev.entries||[]).length, venue:ev.country||snap.venue||null, evId:ev.id};
-    }
-    return {evName:snap.evName||"Result", evDate:snap.evDate||null, cls:snap.cls||null, subclass:snap.subclass||null,
-      rank:snap.rank??null, fleet:snap.fleet??null, venue:snap.venue||null, evId:pin.event_id};
-  }
-
-  async function doClear(slot){
-    setPins(ps=>ps.filter(p=>p.sort_order!==slot));   // optimistic
-    await clearPin(ownerKind,ownerKey,slot);
-  }
-  async function doPin(slot,payload){
-    const optimistic={sort_order:slot,event_id:payload.event_id,entry_id:payload.entry_id,snapshot:payload.snapshot};
-    setPins(ps=>[...ps.filter(p=>p.sort_order!==slot),optimistic].sort((a,b)=>a.sort_order-b.sort_order));
-    setPicker(null);
-    await setPin(ownerKind,ownerKey,slot,{entry_id:payload.entry_id,event_id:payload.event_id,snapshot:payload.snapshot});
-    const fresh=await fetchPins(ownerKind,ownerKey);
-    setPins(fresh||[]);
-  }
-
-  return(
-    <div style={{margin:"0 0 18px"}}>
-      <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:9}}>
-        <Pin size={13} color="var(--accent)"/>
-        <span style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)"}}>Result Highlights</span>
-      </div>
-      <div className="sc-hl-grid">
-        {slots.map(slot=>{
-          const pin=bySlot.get(slot);
-          if(!pin){
-            if(!canEdit) return null;
-            return(
-              <button key={slot} type="button" onClick={()=>setPicker(slot)} className="sc-hl-add">
-                <Plus size={16}/><span>Pin a result</span>
-              </button>
-            );
-          }
-          const d=resolve(pin);
-          const ng=d.cls?nuggetFor(d.cls,d.subclass):null;
-          return(
-            <div key={slot} className="sc-hl-card">
-              {canEdit&&(
-                <button type="button" className="sc-hl-x" title="Unpin" onClick={()=>doClear(slot)}><X size={13}/></button>
-              )}
-              {d.rank!=null&&(
-                <div style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:18,color:medalColor(d.rank),lineHeight:1,marginBottom:6,fontVariantNumeric:"tabular-nums"}}>
-                  {rankOfFleet(d.rank,d.fleet)}
-                </div>
-              )}
-              <div className="sc-link" onClick={()=>d.evId!=null&&onOpenEvent&&onOpenEvent(d.evId)}
-                style={{fontWeight:700,fontSize:13.5,color:"var(--ink)",marginBottom:5,lineHeight:1.25}}>
-                {d.evName}
-              </div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:"4px 8px",alignItems:"center",fontSize:11.5,color:"var(--mut)"}}>
-                {d.evDate&&<span>{formatDate(d.evDate)}</span>}
-                {ng&&<span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"1px 8px",fontWeight:700,fontSize:10.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>}
-                {d.venue&&<span>{d.venue}</span>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {picker!=null&&(
-        <PinPicker ownerKind={ownerKind} ownerKey={ownerKey} events={events} slot={picker}
-          onClose={()=>setPicker(null)} onPin={doPin}/>
-      )}
-    </div>
-  );
-}
-
-// Modal listing pinnable candidates for a slot.
-function PinPicker({ownerKind,ownerKey,events,slot,onClose,onPin}){
-  const candidates=React.useMemo(()=>{
-    if(ownerKind==="athlete"){
-      const idx=athleteIndex(events);
-      const spine=idx.get(canonName(ownerKey))||[];
-      return spine.map(s=>({
-        evId:s.ev.id, evName:s.ev.name, evDate:s.ev.date, cls:s.ev.cls, subclass:s.ev.subclass,
-        rank:s.rank, fleet:s.fleet, venue:s.ev.country||null, entry_id:s.entry?.id??null,
-        pct:s.fleet>1?(s.rank-1)/(s.fleet-1):0,
-      })).sort((a,b)=>a.pct-b.pct);            // best-percentile first
-    }
-    // host — whole-event pins
-    return (events||[])
-      .filter(ev=>ev.status!=="Draft"&&String(ev.owner)===String(ownerKey))
-      .map(ev=>({evId:ev.id, evName:ev.name, evDate:ev.date, cls:ev.cls, subclass:ev.subclass,
-        rank:null, fleet:(ev.entries||[]).length, venue:ev.country||null, entry_id:null,
-        dk:dateKey(ev.date)}))
-      .sort((a,b)=>String(b.dk).localeCompare(String(a.dk)));
-  },[ownerKind,ownerKey,events]);
-
-  function pick(c){
-    onPin(slot,{event_id:c.evId,entry_id:c.entry_id,
-      snapshot:{evName:c.evName,evDate:c.evDate,cls:c.cls,subclass:c.subclass,rank:c.rank,fleet:c.fleet,venue:c.venue,athlete:ownerKind==="athlete"?ownerKey:null}});
-  }
-  return(
-    <div className="ov" onClick={onClose} style={{zIndex:120}}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:560}}>
-        <div className="mhead" style={{padding:"16px 22px"}}>
-          <Pin size={17}/><h3 style={{flex:1}}>Pin a result</h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        <div style={{maxHeight:"60vh",overflow:"auto",padding:"8px 10px 14px"}}>
-          {candidates.length===0&&<p style={{color:"var(--mut)",fontSize:13,padding:"16px 12px"}}>No results available to pin yet.</p>}
-          {candidates.map((c,i)=>{
-            const ng=c.cls?nuggetFor(c.cls,c.subclass):null;
-            return(
-              <button key={i} type="button" onClick={()=>pick(c)}
-                style={{display:"flex",alignItems:"center",gap:10,width:"100%",textAlign:"left",border:0,
-                  background:"transparent",borderRadius:10,padding:"10px 12px",cursor:"pointer",transition:".12s"}}
-                onMouseEnter={e=>e.currentTarget.style.background="var(--grouped)"}
-                onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                {c.rank!=null&&<span style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:15,color:medalColor(c.rank),width:52,flex:"none",fontVariantNumeric:"tabular-nums"}}>{rankOfFleet(c.rank,c.fleet)}</span>}
-                <span style={{flex:1,minWidth:0}}>
-                  <span style={{display:"block",fontWeight:700,fontSize:13.5,color:"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.evName}</span>
-                  <span style={{display:"flex",gap:"3px 8px",flexWrap:"wrap",alignItems:"center",fontSize:11.5,color:"var(--mut)",marginTop:2}}>
-                    {c.evDate&&<span>{formatDate(c.evDate)}</span>}
-                    {ng&&<span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"1px 7px",fontWeight:700,fontSize:10,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>}
-                    {c.venue&&<span>{c.venue}</span>}
-                  </span>
-                </span>
-                <Pin size={14} color="var(--accent)" style={{flex:"none"}}/>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
+/* HighlightsStrip / PinPicker REMOVED: pinned results now live inline in the
+   results lists (App.jsx) — a pin icon on each row + a "Pinned" section at the
+   top, backed by the same pinned_results table (data/scout.js pin API). */
 
 /* ── collapsible discovery section ───────────────────────────────────────── */
 function Section({icon:Ic,title,count,hint,defaultOpen=true,children}){
@@ -1457,12 +1302,6 @@ const SCOUT_CSS=`
 .sc-link:hover{color:var(--accent)!important;}
 .sc-detail{margin-bottom:16px;overflow:hidden;}
 .sc-detail-grid{display:grid;grid-template-columns:1fr 1fr;}
-.sc-hl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
-.sc-hl-card{position:relative;background:rgba(255,255,255,.9);border-radius:13px;padding:12px 13px;box-shadow:inset 0 0 0 .5px var(--line),0 1px 2px rgba(0,0,0,.05);}
-.sc-hl-add{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:88px;border:1.5px dashed var(--line);border-radius:13px;background:none;color:var(--mut);cursor:pointer;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;transition:.14s;}
-.sc-hl-add:hover{border-color:var(--accent);color:var(--accent);background:rgba(10,132,255,.04);}
-.sc-hl-x{position:absolute;top:7px;right:7px;border:0;background:var(--grouped);color:var(--mut);width:22px;height:22px;border-radius:7px;display:grid;place-items:center;cursor:pointer;transition:.12s;}
-.sc-hl-x:hover{background:#fbe3e0;color:#c0392b;}
 .sc-spin{animation:sc-rot 1s linear infinite;}
 @keyframes sc-rot{to{transform:rotate(360deg);}}
 
@@ -1534,7 +1373,6 @@ const SCOUT_CSS=`
   .sc-side{position:static;}
   .sc-detail-grid{grid-template-columns:1fr;}
   .sc-detail-grid>div{border-right:0!important;border-bottom:1px solid var(--line);}
-  .sc-hl-grid{grid-template-columns:1fr;}
   .sc-rep-metrics{grid-template-columns:1fr;}
   .sc-report{padding:22px 20px 26px;}
 }

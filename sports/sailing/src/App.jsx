@@ -5,7 +5,7 @@ import {
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
   CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram,
-  Award, TrendingUp
+  Award, TrendingUp, Pin, GripVertical
 } from "lucide-react";
 import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, authSignUp, authSignIn, authUser } from "@athlink/core";
 import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
@@ -30,8 +30,8 @@ import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
 import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
 import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey, hgRunPool, _hg_norm } from "./views/host.jsx";
 import { SignInModal } from "./views/auth.jsx";
-import ScoutPortal, { SaveButton, HighlightsStrip } from "./views/scout.jsx";
-import { scoutOwnerId, logActivity } from "./data/scout.js";
+import ScoutPortal, { SaveButton } from "./views/scout.jsx";
+import { scoutOwnerId, logActivity, fetchPins, addPin, removePin, reorderPins } from "./data/scout.js";
 import { fetchProfile, upsertProfile, authGoogleOAuth } from "@athlink/auth";
 
 
@@ -1702,6 +1702,60 @@ export default function AthLinkMVP(){
     } else _viewedProfileRef.current=null;
   },[view.name,view.id]);
 
+  // ── Pinned results: owner-pinned rows lifted to a "Pinned" section at the top
+  //    of the results lists. Array order == render order (fetch sorts by
+  //    sort_order asc). One list per context: the open athlete profile and the
+  //    open host portal.
+  const[profilePins,setProfilePins]=useState([]);
+  const[portalPins,setPortalPins]=useState([]);
+  const[pinDrag,setPinDrag]=useState(null);           // index of the pinned row being dragged
+  useEffect(()=>{
+    setPinDrag(null);
+    if(view.name!=="profile"||!view.id){setProfilePins([]);return;}
+    let alive=true;
+    fetchPins("athlete",canonName(view.id)).then(p=>{if(alive)setProfilePins(p||[]);});
+    return()=>{alive=false;};
+  },[view.name,view.id]);
+  useEffect(()=>{
+    setPinDrag(null);
+    if(!portal){setPortalPins([]);return;}
+    let alive=true;
+    fetchPins("host",portal).then(p=>{if(alive)setPortalPins(p||[]);});
+    return()=>{alive=false;};
+  },[portal]);
+  // Pin/unpin one result (keyed by event id). New pins go ABOVE existing ones —
+  // "pin jumps it all the way to the top". Optimistic; rolls back on failure.
+  // Writes carry the session token: RLS (0015_role_rls_hardening) only lets the
+  // verified owner — approved athlete claim / verified host member / admin —
+  // write pins, so anon writes are rejected server-side.
+  const togglePinFor=(ownerKind,ownerKey,pins,setPins)=>async({event_id,entry_id=null,snapshot})=>{
+    const existing=pins.find(p=>String(p.event_id)===String(event_id));
+    if(existing){
+      setPins(ps=>ps.filter(p=>p.id!==existing.id));
+      if(String(existing.id).startsWith("tmp_")) return;   // never persisted
+      // RLS-blocked deletes come back 200 with no rows — treat as failure too.
+      const gone=await removePin(existing.id,auth?.token);
+      if(gone==null||(Array.isArray(gone)&&gone.length===0))
+        setPins(ps=>[existing,...ps.filter(p=>p.id!==existing.id)].sort((a,b)=>a.sort_order-b.sort_order));
+    }else{
+      const sort=(pins[0]?.sort_order??1)-1;
+      const optimistic={id:"tmp_"+Date.now(),owner_kind:ownerKind,owner_key:ownerKey,event_id,entry_id,snapshot,sort_order:sort};
+      setPins(ps=>[optimistic,...ps]);
+      const real=await addPin(ownerKind,ownerKey,{event_id,entry_id,snapshot,sort_order:sort},auth?.token);
+      setPins(ps=>real?ps.map(p=>p===optimistic?real:p):ps.filter(p=>p!==optimistic));
+    }
+  };
+  // Drag-to-reorder within the Pinned section: reorder locally while dragging,
+  // persist 0..n-1 on drop.
+  const movePinLocal=(setPins,from,to)=>setPins(ps=>{
+    if(from===to||from<0||to<0||from>=ps.length||to>=ps.length) return ps;
+    const a=ps.slice();const[m]=a.splice(from,1);a.splice(to,0,m);return a;
+  });
+  const commitPinOrder=(pins,setPins)=>{
+    setPins(ps=>ps.map((p,i)=>({...p,sort_order:i})));
+    reorderPins(pins.map(p=>p.id).filter(id=>!String(id).startsWith("tmp_")),auth?.token);
+  };
+
   const navBack=()=>{
     // Drive the in-app Back button through real browser history so it stays in
     // lock-step with the native back button; fall back to home on a cold deep-link.
@@ -3173,6 +3227,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .seclabel{font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#33425e;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
     .ev{background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:var(--radius);padding:18px 20px;margin-bottom:12px;cursor:pointer;transition:.18s;display:flex;align-items:center;gap:14px;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .ev:hover{transform:translateY(-3px) scale(1.008);box-shadow:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 .5px rgba(255,255,255,.5),0 18px 40px -16px rgba(0,0,0,.28);}
+    /* Inline pin control (owners only) + pinned-row dressing */
+    .pinbtn{border:0;background:none;color:var(--mut);width:24px;height:24px;border-radius:8px;display:inline-grid;place-items:center;cursor:pointer;transition:.15s;flex:none;padding:0;}
+    .pinbtn:hover{background:var(--grouped);color:var(--accent);transform:rotate(-12deg);}
+    .pinbtn.on{color:var(--accent);}
+    .pinbadge{position:absolute;top:-7px;left:-7px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;box-shadow:0 2px 8px -2px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.35);z-index:2;pointer-events:none;}
+    .pingrip{color:var(--mut);opacity:.5;cursor:grab;flex:none;display:inline-flex;margin-right:-6px;}
+    .pingrip:active{cursor:grabbing;}
     .ev.draft{opacity:.72;}
     .evicon{width:44px;height:44px;border-radius:13px;background:var(--sky);color:var(--navy);display:grid;place-items:center;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.6);}
     .evicon-date{width:48px;height:48px;border-radius:12px;background:var(--sky);display:flex;flex-direction:column;align-items:center;justify-content:center;flex:none;gap:0;}
@@ -5065,12 +5126,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         })()}
       </div></div>
       <div className="wrap sec" style={{paddingTop:0}}>
-        {!isClassPortal&&(
-          <div style={{marginBottom:18}}>
-            <HighlightsStrip ownerKind="host" ownerKey={portal} events={events} canEdit={canManageMembers}
-              onOpenEvent={id=>go({name:"event",id})}/>
-          </div>
-        )}
         {isPendingHostHere&&(
           <div style={{display:"flex",alignItems:"center",gap:12,background:"rgba(255,149,0,.09)",border:"1px solid rgba(255,149,0,.32)",borderRadius:14,padding:"14px 18px",marginBottom:18}}>
             <Clock size={20} color="#c8860a" style={{flex:"none"}}/>
@@ -5163,15 +5218,77 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               const db=b.date?.split('/').reverse().join('')||'';
               return db.localeCompare(da);
             });
-          // Build items with year dividers
+          // Hosts pin whole competitions to the top of their list (never on the
+          // dormant class-portal filter view).
+          const canPin=canManageMembers&&!isClassPortal;
+          const togglePin=togglePinFor("host",portal,portalPins,setPortalPins);
+          const pinIdxOf=ev=>isClassPortal?-1:portalPins.findIndex(p=>String(p.event_id)===String(ev.id));
+          const pinnedEvs=allFiltered.filter(ev=>ev.status!=="Draft"&&pinIdxOf(ev)>=0).sort((a,b)=>pinIdxOf(a)-pinIdxOf(b));
+          const rest=allFiltered.filter(ev=>!pinnedEvs.includes(ev));
+          const renderEvRow=(ev,i,pinned)=>{
+            const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
+            const pi=pinned?pinIdxOf(ev):-1;
+            return(<div className={`ev${isDraft?" draft":""}`} key={(pinned?"pin":"")+ev.id} style={{animationDelay:`${i*60}ms`,position:"relative"}} onClick={()=>go({name:"event",id:ev.id})}
+              draggable={pinned&&canPin||undefined}
+              onDragStart={pinned&&canPin?()=>setPinDrag(pi):undefined}
+              onDragOver={pinned&&canPin?e=>{e.preventDefault();if(pinDrag!=null&&pinDrag!==pi){movePinLocal(setPortalPins,pinDrag,pi);setPinDrag(pi);}}:undefined}
+              onDragEnd={pinned&&canPin?()=>{commitPinOrder(portalPins,setPortalPins);setPinDrag(null);}:undefined}>
+              {pinned&&<span className="pinbadge" title="Pinned result"><Pin size={11} fill="currentColor"/></span>}
+              {pinned&&canPin&&<span className="pingrip" title="Drag to reorder"><GripVertical size={15}/></span>}
+{(()=>{
+                const dp=ev.date?.split('/');
+                const hasDate=dp&&dp.length===3&&dp[0]&&dp[2];
+                return(<div style={{display:"flex",alignItems:"center",gap:6}}>
+                  {hasDate&&<div className="evicon-year">
+                    {dp[2].split('').map((ch,ci)=><span key={ci}>{ch}</span>)}
+                  </div>}
+                  {hasDate
+                    ?<div className="evicon-date">
+                        <span className="eid">{dp[0]}</span>
+                        <span className="eim">{MON[parseInt(dp[1])-1]||""}</span>
+                      </div>
+                    :<div className="evicon"><Anchor size={20}/></div>}
+                </div>);
+              })()}
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+                  <p className="evname" style={{margin:0}}>{ev.name}</p>
+                  {canPin&&!isDraft&&(
+                    <button type="button" className={"pinbtn"+(pinned?" on":"")} title={pinned?"Unpin":"Pin to the top"}
+                      onClick={e=>{e.stopPropagation();togglePin({event_id:ev.id,snapshot:{evName:ev.name,evDate:ev.date,cls:ev.cls,subclass:ev.subclass,rank:null,fleet:(ev.entries||[]).length,venue:ev.country||null}});}}>
+                      <Pin size={13} fill={pinned?"currentColor":"none"}/>
+                    </button>
+                  )}
+                </div>
+                <div className="evmeta">
+                  <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
+                  <span className="ev-cal"><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
+                  <span className="ev-count"><Users size={13}/>{isUpcomingEvent(ev)?`${s.fleet} entered`:`${s.fleet} boats · ${s.races} races`}{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
+                </div>
+              </div>
+              {!isDraft&&isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}} title="Entry list published — results pending. Open for the fleet forecast.">UPCOMING</span>}
+              {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
+              {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
+              {canEdit&&<button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>}
+              <ChevronRight size={18} color="#9fb2c8"/>
+            </div>);
+          };
+          // Build the remaining items with year dividers
           const evItems=[];let lastYear=null;
-          allFiltered.forEach((ev,i)=>{
+          rest.forEach((ev,i)=>{
             const yr=ev.date?.split('/')?.[2]||null;
             if(yr&&yr!==lastYear){evItems.push({type:'divider',year:yr});lastYear=yr;}
             evItems.push({type:'ev',ev,i});
           });
           const filtered=allFiltered;
           return(<>
+            {pinnedEvs.length>0&&(
+              <div key="pinhead" style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+                <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:"var(--accent)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}><Pin size={12} fill="currentColor"/>PINNED</span>
+                <div style={{flex:1,height:1,background:"var(--line)"}}/>
+              </div>
+            )}
+            {pinnedEvs.map((ev,i)=>renderEvRow(ev,i,true))}
             {evItems.map((item,idx)=>{
               if(item.type==='divider') return(
                 <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
@@ -5179,38 +5296,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div style={{flex:1,height:1,background:"var(--line)"}}/>
                 </div>
               );
-              const{ev,i}=item;
-              const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
-              return(<div className={`ev${isDraft?" draft":""}`} key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
-{(()=>{
-                  const dp=ev.date?.split('/');
-                  const hasDate=dp&&dp.length===3&&dp[0]&&dp[2];
-                  return(<div style={{display:"flex",alignItems:"center",gap:6}}>
-                    {hasDate&&<div className="evicon-year">
-                      {dp[2].split('').map((ch,ci)=><span key={ci}>{ch}</span>)}
-                    </div>}
-                    {hasDate
-                      ?<div className="evicon-date">
-                          <span className="eid">{dp[0]}</span>
-                          <span className="eim">{MON[parseInt(dp[1])-1]||""}</span>
-                        </div>
-                      :<div className="evicon"><Anchor size={20}/></div>}
-                  </div>);
-                })()}
-                <div style={{flex:1,minWidth:0}}>
-                  <p className="evname">{ev.name}</p>
-                  <div className="evmeta">
-                    <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
-                    <span className="ev-cal"><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-                    <span className="ev-count"><Users size={13}/>{isUpcomingEvent(ev)?`${s.fleet} entered`:`${s.fleet} boats · ${s.races} races`}{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
-                  </div>
-                </div>
-                {!isDraft&&isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}} title="Entry list published — results pending. Open for the fleet forecast.">UPCOMING</span>}
-                {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
-                {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
-                {canEdit&&<button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>}
-                <ChevronRight size={18} color="#9fb2c8"/>
-              </div>);
+              return renderEvRow(item.ev,item.i,false);
             })}
             {filtered.length===0&&classEvents.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No results match {evFilterChips.length>1?"these filters":"this filter"}. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setEvFilterChips([]);setEvFilter("");}}>Clear {evFilterChips.length>1?"filters":"filter"}</button></p>}
             {classEvents.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions yet. Import one to get started.</p>}
@@ -5871,12 +5957,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           )}
         </>);
       })()}
-      {/* Result Highlights — scout/athlete-pinned results (renders nothing when empty & !canEdit) */}
-      <div style={{marginTop:18}}>
-        <HighlightsStrip ownerKind="athlete" ownerKey={canonName(name)} events={events}
-          canEdit={devMode||(auth?.profile?.athlete_name&&canonName(auth.profile.athlete_name)===canonName(name))}
-          onOpenEvent={id=>go({name:"event",id,fromProfile:name})}/>
-      </div>
       {/* Upcoming competitions this athlete is entered in — forecast chips above the results history */}
       <div style={{marginTop:18}}>
         <UpcomingStrip name={name} events={events} onOpen={id=>go({name:"event",id,fromProfile:name})}/>
@@ -5937,27 +6017,36 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               const db=b.ev.date?.split('/').reverse().join('')||'';
               return db.localeCompare(da);
             });
-          // Group into year sections with dividers (same look as the host results list).
-          const items=[]; let lastYear=null;
-          rows.forEach((h,i)=>{
-            const yr=h.ev.date?.split('/')?.[2]||"—";
-            if(yr!==lastYear){items.push({type:'divider',year:yr});lastYear=yr;}
-            items.push({type:'row',h,i});
-          });
-          return items.map((item)=>{
-            if(item.type==='divider') return(
-              <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
-                <span style={{fontSize:12,fontWeight:700,color:"var(--mut)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}>{item.year}</span>
-                <div style={{flex:1,height:1,background:"var(--line)"}}/>
-              </div>
-            );
-            const{h,i}=item;
+          // Only the athlete assigned to this profile (claim or signup link) pins it.
+          const canPin=devMode||isProfileOwner(name)||(auth?.profile?.athlete_name&&canonName(auth.profile.athlete_name)===canonName(name));
+          const togglePin=togglePinFor("athlete",canonName(name),profilePins,setProfilePins);
+          // Pinned rows lift out of the year sections to a "Pinned" block on top,
+          // in the owner's order (profilePins array order == render order).
+          const pinIdxOf=h=>profilePins.findIndex(p=>String(p.event_id)===String(h.ev.id));
+          const pinnedRows=rows.filter(h=>pinIdxOf(h)>=0).sort((a,b)=>pinIdxOf(a)-pinIdxOf(b));
+          const rest=rows.filter(h=>pinIdxOf(h)<0);
+          // Same row markup for both sections — pinned rows just gain a corner
+          // badge, the filled pin, and (owner only) drag-to-reorder.
+          const renderRow=(h,i,pinned)=>{
+            const pi=pinned?pinIdxOf(h):-1;
             return(
-            <div className="ev" key={h.ev.id+i} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:h.ev.id})}>
+            <div className="ev" key={(pinned?"pin":"")+h.ev.id+i} style={{animationDelay:`${i*60}ms`,position:"relative"}} onClick={()=>go({name:"event",id:h.ev.id})}
+              draggable={pinned&&canPin||undefined}
+              onDragStart={pinned&&canPin?()=>setPinDrag(pi):undefined}
+              onDragOver={pinned&&canPin?e=>{e.preventDefault();if(pinDrag!=null&&pinDrag!==pi){movePinLocal(setProfilePins,pinDrag,pi);setPinDrag(pi);}}:undefined}
+              onDragEnd={pinned&&canPin?()=>{commitPinOrder(profilePins,setProfilePins);setPinDrag(null);}:undefined}>
+              {pinned&&<span className="pinbadge" title="Pinned result"><Pin size={11} fill="currentColor"/></span>}
+              {pinned&&canPin&&<span className="pingrip" title="Drag to reorder"><GripVertical size={15}/></span>}
               <div className={`hrk ${h.row.rank<=3?"p"+h.row.rank:""}`} style={{flex:"none"}}>{h.row.rank}<small>of {h.fleet}</small></div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                   <p className="evname" style={{margin:0}}>{h.ev.name}</p>
+                  {canPin&&(
+                    <button type="button" className={"pinbtn"+(pinned?" on":"")} title={pinned?"Unpin":"Pin to the top"}
+                      onClick={e=>{e.stopPropagation();togglePin({event_id:h.ev.id,snapshot:{evName:h.ev.name,evDate:h.ev.date,cls:h.ev.cls,subclass:h.ev.subclass,rank:h.row.rank,fleet:h.fleet,venue:h.ev.country||null,athlete:canonName(name)}});}}>
+                      <Pin size={13} fill={pinned?"currentColor":"none"}/>
+                    </button>
+                  )}
                   <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
                 </div>
                 <div className="evmeta" style={{marginTop:3}}>
@@ -5978,7 +6067,33 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {(()=>{const n=nuggetFor(h.ev.cls,h.ev.subclass);return n?<span className="cls" style={{background:n.color}}>{n.label}</span>:null;})()}
               <ChevronRight size={18} color="#9fb2c8"/>
             </div>);
+          };
+          // Group the remaining rows into year sections with dividers (same look
+          // as the host results list).
+          const items=[]; let lastYear=null;
+          rest.forEach((h,i)=>{
+            const yr=h.ev.date?.split('/')?.[2]||"—";
+            if(yr!==lastYear){items.push({type:'divider',year:yr});lastYear=yr;}
+            items.push({type:'row',h,i});
           });
+          return(<>
+            {pinnedRows.length>0&&(
+              <div key="pinhead" style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+                <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:"var(--accent)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}><Pin size={12} fill="currentColor"/>PINNED</span>
+                <div style={{flex:1,height:1,background:"var(--line)"}}/>
+              </div>
+            )}
+            {pinnedRows.map((h,i)=>renderRow(h,i,true))}
+            {items.map((item)=>{
+              if(item.type==='divider') return(
+                <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+                  <span style={{fontSize:12,fontWeight:700,color:"var(--mut)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}>{item.year}</span>
+                  <div style={{flex:1,height:1,background:"var(--line)"}}/>
+                </div>
+              );
+              return renderRow(item.h,item.i,false);
+            })}
+          </>);
         })()}
         {ag.history.length===0&&<p style={{color:"var(--mut)",fontSize:14}}>No confirmed results found.</p>}
       </div>
