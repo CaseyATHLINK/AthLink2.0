@@ -50,23 +50,10 @@ export function normCategory(raw){
   if(/\b(master|veteran|senior)s?\b/.test(low)) return "Mst";
   return s.length<=14?s.slice(0,12):"";
 }
-// Some boat classes / divisions are locked to ONE gender, which is more
-// authoritative than any stated or remembered value (a source can mis-label a
-// sailor, and a stale gender can carry over from another event). 49erFX is the
-// women's skiff, so every 49erFX sailor is female — regardless of what the
-// results sheet said. Returns "F" | "M" | "" (no lock). Deliberately does NOT
-// lock "open" classes (a bare "49er", "470", "Nacra 17", ILCA…): those aren't
-// single-gender, so their members keep their stated/remembered gender.
-export function lockedGenderOf(label){
-  const s=String(label||"").toLowerCase();
-  if(!s) return "";
-  // Women-only: the 49er FX skiff, plus explicit women's labels.
-  if(/49er\s*fx|\bfx\b|\bwomen\b|\bwomens\b|\bgirls?\b|\bladies\b|\bfemale\b/.test(s)) return "F";
-  // Men-only: explicit men's labels only (never a bare "49er"/"open").
-  if(/\bmens?\b|\bboys?\b|\bmale\b/.test(s)) return "M";
-  return "";
-}
-// Resolve the gender + category to display for an entry, preferring real fields.
+// Resolve the gender + category to display for an entry, from the source's real
+// fields only. We deliberately do NOT infer gender from the boat class: 49erFX
+// is an open women's-and-junior skiff, so it legitimately carries junior-men and
+// mixed crews — assuming "49erFX ⇒ female" mislabels them.
 export function genderCatOf(e){
   if(!e) return {gender:"",category:""};
   let gender=normGender(e.gender);
@@ -76,10 +63,6 @@ export function genderCatOf(e){
     if(!gender&&dg) gender=dg;
     if(!category&&jr) category="Jr";
   }
-  // A gender-locked class/division is authoritative — it overrides a stated
-  // value (e.g. a 49erFX sheet that mistakenly marked its crews "M").
-  const lk=lockedGenderOf(e.div||e.cls||"");
-  if(lk) gender=lk;
   return {gender,category};
 }
 
