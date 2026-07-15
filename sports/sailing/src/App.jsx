@@ -1337,6 +1337,12 @@ export default function AthLinkMVP(){
     return short.length>=3&&short!==long&&long.startsWith(short);
   };
   const dupGroups=useMemo(()=>{
+    // This is an O(n²) Levenshtein sweep over EVERY athlete name — only the admin
+    // "Duplicates" review tab consumes it. Computing it eagerly meant every event
+    // publish (which changes `events`) re-ran it over the whole athlete set on the
+    // main thread, freezing the UI for seconds during a bulk import. Compute it
+    // only when that tab is actually open; the badge count fills in on open.
+    if(!canEdit||filter!=="duplicates") return [];
     // distinct canonical keys (already display-deduped) → find near neighbours
     const keys=[...new Set(allPeople.map(p=>canonName(p.name)).filter(Boolean))];
     const groups=[];
@@ -1355,7 +1361,7 @@ export default function AthLinkMVP(){
       }
     }
     return groups;
-  },[allPeople,displayNameFor,events]);
+  },[allPeople,displayNameFor,events,canEdit,filter]);
 
   const myAssoc=auth?.profile?.class_id||null;
   // Persist "don't merge" dismissals across reloads (localStorage).
@@ -1457,9 +1463,14 @@ export default function AthLinkMVP(){
     events.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
     return s2;
   },[events,athCls]);
-  const lensPeople=(athClsSet||athCountry)
+  // Memoised so an active class/country lens doesn't produce a NEW filtered array
+  // on every render — that fresh reference used to invalidate athleteGridContent's
+  // memo on unrelated state changes (e.g. every keystroke/click in the import
+  // modal), rebuilding the whole athlete grid each time.
+  const lensPeople=useMemo(()=>(athClsSet||athCountry)
     ?currentPeople.filter(p=>(!athClsSet||athClsSet.has(canonName(p.name)))&&(!athCountry||statOf(p.name).nat===athCountry))
-    :currentPeople;
+    :currentPeople
+  ,[athClsSet,athCountry,currentPeople,cardStats]);
   // Progressive reveal so the page paints immediately and fills in as you scroll.
   const[athLimit,setAthLimit]=useState(120);
   const athSentinelRef=React.useRef(null);
@@ -5428,7 +5439,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
               <span style={{display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15}}>
                 <span>{f[0].toUpperCase()+f.slice(1)}</span>
-                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:lensPeople.length}</span>
+                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?(filter==="duplicates"?visibleDupGroups.length:"·"):lensPeople.length}</span>
               </span>
             </button>
           ));

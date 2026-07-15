@@ -63,28 +63,41 @@ export async function saveEventToDb(ev){
   else console.log("saveEventToDb: saved",ev.entries.length,"entries for",ev.name);
   return ins;
 }
-// Insert entries one by one so a single bad row doesn't kill the whole batch.
+// Insert all of an event's entry rows in ONE bulk request (PostgREST accepts an
+// array body). A big fleet used to fire one POST per boat — ~90 sequential
+// round-trips that each triggered a re-render and made a bulk import crawl for
+// minutes. If the bulk insert fails (e.g. one malformed row rejects the whole
+// batch), fall back to one-by-one so a single bad row doesn't lose the rest.
 // Returns the helm names of any rows that failed.
+function _entryPayload(eventId,e){
+  return {
+    event_id:eventId,
+    sail:e.sail||"—",
+    nat:e.nat||null,
+    division:e.div||null,
+    gender:e.gender||null,
+    category:e.category||null,
+    helm_name:e.helm||"",
+    crew_name:e.crew||null,
+    races:Array.isArray(e.races)?e.races:[],
+    race_codes:e.race_codes||null,
+    pdf_rank:e.pdf_rank||null,
+    pdf_net:e.pdf_net||null,
+    birth_year:e.birth_year||null,
+    crew_birth_year:e.crew_birth_year||null,
+  };
+}
 async function insertEntries(eventId,entries){
+  const rows=(entries||[]);
+  if(!rows.length) return [];
+  // Fast path: one bulk insert for the whole fleet.
+  const bulk=await sbPost("entries",rows.map(e=>_entryPayload(eventId,e)));
+  if(Array.isArray(bulk)&&bulk.length===rows.length) return [];
+  // Slow path: the batch was rejected — retry per row so one bad row can't
+  // sink the others, and report exactly which ones failed.
   const entryErrors=[];
-  for(const e of entries||[]){
-    const entryPayload={
-      event_id:eventId,
-      sail:e.sail||"—",
-      nat:e.nat||null,
-      division:e.div||null,
-      gender:e.gender||null,
-      category:e.category||null,
-      helm_name:e.helm||"",
-      crew_name:e.crew||null,
-      races:Array.isArray(e.races)?e.races:[],
-      race_codes:e.race_codes||null,
-      pdf_rank:e.pdf_rank||null,
-      pdf_net:e.pdf_net||null,
-      birth_year:e.birth_year||null,
-      crew_birth_year:e.crew_birth_year||null,
-    };
-    const r=await sbPost("entries",entryPayload);
+  for(const e of rows){
+    const r=await sbPost("entries",_entryPayload(eventId,e));
     if(!r?.[0]?.id) entryErrors.push(e.helm);
   }
   return entryErrors;
