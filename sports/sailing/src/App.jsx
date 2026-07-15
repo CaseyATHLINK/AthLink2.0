@@ -265,6 +265,16 @@ export default function AthLinkMVP(){
   const[allEventClaims,setAllEventClaims]=useState([]);// every event_claims row (host claims on contributed events)
   const[claimNote,setClaimNote]=useState(null);        // toast after submitting a claim
   const[showClaimModal,setShowClaimModal]=useState(false); // guided claim modal open
+  // Shared "which button is mid-DB-write" flag so any async action can show a
+  // spinner + guard against double-clicks. runBusy(id, fn) sets it for the run.
+  const[busyAction,setBusyAction]=useState(null);
+  const runBusy=async(id,fn)=>{
+    if(busyAction) return;
+    setBusyAction(id);
+    try{ return await fn(); }
+    catch(err){ console.error("runBusy["+id+"] failed",err); }
+    finally{ setBusyAction(null); }
+  };
   const[athleteProfiles,setAthleteProfiles]=useState({});  // name_key -> athlete_profiles row (owner extras)
   const[showAthEdit,setShowAthEdit]=useState(null);        // profile name being edited by its owner
   const[showMedia,setShowMedia]=useState(null);            // profile name whose media gallery is open
@@ -1717,10 +1727,12 @@ export default function AthLinkMVP(){
     // Delete this event AND every duplicate row of the same competition, so no
     // ghost copy survives on the global class page or another association.
     const victims=target?events.filter(ev=>eventKey(ev)===eventKey(target)):events.filter(ev=>ev.id===deleteConfirm.id);
-    for(const v of victims) await sbDel("events",`id=eq.${v.id}`);
     const ids=new Set(victims.map(v=>v.id));
+    // Optimistic: drop the rows from the UI + close the popover immediately, then
+    // delete from the DB in the background so the click never blocks.
     setEvents(p=>p.filter(ev=>!ids.has(ev.id)));
     setDeleteConfirm(null);
+    (async()=>{ for(const v of victims){ try{await sbDel("events",`id=eq.${v.id}`);}catch(err){console.error("confirmDelete: DB delete failed",err);} } })();
   };
   const confirmDraft=async(evId)=>{
     await updateEventStatus(evId,"Final");
@@ -3043,9 +3055,25 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
-    await saveEventToDb(ev);setEvents(p=>[ev,...p]);
+    // Optimistic: show the event + close the popup immediately, then persist in
+    // the BACKGROUND so the UI never blocks on the DB round-trip. Swap in the
+    // saved copy (with real ids) once it lands.
+    setEvents(p=>[ev,...p]);
     clearImportDraft();setNote({name:ev.name,matched,created});setOpen(false);setMf(emptyForm());
     setTimeout(()=>setNote(null),6500);
+    (async()=>{
+      try{
+        const saved=await saveEventToDb(ev);
+        if(saved?.[0]?.id){
+          const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
+          if(fresh?.[0]){
+            const dbEv=dbToApp(fresh[0]);
+            setEvents(p=>p.map(x=>x.id===ev.id?dbEv:x));
+            setView(v=>(v.name==="event"&&v.id===ev.id)?{...v,id:dbEv.id}:v);
+          }
+        }
+      }catch(err){ console.error("doImportManual: background save failed",err); }
+    })();
   };
 
   /* ── sail display helper ───────────────────────────────────── */
@@ -5214,7 +5242,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <strong>Draft results — not yet official</strong>
             <p style={{fontSize:13}}>These results are provisional and excluded from athlete profiles until confirmed.</p>
           </div>
-          <button className="btn green" onClick={()=>confirmDraft(ev.id)}><CheckCircle size={16}/>Confirm Results</button>
+          <button className="btn green" disabled={busyAction==="confirmDraft_"+ev.id} onClick={()=>runBusy("confirmDraft_"+ev.id,()=>confirmDraft(ev.id))}>{busyAction==="confirmDraft_"+ev.id?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}Confirm Results</button>
         </div>
       )}
       {(()=>{
@@ -6210,7 +6238,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               <div className="mfoot">
                 <button className="btn ghost" onClick={closeImport}>Cancel</button>
-                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady} onClick={()=>doImportManual(upKind)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>{upKind?"Publish entry list":"Import competition"}</div></button>
+                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady||busyAction==="manualImport"} onClick={()=>runBusy("manualImport",()=>doImportManual(upKind))}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busyAction==="manualImport"?<Loader2 size={16} className="spin"/>:<Upload size={16}/>}{upKind?"Publish entry list":"Import competition"}</div></button>
               </div>
             </>)}
           </div>);})()}
@@ -6783,7 +6811,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         <p>Remove <span className="del-name">"{deleteConfirm.name}"</span>?</p>
         <div className="del-confirm-btns">
           <button className="btn ghost" style={{flex:1,fontSize:12,padding:"6px 10px"}} onClick={()=>setDeleteConfirm(null)}>Cancel</button>
-          <button className="btn" style={{flex:1,fontSize:12,padding:"6px 10px",background:"#e74c3c",color:"#fff"}} onClick={confirmDelete}><Trash2 size={13}/>Delete</button>
+          <button className="btn" style={{flex:1,fontSize:12,padding:"6px 10px",background:"#e74c3c",color:"#fff"}} disabled={busyAction==="delEvent"} onClick={()=>runBusy("delEvent",confirmDelete)}>{busyAction==="delEvent"?<Loader2 size={13} className="spin"/>:<Trash2 size={13}/>}Delete</button>
         </div>
       </div>
     </div>
@@ -6808,7 +6836,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
           <div className="mfoot" style={{marginTop:16}}>
             <button className="btn ghost" onClick={()=>setEditEvMeta(null)}>Cancel</button>
-            <button className="btn cta liquidGlass-wrapper" onClick={saveEvMeta}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><CheckCircle size={15}/>Save changes</div></button>
+            <button className="btn cta liquidGlass-wrapper" disabled={busyAction==="evMeta"} onClick={()=>runBusy("evMeta",saveEvMeta)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busyAction==="evMeta"?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes</div></button>
           </div>
         </div>
       </div>
