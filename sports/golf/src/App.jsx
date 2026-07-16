@@ -1,341 +1,56 @@
-import React, { useState, useMemo, useEffect } from "react";
-import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY } from "d3-force";
+import React, { useState, useMemo, useEffect, useRef, useDeferredValue } from "react";
+import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY, forceRadial } from "d3-force";
 import {
   Anchor, Trophy, Search, BadgeCheck, Upload, ChevronRight, MapPin,
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
   CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram,
-  Award, TrendingUp
+  Award, TrendingUp, Pin, GripVertical
 } from "lucide-react";
+import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, setSbUserToken, authSignUp, authSignIn, authUser } from "@athlink/core";
+import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
+import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
+import { canonName, eventKey, ordinalOf, initials, pascalSlug, avatarColor } from "./util/name.js";
+import { CLASSES, CLASS_COLOR, CUSTOM_CLASSES, CUSTOM_CLASS_PALETTE, canonClass, prettifyClassSlug, customClassById, classLabel, classColor, classColorA, setCustomClassRegistry, SUBCLASSES, nuggetFor, classFromFleetName } from "./util/class.js";
+import { DIV_COLOR, DIV_LABEL, parseDiv, divTokens, divToString, normGender, normCategory, genderCatOf, GENDER_COLOR } from "./util/gender.js";
+import { ATHLETE_ATTRS, buildAthleteAttrs, resolvedEntryGender, ATHLETE_USERNAMES, applyAthleteUsernames, usernameForName, nameForUsername, META, athleteNat, athleteBirthYear, buildHomeCountry } from "./data/athletes.js";
+import { DEFAULT_ASSOCIATIONS, DEFAULT_CLUBS, DEFAULT_FEDERATIONS, ASSOCIATIONS, CLUBS, FEDERATIONS, applyDbHosts, addHostLocal, removeHostLocal, assocById, clubById, fedById, hostById, assocName, hostRest, fetchHostMembers, fetchMyMemberships, fetchHostInvites, fetchHostAudit, fetchInviteByToken, logHostAudit, randToken, randShortCode, removeLogoBackground, uploadHostLogo, fetchCustomClasses, insertCustomClass, readPendingCustomClasses, queuePendingCustomClass, dropPendingCustomClass, fetchInviteByShortCode, markInviteUsed, MOCK_RESEARCH, mockResearchIdentity, mockResearchCompetitions, mockParse, mockProbe, eventCountryCode, governingFeds, eventAssocs, eventFingerprint, hostLocation } from "./data/hosts.js";
+import { fetchUnverifiedMembers, fetchAllProfiles, fetchAllMembers, devDeleteProfile, fetchProfileNames, fetchAllClaims, createClaim, decideClaim, profileNameKey, fetchAllAthleteProfiles, upsertAthleteProfile, uploadAthletePhoto, uploadAthleteMedia, fetchAllEventClaims, createEventClaim, decideEventClaim } from "./data/profiles.js";
+import { isCode, scoreEvent, scorePreview, aggregate, outstandingAchievementFor, isUpcomingEvent } from "./data/scoring.js";
+import { parseHtml } from "./data/parse-html.js";
+import { dbToApp, saveEventToDb, replaceEventResultsInDb, updateEventStatus, fetchDupDismissals, saveDupDismissals } from "./data/events.js";
+import { CountryTag, ConfirmModal, VerifyBadge, DivisionToggle, ClassPicker, HostClassPills, LiquidBackground, MagneticItem, ResultNuggets, WebIcon, ErrorBoundary, HostLogo } from "./views/atoms.jsx";
+import { NatInput, DateField, CustomClassPicker, CollabPicker, CountrySelect, ClassSelect, AddHostNugget } from "./views/forms.jsx";
+import { CalendarBody } from "./views/calendar.jsx";
+import { GLOBE_NAMES, SailingGlobe, FootprintLegend } from "./views/globe.jsx";
+import { AthleteWeb, YearNuggets, ProgressChart, ratingEngine } from "./views/charts.jsx";
+import { FleetForecast, UpcomingStrip } from "./views/forecast.jsx";
+import { SPORT_MODELS, SpmDuo, HomeShowcaseRotator } from "./views/models.jsx";
+import { FootprintModal, RegattaFootprintModal } from "./views/footprint.jsx";
+import { ClaimProfileModal, AthleteEditModal, MediaModal, DevApprovalsModal, DevProfilesModal } from "./views/profile.jsx";
+import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey, hgRunPool, _hg_norm } from "./views/host.jsx";
+import { SignInModal } from "./views/auth.jsx";
+import ScoutPortal, { SaveButton, ScoutLocked } from "./views/scout.jsx";
+import { scoutOwnerId, logActivity, fetchPins, addPin, removePin, reorderPins } from "./data/scout.js";
+import { fetchProfile, upsertProfile, authGoogleOAuth } from "@athlink/auth";
 
-/* ── Scoring codes ────────────────────────────────────────────────────────
-   NEVER_DISCARD: cannot be dropped even if it would improve the score
-   VARIABLE:      the PDF already provides the numeric value (RDG, SCP, STP, DPI, ZFP etc.)
-                  — treat the stored value as-is for points, use fleet+1 for discard ranking
-                  when no explicit number is stored
-   PENALTY:       score = fleet + 1
-   ────────────────────────────────────────────────────────────────────── */
-const NEVER_DISCARD=new Set(["DNE"]);
 
-// Codes where the PDF provides an explicit numeric value that we already stored
-// For discard comparison we still treat them as fleet+1 unless an explicit number was parsed
-const CODE_WEIGHT={
-  // Hard fleet+1
-  OCS:1,UFD:1,BFD:1,DSQ:1,DNF:1,DNC:1,DNS:1,RET:1,NSC:1,
-  // Also fleet+1 for discard purposes (variable numeric for net scoring)
-  SCP:1,STP:1,DPI:1,ZFP:1,TAL:1,
-  // RDG: redress — the number is already stored as a numeric value by the parser
-  // We do NOT score it as fleet+1; whatever number came in is used
-  RDG:0,
-};
 
-const isCode=c=>typeof c==="string";
-const isPenaltyCode=c=>isCode(c)&&CODE_WEIGHT[c]!==undefined&&CODE_WEIGHT[c]===1;
 
-/* ── IOC → ISO flag ───────────────────────────────────────────────────── */
-const IOC_ISO={
-  AFG:'AF',ALB:'AL',ALG:'DZ',AND:'AD',ANG:'AO',ANT:'AG',ARG:'AR',ARM:'AM',
-  ARU:'AW',ASA:'AS',AUS:'AU',AUT:'AT',AZE:'AZ',BAH:'BS',BAN:'BD',BAR:'BB',
-  BDI:'BI',BEL:'BE',BEN:'BJ',BER:'BM',BHU:'BT',BIH:'BA',BIZ:'BZ',BLR:'BY',
-  BOL:'BO',BOT:'BW',BRA:'BR',BRN:'BH',BRU:'BN',BUL:'BG',BUR:'BF',CAF:'CF',
-  CAM:'KH',CAN:'CA',CAY:'KY',CGO:'CG',CHA:'TD',CHI:'CL',CHN:'CN',CIV:'CI',
-  CMR:'CM',COD:'CD',COK:'CK',COL:'CO',COM:'KM',CPV:'CV',CRC:'CR',CRO:'HR',
-  CUB:'CU',CYP:'CY',CZE:'CZ',DEN:'DK',DJI:'DJ',DMA:'DM',DOM:'DO',ECU:'EC',
-  EGY:'EG',ERI:'ER',ESA:'SV',ESP:'ES',EST:'EE',ETH:'ET',FIJ:'FJ',FIN:'FI',
-  FRA:'FR',FSM:'FM',GAB:'GA',GAM:'GM',GBR:'GB',GBS:'GW',GEO:'GE',GEQ:'GQ',
-  GER:'DE',GHA:'GH',GRE:'GR',GRN:'GD',GUA:'GT',GUI:'GN',GUM:'GU',GUY:'GY',
-  HAI:'HT',HKG:'HK',HON:'HN',HUN:'HU',INA:'ID',IND:'IN',IRI:'IR',IRL:'IE',
-  IRQ:'IQ',ISL:'IS',ISR:'IL',ISV:'VI',ITA:'IT',IVB:'VG',JAM:'JM',JOR:'JO',
-  JPN:'JP',KAZ:'KZ',KEN:'KE',KGZ:'KG',KIR:'KI',KOR:'KR',KOS:'XK',KSA:'SA',
-  KUW:'KW',LAO:'LA',LAT:'LV',LBA:'LY',LBR:'LR',LCA:'LC',LES:'LS',LIB:'LB',
-  LIE:'LI',LTU:'LT',LUX:'LU',MAD:'MG',MAR:'MA',MAS:'MY',MAW:'MW',MDA:'MD',
-  MDV:'MV',MEX:'MX',MGL:'MN',MHL:'MH',MKD:'MK',MLI:'ML',MLT:'MT',MNE:'ME',
-  MON:'MC',MOZ:'MZ',MRI:'MU',MTN:'MR',MYA:'MM',NAM:'NA',NCA:'NI',NED:'NL',
-  NEP:'NP',NGR:'NG',NIG:'NE',NOR:'NO',NRU:'NR',NZL:'NZ',OMA:'OM',PAK:'PK',
-  PAN:'PA',PAR:'PY',PER:'PE',PHI:'PH',PLE:'PS',PLW:'PW',PNG:'PG',POL:'PL',
-  POR:'PT',PRK:'KP',PUR:'PR',QAT:'QA',ROC:'TW',RSA:'ZA',ROU:'RO',RUS:'RU',
-  RWA:'RW',SAM:'WS',SEN:'SN',SEY:'SC',SGP:'SG',SKN:'KN',SLE:'SL',SLO:'SI',
-  SMR:'SM',SOL:'SB',SOM:'SO',SRB:'RS',SRI:'LK',SSD:'SS',STP:'ST',SUD:'SD',
-  SUI:'CH',SUR:'SR',SVK:'SK',SWE:'SE',SWZ:'SZ',SYR:'SY',TAN:'TZ',TGA:'TO',
-  THA:'TH',TJK:'TJ',TKM:'TM',TLS:'TL',TOG:'TG',TPE:'TW',TTO:'TT',TUN:'TN',
-  TUR:'TR',TUV:'TV',UAE:'AE',UGA:'UG',UKR:'UA',URU:'UY',USA:'US',UZB:'UZ',
-  VAN:'VU',VEN:'VE',VIE:'VN',VIN:'VC',YEM:'YE',ZAM:'ZM',ZIM:'ZW',
-};
-function isoFlag(iso){
-  try{
-    if(!iso||iso.length!==2) return '';
-    const a=iso.toUpperCase();
-    if(!/^[A-Z]{2}$/.test(a)) return '';
-    return [...a].map(c=>String.fromCodePoint(0x1F1E6+c.charCodeAt(0)-65)).join('');
-  }catch{return '';}
-}
-function iocFlag(code){
-  if(!code) return '';
-  const iso=IOC_ISO[code.toUpperCase()];
-  if(!iso) return '';
-  return [...iso].map(c=>String.fromCodePoint(0x1F1E6+c.charCodeAt(0)-65)).join('');
-}
-
-/* ── Shared display helpers ───────────────────────────────────────────────
-   CountryTag: flag + code shown together (global standard).
-   VerifyBadge: blue badge if verified, grey badge if not — icon only.        */
-function CountryTag({code,size=14,style={}}){
-  if(!code) return null;
-  const fl=iocFlag(code);
-  return <span style={{display:"inline-flex",alignItems:"center",gap:5,...style}}>{fl&&<span style={{fontSize:size+2,lineHeight:1}}>{fl}</span>}{code}</span>;
-}
-/* ── ConfirmModal: in-app replacement for window.confirm (liquid-glass) ──────
-   Render when `state` is set; state = {title?, message, confirmLabel?, danger?, onConfirm}. */
-function ConfirmModal({state,onClose}){
-  if(!state) return null;
-  const {title="Are you sure?",message,confirmLabel="Confirm",danger=true,onConfirm}=state;
-  return(
-    <div className="ov" onClick={onClose} style={{zIndex:120}}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:400,overflow:"visible"}}>
-        <div className="mhead" style={{padding:"16px 22px"}}>
-          <AlertCircle size={18}/><h3 style={{flex:1}}>{title}</h3>
-        </div>
-        <div style={{padding:"18px 22px 22px"}}>
-          <p style={{margin:"0 0 18px",fontSize:14,lineHeight:1.5,color:"var(--ink)",whiteSpace:"pre-line"}}>{message}</p>
-          <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-            <button className="btn ghost" style={{fontSize:13}} onClick={onClose}>Cancel</button>
-            <button className="btn" style={{fontSize:13,background:danger?"#e74c3c":"var(--accent)",color:"#fff",
-              boxShadow:"inset 0 1px 0 rgba(255,255,255,.3),0 1px 3px rgba(0,0,0,.18)"}}
-              onClick={()=>{onClose();onConfirm&&onConfirm();}}>{danger?<Trash2 size={14}/>:<CheckCircle size={14}/>}{confirmLabel}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-function VerifyBadge({verified,size=14,title}){
-  // verified -> blue, unverified -> grey. Badge icon only.
-  const col=verified?"#0d8ecf":"#9fb2c8";
-  return <BadgeCheck size={size} color={col} aria-label={verified?"Verified":"Unverified"}
-    title={title||(verified?"Verified athlete":"Unverified")} style={{flex:"none"}}/>;
-}
-
-// Toggleable M / F / Mix / Jr selector. value = "F Jr" style string; onChange(string).
-// Rules: at most one gender (M/F/Mix); Jr is an independent add-on.
-function DivisionToggle({value,onChange,size="sm",noMix=false}){
-  const tokens=divTokens(value);
-  let gender=tokens.find(t=>t!=="Jr")||null;
-  if(noMix&&gender==="Mix") gender=null; // single-handed: Mix not applicable
-  const jr=tokens.includes("Jr");
-  const set=(g,j)=>onChange(divToString([g,j?"Jr":null].filter(Boolean)));
-  const btn=(key,label)=>{
-    const isJr=key==="Jr";
-    const on=isJr?jr:gender===key;
-    const col=DIV_COLOR[key];
-    return <button key={key} type="button"
-      onClick={e=>{e.stopPropagation();isJr?set(gender,!jr):set(gender===key?null:key,jr);}}
-      style={{border:"1px solid "+(on?col:"var(--line)"),background:on?col:"transparent",color:on?"#fff":"var(--mut)",
-        borderRadius:6,fontSize:size==="sm"?10:11.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",
-        padding:size==="sm"?"2px 6px":"3px 8px",cursor:"pointer",lineHeight:1.3,transition:".12s"}}>{label}</button>;
-  };
-  return <div style={{display:"inline-flex",gap:4,flexWrap:"wrap"}}>
-    {btn("M","M")}{btn("F","F")}{!noMix&&btn("Mix","Mix")}{btn("Jr","Jr")}</div>;
-}
-
-// Compact inline nationality input: type an IOC code (e.g. HKG); once valid it
-// confirms with the flag + country name. Suggests matches as you type.
-function NatInput({value,onChange}){
-  const [open,setOpen]=React.useState(false);
-  const ref=React.useRef();
-  React.useEffect(()=>{
-    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
-  },[]);
-  const v=(value||"").toUpperCase();
-  const valid=!!IOC_ISO[v];
-  const matches=v?COUNTRIES.filter(c=>c.code.startsWith(v)||c.name.toUpperCase().startsWith(v)).slice(0,6):[];
-  return(
-    <div style={{position:"relative"}} ref={ref}>
-      <input value={value||""} onChange={e=>{onChange(e.target.value.toUpperCase());setOpen(true);}}
-        onFocus={()=>setOpen(true)} placeholder="HKG" maxLength={3}
-        style={{textAlign:"center",width:"100%"}}/>
-      {valid&&!open&&<span style={{position:"absolute",right:4,top:"50%",transform:"translateY(-50%)",fontSize:13,pointerEvents:"none"}}>{iocFlag(v)}</span>}
-      {open&&matches.length>0&&(
-        <div style={{position:"absolute",top:"calc(100% + 3px)",left:0,zIndex:95,background:"#fff",border:"1px solid var(--line)",
-          borderRadius:8,boxShadow:"0 10px 24px -10px rgba(0,0,0,.25)",minWidth:170,overflow:"hidden"}}>
-          {matches.map(c=>(
-            <div key={c.code} onMouseDown={()=>{onChange(c.code);setOpen(false);}}
-              style={{padding:"6px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:7,fontSize:12.5}}
-              onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
-              onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
-              <span>{iocFlag(c.code)}</span><b style={{color:"var(--navy)",minWidth:32}}>{c.code}</b>
-              <span style={{color:"var(--mut)"}}>{c.name}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Small read-only division nugget(s) for the results page.
-function DivNugget({div}){
-  const tokens=divTokens(div);
-  if(!tokens.length) return null;
-  return <span style={{display:"inline-flex",gap:3}}>
-    {tokens.map(t=><span key={t} style={{background:DIV_COLOR[t],color:"#fff",borderRadius:4,fontSize:9.5,fontWeight:700,
-      fontFamily:"'Barlow',sans-serif",padding:"1px 5px",letterSpacing:".02em"}} title={DIV_LABEL[t]}>{t}</span>)}
-  </span>;
-}
-
-// Division nugget dropdown for manual import (looks like the division nuggets used elsewhere).
-function ClassPicker({value,onChange}){
-  const opts=[["mens","Men's"],["womens","Women's"],["amateur","Amateur"],["senior","Senior"]];
-  return <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
-    {opts.map(([id,label])=>{
-      const on=value===id;
-      return <button key={id} type="button" onClick={()=>onChange(id)}
-        style={{border:"1px solid "+(on?classColor(id):"var(--line)"),background:on?classColor(id):"transparent",
-          color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
-          padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{label}</button>;
-    })}
-  </div>;
-}
-
-/* ── date helpers ─────────────────────────────────────────────────────── */
-const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function formatDate(str){
-  if(!str||str==="—") return str||"—";
-  const m=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if(m){const d=parseInt(m[1]),mo=parseInt(m[2])-1,y=m[3];if(mo>=0&&mo<=11) return `${d} ${MON[mo]} ${y}`;}
-  return str;
-}
-// Sortable YYYYMMDD key from a dd/mm/yyyy-ish date string. Zero-pads 1-digit
-// day/month (naive split-reverse-join mis-sorts "5/6/2024" vs "20/11/2024") and
-// tolerates ranges like "12-15/06/2024" (uses the last complete d/m/yyyy found).
-// Returns "" for missing/unparseable dates — callers must treat "" as "no date",
-// NOT as "most recent" (the old code let the "—" placeholder outrank all digits).
-function dateKey(str){
-  const s=String(str||"");
-  const re=/(\d{1,2})\/(\d{1,2})\/(\d{4})/g;
-  let m,last=null;
-  while((m=re.exec(s))) last=m;
-  return last?last[3]+last[2].padStart(2,"0")+last[1].padStart(2,"0"):"";
-}
 
 /* ── static data ──────────────────────────────────────────────────────── */
-const META={
-  "Bunyamin Klongsamoot":{nat:"THA"},"Kan Kachachuen":{nat:"THA"},
-  "Chatree Makmul":{nat:"THA"},"Manintorn Leelas":{nat:"THA"},
-  "Mihiro Okada":{nat:"JPN"},"Iwao Yasuda":{nat:"JPN"},
-  "Yuto Tsutsumi":{nat:"JPN"},"Taishi Goto":{nat:"JPN"},
-};
-// ── Base divisions (used for colour coding) ──
-// Golf seed divisions — same data shape as the sailing classes so the whole
-// class registry / classLabel() plumbing carries over untouched.
-const CLASSES=[
-  {id:"mens",   short:"Men's",  full:"Men's Division"},
-  {id:"womens", short:"Women's",full:"Women's Division"},
-  {id:"amateur",short:"AM",     full:"Amateur"},
-  {id:"senior", short:"SEN",    full:"Senior"},
-];
-// Golf is a single-competitor sport: force every entry down the single-athlete
-// path and keep the helm/crew (pair) UI dormant. Flip to false to resurface it.
-const SINGLE_ATHLETE=true;
-// ── Custom divisions (runtime registry, mirrors the host pattern) ──
-// Beyond the four main CLASSES above. Each: {id, short, full, color, canonical}.
-// In-memory only for now — seeded empty; DB persistence comes later.
+// ── Base classes (used for colour coding) ──
+
 // Accepted upload types for the import pop-up (file input `accept` + drop zone).
 const IMPORT_ACCEPT=".pdf,.png,.jpg,.jpeg,.webp,.heic,.xlsx,.xls,.csv,.html,.htm,.blw";
-let CUSTOM_CLASSES=[];
 // In-memory (session-scoped) snapshot of an unfinished import batch. Restored when
 // the import pop-up is reopened within the same page session; cleared on successful
 // publish/save-draft and when a fresh import batch starts. NOT persisted — page
 // reload clears it by design (CLAUDE.md forbids dev-view localStorage/sessionStorage).
 let IMPORT_DRAFT=null;
-const customClassById=id=>CUSTOM_CLASSES.find(c=>c.id===id)||null;
-// Normalise a class name → canonical key for dedup (lowercase, strip non-alphanumerics).
-const canonClass=name=>String(name||"").toLowerCase().replace(/[^a-z0-9]/g,"");
-// Muted navy-palette colours auto-assigned to custom classes (no aggressive highlights).
-const CUSTOM_CLASS_PALETTE=["#1f4e80","#0d8ecf","#5b6b80"];
-// Best-effort readable text from a custom-class canonical slug, used only when no
-// registry entry exists (e.g. after a refresh — custom classes are in-memory).
-// Adds spaces at letter/number boundaries and uppercases; never the bare slug.
-const prettifyClassSlug=(slug)=>{
-  const s=String(slug||"").trim();
-  if(!s) return "Custom class";
-  return s.replace(/([a-z])([0-9])/gi,"$1 $2").replace(/([0-9])([a-z])/gi,"$1 $2").toUpperCase();
-};
-// Single source of truth for displaying ANY class id:
-//   • main class  → its short/full from CLASSES
-//   • custom class in the live registry → its stored (readable) short
-//   • orphaned "custom:<slug>" id (no entry) → prefix stripped + prettified
-// Never returns the literal "custom:" prefix.
-const classLabel=(clsId)=>{
-  const main=CLASSES.find(c=>c.id===clsId);
-  if(main) return main.short||main.full||clsId;
-  const cc=customClassById(clsId);
-  if(cc) return cc.short||cc.full||clsId;
-  if(typeof clsId==="string"&&clsId.startsWith("custom:")) return prettifyClassSlug(clsId.slice(7));
-  return clsId;
-};
 
-// ── Associations: each portal is one association ──
-// ── Hosts (associations, clubs, federations) ────────────────────────────────
-// Hosts own/co-own events. Three types:
-//   association — locked to one boat class (has `cls`)
-//   club        — any class (no `cls`)
-//   federation  — governing body of a country; auto-collaborates on every event
-//                 hosted in its country (`country`), across all classes.
-// These DEFAULT_* arrays are the always-present seeds; hosts added via dev mode
-// are stored in Supabase (`hosts` table) and merged in at runtime.
-const DEFAULT_ASSOCIATIONS=[
-  {id:"hk-29er",     type:"association", scope:"HK",  cls:"29er",     name:"Hong Kong 29er Class Association"},
-  {id:"hk-ilca",     type:"association", scope:"HK",  cls:"ilca",     name:"Hong Kong ILCA"},
-  {id:"hk-optimist", type:"association", scope:"HK",  cls:"optimist", name:"Hong Kong Optimist Dinghy Association"},
-  {id:"int-29er",    type:"association", scope:"INT", cls:"29er",     name:"International 29er Class Association"},
-  {id:"int-ilca",    type:"association", scope:"INT", cls:"ilca",     name:"International Laser Class Association"},
-  {id:"int-optimist",type:"association", scope:"INT", cls:"optimist", name:"International Optimist Dinghy Association"},
-  {id:"int-49er",    type:"association", scope:"INT", cls:"49er",     name:"International 49er Class Association"},
-];
-const DEFAULT_CLUBS=[
-  {id:"rhkyc", type:"club", scope:"HK", name:"Royal Hong Kong Yacht Club"},
-];
-const DEFAULT_FEDERATIONS=[
-  {id:"hksf", type:"federation", scope:"HK", country:"HKG", name:"Sailing Federation of Hong Kong, China"},
-];
-// Mutable runtime registries (defaults + DB-added). Rebuilt by applyDbHosts.
-let ASSOCIATIONS=[...DEFAULT_ASSOCIATIONS];
-let CLUBS=[...DEFAULT_CLUBS];
-let FEDERATIONS=[...DEFAULT_FEDERATIONS];
-// Merge DB host rows on top of the defaults (by id; defaults always win on id clash).
-function applyDbHosts(rows){
-  const norm=t=>(rows||[]).filter(r=>r.type===t).map(r=>({
-    id:r.id, type:r.type, scope:r.scope||"HK", name:r.name,
-    ...(r.cls?{cls:r.cls}:{}), ...(r.country?{country:r.country}:{}),
-    ...(r.slug?{slug:r.slug}:{}),
-  }));
-  // DB rows are the source of truth: defaults seed first, DB overwrites on id clash.
-  // (Seeded once via hosts_seed_migration.sql; defaults remain only as an
-  //  emergency fallback if the hosts table is empty / unreachable.)
-  const merge=(defs,extra)=>{const m=new Map();[...defs,...extra].forEach(h=>m.set(h.id,h));return[...m.values()];};
-  ASSOCIATIONS=merge(DEFAULT_ASSOCIATIONS,norm("association"));
-  CLUBS=merge(DEFAULT_CLUBS,norm("club"));
-  FEDERATIONS=merge(DEFAULT_FEDERATIONS,norm("federation"));
-}
-// Optimistically add a single host to the runtime registry (before/while it
-// persists to the DB) so its portal appears immediately.
-function addHostLocal(h){
-  const arr=h.type==="association"?ASSOCIATIONS:h.type==="club"?CLUBS:FEDERATIONS;
-  if(!arr.some(x=>x.id===h.id)) arr.unshift(h);
-}
-function removeHostLocal(id){
-  ASSOCIATIONS=ASSOCIATIONS.filter(a=>a.id!==id);
-  CLUBS=CLUBS.filter(c=>c.id!==id);
-  FEDERATIONS=FEDERATIONS.filter(f=>f.id!==id);
-}
-const assocById=id=>ASSOCIATIONS.find(a=>a.id===id);
-const clubById=id=>CLUBS.find(c=>c.id===id);
-const fedById=id=>FEDERATIONS.find(f=>f.id===id);
-const isClubId=id=>!!clubById(id);
-const isFedId=id=>!!fedById(id);
-// Resolve any host id (association, club OR federation) to its record / name.
-const hostById=id=>assocById(id)||clubById(id)||fedById(id)||null;
+
+
 
 /* ── Clean-URL slugs & path <-> state mapping ─────────────────────────────
    Golf lives under the /golf prefix — the flat root namespace (/<Host>,
@@ -353,8 +68,6 @@ const hostById=id=>assocById(id)||clubById(id)||fedById(id)||null;
    Resolution priority for a segment: reserved word > host > athlete.
    Slugs are PascalCase, punctuation-stripped; matching is case-insensitive. */
 const SPORT_BASE="/golf";
-const pascalSlug=(s)=>String(s||"").replace(/[^A-Za-z0-9]+/g," ").trim()
-  .split(/\s+/).filter(Boolean).map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join("");
 const slugKey=(s)=>pascalSlug(s).toLowerCase();
 // A host's public slug: the editable hosts.slug if set, else PascalCase(name).
 const hostSlug=(host)=>{const h=(host&&host.id)?host:hostById(host);
@@ -363,23 +76,6 @@ const hostBySlug=(slug)=>{const k=String(slug||"").toLowerCase();
   return [...ASSOCIATIONS,...CLUBS,...FEDERATIONS]
     .find(h=>(h.slug&&h.slug.toLowerCase()===k)||slugKey(h.name)===k)||null;};
 
-/* ── Public athlete usernames (name_key ⇄ username) ────────────────────────
-   Loaded from the athlete_usernames table; default is FirstnameLastname. The
-   registry is a module-level mutable map so the routing helpers below (module
-   scope) can read it. Falls back to PascalCase(name) for any not-yet-loaded
-   name so URLs still work before/without the table. */
-const uNameKey=(s)=>String(s||"").trim().toLowerCase();
-let ATHLETE_USERNAMES={byKey:new Map(),byUser:new Map()};
-function applyAthleteUsernames(rows){
-  const byKey=new Map(),byUser=new Map();
-  (rows||[]).forEach(r=>{ if(!r||!r.username) return;
-    byKey.set(r.name_key,r.username);
-    byUser.set(String(r.username).toLowerCase(),r.display_name||r.name_key);
-  });
-  ATHLETE_USERNAMES={byKey,byUser};
-}
-const usernameForName=(name)=>ATHLETE_USERNAMES.byKey.get(uNameKey(name))||pascalSlug(name);
-const nameForUsername=(u)=>ATHLETE_USERNAMES.byUser.get(String(u||"").toLowerCase())||null;
 const collectAthleteNames=(events)=>{const s=new Set();
   (events||[]).forEach(ev=>(ev.entries||[]).forEach(e=>{
     [e&&e.helm,e&&e.crew,e&&e.name,e&&e.helm_name,e&&e.crew_name].forEach(n=>{if(n)s.add(n);});
@@ -391,6 +87,7 @@ const stateToPath=(portal,view)=>{
   if(v.name==="event")   return SPORT_BASE+"/competition/"+encodeURIComponent(v.id||"");
   if(v.name==="competitions") return v.cls?SPORT_BASE+"/class/"+encodeURIComponent(v.cls):SPORT_BASE+"/competitions";
   if(v.name==="hosts")   return SPORT_BASE+"/hosts";
+  if(v.name==="scout")   return SPORT_BASE+"/scout";
   if(v.name==="ranking") return SPORT_BASE+"/rankings";
   const isClassPortal=portal&&String(portal).startsWith("class:");
   if(v.name==="athletes"){
@@ -413,6 +110,7 @@ const pathToState=(pathname,athleteNames)=>{
   if(seg.length===0) return {portal:null,view:{name:"portals"}};
   if(s0==="athletes") return {portal:null,view:{name:"athletes"}};
   if(s0==="hosts")    return {portal:null,view:{name:"hosts"}};
+  if(s0==="scout")    return {portal:null,view:{name:"scout"}};
   if(s0==="competitions") return {portal:null,view:{name:"competitions"}};
   if(s0==="ranking"||s0==="rankings")  return {portal:null,view:{name:"ranking"}};
   // "/competition/<id>" is canonical; "/event/<id>" kept as an alias so old shared links never break.
@@ -439,549 +137,25 @@ const pathToState=(pathname,athleteNames)=>{
   }
   return null;
 };
-const assocName=id=>hostById(id)?.name||id;
 // Association → ISO country flag (HK gets a flag; International gets none)
-const assocFlag=scope=>scope==="HK"?"🇭🇰":"";
-// scope → governing country code (extend as more countries are added)
-const SCOPE_COUNTRY={HK:"HKG"};
-// The country an event is "hosted in": its own country code, else its owner's scope country.
-const eventCountryCode=ev=>{
-  if(ev.country) return String(ev.country).toUpperCase();
-  return SCOPE_COUNTRY[hostById(ev.owner)?.scope]||"";
-};
-// Federations that govern an event (auto-collaborators): owner is a host in the
-// federation's country, OR the event's host country matches the federation's.
-const governingFeds=ev=>{
-  const ownerCountry=SCOPE_COUNTRY[hostById(ev.owner)?.scope];
-  const cc=eventCountryCode(ev);
-  return FEDERATIONS.filter(f=>(ownerCountry&&ownerCountry===f.country)||(cc&&cc===f.country));
-};
-// All hosts that own/co-own an event, INCLUDING auto-collaborating federations.
-const eventAssocs=ev=>[...new Set([ev.owner,...(ev.collabs||[]),...governingFeds(ev).map(f=>f.id)].filter(Boolean))];
 
-// Dedup fingerprint: normalised name + date + class + sorted sail-number set.
-// Two imports of the same regatta (by different hosts) collide here so we can
-// link them instead of creating duplicates.
-const eventFingerprint=ev=>{
-  const norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
-  const sails=[...new Set((ev.entries||[]).map(e=>norm(e.sail)).filter(Boolean))].sort();
-  return [norm(ev.name),norm(ev.date),norm(ev.cls||ev.class),sails.join(",")].join("|");
-};
-// A host's display location (IOC code): its explicitly-set country, else the
-// most common country across the events it owns/co-owns. evList is all events.
-const hostLocation=(hostId,evList)=>{
-  const h=hostById(hostId);
-  if(h?.country) return String(h.country).toUpperCase();
-  const counts={};
-  (evList||[]).forEach(ev=>{
-    if(!eventAssocs(ev).includes(hostId)&&ev.owner!==hostId) return;
-    const cc=eventCountryCode(ev); if(cc) counts[cc]=(counts[cc]||0)+1;
-  });
-  const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-  if(top) return top[0];
-  return SCOPE_COUNTRY[h?.scope]||null;
-};
 
-// ── Sub-divisions (per-event) ──
-// Golf has no seed sub-divisions (sailing used these for ILCA rigs / Optimist
-// fleets). The machinery stays intact — seed a division here to light up the
-// inline sub-division picker again.
-const SUBCLASSES={};
-const subById=(cls,id)=>(SUBCLASSES[cls]||[]).find(s=>s.id===id);
-// Nugget label + colour for an event (subclass overrides base class)
-const nuggetFor=(cls,subclass)=>{
-  const s=subById(cls,subclass);
-  if(s) return{label:s.short||s.label,full:s.label,color:s.color};
-  const c=CLASSES.find(c=>c.id===cls)||customClassById(cls);
-  return{label:classLabel(cls),full:c?.full||classLabel(cls),color:classColor(cls)};
-};
-
-// Global division colour coding (used by calendar circles)
-// Muted navy-palette tones only (CLAUDE.md: no aggressive highlight colours):
-//   Men's   -> navy      (#1f4e80)
-//   Women's -> sky blue  (#409cff)
-//   Amateur -> slate     (#5b6b80)
-//   Senior  -> charcoal  (#3D3D3D)
-const CLASS_COLOR={"mens":"#1f4e80","womens":"#409cff","amateur":"#5b6b80","senior":"#3D3D3D"};
-const classColor=(cls)=>CLASS_COLOR[(cls||"").toLowerCase()]||customClassById(cls)?.color||"#5b6b80";
+// Global class colour coding (used by calendar circles)
+// Canonical class colours (refer to them by these names):
+//   29er  -> "29er red"      (#E84855)
+//   ILCA  -> "ILCA red"      (#E2231A, matches the ILCA logo red; sub-rigs are dark→light shades of it)
+//   Optimist -> "Optimist black" (#000000, matches the Optimist logo; lower fleets fade to grey)
+//   49er  -> "49er green"    (#5FAF4E); women's sub-fleet "49er FX" -> "49er FX blue" (#1B87C9, matches the 49er FX logo)
 // Class colour at a given alpha (for translucent buttons that go solid on hover).
-const classColorA=(cls,a)=>{
-  const hex=classColor(cls).replace("#","");
-  const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
-  return `rgba(${r},${g},${b},${a})`;
-};
-
-// Sub-class picker (ILCA 4/6/7, Optimist fleets) — only shown for ILCA/Optimist events.
-// Hover-reveal: renders the parent class button; when the class has SUBCLASSES and is
-// selected (or hovered/focused), a pill row of subclass options is revealed inline just
-// below the button. Picking one selects it and collapses the reveal; mouse-out closes
-// after ~200ms (cancelled on re-enter) so users can travel into the popover. Keeps the
-// same onChange contract as the old SubclassPicker (writes mf.subclass) so publish is
-// untouched. `classBtn` is the already-styled parent-class button element.
-function SubclassHover({cls,value,onChange,classBtn,active}){
-  const opts=SUBCLASSES[cls];
-  const[hover,setHover]=React.useState(false);
-  const timer=React.useRef(null);
-  if(!opts) return classBtn;   // no subclasses → just the plain class button
-  const open=active&&(hover||!!value);   // reveal only for the active class row
-  const enter=()=>{if(timer.current){clearTimeout(timer.current);timer.current=null;}setHover(true);};
-  const leave=()=>{if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setHover(false),200);};
-  return(
-    <div style={{position:"relative",display:"inline-block"}}
-      onMouseEnter={enter} onMouseLeave={leave} onFocusCapture={enter} onBlurCapture={leave}>
-      {classBtn}
-      {open&&(
-        <div style={{position:"absolute",top:"calc(100% + 5px)",left:0,zIndex:95,display:"inline-flex",gap:6,flexWrap:"wrap",
-          background:"var(--card)",border:"1px solid var(--line)",borderRadius:9,padding:"7px 8px",
-          boxShadow:"0 12px 30px -10px rgba(0,0,0,.22)",whiteSpace:"nowrap"}}>
-          {opts.map(s=>{
-            const on=value===s.id;
-            return <button key={s.id} type="button"
-              onClick={()=>{onChange(on?null:s.id);if(timer.current)clearTimeout(timer.current);setHover(false);}}
-              style={{border:"1px solid "+(on?s.color:"var(--line)"),background:on?s.color:"transparent",
-                color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",
-                padding:"5px 11px",cursor:"pointer",transition:".12s"}}>{s.label}</button>;
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Date field with a persistent DD/MM/YYYY mask hint + a mini-calendar popover.
-//  • value/onChange: a "DD/MM/YYYY" string (same contract as the plain input it replaces).
-//  • markedDays: { "d/m/yyyy": [competitionName,…] } for the importing host — days that
-//    already have competitions are dotted (dotColor) and carry a title tooltip. Reference
-//    only; picking a marked day is allowed.
-//  • className: forwarded to the <input> so ".pmissing" styling still works.
-function DateField({value,onChange,markedDays={},dotColor="var(--navy2)",className=""}){
-  const[open,setOpen]=React.useState(false);
-  const ref=React.useRef();
-  const parsed=React.useMemo(()=>{
-    const m=(value||"").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    return m?{d:+m[1],mo:+m[2]-1,y:+m[3]}:null;
-  },[value]);
-  const now=new Date();
-  const[vMonth,setVMonth]=React.useState(parsed?parsed.mo:now.getMonth());
-  const[vYear,setVYear]=React.useState(parsed?parsed.y:now.getFullYear());
-  React.useEffect(()=>{
-    if(!open) return;
-    if(parsed){setVMonth(parsed.mo);setVYear(parsed.y);}
-    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
-  },[open]); // eslint-disable-line
-  // Mon-first grid: JS getDay() is Sun=0 → shift so Monday is column 0.
-  const firstDow=(new Date(vYear,vMonth,1).getDay()+6)%7;
-  const daysInMonth=new Date(vYear,vMonth+1,0).getDate();
-  const cells=[];
-  for(let i=0;i<firstDow;i++) cells.push(null);
-  for(let d=1;d<=daysInMonth;d++) cells.push(d);
-  const prevMonth=()=>{if(vMonth===0){setVMonth(11);setVYear(y=>y-1);}else setVMonth(m=>m-1);};
-  const nextMonth=()=>{if(vMonth===11){setVMonth(0);setVYear(y=>y+1);}else setVMonth(m=>m+1);};
-  const pick=(d)=>{onChange(`${d}/${vMonth+1}/${vYear}`);setOpen(false);};
-  return(
-    <div style={{position:"relative"}} ref={ref}>
-      <div style={{position:"relative",display:"flex",alignItems:"center"}}>
-        <input value={value||""} onChange={e=>onChange(e.target.value)} className={className}
-          placeholder="dd/mm/yyyy" maxLength={10} style={{paddingRight:74}}/>
-        <span aria-hidden style={{position:"absolute",right:34,pointerEvents:"none",fontSize:10.5,fontWeight:700,
-          letterSpacing:".03em",color:"var(--mut)",opacity:.7}}>DD/MM/YYYY</span>
-        <button type="button" title="Pick a date" onClick={()=>setOpen(o=>!o)}
-          style={{position:"absolute",right:5,display:"inline-flex",alignItems:"center",justifyContent:"center",
-            width:26,height:26,border:0,borderRadius:7,background:open?"var(--accent)":"transparent",
-            color:open?"#fff":"var(--mut)",cursor:"pointer",transition:".12s"}}>
-          <Calendar size={15}/>
-        </button>
-      </div>
-      {open&&(
-        <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,zIndex:130,width:252,background:"var(--card)",
-          border:"1px solid var(--line)",borderRadius:12,boxShadow:"0 18px 44px -14px rgba(0,0,0,.32)",padding:"10px 12px 12px"}}>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
-            {["Mo","Tu","We","Th","Fr","Sa","Su"].map(d=>(
-              <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:"var(--mut)",padding:"2px 0"}}>{d}</div>
-            ))}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
-            {cells.map((d,i)=>{
-              if(d==null) return <div key={i}/>;
-              const key=`${d}/${vMonth+1}/${vYear}`;
-              const comps=markedDays[key]||null;
-              const sel=parsed&&parsed.d===d&&parsed.mo===vMonth&&parsed.y===vYear;
-              return(
-                <button key={i} type="button" onClick={()=>pick(d)}
-                  title={comps?comps.join(", "):undefined}
-                  style={{position:"relative",height:30,border:"1px solid "+(sel?"var(--accent)":"transparent"),
-                    background:sel?"var(--accent)":"transparent",color:sel?"#fff":"var(--ink)",borderRadius:7,
-                    fontSize:12.5,fontWeight:sel?700:500,cursor:"pointer",transition:".1s"}}
-                  onMouseEnter={e=>{if(!sel)e.currentTarget.style.background="var(--sky)";}}
-                  onMouseLeave={e=>{if(!sel)e.currentTarget.style.background="transparent";}}>
-                  {d}
-                  {comps&&<span style={{position:"absolute",bottom:3,left:"50%",transform:"translateX(-50%)",
-                    width:5,height:5,borderRadius:"50%",background:sel?"#fff":dotColor}}/>}
-                </button>
-              );
-            })}
-          </div>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginTop:9,paddingTop:9,borderTop:"1px solid var(--line)"}}>
-            <button type="button" onClick={prevMonth} title="Previous month"
-              style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:26,height:26,border:"1px solid var(--line)",background:"var(--card)",borderRadius:7,cursor:"pointer",color:"var(--mut)"}}>
-              <ChevronRight size={14} style={{transform:"rotate(180deg)"}}/>
-            </button>
-            <div style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:12.5,fontWeight:700,color:"var(--ink)"}}>
-              <span>{MON[vMonth]}</span>
-              <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
-                <button type="button" onClick={()=>setVYear(y=>y-1)} title="Previous year"
-                  style={{border:0,background:"none",color:"var(--mut)",cursor:"pointer",fontWeight:700,fontSize:13,padding:"0 2px"}}>‹</button>
-                {vYear}
-                <button type="button" onClick={()=>setVYear(y=>y+1)} title="Next year"
-                  style={{border:0,background:"none",color:"var(--mut)",cursor:"pointer",fontWeight:700,fontSize:13,padding:"0 2px"}}>›</button>
-              </span>
-            </div>
-            <button type="button" onClick={nextMonth} title="Next month"
-              style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:26,height:26,border:"1px solid var(--line)",background:"var(--card)",borderRadius:7,cursor:"pointer",color:"var(--mut)"}}>
-              <ChevronRight size={14}/>
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Custom-class dropdown — sits beside the four main class buttons. Lists every
-// custom class (global, not host-scoped) plus an "Add new class" action that
-// prompts for a name, creates it (auto-assigned muted colour) and selects it.
-// value = current evCls; selected style applies when it's a custom class.
-function CustomClassPicker({classes,value,disabled,onSelect,onAdd}){
-  const[open,setOpen]=React.useState(false);
-  const[adding,setAdding]=React.useState(false);  // in-app "New class name" modal
-  const[name,setName]=React.useState("");
-  const ref=React.useRef();
-  React.useEffect(()=>{
-    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
-  },[]);
-  const sel=classes.find(c=>c.id===value);
-  // A "custom:" value with no live registry entry (e.g. an event saved before
-  // refresh) still counts as a selected custom class — resolve it via classLabel.
-  const isCustomVal=typeof value==="string"&&value.startsWith("custom:");
-  const on=!!sel||isCustomVal;
-  const closeAdd=()=>{setAdding(false);setName("");};
-  // Same create-or-dedup logic as before — onAdd normalises + reuses/creates.
-  const submitAdd=()=>{
-    const id=onAdd(name);
-    if(id)onSelect(id);
-    closeAdd();
-  };
-  return(
-    <div style={{position:"relative"}} ref={ref}>
-      <button type="button" disabled={disabled} onClick={()=>{if(!disabled)setOpen(o=>!o);}}
-        style={{border:"1px solid "+(on?classColor(value):"var(--line)"),background:on?classColor(value):"transparent",
-          color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
-          cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1,display:"inline-flex",alignItems:"center",gap:6}}>
-        {sel?sel.short:(isCustomVal?classLabel(value):"+ Other division")}
-        <ChevronRight size={12} style={{transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
-      </button>
-      {open&&(
-        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:90,minWidth:180,background:"var(--card)",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.2)",maxHeight:260,overflow:"auto"}}>
-          {!classes.length&&<div style={{padding:"8px 12px",fontSize:12,color:"var(--mut)"}}>No custom classes yet</div>}
-          {classes.map(c=>(
-            <div key={c.id} onClick={()=>{onSelect(c.id);setOpen(false);}}
-              style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:600,color:"var(--ink)",display:"flex",alignItems:"center",gap:8,background:c.id===value?"var(--sky)":"transparent",transition:".1s"}}
-              onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
-              onMouseLeave={e=>e.currentTarget.style.background=c.id===value?"var(--sky)":"transparent"}>
-              <span style={{width:10,height:10,borderRadius:3,background:c.color,flex:"none"}}/>{c.short}
-            </div>
-          ))}
-          <div onClick={()=>{setAdding(true);setName("");setOpen(false);}}
-            style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:700,color:"var(--accent)",borderTop:"1px solid var(--line)",transition:".1s"}}
-            onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
-            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-            + Add new class
-          </div>
-        </div>
-      )}
-      {adding&&(
-        <div className="modal-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)closeAdd();}}
-          style={{position:"fixed",inset:0,background:"rgba(8,20,40,.55)",zIndex:120,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"80px 16px",overflow:"auto"}}>
-          <div style={{background:"#fff",borderRadius:14,maxWidth:380,width:"100%",boxShadow:"0 24px 60px -20px rgba(0,0,0,.4)"}}>
-            <div style={{background:"var(--navy)",color:"#fff",padding:"14px 18px",borderRadius:"14px 14px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <strong style={{fontSize:15}}>New class name</strong>
-              <button type="button" onClick={closeAdd} style={{border:0,background:"rgba(255,255,255,.15)",color:"#fff",borderRadius:8,padding:6,cursor:"pointer",display:"flex"}}><X size={15}/></button>
-            </div>
-            <div style={{padding:18,display:"flex",flexDirection:"column",gap:14}}>
-              <input autoFocus value={name} onChange={e=>setName(e.target.value)}
-                onKeyDown={e=>{if(e.key==="Enter"&&name.trim())submitAdd();if(e.key==="Escape")closeAdd();}}
-                placeholder="e.g. 2.4 mR"
-                style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"9px 11px",font:"inherit",fontSize:13,outline:"none"}}/>
-              <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-                <button type="button" onClick={closeAdd}
-                  style={{border:"1px solid var(--line)",background:"#fff",color:"var(--mut)",borderRadius:8,padding:"7px 14px",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
-                <button type="button" disabled={!name.trim()} onClick={submitAdd}
-                  style={{border:0,background:name.trim()?"var(--accent)":"var(--line)",color:"#fff",borderRadius:8,padding:"7px 16px",fontSize:13,fontWeight:700,cursor:name.trim()?"pointer":"not-allowed"}}>Add</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Host-card class pills. Shows the classes (main OR custom) a host has events in,
-// resolved via classLabel/classColor. Caps the row at 4 pills; any extras collapse
-// into a "+N" pill that reveals them in a small popover (keeps the row one line).
-function HostClassPills({classIds}){
-  const[open,setOpen]=React.useState(false);
-  const ref=React.useRef();
-  React.useEffect(()=>{
-    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
-  },[]);
-  const ids=classIds||[];
-  const MAX=3;
-  const shown=ids.slice(0,MAX);
-  const extra=ids.slice(MAX);
-  // When there are extras, fan the pills into an overlapping stack so they stay on
-  // one row in line with the host pill: most-popular (first) sits at the back/bottom,
-  // each later pill overlaps the one before it, and the "+N" pill rides on top at the
-  // right. DOM order = paint order, so the +N lands in front and the back pill's left
-  // edge still peeks out. A paper-coloured ring separates the overlapping pills.
-  const stacked=extra.length>0;
-  const OVER=-12; // overlap in px between adjacent pills when stacked
-  // Separator ring uses the card's own background token (--mat-reg), so it reads as
-  // the thumbnail surface showing between pills and shifts with the background colour.
-  const ring={boxShadow:"0 0 0 2px var(--mat-reg),inset 0 1px 0 rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.18)"};
-  return(
-    <div ref={ref} style={{display:"flex",gap:stacked?0:4,alignItems:"center",flexWrap:"nowrap",justifyContent:"flex-end",position:"relative"}}>
-      {shown.map((id,i)=><span key={id} className="cls"
-        style={{background:classColor(id),...(stacked?{marginLeft:i===0?0:OVER,...ring}:{})}}>{classLabel(id)}</span>)}
-      {extra.length>0&&(<>
-        <span onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="cls"
-          title="Show more classes" style={{background:"#2c3444",cursor:"pointer",marginLeft:OVER,...ring}}>+{extra.length}</span>
-        {open&&(
-          <div onClick={e=>e.stopPropagation()}
-            style={{position:"absolute",top:"calc(100% + 6px)",right:0,zIndex:90,background:"var(--card)",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.25)",padding:8,display:"flex",flexWrap:"wrap",gap:4,maxWidth:220,justifyContent:"flex-end"}}>
-            {extra.map(id=><span key={id} className="cls" style={{background:classColor(id)}}>{classLabel(id)}</span>)}
-          </div>
-        )}
-      </>)}
-    </div>
-  );
-}
-
-// Collaboration picker — tickbox reveals a type-to-search dropdown of other
-// hosts. `kind` selects the pool: "association" → only associations,
-// "club" → only clubs. Both pickers share ONE `value` (collabs) array; each
-// only displays/edits its own kind and preserves the other kind's entries.
-// One search field over a host pool (associations or clubs). Shared chips above.
-function CollabSearchField({pool,owner,selected,onAdd,onRemove,placeholder,noMatch,heading}){
-  const[q,setQ]=React.useState("");
-  const[focus,setFocus]=React.useState(false);
-  const candidates=pool.filter(a=>a.id!==owner&&!selected.includes(a.id));
-  const filtered=candidates.filter(a=>!q||a.name.toLowerCase().includes(q.toLowerCase()));
-  return <div style={{flex:1,minWidth:210}}>
-    <p style={{fontSize:11,color:"var(--mut)",fontWeight:700,letterSpacing:".04em",textTransform:"uppercase",margin:"0 0 5px"}}>{heading}</p>
-    {selected.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
-      {selected.map(id=><span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"var(--sky)",color:"var(--navy)",borderRadius:7,fontSize:12,fontWeight:600,padding:"4px 8px"}}>
-        {assocName(id)}
-        <button type="button" onClick={()=>onRemove(id)} style={{border:0,background:"none",cursor:"pointer",color:"var(--navy)",display:"flex",padding:0}}><X size={12}/></button>
-      </span>)}
-    </div>}
-    <div style={{position:"relative"}}>
-      <input value={q} onChange={e=>{setQ(e.target.value);setFocus(true);}} onFocus={()=>setFocus(true)}
-        onBlur={()=>setTimeout(()=>setFocus(false),150)} placeholder={placeholder}
-        style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 10px",font:"inherit",fontSize:13,background:"#fff",outline:"none"}}/>
-      {focus&&filtered.length>0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 28px -12px rgba(0,0,0,.25)",zIndex:20,overflow:"hidden"}}>
-        {filtered.map(a=><div key={a.id} onMouseDown={()=>{onAdd(a.id);setQ("");}}
-          style={{padding:"9px 12px",cursor:"pointer",fontSize:13,borderBottom:"1px solid #f0f4f8"}}
-          onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"} onMouseLeave={e=>e.currentTarget.style.background="#fff"}>{a.name}</div>)}
-      </div>}
-      {focus&&filtered.length===0&&<div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"#fff",border:"1px solid var(--line)",borderRadius:10,padding:"9px 12px",fontSize:12.5,color:"var(--mut)",zIndex:20}}>{noMatch}</div>}
-    </div>
-  </div>;
-}
-
-// Combined collaboration picker: one checkbox reveals an association search box
-// and a club search box side by side. Both feed the SAME collabs array; each box
-// only shows/edits its own host type. An event may collaborate with any mix.
-function CollabPicker({owner,value,onChange}){
-  const all=value||[];
-  const assocIds=React.useMemo(()=>new Set(ASSOCIATIONS.map(x=>x.id)),[]);
-  const clubIds=React.useMemo(()=>new Set(CLUBS.map(x=>x.id)),[]);
-  const selAssoc=all.filter(id=>assocIds.has(id));
-  const selClub=all.filter(id=>clubIds.has(id));
-  const[on,setOn]=React.useState(all.length>0);
-  const addId=id=>onChange([...all,id]);
-  const removeId=id=>onChange(all.filter(x=>x!==id));
-  return <div style={{marginTop:6}}>
-    <label style={{display:"inline-flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13,color:"var(--navy)",fontWeight:600}}>
-      <input type="checkbox" checked={on} onChange={e=>{setOn(e.target.checked);if(!e.target.checked)onChange([]);}}/>
-      Collab with association or club
-    </label>
-    {on&&<>
-      <div style={{display:"flex",gap:16,flexWrap:"wrap",marginTop:8}}>
-        <CollabSearchField pool={ASSOCIATIONS} owner={owner} selected={selAssoc} onAdd={addId} onRemove={removeId}
-          heading="Associations" placeholder="Search associations…" noMatch="No matching associations"/>
-        <CollabSearchField pool={CLUBS} owner={owner} selected={selClub} onAdd={addId} onRemove={removeId}
-          heading="Clubs" placeholder="Search clubs…" noMatch="No matching clubs"/>
-      </div>
-      <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>Collaborated competitions appear on every host's page.</p>
-    </>}
-  </div>;
-}
 
 
-// ── Division (gender / age) helpers — shared by manual import, edit results,
-//    and the results page. Stored as a normalized token set on entry.div. ──
-const DIV_COLOR={M:"#1f6fd6",F:"#e8455f",Mix:"#8b5cf6",Jr:"#4caf50"};
-const DIV_LABEL={M:"Male",F:"Female",Mix:"Mixed",Jr:"Junior"};
-// Allowed gender bases (one of) plus optional Jr.
-function parseDiv(div){
-  // returns {gender:"M"|"F"|"Mix"|null, jr:bool}
-  const t=(div||"").toString();
-  let gender=null;
-  if(/\bmix/i.test(t)||/\bX\b/i.test(t)) gender="Mix";
-  else if(/\bf(emale)?\b/i.test(t)||/\bgirl/i.test(t)||/\bwomen/i.test(t)) gender="F";
-  else if(/\bm(ale)?\b/i.test(t)||/\bboy/i.test(t)||/\bmen\b/i.test(t)) gender="M";
-  const jr=/\bjr\b|\bjun/i.test(t)||/junior/i.test(t)||/youth/i.test(t)||/\bU1[0-9]\b/i.test(t);
-  return {gender,jr};
-}
-function divTokens(div){
-  const {gender,jr}=parseDiv(div);
-  const out=[]; if(gender)out.push(gender); if(jr)out.push("Jr"); return out;
-}
-function divToString(tokens){
-  // canonical storage e.g. "F Jr"
-  const g=tokens.find(t=>t!=="Jr"); const jr=tokens.includes("Jr");
-  return [g,jr?"Jr":null].filter(Boolean).join(" ");
-}
 
-/* ── gender + age-category (real fields, with legacy-div fallback) ─────────
-   Entries now carry real `gender` ('M'|'F'|'Mix') and `category` ('U17','Jr'…)
-   fields from parser v5. Older events stored both inside the free `div` string,
-   so genderCatOf() prefers the real fields and falls back to parsing div. */
-function normGender(raw){
-  const s=String(raw||"").toLowerCase().replace(/[^a-z]/g,"");
-  if(!s) return "";
-  if(["m","male","man","men","boy","boys"].includes(s)) return "M";
-  if(["f","female","woman","women","w","girl","girls","lady","ladies"].includes(s)) return "F";
-  if(["mix","mixed","x","mf","fm"].includes(s)) return "Mix";
-  return "";
-}
-function normCategory(raw){
-  const s=String(raw||"").trim(); if(!s) return "";
-  const low=s.toLowerCase();
-  if(["open","overall","main","all","mixed","m","f","-","—"].includes(low)) return "";
-  if(/\b(gold|silver|bronze|emerald|sapphire)\b/.test(low)) return "";
-  let m=low.match(/\bu[\s-]?(\d{1,2})\b/); if(m) return "U"+m[1];
-  m=low.match(/\bunder[\s-]?(\d{1,2})\b/); if(m) return "U"+m[1];
-  if(/\b(junior|jr|youth|cadet)\b/.test(low)) return "Jr";
-  if(/\b(master|veteran|senior)s?\b/.test(low)) return "Mst";
-  return s.length<=14?s.slice(0,12):"";
-}
-// Resolve the gender + category to display for an entry, preferring real fields.
-function genderCatOf(e){
-  if(!e) return {gender:"",category:""};
-  let gender=normGender(e.gender);
-  let category=normCategory(e.category);
-  if(!gender||!category){
-    const {gender:dg,jr}=parseDiv(e.div||"");
-    if(!gender&&dg) gender=dg;
-    if(!category&&jr) category="Jr";
-  }
-  return {gender,category};
-}
-// Infer a boat class id from a fleet/competition label (for multi-class imports).
-function classFromFleetName(name){
-  const s=String(name||"").toLowerCase();
-  if(/49er/.test(s)) return "49er";
-  if(/29er/.test(s)) return "29er";
-  if(/\bilca\b|laser/.test(s)) return "ilca";
-  if(/opti/.test(s)) return "optimist";
-  return null;
-}
-// Interactive background: soft navy balls drifting & bouncing, pushed away by the cursor.
-// Navy family matched to the header; low-res + blurred = smooth, cheap, muted.
-function LiquidBackground(){
-  const ref=React.useRef(null);
-  const mouse=React.useRef({x:-9999,y:-9999,active:false});
-  useEffect(()=>{
-    const canvas=ref.current; if(!canvas) return;
-    const ctx=canvas.getContext("2d"); if(!ctx) return;
-    const SCALE=0.24; let W=1,H=1,raf=0;
-    const balls=[];
-    // Navy header family (dark -> mid blue).
-    const palette=[[19,49,78],[31,78,128],[15,40,70],[40,92,150],[23,58,98],[28,70,120]];
-    function resize(){
-      W=Math.max(1,Math.round(window.innerWidth*SCALE));
-      H=Math.max(1,Math.round(window.innerHeight*SCALE));
-      canvas.width=W; canvas.height=H;
-      if(balls.length===0){
-        const base=Math.max(W,H);
-        for(let i=0;i<13;i++) balls.push({x:Math.random()*W,y:Math.random()*H,
-          vx:(Math.random()-0.5)*W*0.0018,vy:(Math.random()-0.5)*H*0.0018,
-          r:base*(0.22+Math.random()*0.24),c:i%palette.length});
-      }
-    }
-    resize();
-    const onResize=()=>resize();
-    const onMove=e=>{const cx=("touches"in e&&e.touches[0])?e.touches[0].clientX:e.clientX;const cy=("touches"in e&&e.touches[0])?e.touches[0].clientY:e.clientY;mouse.current.x=cx*SCALE;mouse.current.y=cy*SCALE;mouse.current.active=true;};
-    const onLeave=()=>{mouse.current.active=false;};
-    window.addEventListener("resize",onResize);
-    window.addEventListener("pointermove",onMove,{passive:true});
-    window.addEventListener("pointerleave",onLeave);
-    function frame(){
-      ctx.clearRect(0,0,W,H); ctx.globalCompositeOperation="lighter";
-      const mx=mouse.current.x,my=mouse.current.y,R=Math.max(W,H)*0.32;
-      for(const b of balls){
-        // mouse repulsion (push the balls away)
-        if(mouse.current.active){
-          const dx=b.x-mx,dy=b.y-my,d2=dx*dx+dy*dy;
-          if(d2<R*R){const d=Math.sqrt(d2)||1,f=(1-d/R);b.vx+=(dx/d)*f*0.6;b.vy+=(dy/d)*f*0.6;}
-        }
-        b.x+=b.vx; b.y+=b.vy; b.vx*=0.985; b.vy*=0.985;
-        // gentle drift floor + bounce off edges
-        const sp=Math.hypot(b.vx,b.vy), minSp=W*0.0006;
-        if(sp<minSp){const a=Math.random()*6.283;b.vx+=Math.cos(a)*minSp;b.vy+=Math.sin(a)*minSp;}
-        if(b.x<0&&b.vx<0)b.vx=-b.vx; if(b.x>W&&b.vx>0)b.vx=-b.vx;
-        if(b.y<0&&b.vy<0)b.vy=-b.vy; if(b.y>H&&b.vy>0)b.vy=-b.vy;
-        const c=palette[b.c], g=ctx.createRadialGradient(b.x,b.y,0,b.x,b.y,b.r);
-        g.addColorStop(0,`rgba(${c[0]},${c[1]},${c[2]},0.42)`);
-        g.addColorStop(0.6,`rgba(${c[0]},${c[1]},${c[2]},0.12)`);
-        g.addColorStop(1,`rgba(${c[0]},${c[1]},${c[2]},0)`);
-        ctx.fillStyle=g; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,6.283); ctx.fill();
-      }
-      raf=requestAnimationFrame(frame);
-    }
-    frame();
-    return ()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",onResize);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerleave",onLeave);};
-  },[]);
-  return <canvas ref={ref} className="al-liquid" aria-hidden="true"/>;
-}
-const GENDER_COLOR={M:"#2d6cc9",F:"#c2477f",Mix:"#7c3aed"};
-// Magnetic hover: the label eases toward the cursor and springs back — the "warp around the cursor" feel.
-function MagneticItem({children,onClick,className,strength=0.35}){
-  const ref=React.useRef(null);
-  const onMove=e=>{const el=ref.current;if(!el)return;const r=el.getBoundingClientRect();el.style.transform=`translate(${(e.clientX-(r.left+r.width/2))*strength}px,${(e.clientY-(r.top+r.height/2))*strength}px)`;};
-  const reset=()=>{if(ref.current)ref.current.style.transform="translate(0,0)";};
-  return <button type="button" className={className} onClick={onClick} onMouseMove={onMove} onMouseLeave={reset}>
-    <span ref={ref} style={{display:"inline-block",transition:"transform .28s cubic-bezier(.2,.9,.2,1)",willChange:"transform"}}>{children}</span>
-  </button>;
-}
-// Gender + category nuggets shown on every result page + the preview.
-// `doublehanded` lets the nugget combine helm+crew remembered genders → Mixed.
-function ResultNuggets({entry,size="md",doublehanded=false}){
-  const {category}=genderCatOf(entry);
-  const gender=resolvedEntryGender(entry,doublehanded);
-  if(!gender&&!category) return null;   // no tag → show nothing (no dash)
-  const fs=size==="sm"?9.5:10.5;
-  const pad=size==="sm"?"1px 5px":"2px 6px";
-  return <span style={{display:"inline-flex",gap:3,alignItems:"center",flexWrap:"wrap"}}>
-    {gender&&<span style={{background:GENDER_COLOR[gender]||"var(--mut)",color:"#fff",borderRadius:980,fontSize:fs,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:pad,letterSpacing:".02em",boxShadow:"inset 0 1px 0 rgba(255,255,255,.45),0 1px 2px rgba(0,0,0,.12)"}} title={gender==="Mix"?"Mixed":gender==="F"?"Female":"Male"}>{gender}</span>}
-    {category&&<span style={{background:"#0f8a7e",color:"#fff",borderRadius:980,fontSize:fs,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:pad,letterSpacing:".02em",boxShadow:"inset 0 1px 0 rgba(255,255,255,.45),0 1px 2px rgba(0,0,0,.12)"}} title={"Age category: "+category}>{category}</span>}
-  </span>;
-}
+
+
+
+
+
+
 
 // Strip stray markdown / leading heading / duplicated name from AI summaries
 const cleanAISummary=(t)=>{
@@ -993,4480 +167,63 @@ const cleanAISummary=(t)=>{
 };
 // Demo events removed — all data now comes from Supabase per association.
 
-/* ── scoring engine ───────────────────────────────────────────────────────
-   Rules:
-   - DNE can NEVER be discarded
-   - All other penalty codes score as fleet+1 for both net and discard ranking
-   - RDG/SCP/STP/DPI: the stored value (already a number from the PDF) is used
-     for net scoring; for discard ranking they compete as fleet+1 unless already a number
-   - Discards applied to the N worst scores (by point value), DNE excluded
-   ────────────────────────────────────────────────────────────────────── */
-function scoreEvent(ev){
-  const fleet=ev.entries.length, pen=fleet+1, disc=ev.discards;
 
-  const rows=ev.entries.map(e=>{
-    // Convert each raw score to a numeric point value for net scoring
-    const pts=e.races.map(c=>{
-      if(!isCode(c)) return(c||pen);
-      return pen; // all penalty codes = fleet+1 for calculation purposes
-    });
 
-    // For discard ranking: DNE can never be discarded; everything else
-    // sorted by point weight descending, top N become discards
-    const weights=pts.map((v,i)=>{
-      const raw=e.races[i];
-      if(isCode(raw)&&NEVER_DISCARD.has(raw)) return -Infinity;
-      return v;
-    });
-    const order=weights.map((w,i)=>({w,i})).sort((a,b)=>b.w-a.w);
-    const discardSet=new Set(order.slice(0,disc).filter(o=>o.w>-Infinity).map(o=>o.i));
 
-    const numPts=pts.map(v=>v);
-    const total=numPts.reduce((a,b)=>a+b,0);
-    const dropped=numPts.reduce((s,v,i)=>discardSet.has(i)?s+v:s,0);
-    const calcNet=total-dropped;
-
-    // Use PDF-sourced rank/net when available (they are always correct).
-    // Fall back to our calculation only for manually-entered events or
-    // PDFs where the rank column wasn't parseable.
-    const rank = e.pdf_rank ?? null;
-    const net  = e.pdf_net  ?? calcNet;
-
-    return{...e,pts:numPts,total,net,calcNet,discardSet,rank};
-  });
-
-  // Sort by PDF rank when available, otherwise by calculated net
-  const hasPdfRank = rows.some(r=>r.rank!==null);
-  if(hasPdfRank){
-    rows.sort((a,b)=>(a.rank??9999)-(b.rank??9999));
-  } else {
-    rows.sort((a,b)=>a.net-b.net||a.total-b.total);
-    let prev=null,prevRank=0;
-    rows.forEach((r,i)=>{
-      if(prev&&r.net===prev.net&&r.total===prev.total) r.rank=prevRank;
-      else{r.rank=i+1;prevRank=r.rank;}
-      prev=r;
-    });
-  }
-  const countries=new Set(ev.entries.map(e=>(e.nat||"").trim().toUpperCase()).filter(Boolean)).size;
-  return{rows,fleet,races:Math.max(...ev.entries.map(e=>e.races.length)),countries};
-}
-
-function scorePreview(ev){
-  if(!ev?.entries?.length) return null;
-  const maxR=Math.max(...ev.entries.map(e=>(e.races||[]).length),1);
-  const clean={...ev,entries:ev.entries.map(e=>({
-    ...e,
-    races:Array.from({length:maxR},(_,i)=>{
-      const v=(e.races||[])[i];
-      return(v===null||v===undefined||v==='')?"DNF":v;
-    })
-  }))};
-  return scoreEvent(clean);
-}
-
-// ── Canonical name key — collapses case, accents, hyphens, punctuation & word
-//    order. Two names sharing a canon key are treated as the SAME athlete.
-function canonName(nm){
-  let s=(nm||"").toLowerCase();
-  s=s.normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-  s=s.replace(/ø/g,"o").replace(/ł/g,"l").replace(/đ/g,"d").replace(/ß/g,"ss").replace(/æ/g,"ae").replace(/œ/g,"oe").replace(/þ/g,"th");
-  s=s.replace(/-/g," ").replace(/[^a-z0-9\s]/g," ");
-  return s.trim().split(/\s+/).filter(Boolean).sort().join(" ");
-}
-// Stable identity for an event (to detect duplicate imports of the same comp).
-function eventKey(ev){
-  return `${(ev.name||"").trim().toLowerCase()}|${(ev.date||"").trim()}|${ev.cls||""}|${ev.subclass||""}`;
-}
-
-function aggregate(name,evList){
-  const history=[];let wins=0,podiums=0,best=Infinity;
-  const target=canonName(name);
-  const seenComp=new Set(); // dedupe identical competition rows (duplicate imports)
-  for(const ev of evList){
-    if(ev.status==="Draft") continue;
-    const e=ev.entries.find(x=>canonName(x.helm)===target||canonName(x.crew)===target);
-    if(!e) continue;
-    const s=scoreEvent(ev);
-    const row=s.rows.find(r=>r.helm===e.helm&&r.crew===e.crew&&r.sail===e.sail);
-    if(!row) continue;
-    // Signature: same competition + same finishing line for this athlete → same result.
-    const sig=`${eventKey(ev)}|${e.sail||""}|${row.rank}|${row.net}|${(row.races||[]).join(",")}`;
-    if(seenComp.has(sig)) continue;
-    seenComp.add(sig);
-    const role=canonName(e.helm)===target?"Helm":"Crew";
-    const partner=role==="Helm"?e.crew:e.helm;
-    row.races.forEach(c=>{if(c===1) wins++;});
-    if(row.rank<=3) podiums++;
-    if(row.rank<best) best=row.rank;
-    history.push({ev,row:{...row,nat:e.nat||""},role,partner,fleet:s.fleet,countries:s.countries});
-  }
-  // Sort newest-first via a robust YYYYMMDD key (dates are DD/MM/YYYY; new Date()
-  // misreads that, which previously left history[0] = wrong "most recent").
-  history.sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date)));
-  return{history,wins,podiums,best:best===Infinity?null:best,events:history.length};
-}
-
-// ── Per-athlete attribute memory (gender, birth year, recent class) ──────────
-// Single pass over all events. For each athlete (by canonName), we remember:
-//   gender    — the most-frequently-stated single gender across all their entries
-//   birthYear — most-frequently-stated birth year
-//   recentCls/recentSub — class of their most recent competition
-// A person's own gender is a stable trait, so once stated anywhere it is applied
-// everywhere that athlete appears (including events whose PDF omitted gender).
-let ATHLETE_ATTRS=new Map();
-function buildAthleteAttrs(evList){
-  const m=new Map();
-  for(const ev of (evList||[])){
-    if(ev.status==="Draft") continue;
-    const dk=dateKey(ev.date); // "" = undated; never allowed to claim recency
-    for(const e of (ev.entries||[])){
-      const gc=genderCatOf(e); // resolves real fields + legacy div
-      // helm + crew, each with their own stated gender where derivable
-      const pairs=[[e.helm,e.birth_year,gc.gender,"helm"],[e.crew,e.crew_birth_year,gc.gender,"crew"]];
-      // When an entry's div implies a single gender (M/F), it applies to both
-      // members; "Mix" does not pin either individual, so skip it for the registry.
-      for(const [nm,by,g,which] of pairs){
-        if(!nm) continue; const k=canonName(nm); if(!k) continue;
-        let o=m.get(k); if(!o){o={gender:{},birthYear:{},recentDK:"",recentCls:null,recentSub:null};m.set(k,o);}
-        if(g&&g!=="Mix") o.gender[g]=(o.gender[g]||0)+1;
-        if(by) o.birthYear[by]=(o.birthYear[by]||0)+1;
-        // Undated events may seed recentCls (better than nothing) but any DATED
-        // event beats them; among dated events the latest date wins.
-        if(dk?dk>=o.recentDK:!o.recentDK&&!o.recentCls){o.recentDK=dk;o.recentCls=ev.cls;o.recentSub=ev.subclass||null;}
-      }
-    }
-  }
-  const out=new Map();
-  const top=obj=>{const e=Object.entries(obj);return e.length?e.sort((a,b)=>b[1]-a[1])[0][0]:null;};
-  for(const [k,o] of m){
-    out.set(k,{gender:top(o.gender),birthYear:o.birthYear&&top(o.birthYear)?parseInt(top(o.birthYear)):null,recentCls:o.recentCls,recentSub:o.recentSub});
-  }
-  ATHLETE_ATTRS=out;
-  return out;
-}
-// Remembered gender for a single athlete name (or null).
-function rememberedGender(name){
-  const a=ATHLETE_ATTRS.get(canonName(name)); return a?.gender||null;
-}
-// Resolve the gender to SHOW for an entry, given a specific viewpoint:
-//   - singlehanded / solo: the helm's remembered/ stated gender
-//   - doublehanded: combine helm + crew remembered genders → M / F / Mix
-// Falls back to whatever the entry itself states.
-function resolvedEntryGender(e,doublehanded){
-  const stated=genderCatOf(e).gender;
-  if(doublehanded&&e.crew){
-    const gh=rememberedGender(e.helm)||(stated&&stated!=="Mix"?stated:null);
-    const gc=rememberedGender(e.crew)||(stated&&stated!=="Mix"?stated:null);
-    if(gh&&gc) return gh===gc?gh:"Mix";
-    if(stated) return stated;          // fall back to the entry's own div if we can't pin both
-    return gh||gc||null;
-  }
-  // Solo (or no crew): prefer the person's remembered gender, else stated.
-  return rememberedGender(e.helm)||stated||null;
-}
 
 /* ── Outstanding Achievement (division podium) ────────────────────────────────
    A result can be excellent *within a division* yet buried by a mediocre
    overall position (3rd overall but 1st Under-18). Derived strictly from the
    official overall order — we only filter and count, never re-rank. */
-const MIN_DIVISION_SIZE=4; // a division needs at least this many entries to count (tunable)
-function ordinalOf(n){const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
-function divisionDisplayName(code){
-  if(!code) return "";
-  const m=String(code).match(/^U(\d{1,2})$/i); if(m) return "Under-"+m[1];
-  if(code==="Jr") return "Junior";
-  if(code==="Mst") return "Masters";
-  if(code==="F") return "Female";
-  if(code==="M") return "Male";
-  if(code==="Mix") return "Mixed";
-  return String(code); // unknown code: show as-is, never guess
-}
-// h = an ag.history row. Returns {rank, divisionLabel, label, title} | null.
-// Two independent axes: age category and gender. One badge per row — best
-// division rank wins, tie prefers category; runner-up goes in the tooltip.
-function outstandingAchievementFor(h,athleteName){
-  const ev=h?.ev, entries=ev?.entries;
-  if(!entries||entries.length<MIN_DIVISION_SIZE) return null;
-  const overall=h.row?.rank;
-  if(!(overall>=1)) return null;
-  const target=canonName(athleteName);
-  const own=entries.find(e=>canonName(e.helm)===target||canonName(e.crew)===target);
-  if(!own) return null;
-  const dh=!!ev.doublehanded;
-  const ownCat=genderCatOf(own).category;
-  const ownGen=resolvedEntryGender(own,dh);
-  const axes=[];
-  if(ownCat) axes.push({axis:"category",code:ownCat,of:e=>genderCatOf(e).category});
-  if(ownGen) axes.push({axis:"gender",code:ownGen,of:e=>resolvedEntryGender(e,dh)});
-  if(!axes.length) return null;
-  // Official overall order: scoreEvent rows are sorted by official rank (PDF
-  // ground truth first); unranked rows keep their official array order.
-  let rows;
-  try{rows=scoreEvent(ev).rows;}catch{return null;}
-  const isOwn=r=>r.helm===own.helm&&r.crew===own.crew&&r.sail===own.sail;
-  const hits=[];
-  for(const {axis,code,of} of axes){
-    const div=rows.filter(r=>of(r)===code);
-    if(div.length<MIN_DIVISION_SIZE||div.length>=rows.length) continue; // must be a strict, real subset
-    const pos=div.findIndex(isOwn)+1;
-    if(pos<1||pos>3) continue;          // division podium only
-    if(pos>=overall) continue;          // must beat the overall rank chip
-    hits.push({axis,code,rank:pos});
-  }
-  if(!hits.length) return null;
-  hits.sort((a,b)=>a.rank-b.rank||(a.axis==="category"?-1:1)); // best rank; tie → age category
-  const best=hits[0], second=hits[1];
-  const divisionLabel=`${ordinalOf(best.rank)} ${divisionDisplayName(best.code)}`;
-  const label=`Outstanding Achievement: ${divisionLabel}`;
-  const title=second?`${label} · also ${ordinalOf(second.rank)} ${divisionDisplayName(second.code)}`:label;
-  return{rank:best.rank,divisionLabel,label,title};
-}
 
 // Derive athlete's primary nationality from their result history
-function athleteNat(name,evList){
-  const counts={};
-  for(const ev of evList){
-    const e=ev.entries.find(x=>x.helm===name||x.crew===name);
-    if(e?.nat){counts[e.nat]=(counts[e.nat]||0)+1;}
-  }
-  if(!Object.keys(counts).length) return META[name]?.nat||"";
-  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
-}
 
-// Most-frequently-seen birth year for an athlete (as helm or crew), or null.
-function athleteBirthYear(name,evList){
-  const counts={};
-  for(const ev of (evList||[])){
-    for(const e of (ev.entries||[])){
-      let by=null;
-      if(e.helm===name) by=e.birth_year;
-      else if(e.crew===name) by=e.crew_birth_year;
-      if(by){counts[by]=(counts[by]||0)+1;}
-    }
-  }
-  const top=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
-  return top?parseInt(top[0]):null;
-}
 
-// Build name -> home ISO-A2 (most frequent nationality seen anywhere in the data)
-function buildHomeCountry(evList){
-  const tally={};
-  for(const ev of evList){
-    for(const e of (ev.entries||[])){
-      const ioc=e.nat||""; if(!ioc) continue;
-      const iso=IOC_ISO[ioc]||""; if(!iso) continue;
-      for(const nm of [e.helm,e.crew]){
-        if(!nm) continue;
-        (tally[nm]||(tally[nm]={}));
-        tally[nm][iso]=(tally[nm][iso]||0)+1;
-      }
-    }
-  }
-  // seed with META nationality (weak weight) so known athletes still resolve
-  for(const nm in META){
-    const iso=IOC_ISO[META[nm]?.nat||""]||""; if(!iso) continue;
-    (tally[nm]||(tally[nm]={})); if(!tally[nm][iso]) tally[nm][iso]=0.5;
-  }
-  const home={};
-  for(const nm in tally){
-    home[nm]=Object.entries(tally[nm]).sort((a,b)=>b[1]-a[1])[0][0];
-  }
-  return home;
-}
+/* ── Supabase + Auth (GoTrue) plumbing lives in @athlink/core (single source of
+   truth); App.jsx imports it above and no longer redefines SB_URL/SB_KEY/sbH/
+   sbGet/sbPost/sbPatch/sbDel/AUTH_BASE/authHeaders/authSignUp/authSignIn/authUser.
+   Sailing-local Supabase helpers now live in data modules: event read/write +
+   dup-dismissals in data/events.js, auth/profile in @athlink/auth. ── */
 
-const avatarColor=name=>{
-  const c=["#163a63","#1f4e80","#2a6aa0","#0d6ea0","#264d73","#1a5e8a","#2b557d"];
-  let h=0;for(let i=0;i<name.length;i++) h=name.charCodeAt(i)+((h<<5)-h);
-  return c[Math.abs(h)%c.length];
-};
-const initials=n=>n.split(" ").map(w=>w[0]).slice(0,2).join("");
-
-/* ── Supabase ─────────────────────────────────────────────────────────── */
-const SB_URL=import.meta.env.VITE_SUPABASE_URL;
-const SB_KEY=import.meta.env.VITE_SUPABASE_ANON_KEY;
-const sbH=(SB_URL&&SB_KEY)?{"apikey":SB_KEY,"Authorization":`Bearer ${SB_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"}:null;
-const sbGet=async p=>{
-  if(!sbH) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/${p}`,{headers:sbH});
-    if(!r.ok){const err=await r.text();console.error("Supabase GET error",r.status,err);return null;}
-    return r.json();
-  }catch(e){console.error("Supabase GET network error",e);return null;}
-};
-const sbPost=async(t,b)=>{
-  if(!sbH) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/${t}`,{method:"POST",headers:sbH,body:JSON.stringify(b)});
-    if(!r.ok){const err=await r.text();console.error("Supabase POST error",r.status,err,JSON.stringify(b).slice(0,200));return null;}
-    return r.json();
-  }catch(e){console.error("Supabase POST network error",e);return null;}
-};
-const sbPatch=async(t,f,b)=>{
-  if(!sbH) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"PATCH",headers:sbH,body:JSON.stringify(b)});
-    if(!r.ok){const err=await r.text();console.error("Supabase PATCH error",r.status,err);return null;}
-    const txt=await r.text(); return txt?JSON.parse(txt):[];
-  }catch(e){console.error("Supabase PATCH network error",e);return null;}
-};
-const sbDel=async(t,f)=>{if(!sbH) return;await fetch(`${SB_URL}/rest/v1/${t}?${f}`,{method:"DELETE",headers:{...sbH,"Prefer":""}});};
-// Reviewed duplicate pairs (see migrations/0006). Read to seed the hidden set;
-// save so a "merge"/"don't merge" decision sticks across reloads and devices.
-const fetchDupDismissals=()=>sbGet("dup_dismissals?select=key");
-async function saveDupDismissals(keys){
-  if(!sbH||!keys||!keys.length) return;
-  try{await fetch(`${SB_URL}/rest/v1/dup_dismissals`,{method:"POST",
-    headers:{...sbH,"Prefer":"resolution=ignore-duplicates"},
-    body:JSON.stringify(keys.map(k=>({key:k})))});}
-  catch(e){console.error("saveDupDismissals",e);}
-}
-
-/* ── Auth (Supabase GoTrue) — minimal, no extra deps ─────────────────────── */
-const AUTH_BASE=SB_URL?`${SB_URL}/auth/v1`:null;
-const authHeaders=tok=>({"apikey":SB_KEY,"Content-Type":"application/json",...(tok?{"Authorization":`Bearer ${tok}`}:{})});
-async function authSignUp(email,password){
-  const r=await fetch(`${AUTH_BASE}/signup`,{method:"POST",headers:authHeaders(),body:JSON.stringify({email,password})});
-  const d=await r.json(); if(!r.ok) throw new Error(d.msg||d.error_description||d.error||"Sign-up failed"); return d;
-}
-async function authSignIn(email,password){
-  const r=await fetch(`${AUTH_BASE}/token?grant_type=password`,{method:"POST",headers:authHeaders(),body:JSON.stringify({email,password})});
-  const d=await r.json(); if(!r.ok) throw new Error(d.msg||d.error_description||d.error||"Sign-in failed"); return d;
-}
-async function authUser(tok){
-  const r=await fetch(`${AUTH_BASE}/user`,{headers:authHeaders(tok)});
-  if(!r.ok) return null; return r.json();
-}
-// profiles table: {user_id (uuid, pk), role, display_name, class_id, athlete_name}
-async function fetchProfile(userId,tok){
-  if(!sbH) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/profiles?user_id=eq.${userId}&select=*`,{headers:authHeaders(tok)});
-    if(!r.ok) return null; const rows=await r.json(); return rows[0]||null;
-  }catch{return null;}
-}
-async function upsertProfile(profile,tok){
-  if(!sbH) return null;
-  const r=await fetch(`${SB_URL}/rest/v1/profiles`,{method:"POST",
-    headers:{...authHeaders(tok),"Prefer":"resolution=merge-duplicates,return=representation"},
-    body:JSON.stringify(profile)});
-  if(!r.ok){ const txt=await r.text().catch(()=>""); console.error("upsertProfile",r.status,txt); upsertProfile._lastError=txt||`HTTP ${r.status}`; return null; }
-  upsertProfile._lastError=null; const rows=await r.json(); return rows[0]||null;
-}
-// Kick off Google OAuth — redirects to Google then back to the app.
-// On return, the URL hash contains the session; AthLinkMVP picks it up on mount.
-function authGoogleOAuth(){
-  if(!SB_URL||!SB_KEY) return;
-  const redirectTo=encodeURIComponent(window.location.origin+window.location.pathname);
-  window.location.href=`${SB_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectTo}`;
-}
-
-/* ── Host trust (host_members / host_invites / host_audit) ────────────────────
-   All calls are token-scoped (RLS enforced). Helpers return parsed rows or null. */
-async function hostRest(path,opts={},tok){
-  if(!SB_URL||!SB_KEY) return null;
-  try{
-    const r=await fetch(`${SB_URL}/rest/v1/${path}`,{
-      ...opts,
-      headers:{...authHeaders(tok),"Prefer":opts.method&&opts.method!=="GET"?"return=representation":undefined,...(opts.headers||{})},
-    });
-    if(!r.ok){console.error("hostRest error",r.status,await r.text().catch(()=>""));return null;}
-    const txt=await r.text(); return txt?JSON.parse(txt):[];
-  }catch(e){console.error("hostRest network error",e);return null;}
-}
-// All membership rows for a host (active + pending), newest first.
-const fetchHostMembers=(hostId,tok)=>hostRest(`host_members?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.asc`,{},tok);
-// Every membership for the current user (to compute their editable hosts).
-const fetchMyMemberships=(userId,tok)=>hostRest(`host_members?user_id=eq.${userId}&select=*`,{},tok);
-const fetchHostInvites=(hostId,tok)=>hostRest(`host_invites?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=created_at.desc`,{},tok);
-const fetchHostAudit=(hostId,tok)=>hostRest(`host_audit?host_id=eq.${encodeURIComponent(hostId)}&select=*&order=ts.desc&limit=50`,{},tok);
-const fetchInviteByToken=(token,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}&select=*`,{},tok);
-// Dev: every UNVERIFIED membership across all hosts (pending-approval queue).
-const fetchUnverifiedMembers=(tok)=>hostRest("host_members?verified=eq.false&select=*&order=created_at.desc",{},tok);
-// Dev: every profile row (for the all-profiles cleanup panel). Requires the
-// admin SELECT policy (dev_admin_select_migration.sql) + being signed in as
-// your admin account — otherwise RLS returns only your own row.
-const fetchAllProfiles=(tok)=>hostRest("profiles?select=*&order=created_at.desc",{},tok);
-// Dev: every host_members row (to show which hosts each profile belongs to).
-const fetchAllMembers=(tok)=>hostRest("host_members?select=*",{},tok);
-// Dev: hard-delete a profile and all its host memberships + claims.
-async function devDeleteProfile(userId,tok){
-  await hostRest(`host_members?user_id=eq.${userId}`,{method:"DELETE"},tok);
-  await hostRest(`athlete_claims?user_id=eq.${userId}`,{method:"DELETE"},tok);
-  await hostRest(`profiles?user_id=eq.${userId}`,{method:"DELETE"},tok);
-}
-// Resolve a set of user_ids to display names + account usernames. Reads profiles
-// (first/last/display_name/username); falls back to the public_profiles view,
-// then a short id. Returns {names:{user_id:name}, usernames:{user_id:username}}.
-async function fetchProfileNames(ids,tok){
-  const uniq=[...new Set((ids||[]).filter(Boolean))];
-  if(!uniq.length) return {names:{},usernames:{}};
-  const inList="("+uniq.map(encodeURIComponent).join(",")+")";
-  const out={}; const unames={};
-  // Try the full profiles table first (RLS may scope this).
-  let rows=await hostRest(`profiles?user_id=in.${inList}&select=user_id,first_name,last_name,display_name,username`,{},tok);
-  // Fall back to the public_profiles view for any ids not resolved.
-  const got=new Set((rows||[]).map(r=>r.user_id));
-  const missing=uniq.filter(id=>!got.has(id));
-  let pub=[];
-  if(missing.length&&!fetchProfileNames._noPublicView){
-    const pin="("+missing.map(encodeURIComponent).join(",")+")";
-    const res=await hostRest(`public_profiles?user_id=in.${pin}&select=user_id,display_name`,{},tok);
-    if(res===null) fetchProfileNames._noPublicView=true; // view missing → stop retrying
-    else pub=res||[];
-  }
-  const nameOf=(r)=>{
-    const full=`${r.first_name||""} ${r.last_name||""}`.trim();
-    return full||r.display_name||r.username||null;
-  };
-  (rows||[]).forEach(r=>{const n=nameOf(r); if(n) out[r.user_id]=n; if(r.username) unames[r.user_id]=r.username;});
-  (pub||[]).forEach(r=>{if(!out[r.user_id]&&r.display_name) out[r.user_id]=r.display_name;});
-  uniq.forEach(id=>{if(!out[id]) out[id]=`User ${id.slice(0,8)}`;});
-  return {names:out,usernames:unames};
-}
-async function logHostAudit(hostId,actorId,action,targetId,detail,tok){
-  return hostRest("host_audit",{method:"POST",body:JSON.stringify({host_id:hostId,actor_user_id:actorId,action,target_user_id:targetId||null,detail:detail||null})},tok);
-}
-function randToken(){
-  // url-safe random token
-  const a=new Uint8Array(18); (window.crypto||window.msCrypto).getRandomValues(a);
-  return btoa(String.fromCharCode(...a)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
-}
-// Human-typable short code: 8 chars from an unambiguous uppercase alphabet
-// (no 0/O, 1/I/L, etc.) — safe to read aloud, type, and copy.
-function randShortCode(){
-  const alphabet="ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-  const a=new Uint8Array(8); (window.crypto||window.msCrypto).getRandomValues(a);
-  return Array.from(a,b=>alphabet[b%alphabet.length]).join("");
-}
-
-/* ── Athlete claims (athlete_claims) ──────────────────────────────────────────
-   Athletes claim their auto-built profile; any verified host admin whose events
-   that athlete appears in can approve. Approved claims show a verified badge. */
-const fetchAllClaims=(tok)=>hostRest("athlete_claims?select=*",{},tok);
-const fetchMyClaims=(userId,tok)=>hostRest(`athlete_claims?user_id=eq.${userId}&select=*`,{},tok);
-async function createClaim(profileName,userId,tok){
-  return hostRest("athlete_claims",{method:"POST",headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
-    body:JSON.stringify({profile_name:profileName,user_id:userId,status:"pending"})},tok);
-}
-async function decideClaim(claimId,approve,vouchUserId,hostId,tok){
-  return hostRest(`athlete_claims?id=eq.${claimId}`,{method:"PATCH",body:JSON.stringify({
-    status:approve?"approved":"denied",vouched_by:approve?vouchUserId:null,host_id:approve?hostId:null,
-    decided_at:new Date().toISOString()})},tok);
-}
-
-/* ── Athlete profile extras (athlete_profiles) ────────────────────────────────
-   Owner-editable presentation fields (bio, instagram, nationality override,
-   photo) layered over the auto-built profile. Keyed by normalised name
-   (lower+trim). Read is public; write is gated to the verified owner by RLS
-   (see migrations/0004_athlete_profiles.sql). */
-const profileNameKey=(name)=>String(name||"").trim().toLowerCase();
-const fetchAllAthleteProfiles=(tok)=>hostRest("athlete_profiles?select=*",{},tok);
-async function upsertAthleteProfile(name,patch,userId,tok){
-  const row={name_key:profileNameKey(name),display_name:name,...patch,updated_by:userId,updated_at:new Date().toISOString()};
-  return hostRest("athlete_profiles",{method:"POST",
-    headers:{"Prefer":"resolution=merge-duplicates,return=representation"},
-    body:JSON.stringify(row)},tok);
-}
-// Upload an athlete headshot to the public `athlete-photos` bucket; returns its
-// public URL or null. Path: <name slug>/<timestamp>.<ext>.
-async function uploadAthletePhoto(file,name,tok){
-  if(!SB_URL||!file||!tok) return null;   // storage write needs a signed-in token
-  const type=file.type||"image/jpeg";
-  const ext=type.includes("png")?"png":type.includes("webp")?"webp":type.includes("gif")?"gif":"jpg";
-  const slug=profileNameKey(name).replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"athlete";
-  const path=`${slug}/${Date.now()}.${ext}`;
-  try{
-    const r=await fetch(`${SB_URL}/storage/v1/object/athlete-photos/${path}`,{method:"POST",
-      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":type,"x-upsert":"true"},
-      body:file});
-    if(!r.ok){console.error("uploadAthletePhoto",r.status,await r.text().catch(()=>""));return null;}
-    return `${SB_URL}/storage/v1/object/public/athlete-photos/${path}`;
-  }catch(e){console.error("uploadAthletePhoto network",e);return null;}
-}
-// Upload a gallery media file (image OR video) to the public `athlete-media`
-// bucket under a `<slug>/` prefix. Returns {url,type} or null. The bucket allows
-// image + video MIME and a larger size cap than athlete-photos (see
-// migrations/0010_athlete_media_bucket.sql); type is inferred from the MIME.
-const ATHLETE_MEDIA_BUCKET="athlete-media";
-async function uploadAthleteMedia(file,name,tok){
-  if(!SB_URL||!file||!tok) return null;   // storage write needs a signed-in token
-  const mime=file.type||"application/octet-stream";
-  const isVideo=mime.startsWith("video/");
-  const extMap={"image/png":"png","image/webp":"webp","image/gif":"gif","image/jpeg":"jpg","video/mp4":"mp4","video/quicktime":"mov","video/webm":"webm"};
-  const ext=extMap[mime]||(isVideo?"mp4":"jpg");
-  const slug=profileNameKey(name).replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"athlete";
-  const path=`${slug}/${Date.now()}-${Math.random().toString(36).slice(2,7)}.${ext}`;
-  try{
-    const r=await fetch(`${SB_URL}/storage/v1/object/${ATHLETE_MEDIA_BUCKET}/${path}`,{method:"POST",
-      headers:{"apikey":SB_KEY,"Authorization":`Bearer ${tok}`,"Content-Type":mime,"x-upsert":"true"},
-      body:file});
-    if(!r.ok){console.error("uploadAthleteMedia",r.status,await r.text().catch(()=>""));return null;}
-    return {url:`${SB_URL}/storage/v1/object/public/${ATHLETE_MEDIA_BUCKET}/${path}`,type:isVideo?"video":"image"};
-  }catch(e){console.error("uploadAthleteMedia network",e);return null;}
-}
-
-/* ── Custom boat classes (custom_classes) ─────────────────────────────────────
-   Persisted mirror of the in-memory CUSTOM_CLASSES registry. Read is public
-   (anon SELECT allowed by RLS) so logged-out viewers still get labels/colours;
-   insert is gated to verified hosts or admins (see migrations/0002).
-   hostRest returns null on ANY failure (RLS, network) without throwing, so
-   callers MUST check for null — a .catch alone never fires. Writes that fail
-   (or happen while signed out, e.g. dev-mode imports) are queued in
-   localStorage and re-tried on the next signed-in load, so a class can no
-   longer be silently lost between sessions. */
-const fetchCustomClasses=(tok)=>hostRest("custom_classes?select=*",{},tok);
-async function insertCustomClass(cc,userId,tok){
-  return hostRest("custom_classes",{method:"POST",
-    headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
-    body:JSON.stringify({id:cc.id,canonical:cc.canonical,short:cc.short,full:cc.full,color:cc.color,created_by:userId})},tok);
-}
-// Write-behind queue for custom classes that couldn't be persisted yet.
-const PENDING_CC_KEY="athlink_pending_custom_classes";
-function readPendingCustomClasses(){
-  try{const a=JSON.parse(localStorage.getItem(PENDING_CC_KEY)||"[]");return Array.isArray(a)?a:[];}catch{return[];}
-}
-function queuePendingCustomClass(cc){
-  try{
-    const q=readPendingCustomClasses().filter(p=>p.canonical!==cc.canonical);
-    q.push({id:cc.id,canonical:cc.canonical,short:cc.short,full:cc.full,color:cc.color});
-    localStorage.setItem(PENDING_CC_KEY,JSON.stringify(q));
-  }catch(e){console.error("queuePendingCustomClass",e);}
-}
-function dropPendingCustomClass(canonical){
-  try{
-    const q=readPendingCustomClasses().filter(p=>p.canonical!==canonical);
-    localStorage.setItem(PENDING_CC_KEY,JSON.stringify(q));
-  }catch(e){console.error("dropPendingCustomClass",e);}
-}
-
-/* ── Event claims (event_claims) ──────────────────────────────────────────────
-   A host claims an externally-contributed event (one imported by another host
-   and attributed to them as organizer). Any verified admin of the attributed
-   host can approve; on approval the event's owner flips to that host and
-   owner_confirmed becomes true, so it surfaces in their portal. Mirrors the
-   athlete-claim flow. */
-const fetchAllEventClaims=(tok)=>hostRest("event_claims?select=*",{},tok);
-async function createEventClaim(eventId,hostId,userId,detail,tok){
-  return hostRest("event_claims",{method:"POST",headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
-    body:JSON.stringify({event_id:eventId,host_id:hostId||null,user_id:userId,status:"pending",detail:detail||null})},tok);
-}
-async function decideEventClaim(claimId,approve,vouchUserId,hostId,tok){
-  return hostRest(`event_claims?id=eq.${claimId}`,{method:"PATCH",body:JSON.stringify({
-    status:approve?"approved":"denied",vouched_by:approve?vouchUserId:null,host_id:approve?hostId:null,
-    decided_at:new Date().toISOString()})},tok);
-}
-
-// Fetch invite by dedicated short_code column (exact, case-insensitive)
-const fetchInviteByShortCode=(code,tok)=>hostRest(`host_invites?short_code=eq.${encodeURIComponent(code.toUpperCase())}&select=*`,{},tok);
-// Mark invite used (single-use enforcement)
-const markInviteUsed=(token,userId,tok)=>hostRest(`host_invites?token=eq.${encodeURIComponent(token)}`,{method:"PATCH",body:JSON.stringify({used_at:new Date().toISOString(),used_by:userId})},tok);
-
-// Run schema migration for nat column (idempotent)
-async function ensureSchema(){
-  if(!sbH) return;
-  // We attempt a HEAD request on entries with nat filter; if it fails, column doesn't exist
-  // Actually we just try to patch with nat:null — Supabase will ignore unknown columns gracefully
-  // The safest approach is to include nat in all INSERT payloads and let Supabase handle it
-  // If the column is missing, inserts still work (extra field silently ignored) until column added
-}
-
-function dbToApp(ev){
-  return{id:ev.id,name:ev.name,cls:ev.class,doublehanded:ev.doublehanded,
-    venue:ev.venue||"—",country:ev.country||"",date:ev.date||"—",discards:ev.discards,
-    scoring:ev.scoring||"",source:ev.source||"Imported",status:ev.status||"Final",
-    owner:ev.owner||null,collabs:Array.isArray(ev.collabs)?ev.collabs:(ev.collabs?JSON.parse(ev.collabs):[]),
-    owner_confirmed:ev.owner_confirmed!==false,imported_by:ev.imported_by||null,
-    organizer_name:ev.organizer_name||null,fingerprint:ev.fingerprint||null,
-    sources:Array.isArray(ev.sources)?ev.sources:(ev.sources?JSON.parse(ev.sources):[]),
-    subclass:ev.subclass||null,
-    entries:(ev.entries||[]).map(e=>({_dbId:e.id,sail:e.sail||"—",nat:e.nat||"",div:e.division||"",
-      gender:e.gender||"",category:e.category||"",
-      helm:e.helm_name,crew:e.crew_name||"",races:e.races||[],race_codes:e.race_codes||null,pdf_rank:e.pdf_rank||null,pdf_net:e.pdf_net||null,
-      birth_year:e.birth_year??null,crew_birth_year:e.crew_birth_year??null}))};
-}
-async function saveEventToDb(ev){
-  if(!sbH){console.warn("saveEventToDb: no Supabase connection");return null;}
-  const evPayload={
-    name:ev.name, class:ev.cls, doublehanded:!!ev.doublehanded,
-    venue:ev.venue||null, country:ev.country||null, date:ev.date||null,
-    discards:ev.discards||1, scoring:ev.scoring||null,
-    source:ev.source||null, status:ev.status||"Final",
-    owner:ev.owner||null, collabs:ev.collabs||[], subclass:ev.subclass||null,
-    owner_confirmed:ev.owner_confirmed!==false, imported_by:ev.imported_by||null,
-    organizer_name:ev.organizer_name||null, fingerprint:ev.fingerprint||null,
-    sources:ev.sources||[],
-  };
-  const ins=await sbPost("events",evPayload);
-  if(!ins?.[0]?.id){
-    console.error("saveEventToDb: event insert failed for",ev.name);
-    return null;
-  }
-  const eventId=ins[0].id;
-  // Insert entries one by one so a single bad row doesn't kill the whole batch
-  const entryErrors=[];
-  for(const e of ev.entries){
-    const entryPayload={
-      event_id:eventId,
-      sail:e.sail||"—",
-      nat:e.nat||null,
-      division:e.div||null,
-      gender:e.gender||null,
-      category:e.category||null,
-      helm_name:e.helm||"",
-      crew_name:e.crew||null,
-      races:Array.isArray(e.races)?e.races:[],
-      race_codes:e.race_codes||null,
-      pdf_rank:e.pdf_rank||null,
-      pdf_net:e.pdf_net||null,
-      birth_year:e.birth_year||null,
-      crew_birth_year:e.crew_birth_year||null,
-    };
-    const r=await sbPost("entries",entryPayload);
-    if(!r?.[0]?.id) entryErrors.push(e.helm);
-  }
-  if(entryErrors.length) console.warn("saveEventToDb: failed entries:",entryErrors);
-  else console.log("saveEventToDb: saved",ev.entries.length,"entries for",ev.name);
-  return ins;
-}
-async function updateEventStatus(evId,status){
-  await sbPatch("events",`id=eq.${evId}`,{status});
-}
+/* Golf is a single-competitor sport: force every entry down the single-athlete
+   path and keep the helm/crew (pair) UI dormant. Flip to false to resurface it. */
+const SINGLE_ATHLETE=true;
 
 /* ── manual form ─────────────────────────────────────────────────────── */
 const defRow=n=>({helm:"",crew:"",sail:"",nat:"",div:"",scores:Array(n).fill("")});
 const emptyForm=()=>({name:"",cls:"mens",subclass:null,collabs:[],club:"",country:"",date:"",discards:1,numRaces:5,rows:[defRow(5),defRow(5),defRow(5)]});
 
-/* ── HTML (Sailwave) parser ────────────────────────────────────────────────
-   Parses the standard Sailwave HTML results format directly in the browser.
-   No server round-trip needed.
-   ──────────────────────────────────────────────────────────────────────── */
-const SCORE_CODES_SET=new Set(["DNF","DNC","DNS","OCS","DSQ","BFD","UFD","RET","RDG","DGM","DNE","SCP","NSC","PRP","TAL","ZFP","STP","DPI","TP5","TPP","TPN","NSC"]);
 
-function parseHtmlScore(raw){
-  if(!raw) return null;
-  const s=raw.trim().replace(/\xa0/g,' ').replace(/&nbsp;/g,' ').trim();
-  if(!s||s==='-'||s==='—') return null;
-  const inner=s.replace(/^\(|\)$/g,'');
-  const parts=inner.split(/[\s\[\]]+/).filter(Boolean);
-  let num=null,code=null;
-  for(const p of parts){
-    const up=p.replace(/[^A-Z]/g,'').toUpperCase();
-    if(SCORE_CODES_SET.has(up)){code=up;}
-    else{const ns=p.replace(/[^\d.]/g,'');if(ns){const n=parseFloat(ns);if(!isNaN(n))num=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}}
-  }
-  if(num!==null) return num;
-  if(code) return code;
-  return null;
-}
-// Returns [score, codeAnnotation] — for cells like "(41 UFD)" → [41, "UFD"]
-function parseHtmlScoreWithCode(raw){
-  if(!raw) return [null,null];
-  const s=raw.trim().replace(/\xa0/g,' ').replace(/&nbsp;/g,' ').trim();
-  if(!s||s==='-'||s==='—') return [null,null];
-  const inner=s.replace(/^\(|\)$/g,'');
-  const parts=inner.split(/[\s\[\]]+/).filter(Boolean);
-  let num=null,code=null;
-  for(const p of parts){
-    const up=p.replace(/[^A-Z]/g,'').toUpperCase();
-    if(SCORE_CODES_SET.has(up)){code=up;}
-    else{const ns=p.replace(/[^\d.]/g,'');if(ns){const n=parseFloat(ns);if(!isNaN(n))num=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}}
-  }
-  if(num!==null) return [num,code];
-  if(code) return [code,null];
-  return [null,null];
-}
 
-function parseHtmlDate(text){
-  const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-  // "as of HH:MM on Month Day, Year"
-  let m=text.match(/as\s+of\s+[\d:]+\s+on\s+([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i);
-  if(m){const mo=months[m[1].slice(0,3).toLowerCase()];if(mo)return`${String(parseInt(m[2])).padStart(2,'0')}/${String(mo).padStart(2,'0')}/${m[3]}`;}
-  // "As of DD MON YYYY"
-  m=text.match(/as\s+of\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i);
-  if(m){const mo=months[m[2].slice(0,3).toLowerCase()];if(mo)return`${String(parseInt(m[1])).padStart(2,'0')}/${String(mo).padStart(2,'0')}/${m[3]}`;}
-  return '';
-}
 
-function parseHtml(htmlString){
-  try{
-    // Sailwave HTML files are ISO-8859-1 encoded. The string received from
-    // FileReader.text() may already be mangled if read as UTF-8.
-    // Fix: re-encode common latin-1 sequences back to proper unicode.
-    const fixEncoding=(s)=>s
-      .replace(/\u00c3\u00b8/g,'ø').replace(/\u00c3\u00b1/g,'ñ')
-      .replace(/\u00c3\u00a9/g,'é').replace(/\u00c3\u00a0/g,'à')
-      .replace(/\u00c3\u00a8/g,'è').replace(/\u00c3\u00bc/g,'ü')
-      .replace(/\u00c3\u00b6/g,'ö').replace(/\u00c3\u00a4/g,'ä')
-      .replace(/\u00c3\u00bf/g,'ÿ').replace(/\u00c3\u00ab/g,'ë')
-      .replace(/\u00c3\u00af/g,'ï').replace(/\u00c3\u00ae/g,'î')
-      .replace(/\u00c3\u00aa/g,'ê').replace(/\u00c3\u00a2/g,'â')
-      .replace(/\u00c3\u00b4/g,'ô').replace(/\u00c3\u00bb/g,'û')
-      .replace(/\u00c3\u0081/g,'Á').replace(/\u00c3\u0089/g,'É')
-      .replace(/\u00c3\u008d/g,'Í').replace(/\u00c3\u0093/g,'Ó')
-      .replace(/\u00c3\u009a/g,'Ú').replace(/\u00c3\u00a1/g,'á')
-      .replace(/\u00c3\u00ad/g,'í').replace(/\u00c3\u00b3/g,'ó')
-      .replace(/\u00c3\u00ba/g,'ú').replace(/\u00c3\u00b2/g,'ò')
-      .replace(/\u00c3\u009c/g,'Ü').replace(/\u00c3\u0096/g,'Ö')
-      .replace(/\u00c3\u0084/g,'Ä').replace(/\u00c3\u00b5/g,'õ')
-      .replace(/\u00c3\u00a5/g,'å').replace(/\u00c3\u0085/g,'Å')
-      .replace(/\u00c3\u00a6/g,'æ').replace(/\u00c3\u0086/g,'Æ')
-      .replace(/\u00c3\u00b8/g,'ø').replace(/\u00c3\u0098/g,'Ø')
-      .replace(/\u00c5\u00a1/g,'š').replace(/\u00c5\u00bd/g,'Ž')
-      .replace(/\u00c4\u0099/g,'ę').replace(/\u00c4\u0085/g,'ą')
-      .replace(/\u00c5\u00bc/g,'ż').replace(/\u00c5\u00ba/g,'ź')
-      .replace(/\u00c5\u0082/g,'ł').replace(/\u00c5\u009b/g,'ś')
-      .replace(/\u00c4\u0087/g,'ć').replace(/\u00c5\u0084/g,'ń');
-    // Also handle the file being read as latin-1 by TextDecoder approach
-    const fixLatin=(s)=>{
-      // Replace replacement chars from UTF-8 misread of latin-1
-      // \xf8=ø, \xf1=ñ, \xe9=é, \xfc=ü, \xf6=ö, \xe4=ä, \xe5=å etc.
-      return s.replace(/\ufffd/g,(match,offset)=>{
-        // Can't recover from replacement chars without original bytes; just return as-is
-        return match;
-      });
-    };
-    const fixedHtml=fixEncoding(htmlString);
-    const parser=new DOMParser();
-    const doc=parser.parseFromString(fixedHtml,'text/html');
-    const title=doc.querySelector('h1')?.textContent?.trim()||'Imported Competition';
-    const bodyText=doc.body?.textContent||'';
-    const evDate=parseHtmlDate(bodyText);
-    // Extract discards
-    let discards=1;
-    const discardMatch=bodyText.match(/Discards?\s*:\s*(\d+)/i);
-    if(discardMatch) discards=parseInt(discardMatch[1]);
 
-    const fleetGroups=[];
-    // Each fleet has a summarytitle h3 + a summarytable
-    const fleetHeaders=doc.querySelectorAll('.summarytitle, h3.summarytitle');
-    const fleetTables=doc.querySelectorAll('.summarytable');
 
-    // If no summarytable class, grab all tables
-    const tables=fleetTables.length?fleetTables:doc.querySelectorAll('table');
 
-    tables.forEach((tbl,tblIdx)=>{
-      const fleetName=fleetHeaders[tblIdx]?.textContent?.trim()||'';
-      const thead=tbl.querySelector('thead');
-      const tbody=tbl.querySelector('tbody');
-      if(!thead||!tbody) return;
 
-      // Build column index map from header
-      const headers=[...thead.querySelectorAll('th,td')].map(th=>th.textContent.trim().toLowerCase().replace(/[\s\n_()/'#.]+/g,''));
-      const colIdx={};
-      headers.forEach((h,i)=>{
-        if(['rank','rk','pos','pl'].includes(h)) colIdx.rank??=i;
-        else if(['helmname','helm','helmsname'].includes(h)) colIdx.helm??=i;
-        else if(['crewname','crew','crewsname'].includes(h)) colIdx.crew??=i;
-        else if(['sailno','sail','sailnumber'].includes(h)) colIdx.sail??=i;
-        else if(['nat','nationality','country','sailprefix','prefix','natletter'].includes(h)) colIdx.nat??=i;
-        else if(['division','div','category','agegroup','agecategory','agecat','group'].includes(h)) colIdx.category??=i;
-        else if(['fleet','class','dinghyclass','dinghyclass/fleet','fleet/class','boatclass'].includes(h)) colIdx.div??=i;
-        else if(['gender','sex','boatgender','gender(skipper)','genderskipper','helmgender','skippergender'].includes(h)) colIdx.gender??=i;
-        else if(['crewgender','gender(crew)','gendercrew'].includes(h)) colIdx.crewgender??=i;
-        else if(['nett','net','netpts'].includes(h)) colIdx.net??=i;
-        else if(['total','totalpts'].includes(h)) colIdx.total??=i;
-        else if(['yob','yearofbirth','birthyear','born','dob'].includes(h)) colIdx.yob??=i;
-        else if(['crewyob','crewyearofbirth','crewbirthyear','crewborn'].includes(h)) colIdx.crewyob??=i;
-        else if(['age','optiage','helmage','years'].includes(h)) colIdx.age??=i;
-        else if(['crewage'].includes(h)) colIdx.crewage??=i;
-      });
-      // Race columns: look for col class="race" or headers matching F1,R1,F2...
-      const raceCols=[];
-      headers.forEach((h,i)=>{
-        if(/^[rfq]\d{1,2}$/.test(h)||/^race\s*\d+$/i.test(h)) raceCols.push(i);
-      });
-      // Also check colgroup
-      if(!raceCols.length){
-        const cols=[...tbl.querySelectorAll('col')];
-        cols.forEach((col,i)=>{if(col.className==='race') raceCols.push(i);});
-      }
 
-      if(!colIdx.helm&&!colIdx.sail) return;
-      if(!raceCols.length) return;
 
-      const entries=[];
-      tbody.querySelectorAll('tr.summaryrow,tr').forEach(tr=>{
-        const cells=[...tr.querySelectorAll('td')];
-        if(cells.length<3) return;
-        const get=idx=>(idx!=null&&idx<cells.length)?cells[idx].textContent.trim():'';
 
-        // nat from flag image title attribute
-        let nat='';
-        if(colIdx.nat!=null){
-          const img=cells[colIdx.nat]?.querySelector('img');
-          nat=img?.title||img?.alt||get(colIdx.nat);
-          nat=nat.trim().toUpperCase();
-          if(!/^[A-Z]{3}$/.test(nat)) nat='';
-        }
 
-        const sail=get(colIdx.sail)||'—';
-        const helm=get(colIdx.helm)||'';
-        if(!helm) return;
-        const crew=get(colIdx.crew)||'';
-        const div=get(colIdx.div)||'';
-        // Gender: boat/skipper column, else combine helm + crew gender columns.
-        let gender=normGender(get(colIdx.gender));
-        if(colIdx.crewgender!=null){
-          const hg=normGender(get(colIdx.gender)),cg=normGender(get(colIdx.crewgender));
-          gender=(hg&&cg)?(hg===cg?hg:"Mix"):(hg||cg||"");
-        }
-        const category=normCategory(get(colIdx.category));
 
-        let pdfRank=null;
-        const rankRaw=get(colIdx.rank).replace(/(st|nd|rd|th)$/i,'');
-        if(rankRaw) pdfRank=parseInt(rankRaw)||null;
 
-        let pdfNet=null;
-        const netRaw=get(colIdx.net);
-        if(netRaw){const n=parseFloat(netRaw);if(!isNaN(n))pdfNet=n===Math.floor(n)?Math.floor(n):Math.round(n*100)/100;}
 
-        const raceResults=raceCols.map(ci=>parseHtmlScoreWithCode(cells[ci]?.textContent));
-        const races=raceResults.map(([sc])=>sc).filter(v=>v!==null);
-        const race_codes=raceResults.filter(([sc])=>sc!==null).map(([,cd])=>cd||null);
-        if(!races.length) return;
 
-        // Birth year: prefer an explicit YOB column; else derive from age + event year.
-        const evYear=(()=>{const m=(evDate||'').match(/(20\d{2}|19\d{2})/)||bodyText.slice(0,400).match(/(20\d{2}|19\d{2})/);return m?parseInt(m[1]):null;})();
-        const yobOf=(yobIdx,ageIdx)=>{
-          const yraw=yobIdx!=null?get(yobIdx):'';
-          const ym=String(yraw).match(/\b(19[3-9]\d|20[0-2]\d)\b/);
-          if(ym) return parseInt(ym[1]);
-          const araw=ageIdx!=null?get(ageIdx):'';
-          const am=String(araw).match(/\b(\d{1,2})\b/);
-          if(am&&evYear){const a=parseInt(am[1]);if(a>=5&&a<=99)return evYear-a;}
-          return null;
-        };
-        const birth_year=yobOf(colIdx.yob,colIdx.age);
-        const crew_birth_year=yobOf(colIdx.crewyob,colIdx.crewage);
-        entries.push({helm,crew,sail,nat,div,gender,category,races,race_codes,pdf_rank:pdfRank,pdf_net:pdfNet,birth_year,crew_birth_year});
-      });
 
-      if(entries.length) fleetGroups.push({name:fleetName,entries,discards});
-    });
 
-    if(!fleetGroups.length) return{ok:false,error:'No results table found in this HTML file.'};
 
-    // Merge Gold/Silver/Bronze fleets
-    const gsb=fleetGroups.filter(g=>/gold|silver|bronze|emerald/i.test(g.name));
-    const other=fleetGroups.filter(g=>!/gold|silver|bronze|emerald/i.test(g.name));
-    if(gsb.length&&!other.length){
-      const merged=[];const seen=new Set();
-      for(const g of gsb){for(const e of g.entries){const k=e.helm.toLowerCase()+e.sail;if(!seen.has(k)){seen.add(k);merged.push(e);}}}
-      return{ok:true,multi:false,name:title,discards,date:evDate,entries:merged};
-    }
-    if(fleetGroups.length===1) return{ok:true,multi:false,name:title,discards:fleetGroups[0].discards,date:evDate,entries:fleetGroups[0].entries};
-    return{ok:true,multi:true,name:title,date:evDate,fleets:fleetGroups.map(g=>({name:g.name,entries:g.entries,discards:g.discards,count:g.entries.length}))};
-  }catch(err){
-    return{ok:false,error:'HTML parse error: '+err.message};
-  }
-}
 
 
-/* ── Calendar grid helper ─────────────────────────────────────────────── */
-function buildCalGrid(year, month, evList){
-  // Returns 6 rows × 7 cols of {date, isCurrentMonth, isToday, events[]}
-  const today=new Date();
-  const firstDay=new Date(year,month,1).getDay(); // 0=Sun
-  const daysInMonth=new Date(year,month+1,0).getDate();
-  const cells=[];
-  // Previous month fill
-  const prevDays=new Date(year,month,0).getDate();
-  for(let i=firstDay-1;i>=0;i--){
-    cells.push({day:prevDays-i,month:month-1<0?11:month-1,year:month-1<0?year-1:year,other:true,events:[]});
-  }
-  // Current month
-  for(let d=1;d<=daysInMonth;d++){
-    const isToday=today.getFullYear()===year&&today.getMonth()===month&&today.getDate()===d;
-    const dayEvs=evList.filter(ev=>{
-      const p=ev.date.split('/');
-      if(p.length!==3) return false;
-      return parseInt(p[0])===d&&parseInt(p[1])-1===month&&parseInt(p[2])===year;
-    });
-    cells.push({day:d,month,year,other:false,today:isToday,events:dayEvs});
-  }
-  // Next month fill
-  let next=1;
-  while(cells.length%7!==0) cells.push({day:next++,month:month+1>11?0:month+1,year:month+1>11?year+1:year,other:true,events:[]});
-  // Split into rows
-  const rows=[];for(let i=0;i<cells.length;i+=7)rows.push(cells.slice(i,i+7));
-  return rows;
-}
-
-/* ── CalendarBody: month-grid day view + year overview, with pie-split circles ── */
-// Build a conic-gradient style for a day circle split by class (pie).
-function classPie(comps){
-  if(!comps||!comps.length) return null;
-  // count per class, preserve order of first appearance
-  const order=[]; const counts={};
-  comps.forEach(ev=>{const c=ev.cls;if(!(c in counts)){counts[c]=0;order.push(c);}counts[c]++;});
-  const total=comps.length;
-  if(order.length===1) return {background:classColor(order[0])};
-  let acc=0; const segs=[];
-  order.forEach(c=>{const start=acc/total*360;acc+=counts[c];const endd=acc/total*360;segs.push(`${classColor(c)} ${start}deg ${endd}deg`);});
-  return {background:`conic-gradient(${segs.join(",")})`};
-}
-
-function CalendarBody({events,allEvents,year,month,setYear,setMonth,viewMode,setViewMode,onPick,eventLabel}){
-  const today=React.useMemo(()=>new Date(),[]);
-  const DAYS=React.useMemo(()=>["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],[]);
-  // Scroll refs
-  const yearScrollRef=React.useRef(null);
-  const monthScrollRef=React.useRef(null);
-  // Prevent programmatic scroll from triggering IO update loop
-  const progScrollRef=React.useRef(false);   // true while doing programmatic scroll
-  const fromScrollRef=React.useRef(false);   // (legacy) true when IO just set year/month
-  const navTargetRef=React.useRef(true);     // true when a nav button / year-click set the target → scroll to it
-  const scrollTimerRef=React.useRef(null);
-  // Always-fresh refs for scroll handlers (avoid stale closures)
-  const yrRef=React.useRef(year); yrRef.current=year;
-  const moRef=React.useRef({year,month}); moRef.current={year,month};
-
-  // ── Year view: scroll to current year whenever we enter it
-  React.useEffect(()=>{
-    if(viewMode!=="year"||!yearScrollRef.current) return;
-    const el=yearScrollRef.current.querySelector(`[data-yr="${year}"]`);
-    if(el){
-      progScrollRef.current=true;
-      el.scrollIntoView({block:"start",behavior:"instant"});
-      clearTimeout(scrollTimerRef.current);
-      scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},200);
-    }
-  },[viewMode,year]); // year dep so < > nav buttons scroll correctly
-
-  // ── Year view: update header year as user scrolls
-  React.useEffect(()=>{
-    if(viewMode!=="year"||!yearScrollRef.current) return;
-    const c=yearScrollRef.current;
-    const onScroll=()=>{
-      if(progScrollRef.current) return;
-      const cr=c.getBoundingClientRect();
-      for(const el of c.querySelectorAll("[data-yr]")){
-        if(el.getBoundingClientRect().bottom>cr.top+10){
-          const yr=parseInt(el.dataset.yr);
-          if(!isNaN(yr)){ yrRef.current=yr; const lbl=document.getElementById("cal-cur-label"); if(lbl) lbl.textContent=String(yr); }
-          break;
-        }
-      }
-    };
-    c.addEventListener("scroll",onScroll,{passive:true});
-    return()=>c.removeEventListener("scroll",onScroll);
-  },[viewMode]);
-
-  // ── Month view: scroll to a month ONLY on first entry into month view, or when
-  //    the change came from the year picker. NEVER re-scroll on scroll-driven
-  //    updates — that was the source of the year-jump jerkiness.
-  const didInitScrollRef=React.useRef(false);
-  React.useEffect(()=>{
-    if(viewMode!=="month"){didInitScrollRef.current=false;return;}
-    if(!monthScrollRef.current) return;
-    // Only auto-scroll when explicitly targeted (year-picker / nav), or once on enter.
-    if(didInitScrollRef.current&&!navTargetRef.current){navTargetRef.current=true;return;}
-    const el=monthScrollRef.current.querySelector(`[data-ym="${year}-${month}"]`);
-    if(el){
-      progScrollRef.current=true;
-      clearTimeout(scrollTimerRef.current);
-      el.scrollIntoView({block:"start",behavior:"instant"});
-      scrollTimerRef.current=setTimeout(()=>{progScrollRef.current=false;},250);
-    }
-    didInitScrollRef.current=true;
-    navTargetRef.current=false; // subsequent year/month changes are scroll-driven → no re-scroll
-  },[year,month,viewMode]);
-
-  // ── Month view: track the visible month WITHOUT triggering React re-renders or
-  //    scroll-to effects. We update a ref (used as the year-toggle target) and set
-  //    a tiny header label via direct DOM write — keeps the wheel perfectly smooth.
-  React.useEffect(()=>{
-    if(viewMode!=="month"||!monthScrollRef.current) return;
-    const c=monthScrollRef.current;
-    let ticking=false;
-    const read=()=>{
-      ticking=false;
-      const cr=c.getBoundingClientRect();
-      const anchor=cr.top+8;
-      let pick=null;
-      for(const el of c.querySelectorAll("[data-ym]")){
-        const r=el.getBoundingClientRect();
-        if(r.top<=anchor&&r.bottom>anchor){pick=el;break;}
-        if(r.top>anchor){pick=pick||el;break;}
-      }
-      if(!pick) return;
-      const [ys,ms]=pick.dataset.ym.split("-");
-      const y=parseInt(ys),m=parseInt(ms);
-      if(!isNaN(y)&&!isNaN(m)){
-        moRef.current={year:y,month:m}; yrRef.current=y;   // remember for year-toggle target
-        const lbl=document.getElementById("cal-cur-label");
-        if(lbl) lbl.textContent=`${MON[m]} ${y}`;
-      }
-    };
-    const onScroll=()=>{ if(!ticking){ticking=true;requestAnimationFrame(read);} };
-    c.addEventListener("scroll",onScroll,{passive:true});
-    read();
-    return()=>c.removeEventListener("scroll",onScroll);
-  },[viewMode]);
-
-  // ── Fixed render range: Jan 1990 → Dec (currentYear + 3). Stable across data
-  //    and filter changes, so the month list never re-renders mid-scroll (which
-  //    was causing the scroll-up jumpiness). Re-derives only when the year rolls.
-  const lo=1990;
-  const hi=today.getFullYear()+3;
-  const yearList=[];for(let y=lo;y<=hi;y++)yearList.push(y);
-  // Month list (memoized stable ref) — declared before any early return so hook
-  // order stays constant across year/month views.
-  const allMonths=React.useMemo(()=>{
-    const out=[];
-    for(let y=lo;y<=hi;y++) for(let m=0;m<12;m++) out.push({year:y,month:m});
-    return out;
-  },[lo,hi]);
-
-  // ── YEAR VIEW
-  if(viewMode==="year"){
-    const openMonth=(y,mi)=>{setYear(y);setMonth(mi);setViewMode("month");};
-    return(
-      <div className="cal-year-scroll" ref={yearScrollRef}>
-        {yearList.map(y=>(
-          <div key={y} className="cal-year-block" data-yr={y}>
-            <div className="cal-year-label">{y}</div>
-            <div className="cal-year-grid">
-              {MON.map((mn,mi)=>(
-                <div key={mi} className="cal-mini" onClick={()=>openMonth(y,mi)}>
-                  <div className="cal-mini-name">{mn}</div>
-                  <div className="cal-mini-dow">{["S","M","T","W","T","F","S"].map((d,k)=><span key={k}>{d}</span>)}</div>
-                  <div className="cal-mini-grid">
-                    {buildCalGrid(y,mi,events).flat().map((c,ci)=>{
-                      const comps=c.other?[]:c.events;
-                      const isT=!c.other&&today.getFullYear()===y&&today.getMonth()===mi&&today.getDate()===c.day;
-                      const pie=comps.length?classPie(comps):null;
-                      const st=pie?{...pie,color:"#fff",fontWeight:700}
-                              :isT?{background:"var(--accent)",color:"#fff",fontWeight:700}:{};
-                      return<span key={ci} className={"cal-mini-day"+(c.other?" o":"")} style={st}>{c.day}</span>;
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // ── MONTH VIEW — continuous scroll (Apple Calendar style)
-
-  return(
-    <div className="cal-month-scroll" ref={monthScrollRef}>
-      <CalMonthList months={allMonths} events={events} onPick={onPick} eventLabel={eventLabel} today={today} DAYS={DAYS}/>
-    </div>
-  );
-}
-
-// Memoized so the (480-month) grid only re-renders when events change — NOT on
-// every scroll-driven year/month header update. This is what keeps scroll smooth.
-// Custom comparator ignores onPick/eventLabel identity (they're stable in intent,
-// just re-created each parent render) so scrolling never forces a 480-grid rebuild.
-const CalMonthList=React.memo(function CalMonthList({months,events,onPick,eventLabel,today,DAYS}){
-  // keep latest callbacks without re-rendering on their identity change
-  const cbRef=React.useRef({onPick,eventLabel});
-  cbRef.current={onPick,eventLabel};
-  return months.map(({year:y,month:m})=>{
-    const monthCount=events.filter(ev=>{const dp=(ev.date||"").split("/");return dp.length===3&&parseInt(dp[1])-1===m&&parseInt(dp[2])===y;}).length;
-    return(
-    <div key={`${y}-${m}`} data-ym={`${y}-${m}`} className="cal-month-block">
-      <div className="cal-month-lbl">{MON[m]} {y}{monthCount>0?<span style={{fontWeight:600,color:"var(--mut)",fontSize:13,marginLeft:8}}>· {monthCount} competition{monthCount!==1?"s":""}</span>:null}</div>
-      <div className="cal-grid">{DAYS.map(d=><div key={d} className="cal-dow">{d}</div>)}</div>
-      <div className="cal-grid">
-        {buildCalGrid(y,m,events).flat().map((cell,i)=>{
-          const comps=cell.other?[]:cell.events;
-          const pie=comps.length?classPie(comps):null;
-          const isT=!cell.other&&today.getFullYear()===y&&today.getMonth()===m&&today.getDate()===cell.day;
-          return(
-            <div key={i} className={`cal-cell${cell.other?" other-month":""}${isT?" today":""}`}>
-              <div className="cal-cell-num" style={pie?{...pie,color:"#fff"}:isT?{background:"var(--accent)",color:"#fff"}:{}}>{cell.day}</div>
-              {comps.map(ev=>(
-                <div key={ev.id} className="cal-cell-ev" style={{background:classColor(ev.cls)}} title={ev.name} onClick={()=>cbRef.current.onPick(ev)}>
-                  {cbRef.current.eventLabel?cbRef.current.eventLabel(ev):ev.name}
-                </div>
-              ))}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );});
-},(prev,next)=>prev.months===next.months&&prev.events===next.events&&prev.today===next.today&&prev.DAYS===next.DAYS);
-
-/* ── World SVG map fallback (no API key required) ───────────────────── */
-function WorldSVGMap({countryData}){
-  // Uses a simple SVG world map with country ISO codes
-  // Country outlines via Natural Earth embedded as simplified paths
-  // We use a data-viz approach: colored circles on lat/lon positions
-  const COUNTRY_COORDS={
-    HK:[114.1,22.3],GB:[-1.5,52.4],AU:[133.8,-25.3],NZ:[172.5,-40.9],
-    FR:[2.2,46.2],DE:[10.4,51.2],IT:[12.6,42.5],ES:[-3.7,40.4],
-    NL:[5.3,52.1],DK:[9.6,56.3],SE:[15.2,59.3],NO:[8.5,60.5],
-    FI:[25.7,61.9],JP:[138.3,36.2],CN:[104.2,35.9],KR:[127.8,36.5],
-    SG:[103.8,1.4],TH:[100.5,13.7],AR:[-64.0,-34.0],BR:[-51.9,-14.2],
-    CL:[-71.5,-35.7],US:[-95.7,37.1],CA:[-96.8,60.1],MX:[-102.5,23.6],
-    IE:[-8.2,53.4],PT:[-8.2,39.4],BE:[4.5,50.5],CH:[8.2,46.8],
-    AT:[14.5,47.5],PL:[19.1,52.1],CZ:[15.5,49.8],HU:[19.5,47.2],
-    HR:[15.2,45.1],SI:[14.9,46.1],GR:[21.8,38.7],TR:[35.2,39.0],
-    IL:[34.9,31.0],ZA:[25.1,-29.0],EG:[30.0,26.8],NG:[8.7,9.1],
-    RU:[105.3,61.5],UA:[31.4,49.0],EE:[25.0,58.7],LV:[24.9,57.0],
-    LT:[23.9,55.9],SK:[19.5,48.7],RS:[21.0,44.0],ME:[19.3,42.8],
-    CY:[33.1,35.1],MT:[14.4,35.9],IS:[-18.1,65.0],NOR:[8.5,60.5],
-    BRA:[-51.9,-14.2],ARG:[-64.0,-34.0],
-  };
-  const maxCount=Math.max(...Object.values(countryData),1);
-  // Simple equirectangular projection
-  const W=640,H=320;
-  const toXY=(lng,lat)=>[(lng+180)*(W/360),(90-lat)*(H/180)];
-  return(
-    <div style={{background:"#0d1b2a",borderRadius:14,overflow:"hidden",position:"relative"}}>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto",display:"block"}}>
-        {/* Ocean background */}
-        <rect width={W} height={H} fill="#0d1b2a"/>
-        {/* Grid lines */}
-        {[-60,-30,0,30,60].map(lat=>{
-          const y=(90-lat)*(H/180);
-          return<line key={lat} x1={0} y1={y} x2={W} y2={y} stroke="#1a2e44" strokeWidth={0.5}/>;
-        })}
-        {[-120,-60,0,60,120].map(lng=>{
-          const x=(lng+180)*(W/360);
-          return<line key={lng} x1={x} y1={0} x2={x} y2={H} stroke="#1a2e44" strokeWidth={0.5}/>;
-        })}
-        {/* Country dots */}
-        {Object.entries(countryData).map(([iso,count])=>{
-          const coords=COUNTRY_COORDS[iso];
-          if(!coords) return null;
-          const [x,y]=toXY(coords[0],coords[1]);
-          const intensity=count/maxCount;
-          const r=8+intensity*14;
-          const opacity=0.5+intensity*0.5;
-          return(
-            <g key={iso}>
-              <circle cx={x} cy={y} r={r+4} fill={`rgba(220,50,50,${opacity*0.3})`}/>
-              <circle cx={x} cy={y} r={r} fill={`rgba(220,50,50,${opacity})`}/>
-              <title>{iso}: {count} competition{count!==1?"s":""}</title>
-            </g>
-          );
-        })}
-        {/* Labels for competed countries */}
-        {Object.entries(countryData).map(([iso,count])=>{
-          const coords=COUNTRY_COORDS[iso];
-          if(!coords) return null;
-          const [x,y]=toXY(coords[0],coords[1]);
-          return<text key={iso+"l"} x={x} y={y+24} textAnchor="middle" fill="#9fbdd9" fontSize={9} fontWeight={700}>{iso}</text>;
-        })}
-      </svg>
-      <div style={{padding:"8px 14px 10px",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
-        {Object.entries(countryData).sort((a,b)=>b[1]-a[1]).map(([iso,count])=>(
-          <span key={iso} style={{fontSize:11,color:"#9fbdd9",display:"flex",alignItems:"center",gap:4}}>
-            <span style={{width:8,height:8,borderRadius:"50%",background:`rgba(220,50,50,${0.5+count/Math.max(...Object.values(countryData),1)*0.5})`,display:"inline-block"}}/>
-            {iso} ({count})
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-
-/* ── SailingGlobe v4 + FootprintModal — self-contained (no Mapbox, no API key) ─
-   Tiered red shading by # competitions · sticky country spotlight · dark popup. */
-const GLOBE_COUNTRIES=[{"i":"FJ","r":[[[180,-16.1],[179.4,-16.8],[178.6,-16.6],[179.4,-16.4],[180,-16.1]],[[178.1,-17.5],[178.7,-17.6],[177.9,-18.3],[177.3,-17.7],[178.1,-17.5]]]},{"i":"TZ","r":[[[33.9,-0.9],[37.7,-3.1],[39.2,-4.7],[38.8,-6.5],[39.5,-7.1],[39.3,-8.0],[39.5,-9.1],[40.3,-10.3],[39.5,-10.9],[37.8,-11.3],[36.8,-11.6],[35.3,-11.4],[34.3,-10.2],[33.7,-9.4],[32.2,-8.9],[31.2,-8.6],[30.7,-8.3],[29.6,-6.5],[29.5,-5.4],[29.8,-4.5],[30.5,-3.6],[30.7,-3.0],[30.5,-2.4],[30.8,-2.3],[30.4,-1.1],[31.9,-1.0],[33.9,-0.9]]]},{"i":"EH","r":[[[-8.7,27.7],[-8.7,27.4],[-12.0,25.9],[-12.9,23.3],[-12.9,21.3],[-17.1,21.0],[-17.0,21.4],[-14.6,21.9],[-13.9,23.7],[-12.0,26.0],[-11.4,26.9],[-10.2,26.9],[-9.4,27.1],[-8.8,27.7],[-8.7,27.7]]]},{"i":"CA","r":[[[-122.8,49],[-123.0,49.0],[-124.9,50.0],[-125.6,50.4],[-127.4,50.8],[-128.0,51.7],[-127.9,52.3],[-129.1,52.8],[-129.3,53.6],[-130.5,54.3],[-130.5,54.8],[-130.0,55.3],[-130.0,55.9],[-131.7,56.6],[-132.7,57.7],[-133.4,58.4],[-134.3,58.9],[-134.9,59.3],[-135.5,59.8],[-136.5,59.5],[-137.5,58.9],[-138.3,59.6],[-139.0,60],[-140.0,60.3],[-141.0,60.3],[-141.0,66.0],[-141.0,69.7],[-139.1,69.5],[-137.5,69.0],[-136.5,68.9],[-135.6,69.3],[-134.4,69.6],[-132.9,69.5],[-131.4,69.9],[-129.8,70.2],[-129.1,69.8],[-128.4,70.0],[-128.1,70.5],[-127.4,70.4],[-125.8,69.5],[-124.4,70.2],[-124.3,69.4],[-123.1,69.6],[-122.7,69.9],[-121.5,69.8],[-119.9,69.4],[-117.6,69.0],[-116.2,68.8],[-115.2,68.9],[-113.9,68.4],[-115.3,67.9],[-113.5,67.7],[-110.8,67.8],[-109.9,68.0],[-108.9,67.4],[-107.8,67.9],[-108.8,68.3],[-108.2,68.7],[-107.0,68.7],[-106.2,68.8],[-105.3,68.6],[-104.3,68.0],[-103.2,68.1],[-101.5,67.6],[-99.9,67.8],[-98.4,67.8],[-98.6,68.4],[-97.7,68.6],[-96.1,68.2],[-96.1,67.3],[-95.5,68.1],[-94.7,68.1],[-94.2,69.1],[-95.3,69.7],[-96.5,70.1],[-96.4,71.2],[-95.2,71.9],[-93.9,71.8],[-92.9,71.3],[-91.5,70.2],[-92.4,69.7],[-90.5,69.5],[-90.6,68.5],[-89.2,69.3],[-88.0,68.6],[-88.3,67.9],[-87.4,67.2],[-86.3,67.9],[-85.6,68.8],[-85.5,69.9],[-84.1,69.8],[-82.6,69.7],[-81.3,69.2],[-81.2,68.7],[-82.0,68.1],[-81.3,67.6],[-81.4,67.1],[-83.3,66.4],[-84.7,66.3],[-85.8,66.6],[-86.1,66.1],[-87.0,65.2],[-87.3,64.8],[-88.5,64.1],[-89.9,64.0],[-90.7,63.6],[-90.8,63.0],[-91.9,62.8],[-93.2,62.0],[-94.2,60.9],[-94.6,60.1],[-94.7,58.9],[-93.2,58.8],[-92.8,57.8],[-92.3,57.1],[-90.9,57.3],[-89.0,56.9],[-88.0,56.5],[-87.3,56.0],[-86.1,55.7],[-85.0,55.3],[-83.4,55.2],[-82.3,55.1],[-82.4,54.3],[-82.1,53.3],[-81.4,52.2],[-79.9,51.2],[-79.1,51.5],[-78.6,52.6],[-79.1,54.1],[-79.8,54.7],[-78.2,55.1],[-77.1,55.8],[-76.5,56.5],[-76.6,57.2],[-77.3,58.1],[-78.5,58.8],[-77.3,59.9],[-77.8,60.8],[-78.1,62.3],[-77.4,62.6],[-75.7,62.3],[-74.7,62.2],[-73.8,62.4],[-72.9,62.1],[-71.7,61.5],[-71.4,61.1],[-69.6,61.1],[-69.6,60.2],[-69.3,59.0],[-68.4,58.8],[-67.6,58.2],[-66.2,58.8],[-65.2,59.9],[-64.6,60.3],[-63.8,59.4],[-62.5,58.2],[-61.4,57.0],[-61.8,56.3],[-60.5,55.8],[-59.6,55.2],[-58.0,54.9],[-57.3,54.6],[-56.9,53.8],[-56.2,53.6],[-55.8,53.3],[-55.7,52.1],[-56.4,51.8],[-57.1,51.4],[-58.8,51.1],[-60.0,50.2],[-61.7,50.1],[-63.9,50.3],[-65.4,50.3],[-66.4,50.2],[-67.2,49.5],[-68.5,49.1],[-70.0,47.7],[-71.1,46.8],[-70.3,47.0],[-68.7,48.3],[-66.6,49.1],[-65.1,49.2],[-64.2,48.7],[-65.1,48.1],[-64.8,47.0],[-64.5,46.2],[-63.2,45.7],[-61.5,45.9],[-60.5,47.0],[-60.4,46.3],[-59.8,45.9],[-61.0,45.3],[-63.3,44.7],[-64.2,44.3],[-65.4,43.5],[-66.1,43.6],[-66.2,44.5],[-64.4,45.3],[-66.0,45.3],[-67.1,45.1],[-67.8,45.7],[-67.8,47.1],[-68.2,47.4],[-68.9,47.2],[-69.2,47.4],[-70.0,46.7],[-70.3,45.9],[-70.7,45.5],[-71.1,45.3],[-71.4,45.3],[-71.5,45.0],[-73.3,45.0],[-74.9,45.0],[-75.3,44.8],[-76.4,44.1],[-76.5,44.0],[-76.8,43.6],[-77.7,43.6],[-78.7,43.6],[-79.2,43.5],[-79.0,43.3],[-78.9,43.0],[-78.9,42.9],[-80.2,42.4],[-81.3,42.2],[-82.4,41.7],[-82.7,41.7],[-83.0,41.8],[-83.1,42.0],[-83.1,42.1],[-82.9,42.4],[-82.4,43.0],[-82.1,43.6],[-82.3,44.4],[-82.6,45.3],[-83.6,45.8],[-83.5,46.0],[-83.6,46.1],[-83.9,46.1],[-84.1,46.3],[-84.1,46.5],[-84.3,46.4],[-84.6,46.4],[-84.5,46.5],[-84.8,46.6],[-84.9,46.9],[-85.7,47.2],[-86.5,47.6],[-87.4,47.9],[-88.4,48.3],[-89.3,48.0],[-89.6,48.0],[-90.8,48.3],[-91.6,48.1],[-92.6,48.5],[-93.6,48.6],[-94.3,48.7],[-94.6,48.8],[-94.8,49.4],[-95.2,49.4],[-95.2,49],[-97.2,49.0],[-100.7,49],[-104.0,49.0],[-107.0,49],[-110.0,49],[-113,49],[-116.0,49],[-117.0,49],[-120,49],[-122.8,49]],[[-84.0,62.5],[-81.9,62.9],[-83.1,62.2],[-84.0,62.5]],[[-79.8,72.8],[-80.8,73.7],[-78.1,73.7],[-76.3,72.8],[-78.4,72.9],[-79.8,72.8]],[[-93.6,75.0],[-95.6,74.7],[-96.3,75.4],[-94.0,75.3],[-93.6,75.0]],[[-96.8,78.8],[-95.8,78.1],[-98.1,78.1],[-98.6,78.9],[-96.8,78.8]],[[-88.2,74.4],[-92.4,74.8],[-92.9,75.9],[-96.0,76.4],[-96.7,77.2],[-93.6,76.8],[-90.7,76.4],[-89.8,75.8],[-87.8,75.6],[-84.8,75.7],[-81.1,75.7],[-79.8,74.9],[-81.9,74.4],[-86.1,74.4],[-88.2,74.4]],[[-111.3,78.2],[-110.2,77.7],[-113.5,77.7],[-111.3,78.2]],[[-111.0,78.8],[-110.9,78.4],[-112.5,78.6],[-111.0,78.8]],[[-55.6,51.3],[-56.8,49.8],[-55.5,49.9],[-54.9,49.3],[-53.5,49.2],[-53.1,48.7],[-52.6,47.5],[-53.5,46.6],[-54.0,47.6],[-55.4,46.9],[-55.3,47.4],[-57.3,47.6],[-59.4,47.9],[-59.2,48.5],[-57.4,50.7],[-55.9,51.6],[-55.6,51.3]],[[-83.9,65.1],[-81.6,64.5],[-80.8,64.1],[-81.0,63.4],[-83.1,64.1],[-85.5,63.1],[-87.2,63.5],[-86.2,64.8],[-85.2,65.7],[-84.5,65.4],[-83.9,65.1]],[[-78.8,72.4],[-75.6,72.2],[-74.1,71.3],[-71.2,70.9],[-67.9,70.1],[-68.8,68.7],[-64.9,67.8],[-61.9,66.9],[-63.9,65.0],[-66.7,66.4],[-68.1,65.7],[-65.7,64.6],[-64.7,63.4],[-66.3,62.9],[-67.4,62.9],[-66.2,61.9],[-71.0,62.9],[-71.9,63.7],[-74.8,64.7],[-77.7,64.2],[-77.9,65.3],[-74.0,65.5],[-73.9,66.3],[-72.9,67.7],[-74.8,68.6],[-76.2,69.1],[-78.2,69.8],[-79.5,69.9],[-84.9,70.0],[-88.7,70.4],[-88.5,71.2],[-90.2,72.2],[-88.4,73.5],[-86.6,73.2],[-84.9,73.3],[-80.6,72.7],[-78.8,72.4]],[[-94.5,74.1],[-90.5,73.9],[-93.2,72.8],[-95.4,72.1],[-96.0,73.4],[-94.5,74.1]],[[-122.9,76.1],[-121.2,76.9],[-117.6,77.5],[-116.3,76.9],[-118.0,76.5],[-121.5,75.9],[-122.9,76.1]],[[-132.7,54.0],[-132.0,53.0],[-131.6,52.2],[-132.5,53.1],[-133.2,53.9],[-132.7,54.0]],[[-105.5,79.3],[-100.8,78.8],[-99.7,77.9],[-102.9,78.3],[-104.2,78.7],[-105.5,79.3]],[[-123.5,48.5],[-125.7,48.8],[-126.9,49.5],[-128.1,50.0],[-128.4,50.8],[-126.7,50.4],[-125.4,50.0],[-123.9,49.1],[-123.5,48.5]],[[-121.5,74.4],[-117.6,74.2],[-115.5,73.5],[-119.2,72.5],[-120.5,71.4],[-123.6,71.3],[-125.5,72.3],[-123.9,73.7],[-121.5,74.4]],[[-107.8,75.8],[-105.9,76.0],[-106.3,75.0],[-112.2,74.4],[-113.9,74.7],[-116.3,75.0],[-116.3,76.2],[-112.6,76.1],[-109.1,75.5],[-109.6,76.8],[-108.2,76.2],[-107.8,75.8]],[[-106.5,73.1],[-104.8,71.7],[-102.8,70.5],[-101.1,69.6],[-102.1,69.1],[-104.2,68.9],[-107.1,69.1],[-111.5,68.6],[-113.9,69.0],[-116.1,69.2],[-116.7,70.1],[-113.7,70.2],[-114.3,70.6],[-117.9,70.5],[-116.1,71.3],[-119.4,71.6],[-117.9,72.7],[-114.2,73.1],[-112.4,73.0],[-109.9,73.0],[-108.2,71.7],[-108.4,73.1],[-106.5,73.1]],[[-100.4,72.7],[-100.4,73.8],[-97.4,73.8],[-98.1,73.0],[-96.7,71.7],[-99.3,71.4],[-102.5,72.5],[-100.4,72.7]],[[-106.6,73.6],[-104.5,73.4],[-106.9,73.5],[-106.6,73.6]],[[-98.5,76.7],[-97.7,75.7],[-99.8,74.9],[-100.9,75.6],[-102.6,76.3],[-100.0,76.6],[-98.5,76.7]],[[-96.0,80.6],[-94.3,81.0],[-92.4,81.3],[-89.5,80.5],[-87.0,79.7],[-87.2,79.0],[-90.8,78.2],[-94.0,78.8],[-93.1,79.4],[-96.1,79.7],[-96.0,80.6]],[[-91.6,81.9],[-88.9,82.1],[-85.5,82.7],[-83.2,82.3],[-81.1,83.0],[-76.2,83.2],[-72.8,83.2],[-68.5,83.1],[-63.7,82.9],[-61.9,82.4],[-66.8,81.7],[-65.5,81.5],[-69.5,80.6],[-73.2,79.6],[-76.9,79.3],[-76.2,79.0],[-76.3,78.2],[-78.4,77.5],[-79.6,77.0],[-77.9,76.8],[-83.2,76.5],[-87.6,76.4],[-89.6,77.0],[-88.3,77.9],[-85.0,77.5],[-88.0,78.4],[-85.4,79.0],[-86.5,79.7],[-84.2,80.2],[-81.8,80.5],[-87.6,80.5],[-90.2,81.3],[-91.6,81.9]],[[-75.2,67.4],[-77.0,67.1],[-76.8,68.1],[-75.1,68.0],[-75.2,67.4]],[[-96.3,69.5],[-96.3,68.8],[-98.4,69.0],[-98.9,69.7],[-97.2,69.9],[-96.3,69.5]],[[-64.5,49.9],[-62.9,49.7],[-61.8,49.1],[-63.6,49.4],[-64.5,49.9]],[[-64.0,47.0],[-62.9,46.4],[-62.5,46.0],[-64.1,46.4],[-64.0,47.0]]]},{"i":"US","r":[[[-122.8,49],[-117.0,49],[-113,49],[-107.0,49],[-100.7,49],[-95.2,49],[-94.8,49.4],[-94.3,48.7],[-92.6,48.5],[-90.8,48.3],[-89.3,48.0],[-87.4,47.9],[-85.7,47.2],[-84.8,46.6],[-84.6,46.4],[-84.1,46.5],[-83.9,46.1],[-83.5,46.0],[-82.6,45.3],[-82.1,43.6],[-82.9,42.4],[-83.1,42.0],[-82.7,41.7],[-81.3,42.2],[-78.9,42.9],[-79.0,43.3],[-78.7,43.6],[-76.8,43.6],[-76.4,44.1],[-74.9,45.0],[-71.5,45.0],[-71.1,45.3],[-70.3,45.9],[-69.2,47.4],[-68.2,47.4],[-67.8,45.7],[-67.0,44.8],[-69.1,44.0],[-70.6,43.1],[-70.8,42.3],[-70.1,41.8],[-69.9,41.9],[-70.6,41.5],[-71.9,41.3],[-72.9,41.2],[-72.2,41.1],[-73.3,40.6],[-74.0,40.8],[-74.0,40.4],[-74.9,38.9],[-75.2,39.2],[-75.3,39.0],[-75.1,38.4],[-75.9,37.2],[-75.7,37.9],[-76.3,39.1],[-76.3,38.1],[-76.3,37.9],[-76.0,36.9],[-75.7,35.6],[-77.4,34.5],[-78.6,33.9],[-79.2,33.2],[-80.9,32.0],[-81.5,30.7],[-81.0,29.2],[-80.5,28.0],[-80.1,26.2],[-80.4,25.2],[-81.2,25.2],[-81.7,25.9],[-82.7,27.5],[-82.7,28.6],[-83.7,29.9],[-85.1,29.6],[-85.8,30.2],[-87.5,30.3],[-89.2,30.3],[-89.4,29.9],[-89.2,29.3],[-89.8,29.3],[-90.9,29.1],[-92.5,29.6],[-93.8,29.7],[-95.6,28.7],[-97.1,27.8],[-97.4,26.7],[-97.1,25.9],[-98.2,26.1],[-99.3,26.8],[-100.1,28.1],[-101.0,29.4],[-102.5,29.8],[-103.9,29.3],[-104.7,30.1],[-105.6,31.1],[-106.5,31.8],[-108.2,31.3],[-111.0,31.3],[-114.8,32.5],[-116.0,32.6],[-117.3,33.0],[-118.4,33.7],[-119.1,34.1],[-120.4,34.4],[-120.7,35.2],[-122.5,37.6],[-123.0,38.1],[-123.9,39.8],[-124.2,41.1],[-124.5,42.8],[-124.0,44.6],[-124.1,46.9],[-124.7,48.2],[-123.1,48.0],[-122.3,47.4],[-122.8,49]],[[-155.4,20.1],[-155.1,19.9],[-154.8,19.5],[-155.5,19.1],[-155.9,19.1],[-156.1,19.7],[-155.9,20.0],[-155.9,20.3],[-155.4,20.1]],[[-153.2,58.0],[-152.1,57.6],[-154.0,56.7],[-154.7,57.5],[-153.2,58.0]],[[-141.0,69.7],[-141.0,66.0],[-140.0,60.3],[-138.3,59.6],[-136.5,59.5],[-134.9,59.3],[-133.4,58.4],[-131.7,56.6],[-130.0,55.3],[-130.5,54.8],[-131.1,55.2],[-132.3,56.4],[-134.1,58.1],[-136.6,58.2],[-139.9,59.5],[-142.6,60.1],[-145.9,60.5],[-148.2,60.7],[-148.6,59.9],[-150.6,59.4],[-151.9,59.7],[-150.3,61.0],[-151.9,60.7],[-154.0,59.4],[-154.2,58.1],[-156.3,57.4],[-158.1,56.5],[-159.6,55.6],[-161.2,55.4],[-163.1,54.7],[-164.9,54.6],[-162.9,55.3],[-160.6,56.0],[-158.7,57.0],[-157.7,57.6],[-157.0,58.9],[-158.5,58.8],[-159.7,58.9],[-160.4,59.1],[-162.0,58.7],[-161.9,59.6],[-163.8,59.8],[-165.3,60.5],[-166.1,61.5],[-164.9,62.6],[-163.8,63.2],[-162.3,63.5],[-160.8,63.8],[-161.5,64.4],[-161.4,64.8],[-162.8,64.3],[-165.0,64.4],[-166.8,65.1],[-166.7,66.1],[-163.7,66.6],[-161.7,66.1],[-163.7,67.1],[-165.4,68.0],[-166.2,68.9],[-163.2,69.4],[-161.9,70.3],[-159.0,70.9],[-156.6,71.4],[-154.3,70.7],[-152.2,70.8],[-150.7,70.4],[-147.6,70.2],[-144.9,70.0],[-142.1,69.9],[-141.0,69.7]],[[-171.7,63.8],[-170.5,63.7],[-168.7,63.3],[-169.5,63.0],[-170.7,63.4],[-171.8,63.4],[-171.7,63.8]]]},{"i":"KZ","r":[[[87.4,49.2],[85.8,48.5],[85.2,47.0],[82.5,45.5],[80.0,44.9],[80.2,42.9],[79.6,42.5],[77.7,43.0],[75.6,42.9],[73.6,43.1],[71.8,42.8],[71.0,42.3],[69.1,41.4],[68.3,40.7],[66.7,41.2],[66.0,42.0],[64.9,43.7],[62.0,43.5],[60.2,44.8],[58.5,45.6],[56.0,41.3],[54.8,42.0],[52.9,42.1],[52.4,42.0],[52.5,42.8],[50.9,44.0],[50.3,44.6],[51.3,45.2],[53.0,45.3],[53.0,46.9],[51.2,47.0],[49.1,46.4],[48.7,47.1],[47.3,47.7],[47.0,49.2],[47.5,50.5],[48.7,50.6],[52.3,51.7],[55.7,50.6],[58.4,51.1],[59.9,50.8],[61.6,51.3],[60.9,52.4],[61.7,53.0],[61.4,54.0],[65.7,54.6],[69.1,55.4],[71.2,54.1],[73.5,54.0],[74.4,53.5],[76.5,54.2],[80.0,50.9],[81.9,50.8],[83.9,50.9],[85.1,50.1],[86.8,49.8],[87.4,49.2]]]},{"i":"UZ","r":[[[56.0,41.3],[58.5,45.6],[60.2,44.8],[62.0,43.5],[64.9,43.7],[66.0,42.0],[66.7,41.2],[68.3,40.7],[69.1,41.4],[71.0,42.3],[70.4,41.5],[71.9,41.4],[71.8,40.1],[70.6,40.2],[70.7,41.0],[69.0,40.1],[67.7,39.6],[68.2,38.9],[67.8,37.1],[66.5,37.4],[65.2,38.4],[63.5,39.4],[61.9,41.1],[60.5,41.2],[60.0,42.2],[57.8,42.2],[57.1,41.3],[56.0,41.3]]]},{"i":"PG","r":[[[141.0,-2.6],[144.6,-3.9],[145.8,-4.9],[147.6,-6.1],[147.0,-6.7],[148.1,-8.0],[149.3,-9.1],[150.0,-9.7],[150.8,-10.3],[150.0,-10.7],[148.9,-10.3],[147.1,-9.5],[146.0,-8.1],[143.9,-7.9],[143.4,-9.0],[142.1,-9.2],[141.0,-5.9],[141.0,-2.6]],[[152.6,-3.7],[153.1,-4.5],[152.6,-4.2],[152.0,-3.5],[150.7,-2.7],[151.5,-2.8],[152.2,-3.2],[152.6,-3.7]],[[151.3,-5.8],[150.2,-6.3],[148.9,-6.0],[148.4,-5.4],[149.8,-5.5],[150.1,-5.0],[150.8,-5.5],[151.6,-4.8],[152.1,-4.1],[152.3,-4.9],[151.5,-5.6],[151.3,-5.8]],[[154.8,-5.3],[155.5,-6.2],[155.9,-6.8],[155.2,-6.5],[154.5,-5.1],[154.8,-5.3]]]},{"i":"ID","r":[[[141.0,-2.6],[141.0,-9.1],[139.1,-8.1],[137.6,-8.4],[138.7,-7.3],[137.9,-5.4],[135.2,-4.5],[133.4,-4.0],[132.8,-3.7],[132.0,-2.8],[133.8,-2.5],[132.2,-2.2],[130.9,-1.4],[131.9,-0.7],[134.0,-0.8],[134.4,-2.8],[136.3,-2.3],[138.3,-1.7],[139.9,-2.4],[141.0,-2.6]],[[125.0,-8.9],[125.1,-9.4],[123.6,-10.4],[123.6,-9.9],[125.0,-8.9]],[[117.9,4.1],[118.0,2.3],[119.0,0.9],[117.5,0.1],[116.6,-1.5],[116.1,-4.0],[114.9,-4.1],[113.8,-3.4],[112.1,-3.5],[111.0,-3.0],[110.1,-1.6],[109.1,-0.5],[109.1,1.3],[109.8,1.3],[111.2,1.0],[112.4,1.4],[113.8,1.2],[115.1,2.8],[115.9,4.3],[117.9,4.1]],[[129.4,-2.8],[130.8,-3.9],[129.2,-3.4],[127.9,-3.4],[129.4,-2.8]],[[127.9,2.2],[128.6,1.5],[128.6,0.3],[128.0,-0.3],[128.1,-0.9],[127.4,1.0],[127.9,2.2]],[[122.9,0.9],[125.1,1.6],[124.4,0.4],[122.7,0.4],[120.2,0.2],[120.9,-1.4],[123.3,-0.6],[122.8,-0.9],[121.5,-1.9],[122.3,-3.5],[123.2,-5.3],[122.2,-5.3],[121.7,-4.9],[121.6,-4.2],[121.0,-2.6],[120.4,-4.1],[119.8,-5.7],[119.7,-4.5],[119.1,-3.5],[119.2,-2.1],[119.8,0.2],[120.9,1.3],[122.9,0.9]],[[120.3,-10.3],[119.9,-9.4],[120.8,-10.0],[120.3,-10.3]],[[121.3,-8.5],[122.9,-8.1],[121.3,-8.9],[119.9,-8.4],[121.3,-8.5]],[[118.3,-8.4],[119.1,-8.7],[117.3,-9.0],[117.1,-8.5],[117.9,-8.1],[118.3,-8.4]],[[108.5,-6.4],[110.5,-6.9],[112.6,-6.9],[114.5,-7.8],[114.6,-8.8],[112.6,-8.4],[110.6,-8.1],[108.7,-7.6],[106.5,-7.4],[105.4,-6.9],[107.3,-6.0],[108.5,-6.4]],[[104.4,-1.1],[104.9,-2.3],[106.1,-3.1],[105.8,-5.9],[103.9,-5.0],[102.2,-3.6],[100.9,-2.1],[99.3,0.2],[98.6,1.8],[97.2,3.3],[95.4,5.0],[95.9,5.4],[98.4,4.3],[99.7,3.2],[101.7,2.1],[103.1,0.6],[103.4,-0.7],[104.4,-1.1]]]},{"i":"AR","r":[[[-68.6,-52.6],[-67.8,-53.9],[-65.0,-54.7],[-66.5,-55.2],[-67.6,-54.9],[-68.6,-52.6]],[[-57.6,-30.2],[-58.1,-32.0],[-58.3,-33.3],[-58.5,-34.4],[-57.4,-36.0],[-56.8,-36.9],[-59.2,-38.7],[-62.3,-38.8],[-62.3,-40.2],[-62.7,-41.0],[-64.7,-40.8],[-65.0,-42.1],[-63.8,-42.0],[-64.4,-42.9],[-65.3,-44.5],[-66.5,-45.0],[-67.6,-46.3],[-65.6,-47.2],[-67.2,-48.7],[-68.7,-50.3],[-68.8,-51.8],[-68.6,-52.3],[-71.9,-52.0],[-72.3,-50.7],[-73.3,-50.4],[-72.6,-48.9],[-72.4,-47.7],[-71.6,-45.6],[-71.2,-44.8],[-71.8,-44.2],[-71.9,-43.4],[-71.7,-42.1],[-71.7,-39.8],[-70.8,-38.6],[-71.1,-36.7],[-70.4,-35.2],[-69.8,-33.3],[-70.5,-31.4],[-70.0,-29.4],[-69.0,-27.5],[-68.6,-26.5],[-68.4,-24.5],[-67.0,-23.0],[-66.3,-21.8],[-64.4,-22.8],[-62.8,-22.0],[-60.8,-23.9],[-58.8,-24.8],[-57.6,-25.6],[-57.6,-27.4],[-55.7,-27.4],[-54.6,-25.7],[-53.6,-26.1],[-54.5,-27.5],[-56.3,-28.9],[-57.6,-30.2]]]},{"i":"CL","r":[[[-68.6,-52.6],[-67.6,-54.9],[-67.3,-55.3],[-68.6,-55.6],[-70.0,-55.2],[-72.3,-54.5],[-74.7,-52.8],[-72.4,-53.7],[-70.6,-53.6],[-69.3,-52.5],[-68.6,-52.6]],[[-69.6,-17.6],[-69.0,-19.0],[-68.8,-20.4],[-67.8,-22.9],[-67.0,-23.0],[-68.4,-24.5],[-68.6,-26.5],[-69.0,-27.5],[-70.0,-29.4],[-70.5,-31.4],[-69.8,-33.3],[-70.4,-35.2],[-71.1,-36.7],[-70.8,-38.6],[-71.7,-39.8],[-71.7,-42.1],[-71.9,-43.4],[-71.8,-44.2],[-71.2,-44.8],[-71.6,-45.6],[-72.4,-47.7],[-72.6,-48.9],[-73.3,-50.4],[-72.3,-50.7],[-71.9,-52.0],[-68.6,-52.3],[-69.9,-52.5],[-71.0,-53.8],[-72.6,-53.5],[-73.7,-52.8],[-75.3,-51.6],[-75.5,-50.4],[-75.2,-47.7],[-75.6,-46.6],[-74.4,-44.1],[-72.7,-42.4],[-73.7,-43.4],[-74.0,-41.8],[-73.2,-39.3],[-73.6,-37.2],[-72.6,-35.5],[-71.4,-32.4],[-71.4,-30.1],[-70.9,-27.6],[-70.4,-23.6],[-70.2,-19.8],[-69.9,-18.1],[-69.6,-17.6]]]},{"i":"CD","r":[[[29.3,-4.5],[29.4,-5.9],[30.2,-7.1],[30.7,-8.3],[29.0,-8.4],[28.4,-9.2],[28.5,-10.8],[28.6,-12.0],[29.6,-12.2],[28.9,-13.2],[28.2,-12.3],[27.2,-11.6],[25.8,-11.8],[24.8,-11.2],[24.3,-11.0],[23.5,-10.9],[22.4,-11.0],[22.2,-9.9],[21.8,-8.9],[21.7,-7.9],[20.5,-7.3],[20.1,-6.9],[19.4,-7.2],[19.0,-8.0],[18.1,-8.0],[17.1,-7.5],[16.6,-6.6],[13.4,-5.9],[12.7,-6.0],[12.2,-5.8],[12.5,-5.2],[13.0,-4.8],[13.6,-4.5],[14.2,-4.8],[15.2,-4.3],[16.0,-3.5],[16.4,-1.7],[17.5,-0.7],[17.7,-0.1],[17.8,0.9],[18.1,2.4],[18.5,3.5],[18.9,4.7],[20.3,4.7],[21.7,4.2],[22.7,4.6],[23.3,4.6],[24.8,4.9],[25.3,5.2],[26.4,5.2],[27.4,5.2],[28.4,4.3],[29.2,4.4],[30.0,4.2],[30.8,3.5],[31.2,2.2],[30.5,1.6],[29.9,0.6],[29.6,-0.6],[29.3,-1.6],[29.1,-2.3],[29.3,-3.3],[29.3,-4.5]]]},{"i":"SO","r":[[[41.6,-1.7],[41.0,2.8],[42.1,4.2],[43.7,5.0],[47.8,8.0],[48.9,9.5],[48.9,11.0],[48.9,11.4],[49.3,11.4],[50.3,11.7],[51.1,12.0],[51.0,11.2],[50.8,10.3],[50.1,8.1],[48.6,5.3],[46.6,2.9],[44.1,1.1],[42.0,-0.9],[41.6,-1.7]]]},{"i":"KE","r":[[[39.2,-4.7],[37.7,-3.1],[33.9,-0.9],[34.2,0.5],[35.0,1.9],[34.5,3.6],[34.6,4.8],[35.8,5.3],[36.2,4.4],[38.1,3.6],[38.7,3.6],[39.6,3.4],[40.8,4.3],[41.9,3.9],[41.0,-0.9],[40.9,-2.1],[40.3,-2.6],[39.8,-3.7],[39.2,-4.7]]]},{"i":"SD","r":[[[24.6,8.2],[23.5,9.0],[23.6,9.7],[23.0,10.7],[22.9,11.4],[22.5,12.3],[21.9,12.6],[22.3,13.4],[22.5,14.1],[22.6,14.9],[23.9,15.6],[23.9,20],[25,22],[32.9,22],[37.2,21.0],[37.1,19.8],[37.9,18.4],[37.9,17.4],[36.9,17.0],[36.3,14.8],[36.3,13.6],[35.3,12.1],[34.7,10.9],[34.0,9.6],[34.0,9.5],[33.8,10.0],[33.2,10.7],[33.2,12.2],[32.7,12.0],[32.3,11.7],[31.9,10.5],[30.8,9.7],[29.6,10.1],[29.0,9.6],[28.0,9.4],[27.1,9.6],[26.5,9.6],[25.8,10.4],[24.8,9.8],[24.2,8.7],[24.6,8.2]]]},{"i":"TD","r":[[[23.8,19.6],[23.0,15.7],[22.3,14.3],[22.2,13.8],[22.0,13.0],[22.3,12.6],[22.5,11.7],[22.9,11.1],[21.7,10.6],[20.1,9.0],[18.8,9.0],[18.4,8.3],[16.7,7.5],[16.3,7.8],[15.3,7.4],[15.1,8.4],[14.5,9.0],[14.2,10.0],[14.9,10.0],[14.9,10.9],[14.9,12.2],[14.6,13.3],[14.0,14.0],[14.0,15.7],[15.3,17.9],[15.9,20.4],[15.5,21.0],[14.9,22.9],[19.8,21.5],[23.8,19.6]]]},{"i":"HT","r":[[[-71.7,19.7],[-71.7,18.8],[-71.7,18.3],[-72.4,18.2],[-73.5,18.2],[-74.5,18.3],[-73.4,18.5],[-72.3,18.7],[-72.8,19.5],[-73.2,19.9],[-71.7,19.7]]]},{"i":"DO","r":[[[-71.7,18.0],[-71.9,18.6],[-71.6,19.2],[-71.6,19.9],[-70.2,19.6],[-69.8,19.3],[-69.3,19.0],[-68.3,18.6],[-69.2,18.4],[-70.0,18.4],[-70.5,18.2],[-71.0,18.3],[-71.7,17.8],[-71.7,18.0]]]},{"i":"RU","r":[[[49.1,46.4],[48.6,45.8],[47.7,45.6],[46.7,44.6],[47.6,43.7],[47.5,43.0],[48.6,41.8],[48.0,41.4],[47.8,41.2],[47.4,41.2],[46.7,41.8],[46.4,41.9],[45.8,42.1],[45.5,42.5],[44.5,42.7],[43.9,42.6],[43.8,42.7],[42.4,43.2],[40.9,43.4],[40.1,43.6],[40.0,43.4],[38.7,44.3],[37.5,44.7],[36.7,45.2],[37.4,45.4],[38.2,46.2],[37.7,46.6],[39.1,47.0],[39.1,47.3],[38.2,47.1],[38.3,47.5],[38.8,47.8],[39.7,47.9],[39.9,48.2],[39.7,48.8],[40.1,49.3],[40.1,49.6],[38.6,49.9],[38.0,49.9],[37.4,50.4],[36.6,50.2],[35.4,50.6],[35.4,50.8],[35.0,51.2],[34.2,51.3],[34.1,51.6],[34.4,51.8],[33.8,52.3],[32.7,52.2],[32.4,52.3],[32.2,52.1],[31.8,52.1],[31.5,52.7],[31.3,53.1],[31.5,53.2],[32.3,53.1],[32.7,53.4],[32.4,53.6],[31.7,53.8],[31.8,54.0],[31.4,54.2],[30.8,54.8],[31.0,55.1],[30.9,55.6],[29.9,55.8],[29.4,55.7],[29.2,55.9],[28.2,56.2],[27.9,56.8],[27.8,57.2],[27.3,57.5],[27.7,57.8],[27.4,58.7],[28.1,59.3],[28.0,59.5],[29.1,60.0],[28.1,60.5],[30.2,61.8],[31.1,62.4],[31.5,62.9],[30.0,63.6],[30.4,64.2],[29.5,64.9],[30.2,65.8],[29.1,66.9],[30.0,67.7],[28.4,68.4],[28.6,69.1],[29.4,69.2],[31.1,69.6],[32.1,69.9],[33.8,69.3],[36.5,69.1],[40.3,67.9],[41.1,67.5],[41.1,66.8],[40.0,66.3],[38.4,66.0],[33.9,66.8],[33.2,66.6],[34.8,65.9],[34.9,65.4],[34.9,64.4],[36.2,64.1],[37.0,63.8],[37.1,64.3],[36.5,64.8],[37.2,65.1],[39.6,64.5],[40.4,64.8],[39.8,65.5],[42.1,66.5],[43.0,66.4],[43.9,66.1],[44.5,66.8],[43.7,67.4],[44.2,68.0],[43.5,68.6],[46.2,68.2],[46.8,67.7],[45.6,67.6],[45.6,67.0],[46.3,66.7],[47.9,66.9],[48.1,67.5],[50.2,68.0],[53.7,68.9],[54.5,68.8],[53.5,68.2],[54.7,68.1],[55.4,68.4],[57.3,68.5],[58.8,68.9],[59.9,68.3],[61.1,68.9],[60.0,69.5],[60.5,69.8],[63.5,69.5],[64.9,69.2],[68.5,68.1],[69.2,68.6],[68.2,69.1],[68.1,69.4],[66.9,69.5],[67.3,69.9],[66.7,70.7],[66.7,71.0],[68.5,71.9],[69.2,72.8],[69.9,73.0],[72.6,72.8],[72.8,72.2],[71.8,71.4],[72.5,71.1],[72.8,70.4],[72.6,69.0],[73.7,68.4],[73.2,67.7],[71.3,66.3],[72.4,66.2],[72.8,66.5],[73.9,66.8],[74.2,67.3],[75.1,67.8],[74.5,68.3],[74.9,69.0],[73.8,69.1],[73.6,69.6],[74.4,70.6],[73.1,71.4],[74.9,72.1],[74.7,72.8],[75.2,72.9],[75.7,72.3],[75.3,71.3],[76.4,71.2],[75.9,71.9],[77.6,72.3],[79.7,72.3],[81.5,71.8],[80.6,72.6],[80.5,73.6],[82.2,73.8],[84.7,73.8],[86.8,73.9],[86.0,74.5],[87.2,75.1],[88.3,75.1],[90.3,75.6],[92.9,75.8],[93.2,76.0],[95.9,76.1],[96.7,75.9],[98.9,76.4],[100.8,76.4],[101.0,76.9],[102.0,77.3],[104.4,77.7],[106.1,77.4],[104.7,77.1],[107.0,77.0],[107.2,76.5],[108.2,76.7],[111.1,76.7],[113.3,76.2],[114.1,75.8],[113.9,75.3],[112.8,75.0],[110.2,74.5],[109.4,74.2],[110.6,74.0],[112.1,73.8],[113.0,74.0],[113.5,73.3],[114.0,73.6],[115.6,73.8],[118.8,73.6],[119.0,73.1],[123.2,73.0],[123.3,73.7],[125.4,73.6],[127.0,73.6],[128.6,73.0],[129.1,72.4],[128.5,72.0],[129.7,71.2],[131.3,70.8],[132.3,71.8],[133.9,71.4],[135.6,71.7],[137.5,71.3],[138.2,71.6],[139.9,71.5],[139.1,72.4],[140.5,72.8],[149.5,72.2],[150.4,71.6],[153.0,70.8],[157.0,71.0],[159.0,70.9],[159.8,70.5],[159.7,69.7],[160.9,69.4],[162.3,69.6],[164.1,69.7],[165.9,69.5],[167.8,69.6],[169.6,68.7],[170.8,69.0],[170.0,69.7],[170.5,70.1],[173.6,69.8],[175.7,69.9],[178.6,69.4],[180,69.0],[180,65.0],[178.7,64.5],[177.4,64.6],[178.3,64.1],[178.9,63.3],[179.4,63.0],[179.5,62.6],[179.2,62.3],[177.4,62.5],[174.6,61.8],[173.7,61.7],[172.2,61.0],[170.7,60.3],[170.3,59.9],[168.9,60.6],[166.3,59.8],[165.8,60.2],[164.9,59.7],[163.5,59.9],[163.2,59.2],[162.0,58.2],[162.1,57.8],[163.2,57.6],[163.1,56.2],[162.1,56.1],[161.7,55.3],[162.1,54.9],[160.4,54.3],[160.0,53.2],[158.5,53.0],[158.2,51.9],[156.8,51.0],[156.4,51.7],[156.0,53.2],[155.4,55.4],[155.9,56.8],[156.8,57.4],[156.8,57.8],[158.4,58.1],[160.2,59.3],[161.9,60.3],[163.7,61.1],[164.5,62.6],[163.3,62.5],[162.7,61.6],[160.1,60.5],[159.3,61.8],[156.7,61.4],[154.2,59.8],[155.0,59.1],[152.8,58.9],[151.3,58.8],[151.3,59.5],[149.8,59.7],[148.5,59.2],[145.5,59.3],[142.2,59.0],[139.0,57.1],[135.1,54.7],[136.7,54.6],[137.2,54.0],[138.2,53.8],[138.8,54.3],[139.9,54.2],[141.3,53.1],[141.4,52.2],[140.6,51.2],[140.5,50.0],[140.1,48.4],[138.6,47.0],[138.2,46.3],[136.9,45.1],[135.5,44.0],[134.9,43.4],[133.5,42.8],[132.9,42.8],[132.3,43.3],[130.9,42.6],[130.8,42.2],[130.6,42.4],[130.6,42.9],[131.1,42.9],[131.3,44.1],[131.0,45.0],[131.9,45.3],[133.1,45.1],[133.8,46.1],[134.1,47.2],[134.5,47.6],[135.0,48.5],[133.4,48.2],[132.5,47.8],[131.0,47.8],[130.6,48.7],[129.4,49.4],[127.7,49.8],[127.3,50.7],[126.9,51.4],[126.6,51.8],[125.9,52.8],[125.1,53.2],[123.6,53.5],[122.2,53.4],[121.0,53.3],[120.2,52.8],[120.7,52.5],[120.7,52.0],[120.2,51.6],[119.3,50.6],[119.3,50.1],[117.9,49.5],[116.7,49.9],[115.5,49.8],[115.0,50.1],[114.4,50.2],[112.9,49.5],[111.6,49.4],[110.7,49.1],[109.4,49.3],[108.5,49.3],[107.9,49.8],[106.9,50.3],[105.9,50.4],[104.6,50.3],[103.7,50.1],[102.3,50.5],[102.1,51.3],[100.9,51.5],[100.0,51.6],[98.9,52.0],[97.8,51.0],[98.2,50.4],[97.3,49.7],[95.8,50.0],[94.8,50.0],[94.1,50.5],[93.1,50.5],[92.2,50.8],[90.7,50.3],[88.8,49.5],[87.8,49.3],[87.4,49.2],[86.8,49.8],[85.5,49.7],[85.1,50.1],[84.4,50.3],[83.9,50.9],[83.4,51.1],[81.9,50.8],[80.6,51.4],[80.0,50.9],[77.8,53.4],[76.5,54.2],[76.9,54.5],[74.4,53.5],[73.4,53.5],[73.5,54.0],[72.2,54.4],[71.2,54.1],[70.9,55.2],[69.1,55.4],[68.2,55.0],[65.7,54.6],[65.2,54.4],[61.4,54.0],[61.0,53.7],[61.7,53.0],[60.7,52.7],[60.9,52.4],[60.0,52.0],[61.6,51.3],[61.3,50.8],[59.9,50.8],[59.6,50.5],[58.4,51.1],[56.8,51.0],[55.7,50.6],[54.5,51.0],[52.3,51.7],[50.8,51.7],[48.7,50.6],[48.6,49.9],[47.5,50.5],[46.8,49.4],[47.0,49.2],[46.5,48.4],[47.3,47.7],[48.1,47.7],[48.7,47.1],[48.6,46.6],[49.1,46.4]],[[93.8,81.0],[97.9,80.7],[99.9,78.9],[95.0,79.0],[92.5,80.1],[93.8,81.0]],[[102.8,79.3],[105.1,78.3],[101.3,79.2],[102.8,79.3]],[[138.8,76.1],[145.1,75.6],[140.6,74.8],[137.0,75.3],[138.8,76.1]],[[148.2,75.3],[149.6,74.7],[146.1,75.2],[148.2,75.3]],[[139.9,73.4],[142.1,73.9],[143.6,73.2],[140.0,73.3],[139.9,73.4]],[[44.8,80.6],[48.3,80.8],[49.1,80.8],[51.5,80.7],[49.8,80.4],[48.8,80.2],[46.5,80.2],[44.8,80.6]],[[22.7,54.3],[19.7,54.4],[21.3,55.2],[22.8,54.9],[22.7,54.3]],[[53.5,73.7],[55.6,75.1],[61.2,76.3],[66.2,76.8],[68.9,76.5],[64.6,75.7],[58.5,74.3],[55.4,72.4],[57.5,70.7],[53.7,70.8],[51.6,71.5],[52.5,72.2],[54.4,73.6],[53.5,73.7]],[[142.9,53.7],[143.2,51.8],[144.7,49.0],[142.6,47.9],[143.5,46.1],[142.1,46.0],[142.0,47.8],[142.1,49.6],[141.6,51.9],[142.6,53.8],[142.7,54.4],[142.9,53.7]],[[-174.9,67.2],[-174.3,66.3],[-171.9,66.9],[-170.9,65.5],[-172.6,64.5],[-173.9,64.3],[-176.0,64.9],[-177.2,65.5],[-178.9,65.7],[-179.9,65.9],[-180,65.0],[-177.6,68.2],[-174.9,67.2]],[[-178.7,70.9],[-180,71.5],[-179.0,71.6],[-177.7,71.1],[-178.7,70.9]],[[33.4,46.0],[34.4,46.0],[34.9,45.8],[35.0,45.7],[36.5,45.5],[35.2,44.9],[33.3,44.6],[32.5,45.3],[33.6,45.9],[33.4,46.0]]]},{"i":"BS","r":[[[-78.2,25.2],[-77.5,24.3],[-77.8,23.7],[-78.4,24.6],[-78.2,25.2]]]},{"i":"FK","r":[[[-61.2,-51.9],[-59.1,-51.5],[-57.8,-51.5],[-59.4,-52.2],[-60.7,-52.3],[-61.2,-51.9]]]},{"i":"NO","r":[[[15.1,79.7],[17.0,80.1],[21.5,79.0],[18.5,77.8],[17.1,76.8],[13.8,77.4],[13.2,78.0],[10.4,79.7],[13.7,79.7],[15.1,79.7]],[[31.1,69.6],[28.6,69.1],[27.7,70.2],[25.7,69.1],[23.7,68.9],[21.2,69.4],[20.0,69.1],[18.0,68.6],[16.8,68.0],[15.1,66.2],[13.9,64.4],[12.6,64.1],[12.0,61.8],[12.3,60.1],[11.0,58.9],[8.4,58.3],[5.7,58.6],[5.0,62.0],[8.6,63.5],[12.4,65.9],[16.4,68.6],[21.4,70.3],[24.5,71.0],[28.2,71.2],[30.0,70.2],[31.1,69.6]],[[27.4,80.1],[23.0,79.4],[19.9,79.8],[17.4,80.3],[21.9,80.4],[25.4,80.4],[27.4,80.1]],[[24.7,77.9],[20.7,77.7],[20.8,78.3],[23.3,78.1],[24.7,77.9]]]},{"i":"GL","r":[[[-46.8,82.6],[-39.9,83.2],[-35.1,83.6],[-20.8,82.7],[-26.5,82.3],[-31.4,82.0],[-24.8,81.8],[-22.1,81.7],[-20.6,81.5],[-12.8,81.7],[-16.3,80.6],[-20.0,80.2],[-18.9,79.4],[-19.7,77.6],[-20.0,76.9],[-19.8,76.1],[-20.7,75.2],[-21.6,74.2],[-20.8,73.5],[-23.6,73.3],[-22.3,72.2],[-24.8,72.3],[-22.1,71.5],[-23.5,70.5],[-25.5,71.4],[-26.4,70.2],[-22.3,70.1],[-27.7,68.5],[-31.8,68.1],[-34.2,66.7],[-37.0,65.9],[-39.8,65.5],[-40.7,64.1],[-42.8,62.7],[-42.9,61.1],[-44.8,60.0],[-48.3,60.9],[-49.9,62.4],[-52.1,64.3],[-53.7,66.1],[-54.0,67.2],[-51.5,68.7],[-50.9,69.9],[-52.6,69.4],[-54.7,69.6],[-54.4,70.8],[-51.4,70.6],[-54.0,71.5],[-55.8,71.7],[-55.3,73.0],[-57.3,74.7],[-58.6,75.5],[-63.4,76.2],[-68.5,76.1],[-71.4,77.0],[-66.8,77.4],[-73.3,78.0],[-69.4,78.9],[-65.3,79.8],[-67.2,80.5],[-62.2,81.3],[-60.3,82.0],[-54.1,82.2],[-50.4,82.4],[-46.6,82.0],[-46.9,82.2],[-46.8,82.6]]]},{"i":"TF","r":[[[68.9,-48.6],[70.5,-49.1],[70.3,-49.7],[68.7,-49.2],[68.9,-48.6]]]},{"i":"TL","r":[[[125.0,-8.9],[125.9,-8.4],[127.0,-8.3],[127.0,-8.7],[125.1,-9.4],[125.0,-8.9]]]},{"i":"ZA","r":[[[16.3,-28.6],[17.2,-28.4],[17.8,-28.9],[19.0,-29.0],[19.9,-24.8],[20.8,-25.9],[20.9,-26.8],[22.1,-26.3],[22.8,-25.5],[23.7,-25.4],[25.0,-25.7],[25.8,-25.2],[26.5,-24.6],[27.1,-23.6],[29.4,-22.1],[30.3,-22.3],[31.2,-22.3],[31.9,-24.4],[31.8,-25.8],[31.0,-25.7],[30.7,-26.4],[31.3,-27.3],[32.1,-26.7],[32.6,-27.5],[32.2,-28.8],[31.3,-29.4],[30.6,-30.4],[28.9,-32.2],[27.5,-33.2],[25.9,-33.7],[25.2,-33.8],[23.6,-33.8],[22.6,-33.9],[20.7,-34.4],[19.6,-34.8],[18.9,-34.4],[18.4,-34.1],[18.3,-33.3],[18.2,-32.4],[17.6,-30.7],[17.1,-29.9],[16.3,-28.6]]]},{"i":"LS","r":[[[29.0,-29.0],[29.0,-29.7],[28.3,-30.2],[27.7,-30.6],[27.5,-29.2],[28.5,-28.6],[29.0,-29.0]]]},{"i":"MX","r":[[[-117.1,32.5],[-114.7,32.7],[-113.3,32.0],[-109.0,31.3],[-108.2,31.8],[-106.1,31.4],[-105.0,30.6],[-104.5,29.6],[-103.1,29.0],[-101.7,29.8],[-100.5,28.7],[-99.5,27.5],[-99.0,26.4],[-97.5,25.8],[-97.5,25.0],[-97.8,22.9],[-97.7,21.9],[-97.2,20.6],[-96.3,19.3],[-94.8,18.6],[-93.5,18.4],[-92.0,18.7],[-90.8,19.3],[-90.5,20.7],[-89.6,21.3],[-87.7,21.5],[-86.8,21.3],[-87.4,20.3],[-87.4,19.5],[-87.8,18.3],[-88.3,18.5],[-88.8,17.9],[-89.2,18.0],[-90.1,17.8],[-91.0,17.3],[-91.1,16.9],[-90.6,16.5],[-90.5,16.1],[-92.2,15.3],[-92.2,14.8],[-93.4,15.6],[-94.7,16.2],[-96.1,15.8],[-97.3,15.9],[-98.9,16.6],[-100.8,17.2],[-101.9,17.9],[-103.5,18.3],[-105.0,19.3],[-105.7,20.4],[-105.5,20.8],[-105.3,21.4],[-105.7,22.3],[-106.9,23.8],[-108.4,25.2],[-109.4,25.8],[-109.8,26.7],[-110.6,27.9],[-111.8,28.5],[-112.3,29.3],[-113.2,30.8],[-113.9,31.6],[-114.8,31.8],[-114.8,30.9],[-114.3,29.8],[-113.4,28.8],[-113.1,28.4],[-112.8,27.8],[-112.2,27.2],[-111.3,25.7],[-110.7,24.8],[-110.2,24.3],[-109.4,23.4],[-109.9,22.8],[-110.3,23.4],[-111.7,24.5],[-112.1,25.5],[-112.8,26.3],[-113.6,26.6],[-114.5,27.1],[-115.0,27.8],[-114.2,28.1],[-114.9,29.3],[-115.9,30.2],[-116.7,31.6],[-117.1,32.5]]]},{"i":"UY","r":[[[-57.6,-30.2],[-56.0,-30.9],[-54.6,-31.5],[-53.2,-32.7],[-53.4,-33.8],[-54.9,-35.0],[-56.2,-34.9],[-57.8,-34.5],[-58.3,-33.3],[-58.1,-32.0],[-57.6,-30.2]]]},{"i":"BR","r":[[[-53.4,-33.8],[-53.7,-33.2],[-53.2,-32.7],[-53.8,-32.0],[-54.6,-31.5],[-55.6,-30.9],[-56.0,-30.9],[-57.0,-30.1],[-57.6,-30.2],[-56.3,-28.9],[-55.2,-27.9],[-54.5,-27.5],[-53.6,-26.9],[-53.6,-26.1],[-54.1,-25.5],[-54.6,-25.7],[-54.4,-25.2],[-54.3,-24.6],[-54.3,-24.0],[-54.7,-23.8],[-55.0,-24.0],[-55.4,-24.0],[-55.5,-23.6],[-55.6,-22.7],[-55.8,-22.4],[-56.5,-22.1],[-56.9,-22.3],[-57.9,-22.1],[-57.9,-20.7],[-58.2,-20.2],[-57.9,-20.0],[-57.9,-19.4],[-57.7,-19.0],[-57.5,-18.2],[-57.7,-17.6],[-58.3,-17.3],[-58.4,-16.9],[-58.2,-16.3],[-60.2,-16.3],[-60.5,-15.1],[-60.3,-15.1],[-60.3,-14.6],[-60.5,-14.4],[-60.5,-13.8],[-61.1,-13.5],[-61.7,-13.5],[-62.1,-13.2],[-62.8,-13.0],[-63.2,-12.6],[-64.3,-12.5],[-65.4,-11.6],[-65.3,-10.9],[-65.4,-10.5],[-65.3,-9.8],[-66.6,-9.9],[-67.2,-10.3],[-68.0,-10.7],[-68.3,-11.0],[-68.8,-11.0],[-69.5,-11.0],[-70.1,-11.1],[-70.5,-11.0],[-70.5,-9.5],[-71.3,-10.1],[-72.2,-10.1],[-72.6,-9.5],[-73.2,-9.5],[-73.0,-9.0],[-73.6,-8.4],[-74.0,-7.5],[-73.7,-7.3],[-73.7,-6.9],[-73.1,-6.6],[-73.2,-6.1],[-73.0,-5.7],[-72.9,-5.3],[-71.7,-4.6],[-70.9,-4.4],[-70.8,-4.3],[-69.9,-4.3],[-69.4,-1.6],[-69.4,-1.1],[-69.6,-0.5],[-70.0,-0.2],[-70.0,0.5],[-69.5,0.7],[-69.3,0.6],[-69.2,1.0],[-69.8,1.1],[-69.8,1.7],[-67.9,1.7],[-67.5,2.0],[-67.3,1.7],[-67.1,1.1],[-66.9,1.3],[-66.3,0.7],[-65.5,0.8],[-65.4,1.1],[-64.6,1.3],[-64.2,1.5],[-64.1,1.9],[-63.4,2.2],[-63.4,2.4],[-64.3,2.5],[-64.4,3.1],[-64.4,3.8],[-64.8,4.1],[-64.6,4.1],[-63.9,4.0],[-63.1,3.8],[-62.8,4.0],[-62.1,4.2],[-61.0,4.5],[-60.6,4.9],[-60.7,5.2],[-60.2,5.2],[-60.0,5.0],[-60.1,4.6],[-59.8,4.4],[-59.5,4.0],[-59.8,3.6],[-60.0,2.8],[-59.7,2.2],[-59.6,1.8],[-59.0,1.3],[-58.5,1.3],[-58.4,1.5],[-58.1,1.5],[-57.7,1.7],[-57.3,1.9],[-56.8,1.9],[-56.5,1.9],[-56.0,1.8],[-55.9,2.0],[-56.1,2.2],[-56.0,2.5],[-55.6,2.4],[-55.1,2.5],[-54.5,2.3],[-54.1,2.1],[-53.8,2.4],[-53.6,2.3],[-53.4,2.1],[-52.9,2.1],[-52.6,2.5],[-52.2,3.2],[-51.7,4.2],[-51.3,4.2],[-51.1,3.7],[-50.5,1.9],[-50.0,1.7],[-49.9,1.0],[-50.7,0.2],[-50.4,-0.1],[-48.6,-0.2],[-48.6,-1.2],[-47.8,-0.6],[-46.6,-0.9],[-44.9,-1.6],[-44.4,-2.1],[-44.6,-2.7],[-43.4,-2.4],[-41.5,-2.9],[-40.0,-2.9],[-38.5,-3.7],[-37.2,-4.8],[-36.5,-5.1],[-35.6,-5.1],[-35.2,-5.5],[-34.9,-6.7],[-34.7,-7.3],[-35.1,-9.0],[-35.6,-9.6],[-37.0,-11.0],[-37.7,-12.2],[-38.4,-13.0],[-38.7,-13.1],[-39.0,-13.8],[-38.9,-15.7],[-39.2,-17.2],[-39.3,-17.9],[-39.6,-18.3],[-39.8,-19.6],[-40.8,-20.9],[-40.9,-21.9],[-41.8,-22.4],[-42.0,-23.0],[-43.1,-23.0],[-44.6,-23.4],[-45.4,-23.8],[-46.5,-24.1],[-47.6,-24.9],[-48.5,-25.9],[-48.6,-26.6],[-48.5,-27.2],[-48.7,-28.2],[-48.9,-28.7],[-49.6,-29.2],[-50.7,-31.0],[-51.6,-31.8],[-52.3,-32.2],[-52.7,-33.2],[-53.4,-33.8]]]},{"i":"BO","r":[[[-69.5,-11.0],[-68.3,-11.0],[-67.2,-10.3],[-65.3,-9.8],[-65.3,-10.9],[-64.3,-12.5],[-62.8,-13.0],[-61.7,-13.5],[-60.5,-13.8],[-60.3,-14.6],[-60.5,-15.1],[-58.2,-16.3],[-58.3,-17.3],[-57.5,-18.2],[-57.9,-19.4],[-58.2,-20.2],[-59.1,-19.4],[-61.8,-19.6],[-62.3,-21.1],[-62.8,-22.0],[-64.4,-22.8],[-66.3,-21.8],[-67.8,-22.9],[-68.8,-20.4],[-69.0,-19.0],[-69.6,-17.6],[-69.4,-15.7],[-69.3,-15.0],[-68.9,-13.6],[-68.7,-12.6],[-69.5,-11.0]]]},{"i":"PE","r":[[[-69.9,-4.3],[-70.9,-4.4],[-72.9,-5.3],[-73.2,-6.1],[-73.7,-6.9],[-74.0,-7.5],[-73.0,-9.0],[-72.6,-9.5],[-71.3,-10.1],[-70.5,-11.0],[-69.5,-11.0],[-68.9,-12.9],[-68.9,-14.5],[-69.2,-15.3],[-69.0,-16.5],[-69.9,-18.1],[-71.4,-17.8],[-73.4,-16.4],[-76.0,-14.6],[-76.3,-13.5],[-78.1,-10.4],[-79.4,-7.9],[-80.5,-6.5],[-80.9,-5.7],[-81.1,-4.0],[-80.2,-3.8],[-80.4,-4.4],[-79.6,-4.5],[-78.6,-4.5],[-77.8,-3.0],[-75.5,-1.6],[-75.4,-0.2],[-74.4,-0.5],[-73.7,-1.3],[-72.3,-2.4],[-71.4,-2.3],[-70.0,-2.7],[-70.4,-3.8],[-69.9,-4.3]]]},{"i":"CO","r":[[[-66.9,1.3],[-67.3,1.7],[-67.9,1.7],[-69.8,1.1],[-69.3,0.6],[-70.0,0.5],[-69.6,-0.5],[-69.4,-1.6],[-70.4,-3.8],[-70.0,-2.7],[-71.4,-2.3],[-72.3,-2.4],[-73.7,-1.3],[-74.4,-0.5],[-75.4,-0.2],[-76.3,0.4],[-77.4,0.4],[-77.9,0.8],[-79.0,1.7],[-78.7,2.3],[-77.9,2.7],[-77.1,3.8],[-77.3,4.7],[-77.3,5.8],[-77.9,7.2],[-77.4,7.6],[-77.5,8.5],[-76.8,8.6],[-75.7,9.4],[-75.5,10.6],[-74.3,11.1],[-73.4,11.2],[-72.2,12.0],[-71.4,12.4],[-71.3,11.8],[-72.2,11.1],[-72.9,10.5],[-73.3,9.2],[-72.7,8.6],[-72.4,8.0],[-72.4,7.4],[-72.0,7.0],[-70.1,7.0],[-69.0,6.2],[-67.7,6.3],[-67.5,5.6],[-67.8,4.5],[-67.3,3.5],[-67.8,2.8],[-67.2,2.3],[-66.9,1.3]]]},{"i":"PA","r":[[[-77.4,8.7],[-77.2,7.9],[-77.8,7.7],[-78.2,7.5],[-78.2,8.3],[-78.6,8.7],[-79.6,8.9],[-80.2,8.3],[-80.5,8.1],[-80.3,7.4],[-80.9,7.2],[-81.2,7.6],[-81.7,8.1],[-82.4,8.3],[-82.9,8.1],[-82.9,8.4],[-82.9,8.8],[-82.9,9.1],[-82.5,9.6],[-82.2,9.0],[-81.7,9.0],[-80.9,8.9],[-79.9,9.3],[-79.0,9.6],[-78.5,9.4],[-77.7,8.9],[-77.4,8.7]]]},{"i":"CR","r":[[[-82.5,9.6],[-82.9,9.1],[-82.9,8.8],[-82.9,8.4],[-83.5,8.4],[-83.6,8.8],[-83.9,9.3],[-84.6,9.6],[-85.0,10.1],[-85.1,9.6],[-85.7,9.9],[-85.8,10.4],[-85.9,10.9],[-85.6,11.2],[-84.7,11.1],[-84.2,10.8],[-83.7,10.9],[-83.0,10.0],[-82.5,9.6]]]},{"i":"NI","r":[[[-83.7,10.9],[-84.2,10.8],[-84.7,11.1],[-85.6,11.2],[-86.1,11.4],[-86.7,12.1],[-87.7,12.9],[-87.4,12.9],[-87.0,13.0],[-86.7,13.3],[-86.5,13.8],[-86.1,14.0],[-85.7,14.0],[-85.2,14.4],[-85.1,14.6],[-84.8,14.8],[-84.4,14.6],[-84.0,14.7],[-83.5,15.0],[-83.2,14.9],[-83.2,14.3],[-83.5,13.6],[-83.5,12.9],[-83.6,12.3],[-83.7,11.6],[-83.8,11.1],[-83.7,10.9]]]},{"i":"HN","r":[[[-83.1,15.0],[-83.6,14.9],[-84.2,14.7],[-84.6,14.7],[-84.9,14.8],[-85.1,14.6],[-85.5,14.1],[-85.8,13.8],[-86.3,13.8],[-86.8,13.8],[-86.9,13.3],[-87.3,13.0],[-87.8,13.4],[-87.9,13.9],[-88.5,13.8],[-88.8,14.1],[-89.4,14.4],[-89.2,14.9],[-88.7,15.3],[-88.1,15.7],[-87.6,15.9],[-87.4,15.8],[-86.4,15.8],[-86.0,16.0],[-85.4,15.9],[-85.0,16.0],[-84.4,15.8],[-83.8,15.4],[-83.1,15.0]]]},{"i":"SV","r":[[[-89.4,14.4],[-88.8,14.1],[-88.5,13.8],[-87.9,13.9],[-87.8,13.4],[-88.5,13.2],[-89.3,13.5],[-90.1,13.7],[-89.7,14.1],[-89.6,14.4],[-89.4,14.4]]]},{"i":"GT","r":[[[-92.2,14.5],[-92.1,15.1],[-91.7,16.1],[-90.4,16.4],[-90.7,16.7],[-91.5,17.3],[-91.0,17.8],[-89.1,17.8],[-89.2,15.9],[-88.6,15.7],[-88.2,15.7],[-89.2,15.1],[-89.1,14.7],[-89.6,14.4],[-89.7,14.1],[-90.1,13.7],[-91.2,13.9],[-92.2,14.5]]]},{"i":"BZ","r":[[[-89.1,17.8],[-89.0,18.0],[-88.5,18.5],[-88.3,18.4],[-88.1,18.1],[-88.2,17.5],[-88.2,17.0],[-88.6,16.3],[-88.9,15.9],[-89.2,17.0],[-89.1,17.8]]]},{"i":"VE","r":[[[-60.7,5.2],[-61.0,4.5],[-62.8,4.0],[-63.9,4.0],[-64.8,4.1],[-64.4,3.1],[-63.4,2.4],[-64.1,1.9],[-64.6,1.3],[-65.5,0.8],[-66.9,1.3],[-67.4,2.6],[-67.3,3.3],[-67.6,3.8],[-67.7,5.2],[-67.3,6.1],[-68.3,6.2],[-69.4,6.1],[-70.7,7.1],[-72.2,7.3],[-72.5,7.6],[-72.4,8.4],[-72.8,9.1],[-73.0,9.7],[-72.6,10.8],[-72.0,11.6],[-71.4,11.5],[-71.6,11.0],[-72.1,9.9],[-71.3,9.1],[-71.4,10.2],[-70.2,11.4],[-69.9,12.2],[-68.9,11.4],[-68.2,10.6],[-66.2,10.6],[-64.9,10.1],[-64.3,10.6],[-61.9,10.7],[-62.4,9.9],[-60.8,9.4],[-60.2,8.6],[-60.6,7.8],[-60.3,7.0],[-61.2,6.7],[-61.4,6.0],[-60.7,5.2]]]},{"i":"GY","r":[[[-56.5,1.9],[-57.3,1.9],[-58.1,1.5],[-58.5,1.3],[-59.6,1.8],[-60.0,2.8],[-59.5,4.0],[-60.1,4.6],[-60.2,5.2],[-61.4,6.0],[-61.2,6.7],[-60.3,7.0],[-60.6,7.8],[-59.1,8.0],[-58.5,6.8],[-57.5,6.3],[-57.3,5.1],[-57.9,4.6],[-57.6,3.3],[-57.2,2.8],[-56.5,1.9]]]},{"i":"SR","r":[[[-54.5,2.3],[-55.6,2.4],[-56.1,2.2],[-56.0,1.8],[-57.2,2.8],[-57.6,3.3],[-57.9,4.6],[-57.3,5.1],[-55.9,5.8],[-55.0,6.0],[-54.5,4.9],[-54.0,3.6],[-54.3,2.7],[-54.5,2.3]]]},{"i":"FR","r":[[[-51.7,4.2],[-52.6,2.5],[-53.4,2.1],[-53.8,2.4],[-54.5,2.3],[-54.2,3.2],[-54.4,4.2],[-54.0,5.8],[-52.9,5.4],[-51.7,4.2]],[[6.2,49.5],[8.1,49.0],[7.5,47.6],[6.7,47.5],[6.0,46.7],[6.5,46.4],[6.8,45.7],[6.7,45.0],[7.5,44.1],[6.5,43.1],[3.1,43.1],[1.8,42.3],[0.3,42.6],[-1.9,43.4],[-1.2,46.0],[-3.0,47.6],[-4.6,48.7],[-1.6,48.6],[-1.0,49.3],[1.6,50.9],[2.7,50.8],[3.6,50.4],[4.8,50.0],[5.9,49.4],[6.2,49.5]],[[8.7,42.6],[9.6,42.2],[8.8,41.6],[8.7,42.6]]]},{"i":"EC","r":[[[-75.4,-0.2],[-75.5,-1.6],[-77.8,-3.0],[-78.6,-4.5],[-79.6,-4.5],[-80.4,-4.4],[-80.2,-3.8],[-79.8,-2.7],[-80.4,-2.7],[-80.8,-2.0],[-80.6,-0.9],[-80.0,0.4],[-79.5,1.0],[-77.9,0.8],[-77.4,0.4],[-76.3,0.4],[-75.4,-0.2]]]},{"i":"JM","r":[[[-77.6,18.5],[-76.4,18.2],[-76.9,17.9],[-77.8,17.9],[-78.2,18.5],[-77.6,18.5]]]},{"i":"CU","r":[[[-82.3,23.2],[-80.6,23.1],[-79.3,22.4],[-78.0,22.3],[-76.5,21.2],[-75.6,21.0],[-74.9,20.7],[-74.3,20.1],[-75.6,19.9],[-77.8,19.9],[-77.5,20.7],[-78.5,21.0],[-79.3,21.6],[-80.5,22.0],[-82.2,22.4],[-82.8,22.7],[-83.9,22.2],[-84.5,21.8],[-84.4,22.2],[-83.8,22.8],[-82.5,23.1],[-82.3,23.2]]]},{"i":"ZW","r":[[[31.2,-22.3],[30.3,-22.3],[29.4,-22.1],[28.0,-21.5],[27.7,-20.5],[26.2,-19.3],[25.6,-18.5],[26.4,-17.8],[27.0,-17.9],[28.5,-16.5],[28.9,-16.0],[30.3,-15.5],[31.2,-15.9],[31.9,-16.3],[32.8,-16.7],[32.7,-18.7],[32.8,-19.7],[32.5,-20.4],[31.2,-22.3]]]},{"i":"BW","r":[[[29.4,-22.1],[27.1,-23.6],[26.5,-24.6],[25.8,-25.2],[25.0,-25.7],[23.7,-25.4],[22.8,-25.5],[22.1,-26.3],[20.9,-26.8],[20.8,-25.9],[19.9,-24.8],[20.9,-21.8],[21.7,-18.2],[23.6,-18.3],[24.5,-17.9],[25.3,-17.7],[25.9,-18.7],[27.3,-20.4],[27.7,-20.9],[28.8,-21.6],[29.4,-22.1]]]},{"i":"NA","r":[[[19.9,-24.8],[19.0,-29.0],[17.8,-28.9],[17.2,-28.4],[16.3,-28.6],[15.2,-27.1],[14.7,-25.4],[14.4,-22.7],[13.9,-21.7],[12.8,-19.7],[11.8,-18.1],[12.2,-17.1],[13.5,-17.0],[14.2,-17.4],[19.0,-17.8],[23.2,-17.5],[24.7,-17.4],[25.1,-17.7],[24.2,-17.9],[23.2,-17.9],[20.9,-18.3],[19.9,-21.8],[19.9,-24.8]]]},{"i":"SN","r":[[[-16.7,13.6],[-17.6,14.7],[-16.7,15.6],[-16.1,16.5],[-15.1,16.6],[-14.1,16.3],[-12.8,15.3],[-12.1,14.0],[-11.6,13.1],[-11.5,12.4],[-12.2,12.5],[-12.5,12.3],[-13.7,12.6],[-15.8,12.5],[-16.7,12.4],[-15.9,13.1],[-15.5,13.3],[-14.7,13.3],[-13.8,13.5],[-14.4,13.6],[-15.1,13.9],[-15.6,13.6],[-16.7,13.6]]]},{"i":"ML","r":[[[-11.5,12.4],[-11.6,13.1],[-12.1,14.0],[-11.8,14.8],[-11.3,15.4],[-10.1,15.3],[-9.6,15.5],[-5.3,16.2],[-6.0,20.6],[-4.9,25.0],[1.8,20.6],[2.7,19.9],[3.2,19.1],[4.3,16.9],[3.6,15.6],[1.4,15.3],[0.4,14.9],[-0.5,15.1],[-2.0,14.6],[-3.0,13.8],[-3.5,13.3],[-4.3,13.2],[-5.2,11.7],[-5.5,11.0],[-5.8,10.2],[-6.2,10.5],[-6.7,10.4],[-7.6,10.1],[-8.0,10.2],[-8.3,10.8],[-8.6,10.8],[-8.4,11.4],[-8.9,12.1],[-9.3,12.3],[-9.9,12.1],[-10.6,11.9],[-11.0,12.2],[-11.5,12.1],[-11.5,12.4]]]},{"i":"MR","r":[[[-17.1,21.0],[-12.9,21.3],[-12.9,23.3],[-12.0,25.9],[-8.7,27.4],[-6.5,25.0],[-5.5,16.3],[-5.5,15.5],[-9.7,15.3],[-10.7,15.1],[-11.7,15.4],[-12.2,14.6],[-13.4,16.0],[-14.6,16.6],[-15.6,16.4],[-16.5,16.1],[-16.3,17.2],[-16.3,19.1],[-16.3,20.1],[-17.1,21.0]]]},{"i":"BJ","r":[[[2.7,6.3],[1.6,6.8],[1.5,9.3],[1.1,10.2],[0.9,11.0],[1.4,11.5],[2.2,11.9],[2.8,12.2],[3.6,11.3],[3.6,10.3],[3.2,9.4],[2.7,8.5],[2.7,6.3]]]},{"i":"NE","r":[[[14.9,22.9],[15.5,21.0],[15.9,20.4],[15.3,17.9],[14.0,15.7],[14.0,14.0],[14.6,13.3],[14.2,12.8],[14.0,12.5],[13.1,13.6],[11.5,13.3],[10.7,13.2],[9.5,12.9],[7.8,13.3],[6.8,13.1],[5.4,13.9],[4.1,13.5],[3.7,12.6],[2.8,12.2],[2.2,11.9],[1.0,12.9],[0.4,14.0],[0.4,14.9],[1.4,15.3],[3.6,15.6],[4.3,16.9],[5.7,19.6],[12.0,23.5],[14.1,22.5],[14.9,22.9]]]},{"i":"NG","r":[[[2.7,6.3],[2.7,8.5],[3.2,9.4],[3.6,10.3],[3.6,11.3],[3.7,12.6],[4.1,13.5],[5.4,13.9],[6.8,13.1],[7.8,13.3],[9.5,12.9],[10.7,13.2],[11.5,13.3],[13.1,13.6],[14.0,12.5],[14.6,12.1],[14.4,11.6],[13.3,10.2],[13.0,9.4],[12.2,8.3],[11.8,7.4],[11.1,6.6],[10.1,7.0],[9.2,6.4],[8.5,4.8],[7.1,4.5],[5.9,4.3],[5.0,5.6],[3.6,6.3],[2.7,6.3]]]},{"i":"CM","r":[[[14.5,12.9],[15.0,11.6],[15.5,10.0],[14.6,9.9],[14.0,9.5],[15.0,8.8],[15.4,7.7],[14.8,6.4],[14.5,5.5],[14.5,4.7],[15.0,3.9],[15.9,3.0],[16.0,2.3],[15.1,2.0],[13.1,2.3],[12.4,2.2],[11.3,2.3],[9.8,3.1],[8.9,3.9],[8.5,4.5],[8.8,5.5],[9.5,6.5],[10.5,7.1],[11.7,7.0],[12.1,7.8],[12.8,8.7],[13.2,9.6],[13.6,10.8],[14.5,11.9],[14.2,12.5],[14.5,12.9]]]},{"i":"TG","r":[[[0.9,11.0],[1.1,10.2],[1.5,9.3],[1.6,6.8],[1.1,5.9],[0.6,6.9],[0.7,8.3],[0.4,9.5],[-0.0,10.7],[0.9,11.0]]]},{"i":"GH","r":[[[0.0,11.0],[0.4,10.2],[0.5,8.7],[0.5,7.4],[0.8,6.3],[-0.5,5.3],[-2.0,4.7],[-2.8,5.4],[-3.0,7.4],[-2.8,9.6],[-2.9,11.0],[-0.8,10.9],[0.0,11.0]]]},{"i":"CI","r":[[[-8.0,10.2],[-7.6,10.1],[-6.7,10.4],[-6.2,10.5],[-5.8,10.2],[-5.0,10.2],[-4.3,9.6],[-3.5,9.9],[-2.6,8.2],[-3.2,6.3],[-2.9,5.0],[-4.0,5.2],[-5.8,5.0],[-7.5,4.3],[-7.6,5.2],[-7.6,5.7],[-8.3,6.2],[-8.4,6.9],[-8.4,7.7],[-8.2,8.1],[-8.2,8.5],[-8.1,9.4],[-8.2,10.1],[-8.0,10.2]]]},{"i":"GN","r":[[[-13.7,12.6],[-12.5,12.3],[-12.2,12.5],[-11.5,12.4],[-11.3,12.1],[-10.9,12.2],[-10.2,11.8],[-9.6,12.2],[-9.1,12.3],[-8.8,11.8],[-8.6,11.1],[-8.4,10.9],[-8.3,10.5],[-8.2,10.1],[-8.1,9.4],[-8.2,8.5],[-8.2,8.1],[-8.4,7.7],[-8.9,7.3],[-9.4,7.5],[-9.8,8.5],[-10.2,8.4],[-10.5,8.7],[-10.6,9.3],[-11.1,10.0],[-12.2,9.9],[-12.6,9.6],[-13.2,8.9],[-14.1,9.9],[-14.6,10.2],[-14.8,10.9],[-14.7,11.5],[-14.1,11.7],[-13.7,11.8],[-13.7,12.2],[-13.7,12.6]]]},{"i":"GW","r":[[[-16.7,12.4],[-15.8,12.5],[-13.7,12.6],[-13.8,12.1],[-13.9,11.7],[-14.4,11.5],[-15.1,11.0],[-16.1,11.5],[-16.3,12.0],[-16.7,12.4]]]},{"i":"LR","r":[[[-8.4,7.7],[-8.4,6.9],[-8.3,6.2],[-7.6,5.7],[-7.6,5.2],[-8.0,4.4],[-9.9,5.6],[-11.4,6.8],[-11.1,7.4],[-10.2,8.4],[-9.8,8.5],[-9.4,7.5],[-8.9,7.3],[-8.4,7.7]]]},{"i":"SL","r":[[[-13.2,8.9],[-12.6,9.6],[-12.2,9.9],[-11.1,10.0],[-10.6,9.3],[-10.5,8.7],[-10.2,8.4],[-11.1,7.4],[-11.4,6.8],[-12.4,7.3],[-13.1,8.2],[-13.2,8.9]]]},{"i":"BF","r":[[[-5.4,10.4],[-5.2,11.4],[-4.4,12.5],[-4.0,13.5],[-3.1,13.5],[-2.2,14.2],[-1.1,15.0],[-0.3,14.9],[0.3,14.4],[1.0,13.3],[2.2,12.6],[1.9,11.6],[1.2,11.1],[0.0,11.0],[-0.8,10.9],[-2.9,11.0],[-2.8,9.6],[-4.0,9.9],[-4.8,9.8],[-5.4,10.4]]]},{"i":"CF","r":[[[27.4,5.2],[26.4,5.2],[25.3,5.2],[24.8,4.9],[23.3,4.6],[22.7,4.6],[21.7,4.2],[20.3,4.7],[18.9,4.7],[18.5,3.5],[17.1,3.7],[16.0,2.3],[15.9,3.0],[15.0,3.9],[14.5,4.7],[14.5,5.5],[14.8,6.4],[16.1,7.5],[16.5,7.7],[18.0,7.9],[18.9,8.6],[19.1,9.1],[21.0,9.5],[22.2,11.0],[23.0,10.7],[23.6,9.7],[23.5,9.0],[24.6,8.2],[25.1,7.5],[26.2,6.5],[27.2,5.6],[27.4,5.2]]]},{"i":"CG","r":[[[18.5,3.5],[18.1,2.4],[17.8,0.9],[17.7,-0.1],[17.5,-0.7],[16.4,-1.7],[16.0,-3.5],[15.2,-4.3],[14.2,-4.8],[13.6,-4.5],[13.0,-4.8],[12.3,-4.6],[11.1,-4.0],[11.5,-2.8],[12.5,-2.4],[13.1,-2.4],[14.3,-2.0],[14.3,-0.6],[14.3,1.2],[13.3,1.3],[13.1,2.3],[15.1,2.0],[16.0,2.3],[17.1,3.7],[18.5,3.5]]]},{"i":"GA","r":[[[11.3,2.3],[12.4,2.2],[13.1,2.3],[13.3,1.3],[14.3,1.2],[14.3,-0.6],[14.3,-2.0],[13.1,-2.4],[12.5,-2.4],[11.5,-2.8],[11.1,-4.0],[9.4,-2.1],[8.8,-0.8],[9.3,0.3],[9.8,1.1],[11.3,2.3]]]},{"i":"GQ","r":[[[9.6,2.3],[11.3,1.1],[9.5,1.0],[9.6,2.3]]]},{"i":"ZM","r":[[[30.7,-8.3],[31.6,-8.8],[32.8,-9.2],[33.5,-10.5],[33.1,-11.6],[33.0,-12.8],[33.2,-14.0],[30.3,-15.5],[28.9,-16.0],[28.5,-16.5],[27.0,-17.9],[26.4,-17.8],[25.1,-17.7],[24.7,-17.4],[23.2,-17.5],[21.9,-16.1],[24.0,-12.9],[24.1,-12.2],[24.0,-11.2],[24.3,-11.0],[24.8,-11.2],[25.8,-11.8],[27.2,-11.6],[28.2,-12.3],[28.9,-13.2],[29.6,-12.2],[28.6,-12.0],[28.5,-10.8],[28.4,-9.2],[29.0,-8.4],[30.7,-8.3]]]},{"i":"MW","r":[[[32.8,-9.2],[33.9,-9.7],[34.6,-11.5],[34.6,-13.6],[35.3,-13.9],[35.8,-15.9],[35.0,-16.8],[34.3,-15.5],[34.5,-14.6],[33.8,-14.5],[32.7,-13.7],[33.3,-12.4],[33.3,-10.8],[33.2,-9.7],[32.8,-9.2]]]},{"i":"MZ","r":[[[34.6,-11.5],[36.5,-11.7],[37.5,-11.6],[38.4,-11.3],[40.3,-10.3],[40.4,-11.8],[40.6,-14.2],[40.5,-15.4],[39.5,-16.7],[37.4,-17.6],[35.9,-18.8],[34.8,-19.8],[35.2,-21.3],[35.4,-22.1],[35.5,-23.1],[35.6,-23.7],[35.0,-24.5],[33.0,-25.4],[32.7,-26.1],[32.8,-26.7],[32.0,-26.3],[31.8,-25.5],[31.7,-23.7],[32.2,-21.1],[32.7,-20.3],[32.6,-19.4],[32.8,-18.0],[32.3,-16.4],[31.6,-16.1],[30.3,-15.9],[30.2,-14.8],[33.8,-14.5],[34.5,-14.6],[34.3,-15.5],[35.0,-16.8],[35.8,-15.9],[35.3,-13.9],[34.6,-13.6],[34.6,-11.5]]]},{"i":"SZ","r":[[[32.1,-26.7],[31.3,-27.3],[30.7,-26.4],[31.0,-25.7],[31.8,-25.8],[32.1,-26.7]]]},{"i":"AO","r":[[[13.0,-4.8],[12.5,-5.2],[12.2,-5.8],[12.3,-4.6],[13.0,-4.8]],[[12.3,-6.1],[13.0,-6.0],[16.3,-5.9],[16.9,-7.2],[17.5,-8.1],[18.5,-7.8],[19.2,-7.7],[20.0,-7.1],[20.6,-6.9],[21.7,-7.3],[21.9,-8.3],[21.9,-9.5],[22.2,-11.1],[22.8,-11.0],[23.9,-10.9],[23.9,-11.7],[23.9,-12.6],[21.9,-12.9],[22.6,-16.9],[21.4,-17.9],[18.3,-17.3],[14.1,-17.4],[12.8,-16.9],[11.7,-17.3],[11.8,-15.8],[12.2,-14.4],[12.7,-13.1],[13.6,-12.0],[13.7,-10.7],[13.1,-9.8],[12.9,-9.0],[12.9,-7.6],[12.2,-6.3],[12.3,-6.1]]]},{"i":"BI","r":[[[30.5,-2.4],[30.7,-3.0],[30.5,-3.6],[29.8,-4.5],[29.3,-3.3],[29.6,-2.9],[30.5,-2.4]]]},{"i":"IL","r":[[[35.7,32.7],[35.2,32.5],[35.2,31.8],[34.9,31.4],[35.4,31.1],[34.8,29.8],[34.3,31.2],[34.6,31.5],[34.8,32.1],[35.1,33.1],[35.5,33.1],[35.8,33.3],[35.7,32.7]]]},{"i":"LB","r":[[[35.8,33.3],[35.5,33.1],[35.5,33.9],[36.0,34.6],[36.6,34.2],[35.8,33.3]]]},{"i":"MG","r":[[[49.5,-12.5],[50.1,-13.6],[50.5,-15.2],[50.2,-16.0],[49.7,-15.7],[49.8,-16.9],[49.4,-18.0],[48.5,-20.5],[47.5,-23.8],[46.3,-25.2],[44.8,-25.3],[43.8,-24.5],[43.3,-22.8],[43.4,-21.3],[43.9,-20.8],[44.5,-19.4],[44.0,-18.3],[44.3,-16.9],[44.9,-16.2],[45.9,-15.8],[46.9,-15.2],[48.0,-14.1],[48.3,-13.8],[48.9,-12.5],[49.5,-12.5]]]},{"i":"GM","r":[[[-16.7,13.6],[-15.4,13.9],[-14.7,13.6],[-14.0,13.8],[-14.3,13.3],[-15.1,13.5],[-15.7,13.3],[-16.8,13.2],[-16.7,13.6]]]},{"i":"TN","r":[[[9.5,30.3],[8.4,32.5],[7.6,33.3],[8.1,34.7],[8.2,36.4],[9.5,37.3],[10.2,36.7],[11.1,36.9],[10.6,35.9],[10.8,34.8],[10.3,33.8],[11.1,33.3],[11.4,32.4],[10.6,31.8],[10.1,31.0],[9.5,30.3]]]},{"i":"DZ","r":[[[-8.7,27.4],[-8.7,27.7],[-7.1,29.6],[-5.2,30.0],[-3.7,30.9],[-3.1,31.7],[-1.3,32.3],[-1.4,32.9],[-1.8,34.5],[-1.2,35.7],[0.5,36.3],[3.2,36.8],[5.3,36.7],[7.3,37.1],[8.4,36.9],[8.4,35.5],[7.5,34.1],[8.4,32.7],[9.1,32.1],[9.8,29.4],[9.7,28.1],[9.6,27.1],[9.3,26.1],[9.9,24.9],[10.8,24.6],[12.0,23.5],[5.7,19.6],[3.2,19.1],[2.7,19.9],[1.8,20.6],[-4.9,25.0],[-8.7,27.4]]]},{"i":"JO","r":[[[35.5,32.4],[36.8,32.3],[39.2,32.2],[37.0,31.5],[37.7,30.3],[36.7,29.9],[36.1,29.2],[34.9,29.5],[35.4,31.5],[35.5,32.4]]]},{"i":"AE","r":[[[51.6,24.2],[51.8,24.0],[53.4,24.2],[54.7,24.8],[56.1,26.1],[56.4,24.9],[55.8,24.3],[55.5,23.9],[55.2,23.1],[55.0,22.5],[51.6,24.0],[51.6,24.2]]]},{"i":"QA","r":[[[50.8,24.8],[51.0,26.0],[51.6,25.8],[51.4,24.6],[50.8,24.8]]]},{"i":"KW","r":[[[48.0,30.0],[48.1,29.3],[47.7,28.5],[46.6,29.1],[48.0,30.0]]]},{"i":"IQ","r":[[[39.2,32.2],[41.0,34.4],[41.3,36.4],[42.3,37.2],[43.9,37.3],[44.8,37.2],[46.1,35.7],[45.6,34.7],[46.1,33.0],[47.8,31.7],[48.0,31.0],[48.6,29.9],[47.3,30.1],[44.7,29.2],[40.4,31.9],[39.2,32.2]]]},{"i":"OM","r":[[[55.2,22.7],[55.5,23.5],[56.0,24.1],[55.9,24.9],[56.8,24.2],[58.1,23.7],[59.2,23.0],[59.8,22.5],[59.4,21.7],[58.9,21.1],[58.0,20.5],[57.7,19.7],[57.7,18.9],[56.6,18.6],[56.3,17.9],[55.3,17.6],[54.8,17.0],[53.6,16.7],[52.8,17.3],[55.0,20.0],[55.2,22.7]]]},{"i":"KH","r":[[[102.6,12.2],[103.0,14.2],[105.2,14.3],[106.5,14.6],[107.6,13.5],[105.8,11.6],[105.2,10.9],[103.5,10.6],[102.6,12.2]]]},{"i":"TH","r":[[[105.2,14.3],[103.0,14.2],[102.6,12.2],[100.8,12.6],[100.1,13.4],[99.5,10.8],[99.2,9.2],[100.3,8.3],[101.0,6.9],[102.1,6.2],[101.2,5.7],[100.3,6.6],[99.7,6.8],[99.0,7.9],[98.3,7.8],[98.3,9.0],[99.0,11.0],[99.2,12.8],[99.1,13.8],[98.2,15.1],[98.9,16.2],[97.9,17.6],[97.8,18.6],[99.0,19.8],[100.1,20.4],[100.6,19.5],[101.0,18.4],[102.1,18.1],[103.0,18.0],[104.0,18.2],[104.8,16.4],[105.5,14.7],[105.2,14.3]]]},{"i":"LA","r":[[[107.4,14.2],[106.0,13.9],[105.5,14.7],[104.8,16.4],[104.0,18.2],[103.0,18.0],[102.1,18.1],[101.0,18.4],[100.6,19.5],[100.1,20.4],[101.2,21.4],[101.8,21.2],[102.2,22.5],[103.2,20.8],[104.8,19.9],[103.9,19.3],[105.9,17.5],[107.3,15.9],[107.4,14.2]]]},{"i":"MM","r":[[[100.1,20.4],[99.0,19.8],[97.8,18.6],[97.9,17.6],[98.9,16.2],[98.2,15.1],[99.1,13.8],[99.2,12.8],[99.0,11.0],[98.5,10.7],[98.4,12.0],[98.1,13.6],[97.6,16.1],[96.5,16.4],[94.8,15.8],[94.5,17.3],[93.5,19.4],[93.1,19.9],[92.3,21.5],[92.7,22.0],[93.1,22.7],[93.3,24.1],[94.6,24.7],[95.2,26.0],[96.4,27.3],[97.1,27.7],[97.3,28.3],[98.2,27.7],[98.7,26.7],[97.7,25.1],[98.7,24.1],[99.5,22.9],[100.0,21.7],[101.2,21.8],[100.3,20.8],[100.1,20.4]]]},{"i":"VN","r":[[[104.3,10.5],[106.2,11.0],[107.5,12.3],[107.4,14.2],[107.3,15.9],[105.9,17.5],[103.9,19.3],[104.8,19.9],[103.2,20.8],[102.2,22.5],[103.5,22.7],[105.3,23.4],[106.7,22.8],[107.0,21.8],[106.7,20.7],[105.7,19.1],[107.4,16.7],[108.9,15.3],[109.2,11.7],[107.2,10.4],[105.2,8.6],[105.1,9.9],[104.3,10.5]]]},{"i":"KP","r":[[[130.6,42.4],[130.8,42.2],[130.0,41.9],[129.7,40.9],[129.0,40.5],[128.0,40.0],[127.5,39.3],[127.8,39.1],[128.2,38.4],[127.1,38.3],[126.2,37.8],[125.7,37.9],[125.3,37.7],[125.0,37.9],[125.0,38.5],[125.1,38.8],[125.3,39.6],[124.3,39.9],[126.2,41.1],[127.3,41.5],[128.1,42.0],[130.0,43.0],[130.6,42.4]]]},{"i":"KR","r":[[[126.2,37.7],[126.7,37.8],[127.8,38.3],[128.3,38.6],[129.5,36.8],[129.1,35.1],[127.4,34.5],[126.4,34.9],[126.1,36.7],[126.2,37.7]]]},{"i":"MN","r":[[[87.8,49.3],[90.7,50.3],[93.1,50.5],[94.8,50.0],[97.3,49.7],[97.8,51.0],[100.0,51.6],[102.1,51.3],[103.7,50.1],[105.9,50.4],[107.9,49.8],[109.4,49.3],[111.6,49.4],[114.4,50.2],[115.5,49.8],[116.2,49.1],[115.7,47.7],[117.3,47.7],[118.9,47.7],[119.7,46.7],[117.4,46.7],[116.0,45.7],[113.5,44.8],[111.9,45.1],[111.7,44.1],[111.1,43.4],[109.2,42.5],[106.1,42.1],[104.5,41.9],[101.8,42.5],[99.5,42.5],[96.3,42.7],[95.3,44.2],[93.5,45.0],[90.9,45.3],[91.0,46.9],[88.9,48.1],[87.8,49.3]]]},{"i":"IN","r":[[[97.3,28.3],[97.1,27.7],[96.4,27.3],[95.2,26.0],[94.6,24.7],[93.3,24.1],[93.1,22.7],[92.7,22.0],[91.9,23.6],[91.2,23.5],[91.9,24.1],[91.8,25.1],[89.9,25.3],[89.4,26.0],[88.2,25.8],[88.3,24.9],[88.7,24.2],[88.9,22.9],[88.9,21.7],[87.0,21.5],[86.5,20.2],[83.9,18.3],[82.2,17.0],[81.7,16.3],[80.3,15.9],[80.2,13.8],[79.9,12.1],[79.3,10.3],[79.2,9.2],[77.9,8.3],[76.6,8.9],[75.7,11.3],[74.9,12.7],[74.4,14.6],[73.1,17.9],[72.8,20.4],[71.2,20.8],[69.2,22.1],[69.3,22.8],[68.8,24.4],[70.8,25.2],[70.2,26.5],[70.6,28.0],[72.8,29.0],[74.4,31.0],[75.3,32.3],[74.1,33.4],[74.2,34.7],[76.9,34.7],[78.9,34.3],[79.2,33.0],[78.5,32.6],[79.7,30.9],[80.5,29.7],[81.1,28.4],[83.3,27.4],[85.3,26.7],[87.2,26.4],[88.2,26.8],[88.1,27.9],[88.8,27.3],[89.7,26.7],[91.2,26.8],[92.1,27.5],[92.5,27.9],[94.6,29.3],[96.1,29.5],[96.2,28.4],[97.3,28.3]]]},{"i":"BD","r":[[[92.7,22.0],[92.3,21.5],[92.1,21.2],[91.8,22.2],[90.5,22.8],[90.3,21.8],[89.7,21.9],[89.0,22.1],[88.5,23.6],[88.1,24.5],[88.9,25.2],[88.6,26.4],[89.8,26.0],[90.9,25.1],[92.4,25.0],[91.5,24.1],[91.7,23.0],[92.1,23.6],[92.7,22.0]]]},{"i":"BT","r":[[[91.7,27.8],[92.0,26.8],[90.4,26.9],[88.8,27.1],[89.5,28.0],[90.7,28.1],[91.7,27.8]]]},{"i":"NP","r":[[[88.1,27.9],[88.2,26.8],[87.2,26.4],[85.3,26.7],[83.3,27.4],[81.1,28.4],[80.5,29.7],[81.5,30.4],[83.3,29.5],[84.2,28.8],[85.8,28.2],[88.1,27.9]]]},{"i":"PK","r":[[[77.8,35.5],[75.8,34.5],[73.7,34.3],[74.5,32.8],[74.4,31.7],[73.5,30.0],[71.8,27.9],[69.5,26.9],[70.3,25.7],[71.0,24.4],[68.2,23.7],[67.1,24.7],[64.5,25.2],[61.5,25.1],[63.3,26.8],[62.8,27.4],[61.8,28.7],[60.9,29.8],[63.6,29.5],[64.4,29.6],[66.3,29.9],[66.9,31.3],[67.8,31.6],[68.9,31.6],[69.3,32.5],[70.3,33.4],[70.9,34.0],[71.1,34.7],[71.5,35.7],[71.8,36.5],[74.1,36.8],[75.2,37.1],[76.2,35.9],[77.8,35.5]]]},{"i":"AF","r":[[[66.5,37.4],[67.8,37.1],[68.9,37.3],[69.5,37.6],[70.3,37.7],[70.8,38.5],[71.2,38.0],[71.4,37.1],[72.2,36.9],[73.3,37.5],[75.0,37.4],[74.6,37.0],[72.9,36.7],[71.3,36.1],[71.6,35.2],[71.2,34.3],[69.9,34.0],[69.7,33.1],[69.3,31.9],[68.6,31.7],[67.7,31.3],[66.4,30.7],[65.0,29.5],[64.1,29.3],[62.5,29.3],[61.8,30.7],[60.9,31.5],[60.5,33.0],[60.5,33.7],[61.2,35.7],[63.0,35.4],[64.0,36.0],[64.7,37.1],[65.7,37.7],[66.5,37.4]]]},{"i":"TJ","r":[[[67.8,37.1],[68.2,38.9],[67.7,39.6],[69.0,40.1],[70.7,41.0],[70.6,40.2],[70.6,39.9],[69.5,39.5],[71.8,39.3],[73.9,38.5],[74.9,38.4],[75.0,37.4],[73.3,37.5],[72.2,36.9],[71.4,37.1],[71.2,38.0],[70.8,38.5],[70.3,37.7],[69.5,37.6],[68.9,37.3],[67.8,37.1]]]},{"i":"KG","r":[[[71.0,42.3],[71.8,42.8],[73.6,43.1],[75.6,42.9],[77.7,43.0],[79.6,42.5],[80.1,42.1],[78.2,41.2],[76.5,40.4],[74.8,40.4],[74.0,39.7],[71.8,39.3],[69.5,39.5],[70.6,39.9],[71.8,40.1],[71.9,41.4],[70.4,41.5],[71.0,42.3]]]},{"i":"TM","r":[[[52.5,41.8],[54.1,42.3],[55.5,41.3],[57.1,41.3],[57.8,42.2],[60.0,42.2],[60.5,41.2],[61.9,41.1],[63.5,39.4],[65.2,38.4],[66.5,37.4],[65.7,37.7],[64.7,37.1],[64.0,36.0],[63.0,35.4],[61.2,35.7],[60.4,36.5],[58.4,37.5],[56.6,38.1],[55.5,38.0],[53.9,37.2],[53.9,39.0],[53.4,40.0],[52.9,40.9],[54.7,41.0],[53.7,42.1],[52.8,41.1],[52.5,41.8]]]},{"i":"IR","r":[[[48.6,29.9],[48.0,31.0],[47.8,31.7],[46.1,33.0],[45.6,34.7],[46.1,35.7],[44.8,37.2],[44.2,38.0],[44.1,39.4],[45.0,39.3],[46.1,38.7],[47.7,39.5],[48.4,39.3],[48.6,38.3],[49.2,37.6],[50.8,36.9],[53.8,37.0],[54.8,37.4],[56.2,37.9],[57.3,38.0],[59.2,37.4],[61.1,36.5],[60.8,34.4],[61.0,33.5],[60.9,32.2],[61.7,31.4],[60.9,29.8],[61.8,28.7],[62.8,27.4],[63.3,26.8],[61.5,25.1],[58.5,25.6],[57.0,27.0],[55.7,27.0],[53.5,26.8],[51.5,27.9],[50.1,30.1],[48.9,30.3],[48.6,29.9]]]},{"i":"SY","r":[[[35.7,32.7],[35.8,32.9],[36.1,33.8],[36.4,34.6],[35.9,35.4],[36.4,36.0],[36.7,36.8],[38.2,36.9],[39.5,36.7],[41.2,37.1],[41.8,36.6],[41.4,35.6],[38.8,33.4],[35.7,32.7]]]},{"i":"AM","r":[[[46.5,38.8],[45.7,39.3],[45.3,39.5],[44.8,39.7],[43.7,40.3],[43.6,41.1],[45.2,41.0],[45.4,40.6],[45.6,39.9],[46.5,39.5],[46.5,38.8]]]},{"i":"SE","r":[[[11.0,58.9],[12.3,60.1],[12.0,61.8],[12.6,64.1],[13.9,64.4],[15.1,66.2],[16.8,68.0],[18.0,68.6],[20.0,69.1],[22.0,68.6],[23.6,66.4],[22.2,65.7],[21.4,64.4],[17.8,62.7],[17.8,60.6],[17.9,59.0],[16.4,57.0],[14.7,56.2],[12.9,55.4],[11.8,57.4],[11.0,58.9]]]},{"i":"BY","r":[[[28.2,56.2],[29.4,55.7],[30.9,55.6],[30.8,54.8],[31.8,54.0],[32.4,53.6],[32.3,53.1],[31.3,53.1],[31.8,52.1],[30.9,52.0],[30.6,51.3],[29.3,51.4],[28.6,51.4],[27.5,51.6],[25.3,51.9],[24.0,51.6],[23.5,52.0],[23.8,52.7],[23.5,53.5],[24.5,53.9],[25.8,54.8],[26.5,55.6],[28.2,56.2]]]},{"i":"UA","r":[[[31.8,52.1],[32.4,52.3],[33.8,52.3],[34.1,51.6],[35.0,51.2],[35.4,50.6],[37.4,50.4],[38.6,49.9],[40.1,49.3],[39.9,48.2],[38.8,47.8],[38.2,47.1],[36.8,46.7],[35.0,46.3],[34.9,45.8],[34.4,46.0],[33.4,46.0],[31.7,46.3],[30.7,46.6],[29.6,45.3],[28.7,45.3],[28.5,45.6],[28.9,46.3],[29.1,46.5],[29.8,46.3],[29.8,46.5],[29.6,46.9],[29.1,47.5],[28.7,48.1],[27.5,48.5],[26.6,48.2],[25.9,48.0],[24.9,47.7],[23.8,48.0],[22.7,47.9],[22.1,48.4],[22.6,49.1],[22.5,49.5],[23.9,50.4],[23.5,51.6],[24.6,51.9],[26.3,51.8],[28.2,51.6],[29.0,51.6],[30.2,51.4],[30.6,51.8],[31.8,52.1]]]},{"i":"PL","r":[[[23.5,53.9],[23.8,53.1],[23.2,52.5],[23.5,51.6],[23.9,50.4],[22.5,49.5],[22.6,49.1],[20.9,49.3],[19.8,49.2],[18.9,49.4],[18.4,50.0],[17.6,50.4],[16.7,50.2],[16.2,50.7],[15.0,51.1],[14.7,52.1],[14.1,53.0],[14.1,53.8],[16.4,54.5],[18.6,54.7],[19.7,54.4],[22.7,54.3],[23.5,53.9]]]},{"i":"AT","r":[[[17.0,48.1],[16.3,47.7],[16.2,46.9],[15.1,46.7],[13.8,46.5],[12.2,47.1],[11.0,46.8],[9.9,46.9],[9.6,47.3],[9.9,47.6],[10.5,47.6],[12.1,47.7],[12.9,47.5],[12.9,48.3],[13.6,48.9],[14.9,49.0],[16.0,48.7],[17.0,48.6],[17.0,48.1]]]},{"i":"HU","r":[[[22.1,48.4],[22.7,47.9],[21.6,47.0],[20.2,46.1],[18.8,45.9],[18.5,45.8],[16.9,46.4],[16.4,46.8],[16.5,47.5],[16.9,47.7],[17.5,47.9],[18.7,47.9],[19.2,48.1],[19.8,48.2],[20.5,48.6],[21.9,48.3],[22.1,48.4]]]},{"i":"MD","r":[[[26.6,48.2],[27.5,48.5],[28.7,48.1],[29.1,47.5],[29.6,46.9],[29.8,46.5],[29.8,46.3],[29.1,46.5],[28.9,46.3],[28.5,45.6],[28.1,45.9],[28.1,46.8],[27.2,47.8],[26.6,48.2]]]},{"i":"RO","r":[[[28.2,45.5],[29.1,45.5],[29.6,45.0],[28.8,44.9],[28.0,43.8],[26.1,43.9],[24.1,43.7],[22.9,43.8],[22.5,44.4],[22.5,44.7],[21.6,44.8],[20.9,45.4],[20.2,46.1],[21.6,47.0],[22.7,47.9],[23.8,48.0],[24.9,47.7],[25.9,48.0],[26.6,48.2],[27.2,47.8],[28.1,46.8],[28.1,45.9],[28.2,45.5]]]},{"i":"LT","r":[[[26.5,55.6],[25.8,54.8],[24.5,53.9],[23.2,54.2],[22.7,54.6],[22.3,55.0],[21.1,56.0],[23.9,56.3],[25.0,56.2],[26.5,55.6]]]},{"i":"LV","r":[[[27.3,57.5],[27.9,56.8],[27.1,55.8],[25.5,56.1],[24.9,56.4],[22.2,56.3],[21.1,56.8],[22.5,57.8],[24.1,57.0],[25.2,58.0],[26.5,57.5],[27.3,57.5]]]},{"i":"EE","r":[[[28.0,59.5],[28.1,59.3],[27.7,57.8],[26.5,57.5],[25.2,58.0],[24.4,58.4],[23.4,58.6],[24.6,59.5],[26.9,59.4],[28.0,59.5]]]},{"i":"DE","r":[[[14.1,53.8],[14.1,53.0],[14.7,52.1],[15.0,51.1],[14.3,51.1],[13.3,50.7],[12.2,50.3],[12.5,49.5],[13.6,48.9],[12.9,48.3],[12.9,47.5],[12.1,47.7],[10.5,47.6],[9.9,47.6],[8.5,47.8],[7.5,47.6],[8.1,49.0],[6.2,49.5],[6.0,50.1],[6.0,51.9],[6.8,52.2],[6.9,53.5],[7.9,53.7],[8.8,54.0],[8.5,55.0],[9.9,55.0],[11.0,54.4],[12.0,54.2],[13.6,54.1],[14.1,53.8]]]},{"i":"BG","r":[[[22.7,44.2],[23.3,43.9],[25.6,43.7],[27.2,44.2],[28.6,43.7],[27.7,42.6],[27.1,42.1],[26.1,41.3],[24.5,41.6],[23.0,41.3],[22.4,42.3],[22.4,42.6],[23.0,43.2],[22.4,44.0],[22.7,44.2]]]},{"i":"GR","r":[[[26.3,35.3],[24.7,34.9],[23.5,35.3],[24.2,35.4],[25.8,35.4],[26.3,35.3]],[[23.0,41.3],[24.5,41.6],[26.1,41.3],[26.6,41.6],[26.1,40.8],[24.9,40.9],[24.4,40.1],[23.3,40.0],[22.6,40.3],[23.4,39.2],[23.5,38.5],[24.0,37.7],[23.4,37.4],[23.2,36.4],[21.7,36.8],[21.1,38.3],[20.2,39.3],[20.6,40.1],[21.0,40.6],[21.7,40.9],[22.6,41.1],[23.0,41.3]]]},{"i":"TR","r":[[[44.8,37.2],[43.9,37.3],[42.3,37.2],[40.7,37.1],[38.7,36.7],[37.1,36.6],[36.7,36.3],[36.1,35.8],[36.2,36.7],[34.7,36.8],[32.5,36.1],[30.6,36.7],[29.7,36.1],[27.6,36.7],[26.3,38.2],[26.2,39.5],[28.8,40.5],[31.1,41.1],[33.5,42.0],[36.9,41.3],[39.5,41.1],[41.6,41.5],[43.6,41.1],[43.7,40.3],[44.8,39.7],[44.4,38.3],[44.8,37.2]],[[26.1,41.8],[28.0,42.0],[29.0,41.3],[27.6,41.0],[26.4,40.2],[26.1,40.8],[26.6,41.6],[26.1,41.8]]]},{"i":"AL","r":[[[21.0,40.8],[20.7,40.4],[20.2,39.6],[20.0,39.9],[19.3,40.7],[19.5,41.7],[19.4,41.9],[19.7,42.7],[20.1,42.6],[20.5,42.2],[20.6,41.9],[20.6,41.1],[21.0,40.8]]]},{"i":"HR","r":[[[16.6,46.5],[17.6,46.0],[18.8,45.9],[19.4,45.2],[18.6,45.1],[17.0,45.2],[16.3,45.0],[15.8,44.8],[16.5,44.0],[17.3,43.4],[18.6,42.6],[18.5,42.5],[16.9,43.2],[15.2,44.2],[14.9,44.7],[14.3,45.2],[13.7,45.1],[13.7,45.5],[14.6,45.6],[15.3,45.5],[15.7,45.8],[16.6,46.5]]]},{"i":"CH","r":[[[9.6,47.5],[9.5,47.1],[10.4,46.9],[9.9,46.3],[9.0,46.0],[8.3,46.2],[7.3,45.8],[6.5,46.4],[6.0,46.7],[6.7,47.5],[7.5,47.6],[8.5,47.8],[9.6,47.5]]]},{"i":"BE","r":[[[6.2,50.8],[5.8,50.1],[4.8,50.0],[3.6,50.4],[2.7,50.8],[3.3,51.3],[5.0,51.5],[6.2,50.8]]]},{"i":"NL","r":[[[6.9,53.5],[6.8,52.2],[6.0,51.9],[5.6,51.0],[4.0,51.3],[3.3,51.3],[4.7,53.1],[6.9,53.5]]]},{"i":"PT","r":[[[-9.0,41.9],[-8.3,42.3],[-7.4,41.8],[-6.7,41.9],[-6.9,41.1],[-7.0,40.2],[-7.5,39.6],[-7.4,38.4],[-7.2,37.8],[-7.5,37.1],[-8.4,37.0],[-8.7,37.7],[-9.3,38.4],[-9.4,39.4],[-9.0,40.2],[-8.8,41.2],[-9.0,41.9]]]},{"i":"ES","r":[[[-7.5,37.1],[-7.2,37.8],[-7.4,38.4],[-7.5,39.6],[-7.0,40.2],[-6.9,41.1],[-6.7,41.9],[-7.4,41.8],[-8.3,42.3],[-9.0,41.9],[-9.4,43.0],[-6.8,43.6],[-4.3,43.4],[-1.9,43.4],[0.3,42.6],[1.8,42.3],[3.0,41.9],[0.8,41.0],[0.1,40.1],[0.1,38.7],[-0.7,37.6],[-2.1,36.7],[-4.4,36.7],[-5.4,35.9],[-6.2,36.4],[-7.5,37.1]]]},{"i":"IE","r":[[[-6.2,53.9],[-6.8,52.3],[-10.0,51.8],[-9.7,53.9],[-7.6,55.1],[-7.6,54.1],[-6.2,53.9]]]},{"i":"NC","r":[[[165.8,-21.1],[167.1,-22.2],[166.2,-22.1],[164.8,-21.1],[164.0,-20.1],[165.0,-20.5],[165.8,-21.1]]]},{"i":"SB","r":[[[161.7,-9.6],[160.8,-8.9],[160.9,-8.3],[161.7,-9.6]],[[159.6,-8.0],[159.9,-8.5],[158.6,-7.8],[158.4,-7.3],[159.6,-8.0]]]},{"i":"NZ","r":[[[176.9,-40.1],[176.0,-41.3],[175.1,-41.4],[175.2,-40.5],[173.8,-39.5],[174.6,-38.8],[174.7,-37.4],[174.3,-36.5],[173.1,-35.2],[173.0,-34.5],[174.3,-35.3],[175.3,-37.2],[175.8,-36.8],[176.8,-37.9],[178.0,-37.6],[178.3,-38.6],[177.2,-39.1],[177.0,-39.9],[176.9,-40.1]],[[169.7,-43.6],[171.1,-42.5],[171.9,-41.5],[172.8,-40.5],[173.2,-41.3],[174.2,-41.3],[173.9,-42.2],[172.7,-43.4],[172.3,-43.9],[171.2,-44.9],[169.8,-46.4],[168.4,-46.6],[166.7,-46.2],[167.0,-45.1],[168.9,-43.9],[169.7,-43.6]]]},{"i":"AU","r":[[[147.7,-40.8],[148.4,-42.1],[147.9,-43.2],[146.9,-43.6],[146.0,-43.5],[145.3,-42.0],[144.7,-40.7],[146.4,-41.1],[147.7,-40.8]],[[126.1,-32.2],[124.2,-33.0],[123.7,-33.9],[122.2,-34.0],[120.6,-33.9],[119.3,-34.5],[118.5,-34.7],[117.3,-35.0],[115.6,-34.4],[115.0,-33.6],[115.7,-33.3],[115.8,-32.2],[115.2,-30.6],[115.0,-29.5],[114.6,-28.5],[114.0,-27.3],[113.3,-26.1],[113.4,-25.6],[114.2,-26.3],[113.7,-25.0],[113.4,-24.4],[113.7,-23.6],[113.7,-22.5],[114.2,-22.5],[115.5,-21.5],[116.7,-20.7],[117.4,-20.7],[118.8,-20.3],[119.3,-20.0],[120.9,-19.7],[121.7,-18.7],[122.3,-17.8],[123.0,-16.4],[123.9,-17.1],[123.8,-16.1],[124.4,-15.6],[125.2,-14.7],[125.7,-14.2],[126.1,-14.1],[127.1,-13.8],[128.4,-14.9],[129.6,-15.0],[129.9,-13.6],[130.2,-13.1],[131.2,-12.2],[132.6,-12.1],[131.8,-11.3],[133.0,-11.4],[134.4,-12.0],[135.3,-12.2],[136.3,-12.0],[137.0,-12.4],[136.3,-13.3],[136.1,-13.7],[135.4,-14.7],[136.3,-15.6],[137.6,-16.2],[138.6,-16.8],[139.3,-17.4],[140.9,-17.4],[141.3,-16.4],[141.7,-15.0],[141.6,-14.3],[141.7,-12.9],[141.7,-12.4],[142.1,-11.3],[142.5,-10.7],[142.9,-11.8],[143.2,-12.3],[143.6,-13.4],[143.9,-14.5],[144.9,-14.6],[145.3,-15.4],[145.6,-16.8],[146.2,-17.8],[146.4,-19.0],[148.2,-20.0],[148.7,-20.6],[149.7,-22.3],[150.5,-22.6],[150.9,-23.5],[152.1,-24.5],[153.1,-26.1],[153.1,-27.3],[153.5,-29.0],[153.1,-30.4],[152.9,-31.6],[151.7,-33.0],[151.0,-34.3],[150.3,-35.7],[149.9,-37.1],[149.4,-37.8],[147.4,-38.2],[146.3,-39.0],[144.9,-38.4],[144.5,-38.1],[142.7,-38.5],[141.6,-38.3],[140.0,-37.4],[139.6,-36.1],[138.1,-35.6],[138.2,-34.4],[136.8,-35.3],[137.5,-34.1],[137.8,-32.9],[136.4,-34.1],[135.2,-34.5],[134.6,-33.2],[134.3,-32.6],[132.3,-32.0],[129.5,-31.6],[127.1,-32.3],[126.1,-32.2]]]},{"i":"LK","r":[[[81.8,7.5],[81.2,6.2],[79.9,6.8],[80.1,9.8],[81.3,8.6],[81.8,7.5]]]},{"i":"CN","r":[[[109.5,18.2],[108.6,19.4],[110.2,20.1],[111.0,19.7],[110.3,18.7],[109.5,18.2]],[[80.3,42.3],[80.2,42.9],[80.9,43.2],[80.0,44.9],[81.9,45.3],[82.5,45.5],[83.2,47.3],[85.2,47.0],[85.7,47.5],[85.8,48.5],[86.6,48.5],[87.4,49.2],[87.8,49.3],[88.0,48.6],[88.9,48.1],[90.3,47.7],[91.0,46.9],[90.6,45.7],[90.9,45.3],[92.1,45.1],[93.5,45.0],[94.7,44.4],[95.3,44.2],[95.8,43.3],[96.3,42.7],[97.5,42.7],[99.5,42.5],[100.8,42.7],[101.8,42.5],[103.3,41.9],[104.5,41.9],[105.0,41.6],[106.1,42.1],[107.7,42.5],[109.2,42.5],[110.4,42.9],[111.1,43.4],[111.8,43.7],[111.7,44.1],[111.3,44.5],[111.9,45.1],[112.4,45.0],[113.5,44.8],[114.5,45.3],[116.0,45.7],[116.7,46.4],[117.4,46.7],[118.9,46.8],[119.7,46.7],[119.8,47.0],[118.9,47.7],[118.1,48.1],[117.3,47.7],[116.3,47.9],[115.7,47.7],[115.5,48.1],[116.2,49.1],[116.7,49.9],[117.9,49.5],[119.3,50.1],[119.3,50.6],[120.2,51.6],[120.7,52.0],[120.7,52.5],[120.2,52.8],[121.0,53.3],[122.2,53.4],[123.6,53.5],[125.1,53.2],[125.9,52.8],[126.6,51.8],[126.9,51.4],[127.3,50.7],[127.7,49.8],[129.4,49.4],[130.6,48.7],[131.0,47.8],[132.5,47.8],[133.4,48.2],[135.0,48.5],[134.5,47.6],[134.1,47.2],[133.8,46.1],[133.1,45.1],[131.9,45.3],[131.0,45.0],[131.3,44.1],[131.1,42.9],[130.6,42.9],[130.6,42.4],[130.0,43.0],[129.6,42.4],[128.1,42.0],[128.2,41.5],[127.3,41.5],[126.9,41.8],[126.2,41.1],[125.1,40.6],[124.3,39.9],[122.9,39.6],[122.1,39.2],[121.1,38.9],[121.6,39.4],[121.4,39.8],[122.2,40.4],[121.6,40.9],[120.8,40.6],[119.6,39.9],[119.0,39.3],[118.0,39.2],[117.5,38.7],[118.1,38.1],[118.9,37.9],[118.9,37.4],[119.7,37.2],[120.8,37.9],[121.7,37.5],[122.4,37.5],[122.5,36.9],[121.1,36.7],[120.6,36.1],[119.7,35.6],[119.2,34.9],[120.2,34.4],[120.6,33.4],[121.2,32.5],[121.9,31.7],[121.9,30.9],[121.3,30.7],[121.5,30.1],[122.1,29.8],[121.9,29.0],[121.7,28.2],[121.1,28.1],[120.4,27.1],[119.6,25.7],[118.7,24.5],[117.3,23.6],[115.9,22.8],[114.8,22.7],[114.2,22.2],[113.8,22.5],[113.2,22.1],[111.8,21.6],[110.8,21.4],[110.4,20.3],[109.9,20.3],[109.6,21.0],[109.9,21.4],[108.5,21.7],[108.1,21.6],[107.0,21.8],[106.6,22.2],[106.7,22.8],[105.8,23.0],[105.3,23.4],[104.5,22.8],[103.5,22.7],[102.7,22.7],[102.2,22.5],[101.7,22.3],[101.8,21.2],[101.3,21.2],[101.2,21.4],[101.2,21.8],[100.4,21.6],[100.0,21.7],[99.2,22.1],[99.5,22.9],[98.9,23.1],[98.7,24.1],[97.6,23.9],[97.7,25.1],[98.7,25.9],[98.7,26.7],[98.7,27.5],[98.2,27.7],[97.9,28.3],[97.3,28.3],[96.2,28.4],[96.6,28.8],[96.1,29.5],[95.4,29.0],[94.6,29.3],[93.4,28.6],[92.5,27.9],[91.7,27.8],[91.3,28.0],[90.7,28.1],[90.0,28.3],[89.5,28.0],[88.8,27.3],[88.7,28.1],[88.1,27.9],[87.0,28.0],[85.8,28.2],[85.0,28.6],[84.2,28.8],[83.9,29.3],[83.3,29.5],[82.3,30.1],[81.5,30.4],[81.1,30.2],[79.7,30.9],[78.7,31.5],[78.5,32.6],[79.2,32.5],[79.2,33.0],[78.8,33.5],[78.9,34.3],[77.8,35.5],[76.2,35.9],[75.9,36.7],[75.2,37.1],[75.0,37.4],[74.8,38.0],[74.9,38.4],[74.3,38.6],[73.9,38.5],[73.7,39.4],[74.0,39.7],[73.8,39.9],[74.8,40.4],[75.5,40.6],[76.5,40.4],[76.9,41.1],[78.2,41.2],[78.5,41.6],[80.1,42.1],[80.3,42.3]]]},{"i":"TW","r":[[[121.8,24.4],[120.7,22.0],[120.1,23.6],[121.5,25.3],[121.8,24.4]]]},{"i":"IT","r":[[[10.4,46.9],[11.2,46.9],[12.4,46.8],[13.7,46.0],[13.1,45.7],[12.4,44.9],[12.6,44.1],[14.0,42.8],[15.9,42.0],[15.9,41.5],[17.5,40.9],[18.5,40.2],[17.7,40.3],[16.4,39.8],[17.1,38.9],[16.1,38.0],[15.7,38.2],[16.1,39.0],[15.4,40.0],[14.7,40.6],[13.6,41.2],[12.1,41.7],[10.5,42.9],[9.7,44.0],[8.4,44.2],[7.4,43.7],[7.0,44.3],[7.1,45.3],[6.8,46.0],[7.8,45.8],[8.5,46.0],[9.2,46.4],[10.4,46.5],[10.4,46.9]],[[14.8,38.1],[15.2,37.4],[15.1,36.6],[13.8,37.1],[12.6,38.1],[14.8,38.1]],[[8.7,40.9],[9.8,40.5],[9.2,39.2],[8.4,39.2],[8.2,41.0],[8.7,40.9]]]},{"i":"DK","r":[[[9.9,55.0],[8.5,55.0],[8.1,56.5],[8.5,57.1],[9.8,57.4],[10.5,57.2],[10.4,56.6],[10.7,56.1],[9.6,55.5],[9.9,55.0]],[[12.4,56.1],[12.1,54.8],[10.9,55.8],[12.4,56.1]]]},{"i":"GB","r":[[[-6.2,53.9],[-7.6,54.1],[-7.6,55.1],[-5.7,54.6],[-6.2,53.9]],[[-3.1,53.4],[-2.9,54.0],[-3.6,54.6],[-5.1,55.1],[-5.0,55.8],[-5.6,56.3],[-5.8,57.8],[-4.2,58.6],[-4.1,57.6],[-2.0,57.7],[-3.1,56.0],[-2.0,55.8],[-0.4,54.5],[0.5,52.9],[1.6,52.1],[1.4,51.3],[-0.8,50.8],[-3.0,50.7],[-4.5,50.3],[-5.8,50.2],[-3.4,51.4],[-5.0,51.6],[-4.2,52.3],[-4.6,53.5],[-3.1,53.4]]]},{"i":"IS","r":[[[-14.5,66.5],[-13.6,65.1],[-17.8,63.7],[-20.0,63.6],[-21.8,64.4],[-22.2,65.1],[-24.3,65.6],[-22.1,66.4],[-19.1,66.3],[-16.2,66.5],[-14.5,66.5]]]},{"i":"AZ","r":[[[46.4,41.9],[47.4,41.2],[48.0,41.4],[49.1,41.3],[50.1,40.5],[49.6,40.2],[49.2,39.0],[48.9,38.3],[48.0,38.8],[48.1,39.6],[46.5,38.8],[46.0,39.6],[45.9,40.2],[45.6,40.8],[45.0,41.2],[46.0,41.1],[46.6,41.2],[46.4,41.9]],[[46.1,38.7],[45.0,39.3],[45.0,39.7],[45.7,39.5],[46.1,38.7]]]},{"i":"GE","r":[[[40.0,43.4],[40.9,43.4],[43.8,42.7],[44.5,42.7],[45.8,42.1],[46.1,41.7],[46.5,41.1],[45.2,41.4],[43.6,41.1],[41.6,41.5],[41.5,42.6],[40.3,43.1],[40.0,43.4]]]},{"i":"PH","r":[[[120.8,12.7],[121.2,13.4],[121.3,12.2],[120.8,12.7]],[[122.6,10.0],[122.9,10.9],[123.3,10.3],[124.0,10.3],[123.3,9.3],[122.4,9.7],[122.6,10.0]],[[126.4,8.4],[126.5,7.2],[125.8,7.3],[125.7,6.0],[124.2,6.2],[124.2,7.4],[123.3,7.4],[122.1,6.9],[122.3,8.0],[123.5,8.7],[124.6,8.5],[125.5,9.0],[126.2,9.3],[126.4,8.4]],[[118.5,9.3],[117.7,9.1],[119.0,10.4],[119.7,10.6],[118.5,9.3]],[[122.3,18.2],[122.5,17.1],[121.7,15.9],[121.7,14.3],[122.7,14.3],[123.9,13.2],[124.1,12.5],[122.9,13.6],[122.0,13.8],[120.6,13.9],[121.0,14.5],[120.6,14.4],[119.9,15.4],[120.3,16.0],[120.7,18.5],[121.9,18.2],[122.3,18.2]],[[122.0,11.4],[122.5,11.6],[123.1,11.2],[122.0,10.4],[122.0,11.4]],[[125.5,12.2],[125.0,11.3],[125.3,10.4],[124.8,10.8],[124.3,11.5],[124.9,11.8],[125.2,12.5],[125.5,12.2]]]},{"i":"MY","r":[[[100.1,6.5],[101.1,6.2],[101.8,5.8],[102.4,6.1],[103.4,4.9],[103.3,3.7],[103.5,2.8],[104.2,1.6],[103.5,1.2],[101.4,2.8],[100.7,3.9],[100.2,5.3],[100.1,6.5]],[[117.9,4.1],[115.9,4.3],[115.1,2.8],[113.8,1.2],[112.4,1.4],[111.2,1.0],[109.8,1.3],[110.4,1.7],[111.4,2.7],[113.0,3.1],[114.2,4.5],[114.9,4.3],[115.4,5.0],[116.2,6.1],[117.1,6.9],[117.7,6.0],[119.2,5.4],[118.4,5.0],[117.9,4.1]]]},{"i":"BN","r":[[[115.5,5.4],[115.3,4.3],[114.7,4.0],[114.6,4.9],[115.5,5.4]]]},{"i":"SI","r":[[[13.8,46.5],[15.1,46.7],[16.2,46.9],[16.6,46.5],[15.7,45.8],[15.3,45.5],[14.6,45.6],[13.7,45.5],[13.7,46.0],[13.8,46.5]]]},{"i":"FI","r":[[[28.6,69.1],[30.0,67.7],[30.2,65.8],[30.4,64.2],[31.5,62.9],[30.2,61.8],[28.1,60.5],[26.3,60.4],[22.9,59.8],[21.3,60.7],[21.1,62.6],[22.4,63.8],[25.4,65.1],[23.9,66.0],[23.5,67.9],[20.6,69.1],[22.4,68.8],[24.7,68.6],[26.2,69.8],[29.0,69.8],[28.6,69.1]]]},{"i":"SK","r":[[[22.6,49.1],[22.1,48.4],[20.8,48.6],[20.2,48.3],[19.7,48.3],[18.8,48.1],[17.9,47.8],[17.0,48.1],[17.0,48.6],[17.5,48.8],[17.9,49.0],[18.2,49.3],[18.6,49.5],[18.9,49.4],[19.8,49.2],[20.9,49.3],[22.6,49.1]]]},{"i":"CZ","r":[[[15.0,51.1],[16.2,50.7],[16.7,50.2],[17.6,50.4],[18.4,50.0],[18.6,49.5],[18.2,49.3],[17.9,49.0],[17.5,48.8],[17.0,48.6],[16.0,48.7],[14.9,49.0],[13.6,48.9],[12.5,49.5],[12.2,50.3],[13.3,50.7],[14.3,51.1],[15.0,51.1]]]},{"i":"ER","r":[[[36.4,14.4],[36.8,16.3],[37.2,17.3],[38.4,18.0],[39.3,15.9],[41.2,14.5],[42.3,13.3],[43.1,12.7],[42.4,12.5],[41.6,13.5],[40.9,14.1],[39.3,14.5],[38.5,14.5],[37.6,14.2],[36.4,14.4]]]},{"i":"JP","r":[[[141.9,39.2],[141.0,37.1],[140.8,35.8],[139.0,34.7],[135.8,33.5],[135.1,34.6],[132.2,33.9],[132.0,33.1],[130.7,31.0],[130.4,32.3],[129.4,33.3],[130.9,34.2],[132.6,35.4],[135.7,35.5],[137.4,36.8],[139.4,38.2],[139.9,40.6],[141.4,41.4],[141.9,39.2]],[[144.6,44.0],[145.5,43.3],[143.2,42.0],[141.1,41.6],[139.8,42.6],[141.4,43.4],[142.0,45.6],[143.9,44.2],[144.6,44.0]],[[132.4,33.5],[133.5,33.9],[134.6,34.1],[134.2,33.2],[133.3,33.3],[132.4,33.0],[132.4,33.5]]]},{"i":"PY","r":[[[-58.2,-20.2],[-57.9,-22.1],[-56.5,-22.1],[-55.6,-22.7],[-55.4,-24.0],[-54.7,-23.8],[-54.3,-24.6],[-54.6,-25.7],[-55.7,-27.4],[-57.6,-27.4],[-57.6,-25.6],[-58.8,-24.8],[-60.8,-23.9],[-62.3,-21.1],[-61.8,-19.6],[-59.1,-19.4],[-58.2,-20.2]]]},{"i":"YE","r":[[[52.0,19.0],[53.1,16.7],[52.2,15.9],[51.2,15.2],[48.7,14.0],[47.9,14.0],[46.7,13.4],[45.6,13.3],[45.1,13.0],[44.5,12.7],[43.5,12.6],[43.3,13.8],[42.9,14.8],[42.8,15.3],[42.8,15.9],[43.2,16.7],[43.4,17.6],[44.1,17.4],[45.4,17.3],[46.7,17.3],[47.5,17.1],[49.1,18.6],[52.0,19.0]]]},{"i":"SA","r":[[[35.0,29.4],[36.5,29.5],[37.5,30.0],[38.0,30.5],[39.0,32.0],[40.4,31.9],[44.7,29.2],[47.5,29.0],[48.4,28.6],[49.3,27.5],[50.2,26.7],[50.1,25.9],[50.5,25.3],[50.8,24.8],[51.4,24.6],[51.6,24.0],[55.0,22.5],[55.7,22.0],[52.0,19.0],[48.2,18.2],[47.0,16.9],[46.4,17.2],[45.2,17.4],[43.8,17.3],[43.1,17.1],[42.8,16.3],[42.3,17.1],[41.8,17.8],[40.9,19.5],[39.8,20.3],[39.0,22.0],[38.5,23.7],[37.5,24.3],[37.2,25.1],[36.6,25.8],[35.6,27.4],[34.6,28.1],[34.8,29.0],[35.0,29.4]]]},{"i":"AQ","r":[[[-48.7,-78.0],[-46.7,-77.8],[-43.9,-78.5],[-43.4,-79.5],[-44.9,-80.3],[-48.4,-80.8],[-52.9,-81.0],[-54.0,-80.2],[-51.0,-79.6],[-49.9,-78.8],[-48.7,-78.0]],[[-66.3,-80.3],[-61.9,-80.4],[-60.6,-79.6],[-59.9,-80.5],[-62.3,-80.9],[-65.7,-80.6],[-66.3,-80.3]],[[-73.9,-71.3],[-73.2,-71.2],[-71.8,-70.7],[-71.7,-69.5],[-70.3,-68.9],[-69.5,-69.6],[-68.7,-70.5],[-68.3,-71.4],[-68.8,-72.2],[-71.1,-72.5],[-71.9,-72.1],[-74.2,-72.4],[-75.0,-71.7],[-73.9,-71.3]],[[-102.3,-71.9],[-101.7,-71.7],[-99.0,-71.9],[-96.8,-72.0],[-97.0,-72.4],[-99.4,-72.4],[-101.8,-72.3],[-102.3,-71.9]],[[-122.6,-73.7],[-122.4,-73.3],[-119.9,-73.7],[-119.3,-73.8],[-121.6,-74.0],[-122.6,-73.7]],[[-127.3,-73.5],[-126.6,-73.2],[-124.0,-73.9],[-125.9,-73.7],[-127.3,-73.5]],[[-163.7,-78.6],[-163.1,-78.2],[-160.2,-78.7],[-159.2,-79.5],[-162.4,-79.3],[-163.1,-78.9],[-163.7,-78.6]],[[180,-84.7],[180,-90],[-180,-90],[-180,-84.7],[-179.9,-84.7],[-179.1,-84.1],[-177.3,-84.5],[-177.1,-84.4],[-176.1,-84.1],[-175.9,-84.1],[-175.8,-84.1],[-174.4,-84.5],[-173.1,-84.1],[-172.9,-84.1],[-170.0,-83.9],[-169.0,-84.1],[-168.5,-84.2],[-167.0,-84.6],[-164.2,-84.8],[-161.9,-85.1],[-158.1,-85.4],[-155.2,-85.1],[-150.9,-85.3],[-148.5,-85.6],[-145.9,-85.3],[-143.1,-85.0],[-142.9,-84.6],[-146.8,-84.5],[-150.1,-84.3],[-150.9,-83.9],[-153.6,-83.7],[-153.4,-83.2],[-153.0,-82.8],[-152.7,-82.5],[-152.9,-82.0],[-154.5,-81.8],[-155.3,-81.4],[-156.8,-81.1],[-154.4,-81.2],[-152.1,-81.0],[-150.6,-81.3],[-148.9,-81.0],[-147.2,-80.7],[-146.4,-80.3],[-146.8,-79.9],[-148.1,-79.7],[-149.5,-79.4],[-151.6,-79.3],[-153.4,-79.2],[-155.3,-79.1],[-156.0,-78.7],[-157.3,-78.4],[-158.1,-78.0],[-158.4,-76.9],[-157.9,-77.0],[-157.0,-77.3],[-155.3,-77.2],[-153.7,-77.1],[-152.9,-77.5],[-151.3,-77.4],[-150.0,-77.2],[-148.7,-76.9],[-147.6,-76.6],[-146.1,-76.5],[-146.1,-76.1],[-146.5,-75.7],[-146.2,-75.4],[-144.9,-75.2],[-144.3,-75.5],[-142.8,-75.3],[-141.6,-75.1],[-140.2,-75.1],[-138.9,-75.0],[-137.5,-74.7],[-136.4,-74.5],[-135.2,-74.3],[-134.4,-74.4],[-133.7,-74.4],[-132.3,-74.3],[-130.9,-74.5],[-129.6,-74.5],[-128.2,-74.3],[-126.9,-74.4],[-125.4,-74.5],[-124.0,-74.5],[-122.6,-74.5],[-121.1,-74.5],[-119.7,-74.5],[-118.7,-74.2],[-117.5,-74.0],[-116.2,-74.2],[-115.0,-74.1],[-113.9,-73.7],[-113.3,-74.0],[-112.9,-74.4],[-112.3,-74.7],[-111.3,-74.4],[-110.1,-74.8],[-108.7,-74.9],[-107.6,-75.2],[-106.1,-75.1],[-104.9,-74.9],[-103.4,-75.0],[-102.0,-75.1],[-100.6,-75.3],[-100.1,-74.9],[-100.8,-74.5],[-101.3,-74.2],[-102.5,-74.1],[-103.1,-73.7],[-103.3,-73.4],[-103.7,-72.6],[-102.9,-72.8],[-101.6,-72.8],[-100.3,-72.8],[-99.1,-72.9],[-98.1,-73.2],[-97.7,-73.6],[-96.3,-73.6],[-95.0,-73.5],[-93.7,-73.3],[-92.4,-73.2],[-91.4,-73.4],[-90.1,-73.3],[-89.2,-72.6],[-88.4,-73.0],[-87.3,-73.2],[-86.0,-73.1],[-85.2,-73.5],[-83.9,-73.5],[-82.7,-73.6],[-81.5,-73.9],[-80.7,-73.5],[-80.3,-73.1],[-79.3,-73.5],[-77.9,-73.4],[-76.9,-73.6],[-76.2,-74.0],[-74.9,-73.9],[-73.9,-73.7],[-72.8,-73.4],[-71.6,-73.3],[-70.2,-73.1],[-68.9,-73.0],[-68.0,-72.8],[-67.4,-72.5],[-67.1,-72.0],[-67.3,-71.6],[-67.6,-71.2],[-67.9,-70.9],[-68.2,-70.5],[-68.5,-70.1],[-68.5,-69.7],[-68.4,-69.3],[-68.0,-69.0],[-67.6,-68.5],[-67.4,-68.1],[-67.6,-67.7],[-67.7,-67.3],[-67.3,-66.9],[-66.7,-66.6],[-66.1,-66.2],[-65.4,-65.9],[-64.6,-65.6],[-64.2,-65.2],[-63.6,-64.9],[-63.0,-64.6],[-62.0,-64.6],[-61.4,-64.3],[-60.7,-64.1],[-59.9,-64.0],[-59.2,-63.7],[-58.6,-63.4],[-57.8,-63.3],[-57.2,-63.5],[-57.6,-63.9],[-58.6,-64.2],[-59.0,-64.4],[-59.8,-64.2],[-60.6,-64.3],[-61.3,-64.5],[-62.0,-64.8],[-62.5,-65.1],[-62.6,-65.5],[-62.6,-65.9],[-62.1,-66.2],[-62.8,-66.4],[-63.7,-66.5],[-64.3,-66.8],[-64.9,-67.2],[-65.5,-67.6],[-65.7,-68.0],[-65.3,-68.4],[-64.8,-68.7],[-64.0,-68.9],[-63.2,-69.2],[-62.8,-69.6],[-62.6,-70.0],[-62.3,-70.4],[-61.8,-70.7],[-61.5,-71.1],[-61.4,-72.0],[-61.1,-72.4],[-61.0,-72.8],[-60.7,-73.2],[-60.8,-73.7],[-61.4,-74.1],[-62.0,-74.4],[-63.3,-74.6],[-63.7,-74.9],[-64.4,-75.3],[-65.9,-75.6],[-67.2,-75.8],[-68.4,-76.0],[-69.8,-76.2],[-70.6,-76.6],[-72.2,-76.7],[-74.0,-76.6],[-75.6,-76.7],[-77.2,-76.7],[-76.9,-77.1],[-75.4,-77.3],[-74.3,-77.6],[-73.7,-77.9],[-74.8,-78.2],[-76.5,-78.1],[-77.9,-78.4],[-78.0,-78.8],[-78.0,-79.2],[-76.8,-79.5],[-76.6,-79.9],[-75.4,-80.3],[-73.2,-80.4],[-71.4,-80.7],[-70.0,-81.0],[-68.2,-81.3],[-65.7,-81.5],[-63.3,-81.7],[-61.6,-82.0],[-59.7,-82.4],[-58.7,-82.8],[-58.2,-83.2],[-57.0,-82.9],[-55.4,-82.6],[-53.6,-82.3],[-51.5,-82.0],[-49.8,-81.7],[-47.3,-81.7],[-44.8,-81.8],[-42.8,-82.1],[-42.2,-81.7],[-40.8,-81.4],[-38.2,-81.3],[-36.3,-81.1],[-34.4,-80.9],[-32.3,-80.8],[-30.1,-80.6],[-28.5,-80.3],[-29.3,-80.0],[-29.7,-79.6],[-29.7,-79.3],[-31.6,-79.3],[-33.7,-79.5],[-35.6,-79.5],[-35.9,-79.1],[-35.8,-78.3],[-35.3,-78.1],[-33.9,-77.9],[-32.2,-77.7],[-31.0,-77.4],[-29.8,-77.1],[-28.9,-76.7],[-27.5,-76.5],[-26.2,-76.4],[-25.5,-76.3],[-23.9,-76.2],[-22.5,-76.1],[-21.2,-75.9],[-20.0,-75.7],[-18.9,-75.4],[-17.5,-75.1],[-16.6,-74.8],[-15.7,-74.5],[-15.4,-74.1],[-16.5,-73.9],[-16.1,-73.5],[-15.4,-73.1],[-14.4,-73.0],[-13.3,-72.7],[-12.3,-72.4],[-11.5,-72.0],[-11.0,-71.5],[-10.3,-71.3],[-9.1,-71.3],[-8.6,-71.7],[-7.4,-71.7],[-7.4,-71.3],[-6.9,-70.9],[-5.8,-71.0],[-5.5,-71.4],[-4.3,-71.5],[-3.0,-71.3],[-1.8,-71.2],[-0.7,-71.2],[-0.2,-71.6],[0.9,-71.3],[1.9,-71.1],[3.0,-71.0],[4.1,-70.9],[5.2,-70.6],[6.3,-70.5],[7.1,-70.2],[7.7,-69.9],[8.5,-70.1],[9.5,-70.0],[10.2,-70.5],[10.8,-70.8],[12.0,-70.6],[12.4,-70.2],[13.4,-70.0],[14.7,-70.0],[15.1,-70.4],[15.9,-70.0],[17.0,-69.9],[18.2,-69.9],[19.3,-69.9],[20.4,-70.0],[21.5,-70.1],[21.9,-70.4],[22.6,-70.7],[23.7,-70.5],[24.8,-70.5],[26.0,-70.5],[27.1,-70.5],[28.1,-70.3],[29.2,-70.2],[30.0,-69.9],[31.0,-69.8],[32.0,-69.7],[32.8,-69.4],[33.3,-68.8],[33.9,-68.5],[34.9,-68.7],[35.3,-69.0],[36.2,-69.2],[37.2,-69.2],[37.9,-69.5],[38.6,-69.8],[39.7,-69.5],[40.0,-69.1],[40.9,-68.9],[42.0,-68.6],[42.9,-68.5],[44.1,-68.3],[44.9,-68.1],[45.7,-67.8],[46.5,-67.6],[47.4,-67.7],[48.3,-67.4],[49.0,-67.1],[49.9,-67.1],[50.8,-66.9],[50.9,-66.5],[51.8,-66.2],[52.6,-66.1],[53.6,-65.9],[54.5,-65.8],[55.4,-65.9],[56.4,-66.0],[57.2,-66.2],[57.3,-66.7],[58.1,-67.0],[58.7,-67.3],[59.9,-67.4],[60.6,-67.7],[61.4,-68.0],[62.4,-68.0],[63.2,-67.8],[64.1,-67.4],[65.0,-67.6],[66.0,-67.7],[66.9,-67.9],[67.9,-67.9],[68.9,-67.9],[69.7,-69.0],[69.7,-69.2],[69.6,-69.7],[68.6,-69.9],[67.8,-70.3],[67.9,-70.7],[69.1,-70.7],[68.9,-71.1],[68.4,-71.4],[67.9,-71.9],[68.7,-72.2],[69.9,-72.3],[71.0,-72.1],[71.6,-71.7],[71.9,-71.3],[72.5,-71.0],[73.1,-70.7],[73.3,-70.4],[73.9,-69.9],[74.5,-69.8],[75.6,-69.7],[76.6,-69.6],[77.6,-69.5],[78.1,-69.1],[78.4,-68.7],[79.1,-68.3],[80.1,-68.1],[80.9,-67.9],[81.5,-67.5],[82.1,-67.4],[82.8,-67.2],[83.8,-67.3],[84.7,-67.2],[85.7,-67.1],[86.8,-67.2],[87.5,-66.9],[88.0,-66.2],[88.4,-66.5],[88.8,-67.0],[89.7,-67.2],[90.6,-67.2],[91.6,-67.1],[92.6,-67.2],[93.5,-67.2],[94.2,-67.1],[95.0,-67.2],[95.8,-67.4],[96.7,-67.2],[97.8,-67.2],[98.7,-67.1],[99.7,-67.2],[100.4,-66.9],[100.9,-66.6],[101.6,-66.3],[102.8,-65.6],[103.5,-65.7],[104.2,-66.0],[104.9,-66.3],[106.2,-66.9],[107.2,-67.0],[108.1,-67.0],[109.2,-66.8],[110.2,-66.7],[111.1,-66.4],[111.7,-66.1],[112.9,-66.1],[113.6,-65.9],[114.4,-66.1],[114.9,-66.4],[115.6,-66.7],[116.7,-66.7],[117.4,-66.9],[118.6,-67.2],[119.8,-67.3],[120.9,-67.2],[121.7,-66.9],[122.3,-66.6],[123.2,-66.5],[124.1,-66.6],[125.2,-66.7],[126.1,-66.6],[127.0,-66.6],[127.9,-66.7],[128.8,-66.8],[129.7,-66.6],[130.8,-66.4],[131.8,-66.4],[132.9,-66.4],[133.9,-66.3],[134.8,-66.2],[135.0,-65.7],[135.1,-65.3],[135.7,-65.6],[135.9,-66.0],[136.2,-66.4],[136.6,-66.8],[137.5,-67.0],[138.6,-66.9],[139.9,-66.9],[140.8,-66.8],[142.1,-66.8],[143.1,-66.8],[144.4,-66.8],[145.5,-66.9],[146.2,-67.2],[146.0,-67.6],[146.6,-67.9],[147.7,-68.1],[148.8,-68.4],[150.1,-68.6],[151.5,-68.7],[152.5,-68.9],[153.6,-68.9],[154.3,-68.6],[155.2,-68.8],[155.9,-69.1],[156.8,-69.4],[158.0,-69.5],[159.2,-69.6],[159.7,-70.0],[160.8,-70.2],[161.6,-70.6],[162.7,-70.7],[163.8,-70.7],[164.9,-70.8],[166.1,-70.8],[167.3,-70.8],[168.4,-71.0],[169.5,-71.2],[170.5,-71.4],[171.2,-71.7],[171.1,-72.1],[170.6,-72.4],[170.1,-72.9],[169.8,-73.2],[169.3,-73.7],[168.0,-73.8],[167.4,-74.2],[166.1,-74.4],[165.6,-74.8],[165.0,-75.1],[164.2,-75.5],[163.8,-75.9],[163.6,-76.2],[163.5,-76.7],[163.5,-77.1],[164.1,-77.5],[164.3,-77.8],[164.7,-78.2],[166.6,-78.3],[167.0,-78.8],[165.2,-78.9],[163.7,-79.1],[161.8,-79.2],[160.9,-79.7],[160.7,-80.2],[160.3,-80.6],[159.8,-80.9],[161.1,-81.3],[161.6,-81.7],[162.5,-82.1],[163.7,-82.4],[165.1,-82.7],[166.6,-83.0],[168.9,-83.3],[169.4,-83.8],[172.3,-84.0],[172.5,-84.1],[173.2,-84.4],[176.0,-84.2],[178.3,-84.5],[180,-84.7]]]},{"i":"","r":[[[32.7,35.1],[32.9,35.4],[34.6,35.7],[34.0,35.1],[33.7,35.0],[33.5,35.0],[33.4,35.2],[32.9,35.1],[32.7,35.1]]]},{"i":"MA","r":[[[-2.2,35.2],[-1.7,33.9],[-1.1,32.7],[-2.6,32.1],[-3.6,31.6],[-4.9,30.5],[-6.1,29.7],[-8.7,28.8],[-8.8,27.7],[-9.4,27.1],[-10.2,26.9],[-11.4,26.9],[-12.0,26.0],[-13.9,23.7],[-14.6,21.9],[-17.0,21.4],[-17.0,21.9],[-16.3,22.7],[-16.0,23.7],[-15.1,24.5],[-14.8,25.6],[-13.8,26.6],[-13.1,27.7],[-11.7,28.1],[-10.4,29.1],[-9.8,31.2],[-9.3,32.6],[-7.7,33.7],[-6.2,35.1],[-5.2,35.8],[-3.6,35.4],[-2.2,35.2]]]},{"i":"EG","r":[[[36.9,22],[29.0,22],[25,25.7],[24.7,30.0],[24.8,31.1],[26.5,31.6],[28.5,31.0],[29.7,31.2],[31.0,31.6],[32.0,30.9],[33.0,31.0],[34.3,31.2],[34.8,29.8],[34.6,29.1],[34.2,27.8],[33.6,28.0],[32.4,29.9],[32.7,28.7],[34.1,26.1],[34.8,25.0],[35.5,23.8],[36.7,22.2],[36.9,22]]]},{"i":"LY","r":[[[25,22],[23.9,20],[19.8,21.5],[14.9,22.9],[13.6,23.0],[11.6,24.1],[10.3,24.4],[9.9,25.4],[9.7,26.5],[9.8,27.7],[9.9,29.0],[9.5,30.3],[10.1,31.0],[10.6,31.8],[11.4,32.4],[12.7,32.8],[13.9,32.7],[15.7,31.4],[18.0,30.8],[19.6,30.5],[19.8,31.8],[20.9,32.7],[22.9,32.6],[23.6,32.2],[24.9,31.9],[24.8,31.1],[24.7,30.0],[25,25.7],[25,22]]]},{"i":"ET","r":[[[47.8,8.0],[43.7,5.0],[42.1,4.2],[41.2,3.9],[39.9,3.8],[38.9,3.5],[38.4,3.6],[36.9,4.4],[35.8,4.8],[35.3,5.5],[34.3,6.8],[33.6,7.7],[33.3,8.4],[34.0,8.7],[34.3,10.6],[34.8,11.3],[35.9,12.6],[36.4,14.4],[37.9,15.0],[39.1,14.7],[40.0,14.5],[41.2,13.8],[42.0,12.9],[42,12.1],[41.7,11.4],[42.3,11.0],[42.8,10.9],[42.9,10.0],[43.7,9.2],[47.8,8.0]]]},{"i":"DJ","r":[[[42.4,12.5],[43.1,12.7],[43.3,12.0],[43.1,11.5],[42.6,11.1],[41.8,11.1],[41.7,11.6],[42.4,12.5]]]},{"i":"","r":[[[48.9,11.4],[48.9,10.0],[48.5,8.8],[46.9,8.0],[43.3,9.5],[42.6,10.6],[43.1,11.5],[43.7,10.9],[44.6,10.4],[46.6,10.8],[48.0,11.2],[48.9,11.4]]]},{"i":"UG","r":[[[33.9,-0.9],[30.8,-1.0],[29.8,-1.4],[29.6,-0.6],[29.9,0.6],[30.5,1.6],[31.2,2.2],[30.8,3.5],[31.2,3.8],[32.7,3.8],[34.0,4.2],[34.6,3.1],[34.7,1.2],[33.9,0.1],[33.9,-0.9]]]},{"i":"RW","r":[[[30.4,-1.1],[30.8,-2.3],[30.5,-2.4],[29.6,-2.9],[29.1,-2.3],[29.3,-1.6],[29.8,-1.4],[30.4,-1.1]]]},{"i":"BA","r":[[[18.6,42.6],[17.3,43.4],[16.5,44.0],[15.8,44.8],[16.3,45.0],[17.0,45.2],[18.6,45.1],[19.0,44.9],[19.1,44.4],[19.5,43.6],[19.0,43.4],[18.6,42.6]]]},{"i":"MK","r":[[[22.4,42.3],[23.0,41.3],[22.6,41.1],[21.7,40.9],[20.6,41.1],[20.6,41.9],[20.7,41.8],[21.4,42.2],[21.9,42.3],[22.4,42.3]]]},{"i":"RS","r":[[[18.8,45.9],[19.6,46.2],[20.8,45.7],[21.5,45.2],[22.1,44.5],[22.7,44.6],[22.7,44.2],[22.5,43.6],[22.6,42.9],[22.5,42.5],[21.9,42.3],[21.5,42.3],[21.8,42.7],[21.4,42.9],[21.1,43.1],[20.8,43.3],[20.5,42.9],[20.3,42.9],[19.6,43.2],[19.2,43.5],[19.6,44.0],[19.4,44.9],[19.0,44.9],[19.1,45.5],[18.8,45.9]]]},{"i":"ME","r":[[[20.1,42.6],[19.7,42.7],[19.4,41.9],[18.9,42.3],[18.6,42.6],[19.0,43.4],[19.5,43.4],[20.0,43.1],[20.3,42.8],[20.1,42.6]]]},{"i":"XK","r":[[[20.6,41.9],[20.3,42.3],[20.3,42.8],[20.6,43.2],[21.0,43.1],[21.3,42.9],[21.6,42.7],[21.7,42.4],[21.6,42.2],[20.8,42.1],[20.6,41.9]]]},{"i":"SS","r":[[[30.8,3.5],[29.7,4.6],[28.7,4.5],[28.0,4.4],[27.2,5.6],[26.2,6.5],[25.1,7.5],[24.6,8.2],[24.2,8.7],[24.8,9.8],[25.8,10.4],[26.5,9.6],[27.1,9.6],[28.0,9.4],[29.0,9.6],[29.6,10.1],[30.8,9.7],[31.9,10.5],[32.3,11.7],[32.7,12.0],[33.2,12.2],[33.2,10.7],[33.8,10.0],[34.0,9.5],[33.8,8.4],[33.0,7.8],[34.1,7.2],[34.7,6.6],[34.6,4.8],[33.4,3.8],[31.9,3.6],[30.8,3.5]]]},{"i":"SG","r":[[[103.97,1.33],[103.82,1.27],[103.65,1.33],[103.71,1.42],[103.82,1.45],[103.91,1.42],[103.96,1.39],[104.0,1.37],[103.97,1.33]]]},{"i":"HK","r":[[[114.02,22.51],[114.05,22.54],[114.1,22.55],[114.12,22.56],[114.19,22.56],[114.23,22.55],[114.27,22.54],[114.29,22.5],[114.28,22.46],[114.33,22.44],[114.34,22.4],[114.29,22.37],[114.29,22.33],[114.27,22.3],[114.14,22.35],[114.03,22.38],[113.94,22.36],[113.9,22.4],[113.9,22.43],[114.01,22.48],[114.02,22.51]],[[114.23,22.21],[114.21,22.2],[114.14,22.27],[114.13,22.29],[114.19,22.3],[114.25,22.26],[114.24,22.23],[114.23,22.21]],[[114.0,22.21],[113.88,22.21],[113.85,22.22],[113.84,22.24],[113.88,22.28],[114.04,22.33],[114.0,22.28],[114.0,22.21]]]}];
-const GLOBE_CENT={"AF":[66,33],"AL":[20,41],"DZ":[2.6,28],"AD":[1.5,42.5],"AO":[17.8,-11.2],"AG":[-61.8,17.1],"AR":[-64,-34],"AM":[45,40],"AW":[-69.9,12.5],"AS":[-170.7,-14.3],"AU":[134,-25],"AT":[14.5,47.6],"AZ":[47.5,40.4],"BS":[-77.4,24.2],"BD":[90.4,23.7],"BB":[-59.5,13.2],"BI":[29.9,-3.4],"BE":[4.5,50.6],"BJ":[2.3,9.6],"BM":[-64.8,32.3],"BT":[90.4,27.5],"BA":[17.8,44],"BZ":[-88.5,17.2],"BY":[27.9,53.7],"BO":[-64.7,-16.7],"BW":[24.7,-22.2],"BR":[-51.9,-10.8],"BH":[50.6,26],"BN":[114.7,4.5],"BG":[25.2,42.7],"BF":[-1.7,12.3],"CF":[20.9,6.6],"KH":[105,12.7],"CA":[-106,56],"KY":[-80.9,19.3],"CG":[15.8,-0.8],"TD":[18.7,15.4],"CL":[-71.5,-35.7],"CN":[104,35.9],"CI":[-5.5,7.6],"CM":[12.7,5.7],"CD":[23.6,-2.9],"CK":[-159.8,-21.2],"CO":[-73.1,3.9],"KM":[43.9,-11.6],"CV":[-23.6,16],"CR":[-84.2,9.9],"HR":[15.2,45.1],"CU":[-77.8,21.6],"CY":[33.4,35.1],"CZ":[15.5,49.8],"DK":[9.5,56.3],"DJ":[42.6,11.7],"DM":[-61.4,15.4],"DO":[-70.5,18.9],"EC":[-78.2,-1.4],"EG":[30,26.8],"ER":[39.8,15.3],"SV":[-88.9,13.8],"ES":[-3.6,40.2],"EE":[25.5,58.6],"ET":[39.6,8.6],"FJ":[178,-17.8],"FI":[26,64.5],"FR":[2.5,46.6],"FM":[150.5,6.9],"GA":[11.8,-0.6],"GM":[-15.4,13.4],"GB":[-2.4,54.2],"GW":[-15,12],"GE":[43.4,42.2],"GQ":[10.3,1.6],"DE":[10.4,51.2],"GH":[-1.2,7.9],"GR":[22.9,39.1],"GD":[-61.7,12.1],"GT":[-90.4,15.7],"GN":[-10.9,10.4],"GU":[144.8,13.4],"GY":[-58.9,4.8],"HT":[-72.7,19],"HK":[114.1,22.4],"HN":[-86.6,14.8],"HU":[19.4,47.2],"ID":[114,-2],"IN":[79.6,22.9],"IR":[54.3,32.4],"IE":[-8,53.2],"IQ":[43.7,33.2],"IS":[-18.6,64.9],"IL":[35,31.5],"VI":[-64.8,18.3],"IT":[12.6,42.5],"VG":[-64.6,18.4],"JM":[-77.3,18.1],"JO":[36.8,31.3],"JP":[138,37.5],"KZ":[67.3,48],"KE":[37.9,0.5],"KG":[74.8,41.5],"KI":[173,1.4],"KR":[127.8,36.4],"XK":[20.9,42.6],"SA":[45.1,23.9],"KW":[47.6,29.3],"LA":[103.8,18.5],"LV":[24.9,56.9],"LY":[18,27],"LR":[-9.4,6.5],"LC":[-61,13.9],"LS":[28.2,-29.6],"LB":[35.9,33.9],"LI":[9.5,47.1],"LT":[23.9,55.2],"LU":[6.1,49.8],"MG":[46.7,-19.4],"MA":[-7.1,31.8],"MY":[109.7,3.8],"MW":[34.3,-13.2],"MD":[28.4,47],"MV":[73.2,3.7],"MX":[-102.5,23.6],"MN":[103.8,46.8],"MH":[171.2,7.1],"MK":[21.7,41.6],"ML":[-3.5,17.6],"MT":[14.4,35.9],"ME":[19.3,42.7],"MC":[7.4,43.7],"MZ":[35.5,-17.3],"MU":[57.6,-20.3],"MR":[-10.9,20.3],"MM":[96,21.9],"NA":[18.5,-22.1],"NI":[-85,12.9],"NL":[5.3,52.1],"NP":[84.1,28.3],"NG":[8.1,9.6],"NE":[8.1,17.6],"NO":[9,61.5],"NR":[166.9,-0.5],"NZ":[172,-41.8],"OM":[56.1,21.5],"PK":[69.3,30.4],"PA":[-80.1,8.5],"PY":[-58.4,-23.4],"PE":[-75,-9.2],"PH":[122.9,11.8],"PS":[35.3,31.9],"PW":[134.6,7.5],"PG":[143.9,-6.5],"PL":[19.4,52],"PT":[-8.1,39.6],"KP":[127.5,40.3],"PR":[-66.5,18.2],"QA":[51.2,25.3],"TW":[121,23.8],"ZA":[24.7,-29],"RO":[24.9,45.8],"RU":[97.7,61.5],"RW":[29.9,-1.9],"WS":[-172.1,-13.7],"SN":[-14.5,14.5],"SC":[55.5,-4.7],"SG":[103.8,1.4],"KN":[-62.7,17.3],"SL":[-11.8,8.5],"SI":[14.8,46.1],"SM":[12.5,43.9],"SB":[160.2,-9.6],"SO":[46.2,5.2],"RS":[20.8,44],"LK":[80.7,7.9],"SS":[31.3,7.3],"ST":[6.6,0.2],"SD":[30.2,16],"CH":[8.2,46.8],"SR":[-56,4],"SK":[19.5,48.7],"SE":[15.3,62.2],"SZ":[31.5,-26.5],"SY":[38.5,35],"TZ":[34.9,-6.4],"TO":[-175.2,-21.2],"TH":[101,15.1],"TJ":[71.3,38.9],"TM":[59.6,39.1],"TL":[125.7,-8.8],"TG":[0.8,8.6],"TT":[-61.3,10.5],"TN":[9.6,34.1],"TR":[35.2,39],"TV":[178.7,-7.5],"AE":[54,23.9],"UG":[32.4,1.4],"UA":[31.2,49],"UY":[-55.8,-32.5],"US":[-98.5,39.8],"UZ":[63.1,41.4],"VU":[166.9,-15.4],"VE":[-66.6,6.4],"VN":[106.3,16.2],"VC":[-61.2,13.2],"YE":[47.6,15.6],"ZM":[27.8,-13.1],"ZW":[29.2,-19]};
-const GLOBE_NAMES={"AF":"Afghanistan","AL":"Albania","DZ":"Algeria","AD":"Andorra","AO":"Angola","AG":"Antigua & Barbuda","AR":"Argentina","AM":"Armenia","AW":"Aruba","AS":"American Samoa","AU":"Australia","AT":"Austria","AZ":"Azerbaijan","BS":"Bahamas","BD":"Bangladesh","BB":"Barbados","BI":"Burundi","BE":"Belgium","BJ":"Benin","BM":"Bermuda","BT":"Bhutan","BA":"Bosnia","BZ":"Belize","BY":"Belarus","BO":"Bolivia","BW":"Botswana","BR":"Brazil","BH":"Bahrain","BN":"Brunei","BG":"Bulgaria","BF":"Burkina Faso","CF":"Central African Rep.","KH":"Cambodia","CA":"Canada","KY":"Cayman Islands","CG":"Congo","TD":"Chad","CL":"Chile","CN":"China","CI":"C\u00f4te d'Ivoire","CM":"Cameroon","CD":"DR Congo","CK":"Cook Islands","CO":"Colombia","KM":"Comoros","CV":"Cape Verde","CR":"Costa Rica","HR":"Croatia","CU":"Cuba","CY":"Cyprus","CZ":"Czech Republic","DK":"Denmark","DJ":"Djibouti","DM":"Dominica","DO":"Dominican Republic","EC":"Ecuador","EG":"Egypt","ER":"Eritrea","SV":"El Salvador","ES":"Spain","EE":"Estonia","ET":"Ethiopia","FJ":"Fiji","FI":"Finland","FR":"France","FM":"Micronesia","GA":"Gabon","GM":"Gambia","GB":"Great Britain","GW":"Guinea-Bissau","GE":"Georgia","GQ":"Equatorial Guinea","DE":"Germany","GH":"Ghana","GR":"Greece","GD":"Grenada","GT":"Guatemala","GN":"Guinea","GU":"Guam","GY":"Guyana","HT":"Haiti","HK":"Hong Kong","HN":"Honduras","HU":"Hungary","ID":"Indonesia","IN":"India","IR":"Iran","IE":"Ireland","IQ":"Iraq","IS":"Iceland","IL":"Israel","VI":"US Virgin Islands","IT":"Italy","VG":"British Virgin Islands","JM":"Jamaica","JO":"Jordan","JP":"Japan","KZ":"Kazakhstan","KE":"Kenya","KG":"Kyrgyzstan","KI":"Kiribati","KR":"South Korea","XK":"Kosovo","SA":"Saudi Arabia","KW":"Kuwait","LA":"Laos","LV":"Latvia","LY":"Libya","LR":"Liberia","LC":"Saint Lucia","LS":"Lesotho","LB":"Lebanon","LI":"Liechtenstein","LT":"Lithuania","LU":"Luxembourg","MG":"Madagascar","MA":"Morocco","MY":"Malaysia","MW":"Malawi","MD":"Moldova","MV":"Maldives","MX":"Mexico","MN":"Mongolia","MH":"Marshall Islands","MK":"North Macedonia","ML":"Mali","MT":"Malta","ME":"Montenegro","MC":"Monaco","MZ":"Mozambique","MU":"Mauritius","MR":"Mauritania","MM":"Myanmar","NA":"Namibia","NI":"Nicaragua","NL":"Netherlands","NP":"Nepal","NG":"Nigeria","NE":"Niger","NO":"Norway","NR":"Nauru","NZ":"New Zealand","OM":"Oman","PK":"Pakistan","PA":"Panama","PY":"Paraguay","PE":"Peru","PH":"Philippines","PS":"Palestine","PW":"Palau","PG":"Papua New Guinea","PL":"Poland","PT":"Portugal","KP":"North Korea","PR":"Puerto Rico","QA":"Qatar","TW":"Chinese Taipei","ZA":"South Africa","RO":"Romania","RU":"Russia","RW":"Rwanda","WS":"Samoa","SN":"Senegal","SC":"Seychelles","SG":"Singapore","KN":"St Kitts & Nevis","SL":"Sierra Leone","SI":"Slovenia","SM":"San Marino","SB":"Solomon Islands","SO":"Somalia","RS":"Serbia","LK":"Sri Lanka","SS":"South Sudan","ST":"S\u00e3o Tom\u00e9","SD":"Sudan","CH":"Switzerland","SR":"Suriname","SK":"Slovakia","SE":"Sweden","SZ":"Eswatini","SY":"Syria","TZ":"Tanzania","TO":"Tonga","TH":"Thailand","TJ":"Tajikistan","TM":"Turkmenistan","TL":"Timor-Leste","TG":"Togo","TT":"Trinidad & Tobago","TN":"Tunisia","TR":"Turkey","TV":"Tuvalu","AE":"UAE","UG":"Uganda","UA":"Ukraine","UY":"Uruguay","US":"United States","UZ":"Uzbekistan","VU":"Vanuatu","VE":"Venezuela","VN":"Vietnam","VC":"St Vincent","YE":"Yemen","ZM":"Zambia","ZW":"Zimbabwe"};
-const TINY_ISO=new Set(["HK","SG","MT","MC","SM","LI","BH","SC","MV","BB","GD","LC","VC","KN","DM","AG","BM","KY","AW","GU"]);
-// tiered shading: 1 = light red, 2–3 = darker, 4+ = darkest
-const TIER_COLORS=["#f0a79e","#d24a3e","#921508"];
-function tierColor(count){return count>=4?TIER_COLORS[2]:count>=2?TIER_COLORS[1]:TIER_COLORS[0];}
-function tierLabel(count){return count>=4?"4+":count>=2?"2–3":"1";}
-
-class ErrorBoundary extends React.Component{
-  constructor(props){super(props);this.state={err:false};}
-  static getDerivedStateFromError(){return{err:true};}
-  componentDidCatch(e,info){console.error("Globe/render error caught:",e,info);}
-  componentDidUpdate(prev){if(prev.resetKey!==this.props.resetKey&&this.state.err)this.setState({err:false});}
-  render(){
-    if(this.state.err) return this.props.fallback||(
-      <div style={{padding:16,color:"#9fbdd9",fontSize:13,textAlign:"center"}}>Couldn't render this view.</div>);
-    return this.props.children;
-  }
-}
-
-/* Spider-web icon (lucide has none) — radial spokes + two octagon rings. */
-function WebIcon({size=12}){
-  return(<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{flex:"none"}}>
-    <path d="M12 3.5 L12 20.5 M3.5 12 L20.5 12 M6 6 L18 18 M18 6 L6 18"/>
-    <path d="M20 12 L17.66 17.66 L12 20 L6.34 17.66 L4 12 L6.34 6.34 L12 4 L17.66 6.34 Z"/>
-    <path d="M16.5 12 L15.18 15.18 L12 16.5 L8.82 15.18 L7.5 12 L8.82 8.82 L12 7.5 L15.18 8.82 Z"/>
-  </svg>);
-}
-
-/* === AthleteWeb: force-directed "web" of rivals ==============================
-   Each node is an athlete the focal athlete has raced against. Rivals are
-   ranked and sized by a combined rivalry score on a 0–1 scale:
-       rivalry = jaccard^ALPHA × proximity^BETA
-   jaccard = shared / (focalTotal + rivalTotal − shared) — co-appearance over
-   the union of both athletes' competition sets. Damps one-event wonders and
-   mega-active athletes who co-appear with everyone by sheer volume.
-   proximity = mean over shared events of exp(−GAP_K × |rankGap| / (fleet−1)) —
-   how close the two actually finish. Ranks are read from scoreEvent (PDF is
-   ground truth, never re-ranked). Events where either rank is missing, or
-   where the two sailed the SAME boat (partners), count for co-appearance but
-   never for closeness; zero ranked meetings ⇒ proximity = PROX_FLOOR.
-   Raw shared count stays on the node for human-readable display. Edges connect
-   any two shown athletes who appeared in the same event (weight = times
-   together). Limited to the top 15 rivals with ≥MIN_SHARED shared events
-   (relaxed to 1 for young profiles). Drag nodes; hover to spotlight a node and
-   its connections; click to pin (sidebar shows head-to-head + shared comps);
-   double-click to open that athlete's profile.
-   Self-contained 2D canvas (matches SailingGlobe) + d3-force physics. */
-const GAP_K=5;          // steepness of placement-gap decay: prox_e = exp(-GAP_K * gap)
-const ALPHA=1;          // exponent on the Jaccard co-appearance term
-const BETA=1;           // exponent on the placement-proximity term
-const PROX_FLOOR=0.15;  // proximity when no shared event has both ranks (heavy damping, never fake closeness)
-const MIN_SHARED=2;     // min shared events to qualify as a rival (relaxed to 1 if <5 athletes qualify)
-/* ── Rival cohort — single source of truth for "real rivals" ─────────────────
-   Shared by AthleteWeb (rival web) and ProgressChart so both views measure
-   against the IDENTICAL cohort: canonName keys, Draft events skipped, helm+crew
-   both counted. Rivals rank by the combined rivalry score described above —
-   jaccard^ALPHA × proximity^BETA (co-appearance × placement closeness) — with
-   ≥MIN_SHARED shared events to qualify (relaxed when <5 qualify), top-N,
-   raw-shared then name tiebreaks. `corr` on each rival carries the rivalry
-   score. Also returns focalEvData: the per-event rank maps built ONCE here
-   (ranks READ from scoreEvent rows — PDF-truth, tie-aware) and reused by the
-   web's proximity, head-to-head and partner-split views. */
-function modeOfCountMap(m){if(!m)return null;let best=null,bc=-1;m.forEach((c,k)=>{if(c>bc){bc=c;best=k;}});return best;}
-function computeRivalCohort(name,events,N=15){
-  const focal=canonName(name);
-  const disp=new Map();                 // canon -> display name
-  const shared=new Map();               // canon -> # events shared with focal
-  const totals=new Map();               // canon -> total events appeared in (for Jaccard union)
-  const focalEvData=[];                 // per focal event: {ev, present, rankOf, N(fleet), focalRank, partnerKey, partnerName, mates}
-  const clsCount=new Map();             // canon -> Map(classId -> # shared events in that class)
-  const natCount=new Map();             // canon -> Map(nat -> count)
-  const bump=(map,k,v)=>{if(!v)return;let m=map.get(k);if(!m){m=new Map();map.set(k,m);}m.set(v,(m.get(v)||0)+1);};
-  const remember=raw=>{const k=canonName(raw);if(!k)return null;if(!disp.has(k))disp.set(k,raw);return k;};
-  (events||[]).forEach(ev=>{
-    if(ev.status==="Draft")return;
-    const present=new Set();
-    (ev.entries||[]).forEach(e=>{[e.helm,e.crew].forEach(raw=>{const k=remember(raw);if(k){present.add(k);bump(natCount,k,e.nat);}});});
-    present.forEach(k=>totals.set(k,(totals.get(k)||0)+1));
-    if(!present.has(focal))return;
-    // Rank map built ONCE per focal event — ranks READ from scoreEvent rows
-    // (PDF-truth, tie-aware), reused for proximity + head-to-head + partner split.
-    const rankOf=new Map();             // canon -> best (lowest) rank in this event
-    const mates=new Set();              // canons who shared the focal's boat here (partners, not rivals)
-    let fleetN=0,focalRank=null,partnerKey="",partnerName="";
-    try{
-      const sc=scoreEvent(ev);
-      fleetN=sc.rows.length;
-      let focalRow=null;
-      sc.rows.forEach(r=>{
-        const hk=canonName(r.helm),ck=canonName(r.crew);
-        if(hk===focal||ck===focal){
-          const other=hk===focal?ck:hk;
-          if(other&&other!==focal)mates.add(other);
-          if(r.rank!=null&&(focalRank==null||r.rank<focalRank)){focalRank=r.rank;focalRow=r;}
-        }
-        if(r.rank==null)return;
-        [hk,ck].forEach(k=>{if(!k)return;const cur=rankOf.get(k);if(cur==null||r.rank<cur)rankOf.set(k,r.rank);});
-      });
-      if(focalRow){
-        const pRaw=canonName(focalRow.helm)===focal?focalRow.crew:focalRow.helm;
-        partnerKey=canonName(pRaw)||"";partnerName=pRaw||"";
-      }
-    }catch{/* unscoreable event: still counts for co-appearance, never for closeness */}
-    focalEvData.push({ev,present,rankOf,N:fleetN,focalRank,partnerKey,partnerName,mates});
-    present.forEach(k=>{if(k!==focal){shared.set(k,(shared.get(k)||0)+1);bump(clsCount,k,ev.cls);}});
-  });
-  const focalEvents=focalEvData.map(d=>d.present);   // back-compat: [Set(canon)] events the focal sailed
-  // Jaccard correlation (0–1): shared / union of the two competition sets.
-  const focalTotal=focalEvData.length;
-  const corrOf=(k,sh)=>{const u=focalTotal+(totals.get(k)||sh)-sh;return u>0?sh/u:0;};
-  // Placement proximity (0–1): mean of exp(-GAP_K*gap) over shared events where
-  // both have ranks and they weren't in the same boat. Missing/partner events
-  // are skipped — missing data must never read as either huge gap or closeness.
-  const proxOf=k=>{
-    let sum=0,n=0;
-    focalEvData.forEach(d=>{
-      if(!d.present.has(k)||d.mates.has(k))return;
-      const rr=d.rankOf.get(k);
-      if(d.focalRank==null||rr==null)return;
-      sum+=Math.exp(-GAP_K*Math.abs(d.focalRank-rr)/Math.max(d.N-1,1));n++;
-    });
-    return{prox:n>0?sum/n:PROX_FLOOR,ranked:n};
-  };
-  // Combined rivalry = co-appearance × placement proximity; both must matter.
-  const scored=[...shared.entries()].map(([k,sh])=>{
-    const{prox,ranked}=proxOf(k);
-    return{key:k,name:disp.get(k)||k,shared:sh,ranked,corr:Math.pow(corrOf(k,sh),ALPHA)*Math.pow(prox,BETA)};
-  });
-  let eligible=scored.filter(s=>s.shared>=MIN_SHARED);
-  if(eligible.length<5)eligible=scored;   // young profiles: relax to 1 shared so the web isn't empty
-  const rivals=eligible
-    .sort((a,b)=>b.corr-a.corr||b.shared-a.shared||a.name.localeCompare(b.name))
-    .slice(0,N);                          // rank by rivalry, tie-break raw shared, then name
-  return{focal,disp,focalEvents,totals,rivals,clsCount,natCount,focalEvData};
-}
-
-function AthleteWeb({name,events,height=220,dark=true,onPick,onOpen,onOpenEvent,onSelectionChange,deselectKey=0,enlarged=false}){
-  const canvasRef=React.useRef(null);
-  const wrapRef=React.useRef(null);
-  const simRef=React.useRef(null);
-  const onPickRef=React.useRef(onPick);
-  const onOpenRef=React.useRef(onOpen);
-  const onOpenEventRef=React.useRef(onOpenEvent);
-  const onSelChangeRef=React.useRef(onSelectionChange);
-  React.useEffect(()=>{onPickRef.current=onPick;onOpenRef.current=onOpen;onOpenEventRef.current=onOpenEvent;onSelChangeRef.current=onSelectionChange;},[onPick,onOpen,onOpenEvent,onSelectionChange]);
-  const stateRef=React.useRef({w:260,h:height,dpr:1,nodes:[],links:[],hover:null,sel:null,drag:null,maxShared:1,down:null,scale:1,ox:0,oy:0,pan:null});
-
-  // Build {nodes, links} from all events, centred on the focal athlete.
-  // Cohort comes from computeRivalCohort — the same set ProgressChart scores
-  // against — along with focalEvData, the per-event rank maps reused by the
-  // sidebar's head-to-head + shared-competition memos below.
-  const graph=React.useMemo(()=>{
-    const{focal,disp,rivals,clsCount,natCount,focalEvData}=computeRivalCohort(name,events,15);
-    const keep=new Set(rivals.map(r=>r.key)); keep.add(focal);
-    const maxShared=rivals.length?Math.max(...rivals.map(r=>r.shared)):1;
-    const maxCorr=rivals.length?rivals[0].corr:1;
-    // node class = the boat class they shared MOST competitions with the focal in (drives node colour)
-    const nodes=[{id:focal,name:disp.get(focal)||name,cls:ATHLETE_ATTRS.get(focal)?.recentCls||null,nat:modeOfCountMap(natCount.get(focal)),shared:maxShared,corr:maxCorr||1,focal:true}];
-    rivals.forEach(r=>nodes.push({id:r.key,name:r.name,cls:modeOfCountMap(clsCount.get(r.key)),nat:modeOfCountMap(natCount.get(r.key)),shared:r.shared,corr:r.corr,ranked:r.ranked,focal:false}));
-    const ew=new Map();
-    focalEvData.forEach(({present})=>{
-      const arr=[...present].filter(k=>keep.has(k));
-      for(let i=0;i<arr.length;i++)for(let j=i+1;j<arr.length;j++){
-        const a=arr[i],b=arr[j];const key=a<b?a+"|"+b:b+"|"+a;
-        ew.set(key,(ew.get(key)||0)+1);
-      }
-    });
-    const links=[...ew.entries()].map(([key,w])=>{const p=key.split("|");return{source:p[0],target:p[1],w};});
-    return{nodes,links,maxShared,maxCorr:maxCorr||1,focal,count:rivals.length,focalEvData};
-  },[name,events]);
-
-  // selected node (lifted to React state so the enlarged sidebar can render it)
-  const [selNode,setSelNode]=React.useState(null);
-  React.useEffect(()=>{onSelChangeRef.current&&onSelChangeRef.current(selNode);},[selNode]);
-  // external "Deselect" (from the popup header) clears the current selection
-  React.useEffect(()=>{const st=stateRef.current;st.sel=null;setSelNode(null);st.draw&&st.draw();},[deselectKey]);
-  // the competitions the focal + selected athlete both sailed, with both
-  // placements (from the rank maps already built in the graph memo)
-  const sharedComps=React.useMemo(()=>{
-    if(!selNode)return [];
-    const target=selNode.id;
-    return graph.focalEvData
-      .filter(d=>d.present.has(target))
-      .map(d=>({ev:d.ev,focalRank:d.focalRank,rivalRank:d.rankOf.get(target)??null,sameBoat:d.mates.has(target)}))
-      .sort((a,b)=>dateKey(b.ev.date).localeCompare(dateKey(a.ev.date)));
-  },[selNode,graph]);
-  // head-to-head record vs the selected athlete — overall and split by the
-  // focal athlete's partner in each event. Only events where BOTH have ranks
-  // and the two weren't in the same boat count; missing data never fabricates
-  // a win, a loss, or closeness.
-  const headToHead=React.useMemo(()=>{
-    if(!selNode)return null;
-    const target=selNode.id;
-    let w=0,l=0,t=0,gapSum=0,n=0;
-    const byPartner=new Map();            // partnerKey -> {name,w,l,t,n}
-    graph.focalEvData.forEach(d=>{
-      if(!d.present.has(target)||d.mates.has(target))return;
-      const rr=d.rankOf.get(target);
-      if(d.focalRank==null||rr==null)return;
-      const res=d.focalRank<rr?"w":(d.focalRank>rr?"l":"t");
-      if(res==="w")w++;else if(res==="l")l++;else t++;
-      gapSum+=rr-d.focalRank;n++;
-      const pk=d.partnerKey||"__solo";
-      let g=byPartner.get(pk);
-      if(!g){g={name:d.partnerKey?d.partnerName:"Solo",w:0,l:0,t:0,n:0};byPartner.set(pk,g);}
-      g[res]++;g.n++;
-    });
-    return{n,w,l,t,avgGap:n>0?gapSum/n:0,
-      partners:[...byPartner.values()].sort((a,b)=>b.n-a.n||a.name.localeCompare(b.name))};
-  },[selNode,graph]);
-
-  React.useEffect(()=>{
-    const cv=canvasRef.current,wrap=wrapRef.current;
-    if(!cv||!wrap||graph.nodes.length<=1)return;
-    const st=stateRef.current;
-    const ctx=cv.getContext("2d");
-    const sizeCanvas=()=>{
-      const w=wrap.clientWidth||260,h=height,dpr=window.devicePixelRatio||1;
-      cv.width=w*dpr;cv.height=h*dpr;cv.style.width=w+"px";cv.style.height=h+"px";
-      st.w=w;st.h=h;st.dpr=dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
-    };
-    sizeCanvas();
-    const nodes=graph.nodes.map(n=>({...n}));
-    const byId=new Map(nodes.map(n=>[n.id,n]));
-    const links=graph.links.map(l=>({...l}));
-    st.nodes=nodes;st.links=links;st.byId=byId;st.maxShared=graph.maxShared;st.maxCorr=graph.maxCorr;st.hover=null;st.sel=null;st.scale=1;st.ox=0;st.oy=0;st.pan=null;
-    setSelNode(null);
-    const focalNode=byId.get(graph.focal);
-    if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}
-    // scatter rivals radially: bigger (more-correlated) start nearer the focal,
-    // smaller start further out, with random jitter so the layout looks organic.
-    nodes.forEach(n=>{if(n.focal)return;const ratio=(n.corr||0)/(graph.maxCorr||1);
-      const ang=Math.random()*Math.PI*2,dist=(enlarged?144:55)+(1-ratio)*(enlarged?414:104)+(Math.random()-.5)*(enlarged?90:26);
-      n.x=st.w/2+Math.cos(ang)*dist;n.y=st.h/2+Math.sin(ang)*dist;});
-    // Sizing is relative to the focal node: the MOST-CORRELATED rival (Jaccard)
-    // is 80% of the focal's size, everyone else scales linearly by their
-    // correlation vs. that top rival. No rival is ever bigger than focal.
-    const F=enlarged?12.6:7.65;               // focal radius (50% smaller, +20%, then +50%)
-    const rad=d=>{if(d.focal)return F;
-      const ratio=(d.corr||0)/(st.maxCorr||1);
-      return Math.max(enlarged?3.3:1.95,F*0.8*ratio);};   // top rival = 80% of focal
-    st.rad=rad;
-    const lerpText=(n,strong,sx,sy)=>{
-      ctx.font=(strong?"700 ":"600 ")+(strong?12:10.5)+"px -apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif";
-      const t=n.name,tw=ctx.measureText(t).width,x=sx,y=sy-rad(n)*st.scale-6;
-      ctx.fillStyle="rgba(8,24,45,.82)";
-      const px=6,h=15,bx=x-tw/2-px,by=y-h+3,bw=tw+px*2;
-      ctx.beginPath();
-      if(ctx.roundRect)ctx.roundRect(bx,by,bw,h,5);else ctx.rect(bx,by,bw,h);
-      ctx.fill();
-      ctx.fillStyle=strong?"#ffffff":"#dcecf8";ctx.textAlign="center";ctx.textBaseline="alphabetic";
-      ctx.fillText(t,x,y);
-    };
-    // a node shows its label when it's the focal/active node, or — in the
-    // enlarged view — once zoom makes it big enough (larger nodes reveal first).
-    // enlarged: label every node. mini: only label the node under the cursor.
-    const labelFor=(n,active)=>enlarged||(active&&n.id===active.id);
-    const draw=()=>{
-      const s=st.scale,active=st.sel||st.hover;
-      ctx.save();
-      ctx.setTransform(st.dpr,0,0,st.dpr,0,0);
-      ctx.clearRect(0,0,st.w,st.h);
-      const nbr=new Set();
-      if(active)links.forEach(l=>{const a=l.source.id,t=l.target.id;if(a===active.id)nbr.add(t);else if(t===active.id)nbr.add(a);});
-      // world-space layer — nodes + links pan & zoom together
-      ctx.save();
-      ctx.translate(st.ox,st.oy);ctx.scale(s,s);
-      links.forEach(l=>{
-        const a=l.source,b=l.target;if(a.x==null||b.x==null)return;
-        const on=active&&(a.id===active.id||b.id===active.id);
-        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
-        ctx.lineWidth=Math.min(2.4,.4+l.w*.35)/s;
-        ctx.strokeStyle=on?"rgba(13,142,207,.85)":active?"rgba(150,175,205,.05)":"rgba(150,175,205,.16)";
-        ctx.stroke();
-      });
-      nodes.forEach(n=>{
-        if(n.x==null)return;
-        const c=rad(n),dim=active&&n.id!==active.id&&!nbr.has(n.id);
-        const col=n.focal?"#ffcf2e":classColor(n.cls);
-        ctx.globalAlpha=dim?.15:1;
-        ctx.fillStyle=col;ctx.beginPath();ctx.arc(n.x,n.y,c,0,7);ctx.fill();
-        ctx.lineWidth=((n.focal||(active&&n.id===active.id))?1.6:1.1)/s;ctx.strokeStyle="#fff";ctx.stroke();
-        ctx.globalAlpha=1;
-      });
-      ctx.restore();
-      // screen-space labels — constant size, never scale with zoom
-      nodes.forEach(n=>{
-        if(n.x==null||!labelFor(n,active))return;
-        const dim=active&&n.id!==active.id&&!nbr.has(n.id);
-        ctx.globalAlpha=dim?.2:1;
-        lerpText(n,n.focal||(active&&n.id===active.id),n.x*s+st.ox,n.y*s+st.oy);
-        ctx.globalAlpha=1;
-      });
-      ctx.restore();
-    };
-    st.draw=draw;
-    const sim=forceSimulation(nodes)
-      .velocityDecay(enlarged?.62:.58)        // higher damping = relaxed, fluid motion (less bounce)
-      // link distance is driven by correlation: more-correlated nodes sit
-      // closer to the focal, less-correlated ones further out. Focal links hold
-      // the radial structure; rival-rival links stay weak so they don't clump.
-      .force("link",forceLink(links).id(d=>d.id)
-        .distance(l=>{const a=l.source,b=l.target,other=a.focal?b:(b.focal?a:null);
-          if(other){const ratio=(other.corr||0)/(st.maxCorr||1);return (enlarged?126:47)+(1-ratio)*(enlarged?414:104);}
-          return enlarged?270:91;})
-        .strength(l=>(l.source.focal||l.target.focal)?(enlarged?.5:.45):.04))
-      .force("charge",forceManyBody().strength(enlarged?-270:-60).distanceMax(enlarged?1100:390))
-      .force("collide",forceCollide(d=>rad(d)+(enlarged?10:7)).strength(.6))
-      .force("x",forceX(()=>st.w/2).strength(enlarged?.04:.05))
-      .force("y",forceY(()=>st.h/2).strength(enlarged?.04:.05))
-      // soft walls — any node dragged/pushed outside the frame eases back in
-      .force("bounds",a=>{const m=enlarged?22:12;nodes.forEach(n=>{if(n.fx!=null||n.x==null)return;
-        if(n.x<m)n.vx+=(m-n.x)*a*0.6;else if(n.x>st.w-m)n.vx+=(st.w-m-n.x)*a*0.6;
-        if(n.y<m)n.vy+=(m-n.y)*a*0.6;else if(n.y>st.h-m)n.vy+=(st.h-m-n.y)*a*0.6;});})
-      .on("tick",draw);
-    simRef.current=sim;
-
-    const pos=ev=>{const r=cv.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};};
-    const toWorld=p=>({x:(p.x-st.ox)/st.scale,y:(p.y-st.oy)/st.scale});
-    const hit=p=>{const w=toWorld(p);let best=null,bd=1e9;nodes.forEach(n=>{if(n.x==null)return;const dx=n.x-w.x,dy=n.y-w.y,d=dx*dx+dy*dy,r=rad(n)+6/st.scale;if(d<=r*r&&d<bd){bd=d;best=n;}});return best;};
-    const onDown=e=>{const p=pos(e);const n=hit(p);st.down={p,n,moved:false,t:Date.now()};
-      if(n){const w=toWorld(p);st.drag=n;n.fx=w.x;n.fy=w.y;sim.alphaTarget(.3).restart();}
-      else if(enlarged){st.pan={x:p.x,y:p.y,ox:st.ox,oy:st.oy};cv.style.cursor="grabbing";}};
-    const onMove=e=>{
-      const p=pos(e);
-      if(st.drag){st.down&&(st.down.moved=true);const w=toWorld(p);st.drag.fx=w.x;st.drag.fy=w.y;return;}
-      if(st.pan){st.down&&(st.down.moved=true);st.ox=st.pan.ox+(p.x-st.pan.x);st.oy=st.pan.oy+(p.y-st.pan.y);draw();return;}
-      const n=hit(p);
-      if(n!==st.hover){st.hover=n;cv.style.cursor=n?"pointer":(enlarged?"grab":"default");draw();}
-    };
-    const endDrag=()=>{if(st.drag){if(!st.drag.focal){st.drag.fx=null;st.drag.fy=null;}st.drag=null;sim.alphaTarget(0);sim.alpha(.55).restart();}st.pan=null;};
-    const onUp=()=>{
-      const d=st.down;endDrag();
-      if(d&&d.n&&!d.moved){
-        if(enlarged){const ns=st.sel&&st.sel.id===d.n.id?null:d.n;st.sel=ns;setSelNode(ns?{id:ns.id,name:ns.name,shared:ns.shared,cls:ns.cls,nat:ns.nat}:null);draw();}
-        else if(onOpenRef.current){onOpenRef.current();}
-      }
-      else if(d&&!d.n&&!d.moved&&enlarged){st.sel=null;setSelNode(null);draw();} // click empty space → clear selection
-      st.down=null;cv.style.cursor=enlarged?"grab":"default";
-    };
-    const onDbl=e=>{const n=hit(pos(e));if(n&&!n.focal&&onPickRef.current)onPickRef.current(n.name);};
-    const onLeave=()=>{if(!st.drag&&!st.pan){st.hover=null;draw();}};
-    const onWheel=e=>{if(!enlarged)return;e.preventDefault();const p=pos(e);
-      const f=Math.exp(-e.deltaY*0.0016),ns=Math.min(6,Math.max(.6,st.scale*f));
-      const wx=(p.x-st.ox)/st.scale,wy=(p.y-st.oy)/st.scale;
-      st.scale=ns;st.ox=p.x-wx*ns;st.oy=p.y-wy*ns;draw();};
-    cv.addEventListener("pointerdown",onDown);
-    window.addEventListener("pointermove",onMove);
-    window.addEventListener("pointerup",onUp);
-    cv.addEventListener("dblclick",onDbl);
-    cv.addEventListener("pointerleave",onLeave);
-    if(enlarged)cv.addEventListener("wheel",onWheel,{passive:false});
-    const onResize=()=>{sizeCanvas();sim.force("x",forceX(()=>st.w/2).strength(enlarged?.05:.055)).force("y",forceY(()=>st.h/2).strength(enlarged?.05:.055));if(focalNode){focalNode.fx=st.w/2;focalNode.fy=st.h/2;}sim.alpha(.3).restart();};
-    window.addEventListener("resize",onResize);
-    return()=>{sim.stop();cv.removeEventListener("pointerdown",onDown);window.removeEventListener("pointermove",onMove);window.removeEventListener("pointerup",onUp);cv.removeEventListener("dblclick",onDbl);cv.removeEventListener("pointerleave",onLeave);cv.removeEventListener("wheel",onWheel);window.removeEventListener("resize",onResize);};
-  },[graph,height,enlarged]);
-
-  if(graph.nodes.length<=1)
-    return(<div ref={wrapRef} style={{height,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#9fbdd9",fontSize:12,padding:"0 16px",lineHeight:1.5}}>Not enough shared competitions yet to build a web.</div>);
-  // Colour key for the nodes: focal (gold) + every boat class present among the rivals
-  // (dynamic — only classes actually on screen), coloured to match the node fills.
-  const legend=(()=>{
-    const out=[{id:"__focal",label:"This athlete",color:"#ffcf2e"}];
-    const seen=new Set();
-    graph.nodes.forEach(n=>{if(n.focal)return;const key=(n.cls||"").toLowerCase();if(seen.has(key))return;seen.add(key);
-      out.push({id:key||"__none",label:n.cls?classLabel(n.cls):"Other",color:classColor(n.cls)});});
-    return out;
-  })();
-  const canvasPane=(
-    <div ref={wrapRef} style={{position:"relative",width:"100%",height}}>
-      <canvas ref={canvasRef} style={{display:"block",width:"100%",height,touchAction:"none"}}/>
-      <div style={{position:"absolute",top:8,left:8,display:"flex",flexDirection:"column",gap:4,pointerEvents:"none",
-        background:"rgba(8,24,45,.5)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",
-        border:"1px solid rgba(120,160,210,.22)",borderRadius:9,padding:"7px 10px"}}>
-        {legend.map(l=>(
-          <div key={l.id} style={{display:"flex",alignItems:"center",gap:7,fontSize:enlarged?11.5:10,color:"#dcecf8",fontWeight:600,lineHeight:1}}>
-            <span style={{width:enlarged?11:9,height:enlarged?11:9,borderRadius:"50%",background:l.color,flex:"none",boxShadow:"0 0 0 1px rgba(255,255,255,.4)"}}/>{l.label}
-          </div>
-        ))}
-      </div>
-      <div style={{position:"absolute",bottom:4,left:0,right:0,textAlign:"center",fontSize:10,color:"#7fa0c0",pointerEvents:"none"}}>{enlarged?`Top ${graph.count} rivals · click a node · scroll to zoom · drag to pan`:`Top 15 Rivals`}</div>
-    </div>
-  );
-  if(!enlarged)return canvasPane;
-  // shared competitions grouped by host country (mirrors the globe's footprint list)
-  const sharedGroups=(()=>{const m={};sharedComps.forEach(sc=>{const ioc=sc.ev.country||"";const iso=IOC_ISO[ioc]||"";const cname=GLOBE_NAMES[iso]||ioc||"Unknown";const key=iso||ioc||"ZZ";if(!m[key])m[key]={iso,cname,items:[]};m[key].items.push(sc);});return Object.values(m).sort((a,b)=>a.cname.localeCompare(b.cname));})();
-  const sidebar=!selNode
-    ? <div style={{padding:"22px 18px",color:"#9fbdd9",fontSize:13,lineHeight:1.6}}>Click a node to see your head-to-head record against that athlete — overall, split by your partner, and across every shared competition. Click a competition to open its results.</div>
-    : (<div style={{padding:"4px 0"}}>
-        <div style={{padding:"14px 16px 12px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
-          <h3 onClick={()=>onPickRef.current&&onPickRef.current(selNode.name)} title="Open profile"
-            style={{margin:0,fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:19,color:"#eaf3fc",cursor:"pointer",
-              display:"inline-flex",alignItems:"center",gap:9,lineHeight:1.15}}>
-            {selNode.name}{selNode.nat&&<span style={{fontSize:19,lineHeight:1}}>{iocFlag(selNode.nat)}</span>}
-          </h3>
-          <div style={{marginTop:8,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-            {selNode.cls&&(()=>{const ng=nuggetFor(selNode.cls);return <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})()}
-            <span style={{color:"#9fc4ec",fontWeight:800,fontSize:13,fontVariantNumeric:"tabular-nums"}}>{sharedComps.length} shared competition{sharedComps.length===1?"":"s"}</span>
-          </div>
-        </div>
-        {headToHead&&(headToHead.n>0?(
-          <div style={{padding:"13px 16px 14px",borderBottom:"1px solid rgba(120,160,210,.16)"}}>
-            <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0",marginBottom:4}}>Head-to-head</div>
-            <div style={{fontSize:11,color:"#7fa0c0",lineHeight:1.4,marginBottom:8}}>How {name} ranked up against {selNode.name} in common competitions.</div>
-            <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
-              <span style={{fontWeight:800,fontSize:22,lineHeight:1,color:"#eaf3fc",fontVariantNumeric:"tabular-nums",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif"}}>
-                {headToHead.w}–{headToHead.l}{headToHead.t>0?`–${headToHead.t}`:""}
-              </span>
-              <span style={{fontSize:11.5,color:"#9fbdd9",lineHeight:1.35}}>
-                {headToHead.avgGap===0?"dead even on average":`${name} finished ${Math.abs(headToHead.avgGap).toFixed(1)} place${Math.abs(headToHead.avgGap).toFixed(1)==="1.0"?"":"s"} ${headToHead.avgGap>0?"ahead":"behind"} on average`}
-              </span>
-            </div>
-            {headToHead.partners.length>0&&(
-              <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:5}}>
-                {headToHead.partners.map(p=>(
-                  <div key={p.name} style={{display:"flex",alignItems:"center",gap:8,fontSize:11.5,color:"#dcecf8"}}>
-                    <span style={{fontWeight:700,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name==="Solo"?"Solo":`With ${p.name}`}</span>
-                    <span style={{fontWeight:800,fontVariantNumeric:"tabular-nums",color:p.w>p.l?"#ffcf2e":"#dcecf8"}}>{p.w}–{p.l}{p.t>0?`–${p.t}`:""}</span>
-                    <span style={{color:"#7fa0c0",fontVariantNumeric:"tabular-nums"}}>{p.n} comp{p.n===1?"":"s"}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ):(
-          <div style={{padding:"12px 16px",borderBottom:"1px solid rgba(120,160,210,.16)",color:"#9fbdd9",fontSize:11.5,lineHeight:1.5}}>
-            No ranked head-to-head results with this athlete yet.
-          </div>
-        ))}
-        {sharedGroups.map(g=>(
-          <div key={g.cname}>
-            <div style={{position:"sticky",top:0,padding:"9px 14px 7px",zIndex:1,display:"flex"}}>
-              <span style={{display:"inline-flex",alignItems:"center",gap:8,background:"rgba(120,160,210,.16)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",border:"1px solid rgba(120,160,210,.3)",borderRadius:980,padding:"5px 13px",color:"#eaf3fc",fontWeight:700,fontFamily:"'Barlow',sans-serif",fontSize:13,letterSpacing:".02em",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)"}}>
-                <span style={{fontSize:16,lineHeight:1}}>{g.iso?isoFlag(g.iso):""}</span>{g.cname}
-                <span style={{color:"#9fc4ec",fontWeight:800}}>{g.items.length}</span>
-              </span>
-            </div>
-            {g.items.map((sc,i)=>{const ev=sc.ev;const ng=ev.cls?nuggetFor(ev.cls,ev.subclass):null;
-              const won=!sc.sameBoat&&sc.focalRank!=null&&sc.rivalRank!=null&&sc.focalRank<sc.rivalRank;
-              return(
-              <div key={i} onClick={()=>onOpenEventRef.current&&onOpenEventRef.current(ev.id)} title="Open results"
-                style={{margin:"7px 12px",padding:"10px 12px",borderRadius:10,cursor:"pointer",transition:"all .15s",
-                  background:"rgba(120,160,210,.08)",border:"1px solid rgba(120,160,210,.16)"}}
-                onMouseEnter={e=>{e.currentTarget.style.background="rgba(90,150,215,.2)";e.currentTarget.style.borderColor="rgba(120,180,235,.5)";}}
-                onMouseLeave={e=>{e.currentTarget.style.background="rgba(120,160,210,.08)";e.currentTarget.style.borderColor="rgba(120,160,210,.16)";}}>
-                <div style={{fontWeight:700,color:"#eaf3fc",fontSize:13.5,marginBottom:3}}>{ev.name}</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:"4px 10px",fontSize:12,color:"#9fbdd9",alignItems:"center"}}>
-                  <span>{formatDate(ev.date)}</span>
-                  {ng&&<span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 9px",fontWeight:700,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>}
-                  {sc.sameBoat
-                    ?<span style={{color:"#9fc4ec",fontWeight:700,fontSize:11.5}}>Competed together{sc.focalRank!=null?` · #${sc.focalRank}`:""}</span>
-                    :<span style={{fontVariantNumeric:"tabular-nums",fontWeight:800,fontSize:11.5}}>
-                      <span style={{color:won?"#ffcf2e":"#dcecf8"}}>{sc.focalRank!=null?`#${sc.focalRank}`:"—"}</span>
-                      <span style={{fontWeight:600,color:"#7fa0c0"}}>{" vs "}</span>
-                      <span style={{color:"#dcecf8"}}>{sc.rivalRank!=null?`#${sc.rivalRank}`:"—"}</span>
-                    </span>}
-                </div>
-              </div>);})}
-          </div>
-        ))}
-        {sharedComps.length===0&&<div style={{padding:16,color:"#9fbdd9",fontSize:12}}>No shared competitions found.</div>}
-      </div>);
-  return(
-    <div style={{display:"flex",width:"100%",height}}>
-      <div style={{flex:"0 0 70%",height}}>{canvasPane}</div>
-      <div style={{flex:"0 0 30%",height,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)"}}>{sidebar}</div>
-    </div>
-  );
-}
-
-/* ── Rival-relative career progress ──────────────────────────────────────────
-   Score per event = share of the athlete's top rivals (computeRivalCohort —
-   the SAME cohort the rival web shows) they finished ahead of. Bounded 0–1,
-   independent of fleet size and event strength, so it reads across events:
-   50% = level with your rivals wherever you race. Official overall ranks
-   only — we filter and count, never re-rank. */
-const MIN_RIVALS_PRESENT=2; // events with fewer cohort rivals present are not scored (tunable)
-const SMOOTH_WINDOW=5;      // trend = rolling mean of the last N scored events
-function ProgressChart({name,events,history,height=220}){
-  const [mode,setMode]=React.useState("career"); // "career" | "year"
-  const [tip,setTip]=React.useState(null);       // {x,y,lines:[..]}
-  const data=React.useMemo(()=>{
-    const cohort=computeRivalCohort(name,events,15);
-    const rivalKeys=new Set(cohort.rivals.map(r=>r.key));
-    const pts=[];
-    if(rivalKeys.size)(history||[]).forEach(h=>{
-      const ev=h?.ev; if(!ev||ev.status==="Draft")return;
-      const dk=dateKey(ev.date); if(!dk)return;            // undated → excluded
-      const myRank=h.row?.rank; if(!(myRank>=1))return;
-      let rows; try{rows=scoreEvent(ev).rows;}catch{return;}
-      const rankOf=new Map();                              // rival canon -> best official rank in this event
-      rows.forEach(r=>{if(r.rank>=1)[r.helm,r.crew].forEach(nm=>{const k=canonName(nm);if(k&&rivalKeys.has(k)){const prev=rankOf.get(k);if(prev===undefined||r.rank<prev)rankOf.set(k,r.rank);}});});
-      if(rankOf.size<MIN_RIVALS_PRESENT)return;
-      let beaten=0; rankOf.forEach(rk=>{if(myRank<rk)beaten+=1;else if(myRank===rk)beaten+=0.5;});
-      pts.push({dk,date:ev.date,evName:ev.name,score:beaten/rankOf.size,beaten,rivals:rankOf.size,rank:myRank,fleet:h.fleet});
-    });
-    pts.sort((a,b)=>a.dk.localeCompare(b.dk));             // oldest → newest
-    pts.forEach((p,i)=>{const w=pts.slice(Math.max(0,i-SMOOTH_WINDOW+1),i+1);p.trend=w.reduce((s,x)=>s+x.score,0)/w.length;});
-    const byY=new Map();
-    pts.forEach(p=>{const y=p.dk.slice(0,4);const o=byY.get(y)||{y,sum:0,n:0};o.sum+=p.score;o.n++;byY.set(y,o);});
-    const years=[...byY.values()].sort((a,b)=>a.y.localeCompare(b.y)).map(o=>({year:o.y,score:o.sum/o.n,n:o.n}));
-    return{pts,years};
-  },[name,events,history]);
-  const W=260, headH=64, CH=Math.max(80,height-headH-6);
-  const M={l:26,r:8,t:10,b:14};
-  const plotW=W-M.l-M.r, plotH=CH-M.t-M.b;
-  const yOf=s=>M.t+plotH*(1-s);
-  const infoTxt="Measured against the same top rivals shown in the Rival Web — the athletes this athlete competes against most often. This normalizes for event difficulty: 50% means finishing level with your rivals, wherever you play.";
-  const chip=(k,lab)=>(
-    <button key={k} onClick={()=>{setMode(k);setTip(null);}}
-      style={{fontSize:10,fontWeight:700,letterSpacing:".02em",border:"1px solid rgba(120,160,210,.3)",borderRadius:980,
-        padding:"2px 10px",cursor:"pointer",transition:"all .2s ease",boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
-        background:mode===k?"rgba(146,180,222,.34)":"rgba(120,160,210,.16)",color:mode===k?"#fff":"#cfe0f2"}}>{lab}</button>);
-  const showTip=(e,lines)=>{const host=e.currentTarget.ownerSVGElement.parentElement.getBoundingClientRect();const r=e.currentTarget.getBoundingClientRect();
-    setTip({x:Math.min(Math.max(r.left-host.left+r.width/2,60),W-60),y:r.top-host.top,lines});};
-  let body;
-  if(data.pts.length<3){
-    body=<div style={{height:CH,display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center",color:"#7fa0c0",fontSize:11,padding:"0 18px"}}>Not enough shared competitions with rivals yet.</div>;
-  }else{
-    const grid=(
-      <g>
-        <text transform={`rotate(-90 7 ${M.t+plotH/2})`} x={7} y={M.t+plotH/2} textAnchor="middle" fontSize="7" fill="#7fa0c0">Rivals beaten</text>
-        {[["100%",1],["50%",.5],["0%",0]].map(([lab,s])=>
-          <text key={lab} x={M.l-3} y={yOf(s)+2.5} textAnchor="end" fontSize="7" fill="#7fa0c0">{lab}</text>)}
-        <line x1={M.l} y1={yOf(.5)} x2={W-M.r} y2={yOf(.5)} stroke="rgba(220,236,248,.32)" strokeWidth="1" strokeDasharray="3 3"/>
-        <text x={W-M.r} y={yOf(.5)-3} textAnchor="end" fontSize="6.5" fill="#7fa0c0">level with rivals</text>
-        <line x1={M.l} y1={yOf(0)} x2={W-M.r} y2={yOf(0)} stroke="rgba(220,236,248,.18)" strokeWidth="1"/>
-      </g>);
-    if(mode==="career"){
-      const ts=data.pts.map(p=>Date.UTC(+p.dk.slice(0,4),+p.dk.slice(4,6)-1,+p.dk.slice(6,8)));
-      const t0=ts[0],t1=ts[ts.length-1],span=Math.max(1,t1-t0);
-      const xOf=i=>ts.length>1?M.l+plotW*(ts[i]-t0)/span:M.l+plotW/2;
-      const trendPts=data.pts.map((p,i)=>`${xOf(i)},${yOf(p.trend)}`).join(" ");
-      const area=`M ${xOf(0)},${yOf(data.pts[0].trend)} `+data.pts.map((p,i)=>`L ${xOf(i)},${yOf(p.trend)}`).join(" ")+` L ${xOf(data.pts.length-1)},${yOf(0)} L ${xOf(0)},${yOf(0)} Z`;
-      body=(
-        <svg width="100%" height={CH} viewBox={`0 0 ${W} ${CH}`} style={{display:"block"}}>
-          {grid}
-          <path d={area} fill="rgba(200,146,11,.10)"/>
-          <polyline points={trendPts} fill="none" stroke="var(--gold)" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round"/>
-          {data.pts.map((p,i)=>(
-            <circle key={i} cx={xOf(i)} cy={yOf(p.score)} r="3" fill="var(--accent)" stroke="rgba(255,255,255,.55)" strokeWidth="1" style={{cursor:"pointer"}}
-              onMouseEnter={e=>showTip(e,[p.evName,formatDate(p.date),`Beat ${p.beaten%1?p.beaten.toFixed(1):p.beaten} of ${p.rivals} rivals`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
-              onMouseLeave={()=>setTip(null)}/>))}
-          <text x={M.l} y={CH-3} fontSize="7" fill="#7fa0c0">{data.pts[0].dk.slice(0,4)}</text>
-          {data.pts[data.pts.length-1].dk.slice(0,4)!==data.pts[0].dk.slice(0,4)&&
-            <text x={W-M.r} y={CH-3} textAnchor="end" fontSize="7" fill="#7fa0c0">{data.pts[data.pts.length-1].dk.slice(0,4)}</text>}
-        </svg>);
-    }else{
-      const n=data.years.length, slot=plotW/n, bw=Math.min(26,slot*.55);
-      body=(
-        <svg width="100%" height={CH} viewBox={`0 0 ${W} ${CH}`} style={{display:"block"}}>
-          {grid}
-          {data.years.map((y,i)=>{const x=M.l+slot*i+(slot-bw)/2;const h=plotH*y.score;return(
-            <g key={y.year}>
-              <rect x={x} y={yOf(y.score)} width={bw} height={Math.max(1,h)} rx="3" fill="rgba(13,142,207,.75)" stroke="rgba(255,255,255,.25)" strokeWidth=".5" style={{cursor:"pointer"}}
-                onMouseEnter={e=>showTip(e,[y.year,`Avg ${Math.round(y.score*100)}% of rivals beaten`,`${y.n} scored competition${y.n>1?"s":""}`])}
-                onMouseLeave={()=>setTip(null)}/>
-              <text x={x+bw/2} y={CH-3} textAnchor="middle" fontSize="7" fill="#7fa0c0">{y.year}</text>
-            </g>);})}
-        </svg>);
-    }
-  }
-  return(
-    <div style={{position:"relative",width:"100%",height}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-        <span style={{fontSize:12.5,fontWeight:800,color:"#fff",letterSpacing:"-.01em"}}>Progress vs Rivals</span>
-        <span title={infoTxt} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:13,height:13,borderRadius:"50%",
-          border:"1px solid rgba(127,160,192,.6)",color:"#7fa0c0",fontSize:9,fontWeight:700,cursor:"help",fontStyle:"italic",fontFamily:"Georgia,serif"}}>i</span>
-      </div>
-      <div style={{textAlign:"center",fontSize:9,color:"#7fa0c0",lineHeight:1.35,margin:"2px 6px 5px"}}>Share of your top rivals you finished ahead of, per competition</div>
-      <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:4}}>{[chip("career","Career"),chip("year","By year")]}</div>
-      {body}
-      {tip&&(
-        <div style={{position:"absolute",left:tip.x,top:Math.max(headH,tip.y),transform:"translate(-50%,-100%)",pointerEvents:"none",zIndex:5,
-          background:"rgba(8,24,45,.94)",border:"1px solid rgba(120,160,210,.35)",borderRadius:8,padding:"6px 9px",maxWidth:200,boxShadow:"0 4px 14px rgba(0,0,0,.4)"}}>
-          {tip.lines.map((l,i)=><div key={i} style={{fontSize:i?9.5:10,fontWeight:i?500:700,color:i?"#a9c4de":"#fff",whiteSpace:i?"nowrap":"normal"}}>{l}</div>)}
-        </div>)}
-    </div>);
-}
-
-function SailingGlobe({countryData,height=330,pulseIso=null,dark=false,mini=false,bare=false,countLabel="competition",hostIso=null,rankShade=false,markersHostOnly=false}){
-  const canvasRef=React.useRef(null);
-  const wrapRef=React.useRef(null);
-  const stateRef=React.useRef({lon:0,lat:-12,zoom:1,auto:true,drag:false,px:0,py:0,vlon:0.16,pinch:0,tlon:null,tlat:null,lastPulse:undefined});
-  const pulseRef=React.useRef(pulseIso); pulseRef.current=pulseIso;
-  const [tip,setTip]=React.useState(null);
-
-  const data=React.useMemo(()=>countryData||{},[countryData]);
-  const isoSet=React.useMemo(()=>new Set(GLOBE_COUNTRIES.map(c=>c.i)),[]);
-  const tinyEntries=React.useMemo(()=>Object.keys(data)
-    .filter(iso=>GLOBE_CENT[iso]&&(TINY_ISO.has(iso)||!isoSet.has(iso)))
-    .map(iso=>({iso,count:data[iso],lon:GLOBE_CENT[iso][0],lat:GLOBE_CENT[iso][1],name:GLOBE_NAMES[iso]||iso})),[data,isoSet]);
-
-  // rank-based red shading: lightest = fewest, darkest = most (competition globe)
-  const maxCount=React.useMemo(()=>Object.values(data).reduce((a,b)=>Math.max(a,b),0),[data]);
-  const shadeFor=React.useCallback((count)=>{
-    if(!rankShade) return tierColor(count);
-    if(!count||maxCount<=0) return TIER_COLORS[0];
-    // interpolate light(#f0a79e) -> dark(#7a0d04) by relative count, return HEX
-    const t=maxCount<=1?1:(count-1)/(maxCount-1);
-    const lerp=(a,b)=>Math.round(a+(b-a)*t);
-    const hx=v=>v.toString(16).padStart(2,'0');
-    const r=lerp(0xf0,0x7a),g=lerp(0xa7,0x0d),b=lerp(0x9e,0x04);
-    return `#${hx(r)}${hx(g)}${hx(b)}`;
-  },[rankShade,maxCount]);
-
-  // every shaded country (+host) gets a centroid marker for the glow/ring pass
-  const markerEntries=React.useMemo(()=>{
-    const out=[],seen=new Set();
-    const push=(iso,count)=>{if(!iso||seen.has(iso)||!GLOBE_CENT[iso])return;seen.add(iso);
-      out.push({iso,count,lon:GLOBE_CENT[iso][0],lat:GLOBE_CENT[iso][1],name:GLOBE_NAMES[iso]||iso});};
-    Object.keys(data).forEach(iso=>push(iso,data[iso]));
-    if(hostIso)push(hostIso,data[hostIso]||0);
-    return out;
-  },[data,hostIso]);
-
-  // Live refs so the canvas effect mounts ONCE and never tears down on data change
-  const drawRef=React.useRef({});
-  drawRef.current={data,tinyEntries,markerEntries,hostIso,dark,mini,shadeFor,markersHostOnly};
-
-  // Recenter on the busiest country when the data set itself changes
-  const dataKey=React.useMemo(()=>Object.keys(data).sort().join(",")+"|"+maxCount,[data,maxCount]);
-  React.useEffect(()=>{
-    const keys=Object.keys(data); if(!keys.length) return;
-    const top=keys.reduce((a,b)=>data[b]>data[a]?b:a,keys[0]);
-    const cc=GLOBE_CENT[top]; if(cc){stateRef.current.lon=-cc[0];stateRef.current.lat=Math.max(-35,Math.min(35,-cc[1]*0.4-6));}
-  },[dataKey]);
-
-  React.useEffect(()=>{
-    const canvas=canvasRef.current; if(!canvas) return;
-    const ctx=canvas.getContext('2d');
-    let raf,W,H,baseR,R,cx,cy,dpr=Math.min(2,window.devicePixelRatio||1);
-    const size=()=>{if(!wrapRef.current)return;const w=wrapRef.current.clientWidth||0,h=height;if(!w)return;W=w;H=h;canvas.width=w*dpr;canvas.height=h*dpr;
-      canvas.style.width=w+'px';canvas.style.height=h+'px';ctx.setTransform(dpr,0,0,dpr,0,0);
-      baseR=Math.min(W,H)/2-16;cx=W/2;cy=H/2;};
-    size();
-    const D=Math.PI/180;
-    const project=(lon,lat,s)=>{const la=lat*D,lo=(lon+s.lon)*D,p0=s.lat*D,cl=Math.cos(la),sl=Math.sin(la);
-      const cosc=Math.sin(p0)*sl+Math.cos(p0)*cl*Math.cos(lo);
-      return{x:cx+R*(cl*Math.sin(lo)),y:cy-R*(Math.cos(p0)*sl-Math.sin(p0)*cl*Math.cos(lo)),vis:cosc>=0};};
-    const runs=(ring,s)=>{const out=[];let cur=null;
-      for(const [lon,lat] of ring){const p=project(lon,lat,s);
-        if(!p.vis){if(cur&&cur.length>1)out.push(cur);cur=null;continue;}if(!cur)cur=[];cur.push(p);}
-      if(cur&&cur.length>1)out.push(cur);return out;};
-
-    const draw=()=>{
-      // Wrapper may have 0 width on first paint (hidden tab / pre-layout) —
-      // size() bails without setting W/H/baseR/cx/cy, and NaN maths here would
-      // throw in createRadialGradient and take down the whole profile via the
-      // ErrorBoundary. Retry sizing until layout settles instead of crashing.
-      if(!Number.isFinite(baseR)||!(W>0)){size();if(!Number.isFinite(baseR)||!(W>0)){raf=requestAnimationFrame(draw);return;}}
-      const D2=drawRef.current;
-      const data=D2.data,tinyEntries=D2.tinyEntries,hostIso=D2.hostIso,dark=D2.dark,shadeFor=D2.shadeFor;
-      const ocean=dark?'#081a33':'#0e2c50';
-      const land=dark?'#16365c':'#d9e6f2';
-      const s=stateRef.current;R=baseR*s.zoom;
-      const pulse=pulseRef.current;
-      if(pulse!==s.lastPulse){s.lastPulse=pulse;
-        if(pulse&&GLOBE_CENT[pulse]){const c=GLOBE_CENT[pulse];s.tlon=-c[0];s.tlat=Math.max(-45,Math.min(45,-c[1]*0.55));s.auto=false;}
-        else{s.tlon=null;s.tlat=null;}}
-      if(s.tlon!=null){let dl=((s.tlon-s.lon+540)%360)-180;s.lon+=dl*0.14;s.lat+=(s.tlat-s.lat)*0.14;}
-      else if(s.auto&&!s.drag&&s.zoom<1.15)s.lon+=s.vlon;
-
-      ctx.clearRect(0,0,W,H);
-      const atm=ctx.createRadialGradient(cx,cy,baseR*0.92,cx,cy,baseR*1.16);
-      atm.addColorStop(0,'rgba(120,170,220,0.20)');atm.addColorStop(1,'rgba(120,170,220,0)');
-      ctx.fillStyle=atm;ctx.beginPath();ctx.arc(cx,cy,baseR*1.16,0,7);ctx.fill();
-
-      ctx.save();ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.clip();
-      ctx.fillStyle=ocean;ctx.fillRect(cx-R,cy-R,R*2,R*2);
-      const shg=ctx.createRadialGradient(cx-R*0.3,cy-R*0.35,R*0.1,cx,cy,R);
-      shg.addColorStop(0,dark?'rgba(40,90,150,0.45)':'rgba(60,110,165,0.35)');shg.addColorStop(1,'rgba(8,28,52,0)');
-      ctx.fillStyle=shg;ctx.fillRect(cx-R,cy-R,R*2,R*2);
-
-      ctx.strokeStyle='rgba(180,205,235,0.08)';ctx.lineWidth=1;
-      for(let lat=-60;lat<=60;lat+=30){ctx.beginPath();let st=false;for(let lon=-180;lon<=180;lon+=4){const p=project(lon,lat,s);if(!p.vis){st=false;continue;}st?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);st=true;}ctx.stroke();}
-      for(let lon=-180;lon<180;lon+=30){ctx.beginPath();let st=false;for(let lat=-90;lat<=90;lat+=4){const p=project(lon,lat,s);if(!p.vis){st=false;continue;}st?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);st=true;}ctx.stroke();}
-
-      for(const c of GLOBE_COUNTRIES){
-        const isHost=hostIso&&c.i===hostIso;
-        const competing=data[c.i]>0;
-        ctx.fillStyle=isHost?'#ffcf2e':(competing?shadeFor(data[c.i]):land);
-        ctx.beginPath();let any=false;
-        for(const ring of c.r)for(const run of runs(ring,s)){any=true;ctx.moveTo(run[0].x,run[0].y);for(let i=1;i<run.length;i++)ctx.lineTo(run[i].x,run[i].y);ctx.closePath();}
-        if(any)ctx.fill();
-        ctx.strokeStyle=isHost?'rgba(180,130,0,0.9)':(competing?'rgba(120,20,12,0.55)':(dark?'rgba(150,185,225,0.30)':'rgba(20,58,99,0.45)'));
-        ctx.lineWidth=(isHost||competing)?0.9:0.7;
-        for(const ring of c.r)for(const run of runs(ring,s)){ctx.beginPath();ctx.moveTo(run[0].x,run[0].y);for(let i=1;i<run.length;i++)ctx.lineTo(run[i].x,run[i].y);ctx.stroke();}
-      }
-
-      // Marker + glow + ring on EVERY shaded country (and the host), so small
-      // countries like Hong Kong are visible without zooming and large ones
-      // get a clear locator dot too. Compact radius so it doesn't smother things.
-      const markerEntries=D2.markerEntries||[];
-      const hostOnly=D2.markersHostOnly;
-      markerEntries.forEach(e=>{
-        const p=project(e.lon,e.lat,s);if(!p.vis){e._sx=null;return;}
-        const isHostM=hostIso&&e.iso===hostIso;
-        // keep hover hit-area for every country, but only DRAW the host marker
-        if(hostOnly&&!isHostM){e._sx=p.x;e._sy=p.y;e._sr=Math.max(R*0.05,14);return;}
-        const col=isHostM?'#ffcf2e':shadeFor(e.count);
-        const core=Math.max(3.5,Math.min(6,R*0.012));        // compact solid dot
-        const halo=core*2.6;                                 // tighter glow
-        const g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,halo);
-        g.addColorStop(0,col);g.addColorStop(0.34,col);
-        g.addColorStop(0.66,col+'66');g.addColorStop(1,col+'00');
-        ctx.fillStyle=g;ctx.beginPath();ctx.arc(p.x,p.y,halo,0,7);ctx.fill();
-        ctx.fillStyle=col;ctx.beginPath();ctx.arc(p.x,p.y,core,0,7);ctx.fill();
-        ctx.lineWidth=1.4;ctx.strokeStyle=isHostM?'#7a5600':'rgba(255,255,255,0.7)';
-        ctx.beginPath();ctx.arc(p.x,p.y,core,0,7);ctx.stroke();
-        e._sx=p.x;e._sy=p.y;e._sr=Math.max(halo,11);
-      });
-
-      if(s.zoom>=1.6){
-        ctx.font='600 10px DM Sans, system-ui, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
-        for(const c of GLOBE_COUNTRIES){const cc=GLOBE_CENT[c.i];const nm=GLOBE_NAMES[c.i];if(!cc||!nm)continue;
-          const p=project(cc[0],cc[1],s);if(!p.vis)continue;const competing=data[c.i]>0;
-          ctx.lineWidth=2.4;ctx.strokeStyle=competing?'rgba(255,235,232,0.9)':(dark?'rgba(8,24,45,0.85)':'rgba(247,251,255,0.85)');ctx.strokeText(nm,p.x,p.y);
-          ctx.fillStyle=competing?'#6e140c':(dark?'#cfe0f2':'#163a63');ctx.fillText(nm,p.x,p.y);}
-      }
-      ctx.restore();
-
-      // spotlight pulse + glow + name label (any zoom)
-      if(pulse&&GLOBE_CENT[pulse]){
-        const c=GLOBE_CENT[pulse];const p=project(c[0],c[1],s);
-        if(p.vis){
-          const ph=(performance.now()%1400)/1400;
-          // soft persistent glow so the selected country is easy to spot
-          const gl=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,34);
-          gl.addColorStop(0,'rgba(255,210,80,0.55)');gl.addColorStop(0.5,'rgba(255,180,60,0.22)');gl.addColorStop(1,'rgba(255,180,60,0)');
-          ctx.fillStyle=gl;ctx.beginPath();ctx.arc(p.x,p.y,34,0,7);ctx.fill();
-          ctx.beginPath();ctx.arc(p.x,p.y,9+ph*30,0,7);ctx.strokeStyle=`rgba(233,60,50,${(1-ph)*0.9})`;ctx.lineWidth=3;ctx.stroke();
-          ctx.beginPath();ctx.arc(p.x,p.y,6,0,7);ctx.fillStyle='#e93c32';ctx.fill();ctx.lineWidth=1.6;ctx.strokeStyle='#fff';ctx.stroke();
-          const nm=GLOBE_NAMES[pulse]||pulse;
-          ctx.font='700 12px DM Sans, system-ui, sans-serif';ctx.textAlign='center';ctx.textBaseline='top';
-          ctx.lineWidth=3;ctx.strokeStyle='rgba(8,20,40,0.9)';ctx.strokeText(nm,p.x,p.y+12);
-          ctx.fillStyle='#ffe3df';ctx.fillText(nm,p.x,p.y+12);
-        }
-      }
-      raf=requestAnimationFrame(draw);
-    };
-    draw();
-
-    const pt=ev=>{const r=canvas.getBoundingClientRect();const t=ev.touches?ev.touches[0]:ev;return{x:t.clientX-r.left,y:t.clientY-r.top};};
-    // window-level drag listeners are bound ONLY while a drag is active, so
-    // multiple globe instances on screen never interfere with each other.
-    const winMove=ev=>{const s=stateRef.current;if(!s.drag)return;const q=pt(ev);
-      s.lon+=(q.x-s.px)*0.4/s.zoom;s.lat=Math.max(-82,Math.min(82,s.lat+(q.y-s.py)*0.4/s.zoom));s.px=q.x;s.py=q.y;setTip(null);};
-    const winUp=()=>{const s=stateRef.current;s.drag=false;
-      window.removeEventListener('mousemove',winMove);window.removeEventListener('mouseup',winUp);
-      setTimeout(()=>{if(!s.drag&&!pulseRef.current)s.auto=true;},2500);};
-    const down=ev=>{const s=stateRef.current;const q=pt(ev);s.drag=true;s.auto=false;s.tlon=null;s.tlat=null;s.px=q.x;s.py=q.y;
-      window.addEventListener('mousemove',winMove);window.addEventListener('mouseup',winUp);};
-    // hover detection only (no drag) — bound to the canvas itself
-    const hover=ev=>{const s=stateRef.current;if(s.drag)return;const q=pt(ev);
-      let f=null;for(const e of (drawRef.current.markerEntries||[])){if(e._sx==null)continue;if(Math.hypot(q.x-e._sx,q.y-e._sy)<=e._sr){f=e;break;}}
-      if(f){canvas.style.cursor='pointer';setTip({x:f._sx,y:f._sy,name:f.name,count:f.count});}else{canvas.style.cursor='grab';setTip(null);}};
-    const wheel=ev=>{ev.preventDefault();const s=stateRef.current;s.auto=false;s.zoom=Math.max(1,Math.min(4.5,s.zoom*(ev.deltaY<0?1.12:0.89)));setTip(null);};
-    const dist=t=>Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);
-    const tstart=ev=>{const s=stateRef.current;if(ev.touches.length===2){s.pinch=dist(ev.touches);s.drag=false;s.auto=false;}else{const q=pt(ev);s.drag=true;s.auto=false;s.tlon=null;s.tlat=null;s.px=q.x;s.py=q.y;}};
-    const tmove=ev=>{const s=stateRef.current;if(ev.touches.length===2&&s.pinch){const d=dist(ev.touches);s.zoom=Math.max(1,Math.min(4.5,s.zoom*d/s.pinch));s.pinch=d;setTip(null);}
-      else if(s.drag){const q=pt(ev);s.lon+=(q.x-s.px)*0.4/s.zoom;s.lat=Math.max(-82,Math.min(82,s.lat+(q.y-s.py)*0.4/s.zoom));s.px=q.x;s.py=q.y;setTip(null);}};
-    const tend=()=>{const s=stateRef.current;s.pinch=0;s.drag=false;setTimeout(()=>{if(!s.drag&&!pulseRef.current)s.auto=true;},2500);};
-    const ro=new ResizeObserver(size);ro.observe(wrapRef.current);
-    canvas.addEventListener('mousedown',down);canvas.addEventListener('mousemove',hover);canvas.addEventListener('mouseleave',()=>setTip(null));
-    if(!mini)canvas.addEventListener('wheel',wheel,{passive:false});
-    canvas.addEventListener('touchstart',tstart,{passive:true});canvas.addEventListener('touchmove',tmove,{passive:true});canvas.addEventListener('touchend',tend);
-    return()=>{cancelAnimationFrame(raf);ro.disconnect();
-      canvas.removeEventListener('mousedown',down);canvas.removeEventListener('mousemove',hover);
-      window.removeEventListener('mousemove',winMove);window.removeEventListener('mouseup',winUp);
-      canvas.removeEventListener('wheel',wheel);
-      canvas.removeEventListener('touchstart',tstart);canvas.removeEventListener('touchmove',tmove);canvas.removeEventListener('touchend',tend);};
-  },[height,dark,mini]);
-
-  const total=Object.values(data).reduce((a,b)=>a+b,0);
-  const nC=Object.keys(data).length;
-  return(
-    <div ref={wrapRef} style={bare?{position:'relative',width:'100%'}:{position:'relative',width:'100%',borderRadius:14,overflow:'hidden',
-         background:dark?'radial-gradient(120% 120% at 30% 18%,#0d2745 0%,#06122a 75%)':'radial-gradient(120% 120% at 30% 18%,#163a63 0%,#0a1f3a 72%)',
-         border:'1px solid rgba(160,195,230,0.14)'}}>
-      <canvas ref={canvasRef} style={{display:'block',cursor:'grab',touchAction:'none'}}/>
-      {tip&&(<div style={{position:'absolute',left:tip.x,top:tip.y-14,transform:'translate(-50%,-100%)',
-             background:'rgba(8,24,45,0.95)',color:'#ffe9e6',padding:'6px 10px',borderRadius:8,fontSize:12,fontWeight:600,
-             whiteSpace:'nowrap',pointerEvents:'none',border:'1px solid rgba(220,90,80,0.5)',boxShadow:'0 4px 14px rgba(0,0,0,0.4)'}}>
-          {tip.name} · {tip.count} {countLabel}{tip.count!==1?'s':''}</div>)}
-      {!mini&&!bare&&<div style={{position:'absolute',left:12,bottom:10,color:'#9fbdd9',fontSize:11,letterSpacing:0.3,pointerEvents:'none'}}>
-        {nC} countr{nC!==1?'ies':'y'} · {total} {countLabel}{total!==1?'s':''} · scroll to zoom · drag to spin</div>}
-    </div>
-  );
-}
-
-/* ═══════════════ SPORT EXPLAINER (spm-) — per-class equipment hologram + course diagram ═══════════════
-   Config-driven via SPORT_MODELS: add a class entry and <SportShowcase clsId=…/> renders it with zero
-   component changes. Rendering is dependency-free pseudo-3D: [x,y,z] polys → rotate → perspective → SVG. */
-const SPM_TAU=Math.PI*2;
-const spmReducedMotion=()=>typeof window!=="undefined"&&!!window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-/* Shared rAF driver: one loop per component, paused when offscreen (IntersectionObserver) or tab hidden. */
-function useSpmLoop(hostRef,step,reduced){
-  const stepRef=React.useRef(step);stepRef.current=step;
-  React.useEffect(()=>{
-    if(reduced)return;
-    let raf=0,vis=true,last=performance.now();
-    const frame=now=>{raf=0;const dt=Math.min(64,now-last);last=now;stepRef.current(dt,now);sync();};
-    const sync=()=>{const should=vis&&!document.hidden;
-      if(should&&!raf)raf=requestAnimationFrame(frame);
-      else if(!should&&raf){cancelAnimationFrame(raf);raf=0;}};
-    const io=new IntersectionObserver(es=>{vis=!!(es[0]&&es[0].isIntersecting);if(vis)last=performance.now();sync();},{rootMargin:"90px"});
-    if(hostRef.current)io.observe(hostRef.current);
-    const onVis=()=>{if(!document.hidden)last=performance.now();sync();};
-    document.addEventListener("visibilitychange",onVis);
-    sync();
-    return()=>{io.disconnect();document.removeEventListener("visibilitychange",onVis);if(raf)cancelAnimationFrame(raf);};
-  },[reduced]);
-}
-
-/* 49er geometry in metres. Axes: x fore/aft (bow +), y up, z athwartships. Real class proportions:
-   hull 4.99 m, hull beam ~1.7 m flaring to 2.90 m across the wings, mast ~8.1 m, bowsprit (retracted),
-   square-top main 16.1 m² + jib 5.1 m². */
-function build49erGeometry(){
-  const polys=[];
-  const fill=(part,cls,pts)=>polys.push({part,cls,kind:"fill",pts});
-  const line=(part,cls,pts,w)=>polys.push({part,cls,kind:"line",pts,w});
-  // Smooth hull stations sampled from 49er lines: [x, halfBeamDeck, halfBeamBottom, yDeck, yBottom].
-  // Fine plumb bow, gentle sheer spring, flat run aft, slight rocker — dense stations keep curves soft.
-  const st=[
-    [ 2.50,0.02,0.01,0.55,0.40],
-    [ 2.12,0.15,0.07,0.51,0.22],
-    [ 1.62,0.32,0.17,0.48,0.11],
-    [ 1.06,0.48,0.29,0.46,0.045],
-    [ 0.46,0.62,0.41,0.445,0.015],
-    [-0.24,0.74,0.51,0.435,0.00],
-    [-0.94,0.81,0.57,0.43,0.00],
-    [-1.70,0.85,0.60,0.43,0.02],
-    [-2.49,0.84,0.56,0.44,0.06],
-  ];
-  for(let i=0;i<st.length-1;i++){
-    const[xa,da,ba,yda,yba]=st[i],[xb,db,bb,ydb,ybb]=st[i+1];
-    for(const s of[1,-1]){
-      fill("hull","hullSide",[[xa,yda,da*s],[xb,ydb,db*s],[xb,ybb,bb*s],[xa,yba,ba*s]]);
-      fill("hull","hullBottom",[[xa,yba,ba*s],[xb,ybb,bb*s],[xb,ybb,0],[xa,yba,0]]);
-      fill("hull","deck",[[xa,yda,da*s],[xb,ydb,db*s],[xb,ydb,0],[xa,yda,0]]);
-    }
-  }
-  for(const s of[1,-1]){ // gunwale + chine curves give the hull its lines
-    line("hull","edge",st.map(p=>[p[0],p[3],p[1]*s]),1.1);
-    line("hull","edge",st.map(p=>[p[0],p[4],p[2]*s]),0.7);
-  }
-  line("hull","edge",[[-2.49,0.44,0.84],[-2.49,0.06,0.56],[-2.49,0.06,-0.56],[-2.49,0.44,-0.84]],1); // open transom
-  for(const s of[1,-1]){ // wings/racks — rounded rim, long and clearly angled up outboard, trampoline hints
-    const rim=[[0.95,0.48,0.62*s],[0.58,0.56,1.17*s],[0.34,0.63,1.44*s],[0.00,0.70,1.56*s],[-1.55,0.73,1.58*s],[-2.04,0.73,1.54*s],[-2.27,0.68,1.39*s],[-2.35,0.58,1.10*s],[-2.35,0.51,0.85*s]];
-    fill("hull","wing",rim.concat([[-2.35,0.46,0.84*s],[0.95,0.46,0.62*s]]));
-    line("hull","wingEdge",rim,1.3);
-    line("hull","seam",[[0.30,0.48,0.68*s],[-0.60,0.71,1.56*s]],0.5);
-    line("hull","seam",[[-0.70,0.47,0.79*s],[-1.70,0.72,1.57*s]],0.5);
-  }
-  // daggerboard — straight parallel-edged board, raked slightly aft
-  fill("daggerboard","foil",[[0.62,0.06,0],[0.30,0.06,0],[0.16,-1.05,0],[0.48,-1.05,0]]);
-  fill("rudder","foil",[[-2.52,0.52,0],[-2.72,0.52,0],[-2.80,-0.42,0],[-2.87,-0.86,0],[-2.78,-0.97,0],[-2.66,-0.72,0],[-2.59,-0.18,0]]);
-  line("rudder","spar",[[-2.60,0.58,0],[-1.55,0.72,0]],1.5); // tiller
-  line("mast","mast",[[0.30,0.45,0],[0.26,2.20,0],[0.18,4.20,0],[0.05,6.40,0],[-0.12,8.55,0]],2.2);
-  line("mast","spar",[[0.30,0.85,0],[-1.70,0.94,0.45]],1.7); // boom, eased out to port (starboard tack)
-  for(const s of[1,-1]){ // standing rigging per the 49er owner's manual (Ovington):
-    // two spreader pairs — lower at the mast joint, upper at the hounds; CAP SHROUDS run
-    // masthead → over both spreader tips → chainplates; PRIMARY SHROUDS hounds → chainplates;
-    // D1 lowers to inner chainplates; twin trapeze wires from the hounds keyplates.
-    line("mast","spar",[[0.225,3.35,0],[0.17,3.37,0.48*s]],1.1);  // lower spreaders
-    line("mast","spar",[[0.115,5.55,0],[0.07,5.57,0.36*s]],1.1);  // upper spreaders
-    line(null,"wire",[[0.10,0.47,0.78*s],[0.17,3.37,0.48*s],[0.07,5.57,0.36*s],[-0.12,8.55,0]],0.8); // cap shroud
-    line(null,"wire",[[0.12,0.47,0.66*s],[0.16,5.60,0.02*s]],0.7);  // primary shroud
-    line(null,"wire",[[0.16,0.47,0.42*s],[0.225,3.35,0.03*s]],0.6); // D1 lower
-    line(null,"trap",[[0.16,5.60,0],[-0.60,0.71,1.56*s]],0.9);      // trapeze wire down to the wing rim
-  }
-  line(null,"spar",[[2.46,0.50,0],[3.35,0.54,0]],1.6);    // bowsprit, gennaker flying
-  line(null,"wire",[[2.42,0.52,0],[0.16,5.60,0]],0.8);    // forestay
-  // gennaker — 38 m² asymmetric kite flying entirely on the PORT side: tack on the bowsprit
-  // tip, head at the masthead, clew sheeted back beside the port shroud/chainplate.
-  const KL=[[3.35,0.55,0.00],[3.90,2.60,0.85],[3.45,5.10,1.15],[2.25,7.35,0.85],[-0.05,8.40,0.15]]; // flying luff
-  const KE=[[0.05,0.95,0.66],[0.80,3.10,0.95],[0.92,5.00,1.00],[0.55,6.90,0.62],[-0.05,8.40,0.15]]; // leech to the port clew
-  const KZ=[1.20,1.85,2.05,1.35,0.15];
-  const KM=KL.map((p,i)=>[(p[0]+KE[i][0])/2+0.30,(p[1]+KE[i][1])/2,KZ[i]]);                         // cambered middle
-  for(let i=0;i<4;i++){
-    fill("gennaker","kite",[KL[i],KL[i+1],KM[i+1],KM[i]]);
-    fill("gennaker","kite",[KM[i],KM[i+1],KE[i+1],KE[i]]);
-  }
-  line("gennaker","wire",KL,1.1);                                        // luff
-  line("gennaker","seam",KE,0.7);                                        // leech
-  for(let i=1;i<4;i++)line("gennaker","seam",[KL[i],KM[i],KE[i]],0.6);   // horizontal panel seams
-  line("gennaker","seam",[KL[0],[1.70,0.72,0.48],KE[0]],0.7);            // foot
-  // Sails are modelled as CAMBERED 3D SURFACES on STARBOARD TACK — every sail bellies out to
-  // PORT (+z). Each sail = luff/mid/leech curves at several heights, panelled into strips, so
-  // nothing is flat or mirror-symmetric about the centreline.
-  // mainsail — square top, roached leech, full-length battens
-  const ML=[[0.29,0.92,0],[0.25,2.20,0],[0.17,4.20,0],[0.05,6.40,0],[-0.10,8.45,0]];                  // luff on the mast
-  const ME=[[-1.68,0.95,0.45],[-1.85,2.30,0.56],[-1.72,4.40,0.50],[-1.40,6.50,0.34],[-0.92,8.22,0.12]]; // leech, eased to port
-  const MZ=[0.40,0.58,0.52,0.34,0.10];
-  const MM=ML.map((p,i)=>[(p[0]+ME[i][0])/2,(p[1]+ME[i][1])/2,MZ[i]]);                                 // cambered middle
-  for(let i=0;i<4;i++){
-    fill("mainsail","sail",[ML[i],ML[i+1],MM[i+1],MM[i]]);
-    fill("mainsail","sail",[MM[i],MM[i+1],ME[i+1],ME[i]]);
-  }
-  line("mainsail","seam",[ML[4],MM[4],ME[4]],1);                          // flat square head
-  line("mainsail","seam",ME,0.8);                                        // leech
-  for(let i=1;i<4;i++)line("mainsail","seam",[ML[i],MM[i],ME[i]],0.7);    // battens
-  line("mainsail","seam",[ML[0],MM[0],ME[0]],0.7);                       // foot
-  // jib — luff along the forestay, clew sheeted to port
-  const JL=[[2.30,0.62,0],[1.72,1.95,0],[1.16,3.10,0],[0.62,4.55,0]];
-  const JE=[[-0.42,0.85,0.34],[-0.25,2.00,0.30],[0.10,3.25,0.22],[0.62,4.55,0]];
-  const JZ=[0.40,0.37,0.23,0];
-  const JM=JL.map((p,i)=>[(p[0]+JE[i][0])/2,(p[1]+JE[i][1])/2,JZ[i]]);
-  for(let i=0;i<3;i++){
-    fill("jib","sail",[JL[i],JL[i+1],JM[i+1],JM[i]]);
-    fill("jib","sail",[JM[i],JM[i+1],JE[i+1],JE[i]]);
-  }
-  line("jib","seam",JE,0.7);                                             // leech
-  for(let i=1;i<3;i++)line("jib","seam",[JL[i],JM[i],JE[i]],0.6);        // seams
-  line("jib","seam",[JL[0],[0.95,0.70,0.20],JE[0]],0.6);                 // foot
-  return polys;
-}
-
-/* Rotate-Y (yaw) + rotate-X (fixed 12° camera tilt + user pitch), perspective-project, painter-sort. */
-function spmProjectAll(polys,yaw,pitchDeg){
-  const W=520,H=430,cx=W/2,cyc=H/2+4,D=17,F=15,S=48,YC=3.75,XC=0.6;
-  const pit=((12+pitchDeg)*Math.PI)/180;
-  const cyw=Math.cos(yaw),syw=Math.sin(yaw),cp=Math.cos(pit),sp=Math.sin(pit);
-  const out=[];
-  for(let i=0;i<polys.length;i++){
-    const P=polys[i],n=P.pts.length,cam=[];
-    let d="",zsum=0;
-    for(let k=0;k<n;k++){
-      const x0=P.pts[k][0]-XC,y0=P.pts[k][1]-YC,z0=P.pts[k][2];
-      const xr=x0*cyw+z0*syw,zr=-x0*syw+z0*cyw;
-      const y2=y0*cp-zr*sp,z2=y0*sp+zr*cp;
-      const f=(F/(D-z2))*S;
-      d+=(k?"L":"M")+(cx+xr*f).toFixed(1)+","+(cyc-y2*f).toFixed(1);
-      zsum+=z2;
-      if(k<3)cam.push([xr,y2,z2]);
-    }
-    if(P.kind==="fill")d+="Z";
-    let light=.5;
-    if(P.kind==="fill"&&cam.length===3){
-      const ux=cam[1][0]-cam[0][0],uy=cam[1][1]-cam[0][1],uz=cam[1][2]-cam[0][2];
-      const vx=cam[2][0]-cam[0][0],vy=cam[2][1]-cam[0][1],vz=cam[2][2]-cam[0][2];
-      const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
-      light=Math.min(1,.18+.82*Math.abs(nz/(Math.hypot(nx,ny,nz)||1)));
-    }
-    out.push({i,d,part:P.part,cls:P.cls,kind:P.kind,w:P.w,depth:zsum/n,light});
-  }
-  out.sort((a,b)=>a.depth-b.depth);
-  return out;
-}
-
-const spmNavy=(t,a)=>{const m=(lo,hi)=>Math.round(lo+(hi-lo)*t);return"rgba("+m(15,74)+","+m(42,140)+","+m(74,205)+","+a+")";};
-/* Colours tuned for the app's LIGHT page background — the models render frameless. */
-function spmPaint(cls,light,hot){
-  switch(cls){
-    case"hullSide":return{fill:spmNavy(light,1),stroke:hot?"#0a84ff":"rgba(140,200,255,.4)",sw:hot?1.4:.7,fo:1};
-    case"hullBottom":return{fill:spmNavy(light*.55,1),stroke:"rgba(140,200,255,.25)",sw:.6,fo:1};
-    case"deck":return{fill:spmNavy(.25+light*.5,1),stroke:hot?"#0a84ff":"rgba(140,200,255,.3)",sw:hot?1.3:.6,fo:1};
-    case"wing":return{fill:spmNavy(light,.6),stroke:hot?"#0a84ff":"rgba(31,78,128,.6)",sw:hot?1.5:.9,fo:.5};
-    case"foil":return{fill:spmNavy(.3+light*.4,.9),stroke:hot?"#0a84ff":"rgba(31,78,128,.55)",sw:hot?1.6:.8,fo:.92};
-    // sails shade panel-by-panel with the surface normal (light) so the camber reads in 3D
-    case"sail":{const m=(lo,hi)=>Math.round(lo+(hi-lo)*light);return{fill:"rgb("+m(9,58)+","+m(38,120)+","+m(86,196)+")",stroke:hot?"#0a84ff":"rgba(13,35,60,.6)",sw:hot?1.5:.9,fo:hot?.62:.30+.22*light};}
-    case"kite":{const m=(lo,hi)=>Math.round(lo+(hi-lo)*light);return{fill:"rgb("+m(16,66)+","+m(54,132)+","+m(110,210)+")",stroke:hot?"#0a84ff":"rgba(13,35,60,.5)",sw:hot?1.4:.8,fo:hot?.55:.26+.20*light};}
-    default:return{fill:spmNavy(light,1),stroke:"rgba(140,200,255,.35)",sw:.7,fo:1};
-  }
-}
-function spmLinePaint(cls,hot){
-  if(hot)return{col:"#0a84ff",glow:"rgba(10,132,255,.35)",go:.8};
-  switch(cls){
-    case"mast":return{col:"rgba(19,49,78,.9)",glow:"rgba(10,132,255,.25)",go:.25};
-    case"spar":return{col:"rgba(19,49,78,.72)",glow:"rgba(10,132,255,.2)",go:.2};
-    case"wire":return{col:"rgba(31,78,128,.5)",glow:"rgba(10,132,255,.16)",go:.12};
-    case"trap":return{col:"rgba(10,132,255,.6)",glow:"rgba(10,132,255,.22)",go:.16};
-    case"seam":return{col:"rgba(31,78,128,.32)",glow:"rgba(10,132,255,.15)",go:0};
-    default:return{col:"rgba(150,200,245,.7)",glow:"rgba(10,132,255,.2)",go:.15};
-  }
-}
-
-/* Windward–leeward course model (520×430 viewBox) — RYA course "M": mark 1 to windward,
-   leeward gate 2s/2p, shared start/finish line at the bottom. Signal M2:
-   Start – 1 – 2s/2p – 1 – Finish. One boat sails the loop. */
-const SPM_COURSE_XY={wind:[260,26],windward:[260,64],gateL:[180,306],gateR:[340,306],sfA:[150,390],sfB:[370,390]};
-function spmSmooth(pts,iters){ // Chaikin corner-cutting — turns the waypoint polyline into a smooth track
-  let p=pts;
-  for(let n=0;n<iters;n++){
-    const q=[p[0]];
-    for(let i=0;i<p.length-1;i++){
-      const a=p[i],b=p[i+1];
-      q.push([a[0]*.75+b[0]*.25,a[1]*.75+b[1]*.25]);
-      q.push([a[0]*.25+b[0]*.75,a[1]*.25+b[1]*.75]);
-    }
-    q.push(p[p.length-1]);
-    p=q;
-  }
-  return p;
-}
-function spmResample(pts,n){
-  const d=[0];let tot=0;
-  for(let i=1;i<pts.length;i++){tot+=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);d.push(tot);}
-  const out=[];let j=0;
-  for(let k=0;k<n;k++){
-    const target=(tot*k)/(n-1);
-    while(j<pts.length-2&&d[j+1]<target)j++;
-    const seg=d[j+1]-d[j]||1,t=(target-d[j])/seg;
-    out.push([pts[j][0]+(pts[j+1][0]-pts[j][0])*t,pts[j][1]+(pts[j+1][1]-pts[j][1])*t]);
-  }
-  return out;
-}
-function spmBuildCourse(){
-  const pts=[];const push=(x,y)=>pts.push([x,y]);
-  // An efficient windward–leeward: tidy, even tacks and gybes worked up and down the
-  // middle of the course (no erratic short tacks); each mark is fully enclosed by its arc.
-  push(260,406);push(258,384);                                             // cross the start line
-  push(198,300);push(322,192);push(238,98);                                // beat 1 — two clean tacks
-  push(284,74);push(276,54);push(256,50);push(238,62);push(242,86);        // round mark 1 (mark inside the arc)
-  push(316,168);push(210,250);push(261,300);                               // run 1 — two gybes to the gate centre
-  push(236,314);push(214,330);push(182,332);push(158,314);push(166,290);push(192,282); // full loop around 2s
-  push(322,196);push(232,104);push(240,96);                                // beat 2 — two clean tacks
-  push(284,74);push(276,54);push(256,50);push(238,62);push(242,86);        // round mark 1 again
-  push(316,168);push(214,258);push(272,330);push(322,384);push(330,406);   // run 2 down the middle, across the line
-  const smooth=spmResample(spmSmooth(pts,3),320);
-  const n=smooth.length;
-  // Heading = the SMOOTH path's own tangent, averaged over a window so the boat turns
-  // gently and always points where it's actually going (nose leads, trail follows).
-  const heads=smooth.map((p,i)=>{
-    const a=smooth[Math.max(0,i-5)],b=smooth[Math.min(n-1,i+5)];
-    return Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI+90;
-  });
-  for(let i=1;i<n;i++){ // unwrap so rotation is continuous (no 360° flip at the wrap point)
-    while(heads[i]-heads[i-1]>180)heads[i]-=360;
-    while(heads[i]-heads[i-1]<-180)heads[i]+=360;
-  }
-  return{pts:smooth,heads};
-}
-function spmBoatAt(course,t){
-  const path=course.pts,n=path.length,f=Math.min(n-1.001,Math.max(0,t*(n-1)));
-  const i=Math.floor(f),fr=f-i,a=path[i],b=path[Math.min(n-1,i+1)];
-  const ang=course.heads
-    ?course.heads[i]+(course.heads[Math.min(n-1,i+1)]-course.heads[i])*fr // interpolate the smooth heading
-    :Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI+90;
-  return{x:a[0]+(b[0]-a[0])*fr,y:a[1]+(b[1]-a[1])*fr,
-    ang,idx:i,
-    op:t<.03?t/.03:t>.96?Math.max(0,(1-t)/.04):1};
-}
-
-const SPORT_MODELS={
-  "49er":{
-    equipment:{
-      name:"49er",
-      geometry:build49erGeometry,
-      parts:[
-        {id:"hull",name:"Hull",blurb:"Carries the crew and creates the platform; shaped to plane (skim) across the water at high speed."},
-        {id:"daggerboard",name:"Daggerboard",blurb:"The underwater fin that stops the boat slipping sideways and stabilises it, converting the sails' side-force into forward drive."},
-        {id:"rudder",name:"Rudder",blurb:"The steering blade at the back; small movements at 20+ knots make big course changes."},
-        {id:"mast",name:"Mast",blurb:"The 8-metre carbon spar that holds the sails up; bends to depower them in strong wind."},
-        {id:"mainsail",name:"Mainsail",blurb:"The engine. Its distinctive square top gives huge power; trimming it (via the mainsheet) controls the boat's speed and balance."},
-        {id:"jib",name:"Jib",blurb:"The front sail; drives the boat and steers airflow onto the mainsail, doubling its efficiency."},
-        {id:"gennaker",name:"Gennaker",blurb:"The 38 m² downwind sail flown from the bowsprit — it more than doubles the sail area and powers 20-knot-plus runs."},
-      ],
-    },
-    course:{
-      title:"How a race works",
-      loopSeconds:24,
-      explainer:[
-        "Course: Start – 1 – 2s/2p – 1 – Finish, tacking upwind and gybing downwind.",
-        "Average race: about 30 minutes.",
-        "Top speed: 24 knots (~44 km/h) — one of the fastest Olympic boats.",
-      ],
-      marks:[
-        {id:"wind",label:"Wind",desc:"The course is set so the first leg is straight into the wind."},
-        {id:"windward",label:"Mark 1 — windward",desc:"The top buoy. Boats beat upwind to it, round it, then turn downwind."},
-        {id:"gate",label:"Leeward gate (2s / 2p)",desc:"Two buoys at the bottom of the course — round either one, then head back upwind."},
-        {id:"startfinish",label:"Start & finish line",desc:"Races start and finish on the same line, between the committee vessels."},
-      ],
-    },
-  },
-};
-
-function EquipmentModel3D({cfg,onInfo}){
-  const geo=React.useMemo(()=>cfg.geometry(),[cfg]);
-  const[reduced]=React.useState(spmReducedMotion);
-  const stRef=React.useRef({yaw:-0.7,pitch:0,vyaw:0,drag:null,idleAt:-1e9,hover:null});
-  const[frame,setFrame]=React.useState(()=>spmProjectAll(geo,-0.7,0));
-  const[active,setActive]=React.useState(null);
-  const wrapRef=React.useRef(null);
-
-  useSpmLoop(wrapRef,(dt,now)=>{
-    const s=stRef.current;
-    if(!s.drag&&!s.hover){ // rotation pauses while a part is hovered/selected
-      if(s.vyaw){s.yaw+=s.vyaw*dt;s.vyaw*=Math.pow(0.93,dt/16.7);if(Math.abs(s.vyaw)<2e-5)s.vyaw=0;}
-      if(now-s.idleAt>3000)s.yaw+=(SPM_TAU/24000)*dt; // one revolution / 24 s
-    }
-    setFrame(spmProjectAll(geo,s.yaw,s.pitch));
-  },reduced);
-
-  const setPart=p=>{
-    stRef.current.hover=p;
-    setActive(p);
-    if(onInfo){const part=p?cfg.parts.find(x=>x.id===p):null;onInfo(part?{t:part.name,d:part.blurb}:null);}
-  };
-  const hoverAt=e=>{
-    const part=(e.target.dataset&&e.target.dataset.part)||null;
-    setPart(part);
-  };
-  const onDown=e=>{
-    stRef.current.drag={x:e.clientX,y:e.clientY,id:e.pointerId,claimed:false,moved:false,mt:performance.now()};
-  };
-  const onMove=e=>{
-    const s=stRef.current,d=s.drag;
-    if(d&&d.id===e.pointerId&&!reduced){
-      const dx=e.clientX-d.x,dy=e.clientY-d.y;
-      if(!d.claimed){
-        const ax=Math.abs(dx),ay=Math.abs(dy);
-        if(e.pointerType==="touch"){ // only claim horizontal-dominant gestures; let the page scroll otherwise
-          if(ax>8&&ax>ay*1.2){d.claimed=true;try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){/* noop */}}
-          else if(ay>12&&ay>ax){s.drag=null;return;}
-        }else if(ax>3||ay>3){
-          d.claimed=true;
-          // capture the pointer so dragging keeps working outside the model's bounds until release
-          try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){/* noop */}
-        }
-      }
-      if(d.claimed){ // full 360° freedom: yaw + unclamped pitch (trackball feel)
-        const now=performance.now(),mdt=Math.max(8,now-d.mt);d.mt=now;d.moved=true;
-        s.yaw+=dx*0.0065;s.vyaw=(dx*0.0065)/mdt;
-        s.pitch+=dy*0.32;
-        d.x=e.clientX;d.y=e.clientY;
-        setPart(null);
-        return;
-      }
-    }
-    if(e.pointerType!=="touch")hoverAt(e);
-  };
-  const onUp=e=>{
-    const s=stRef.current,d=s.drag;
-    if(d&&d.id===e.pointerId){
-      s.drag=null;s.idleAt=performance.now();
-      if(!d.moved){ // tap = select part; tap elsewhere dismisses
-        const part=(e.target.dataset&&e.target.dataset.part)||null;
-        setPart(part);
-      }
-    }
-  };
-  const onLeave=e=>{if(e.pointerType!=="touch"&&!stRef.current.drag)setPart(null);};
-
-  return(
-    <div ref={wrapRef} className="spm-holo">
-      <svg viewBox="0 0 520 430" style={{display:"block",width:"100%",cursor:reduced?"default":"grab",touchAction:"pan-y"}}
-        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={onLeave}>
-        {frame.map(p=>{
-          const hot=!!active&&p.part===active;
-          const dim=!!active&&!hot; // dim everything but the selected part so it pinpoints clearly
-          if(p.kind==="fill"){
-            const c=spmPaint(p.cls,p.light,hot);
-            return<path key={p.i} d={p.d} fill={c.fill} fillOpacity={c.fo} stroke={c.stroke} strokeWidth={c.sw}
-              strokeLinejoin="round" opacity={dim?0.16:1} data-part={p.part||undefined}/>;
-          }
-          const L=spmLinePaint(p.cls,hot);
-          return(<g key={p.i} opacity={dim?0.14:1}>
-            {(hot||L.go>0)&&<path d={p.d} fill="none" stroke={L.glow} strokeWidth={(p.w||1)*3.6} strokeLinecap="round" opacity={L.go}/>}
-            <path d={p.d} fill="none" stroke={L.col} strokeWidth={hot?(p.w||1)*1.6:(p.w||1)} strokeLinecap="round" data-part={p.part||undefined}/>
-          </g>);
-        })}
-        {frame.filter(p=>p.part&&p.kind==="line").map(p=>( // generous invisible hit paths so thin lines are hoverable
-          <path key={"h"+p.i} d={p.d} fill="none" stroke="#000" strokeOpacity="0" strokeWidth="15"
-            data-part={p.part} style={{pointerEvents:"stroke"}}/>
-        ))}
-      </svg>
-    </div>
-  );
-}
-
-function CourseDiagram({cfg,onInfo}){
-  const[reduced]=React.useState(spmReducedMotion);
-  const course=React.useMemo(()=>spmBuildCourse(),[]);
-  const[clock,setClock]=React.useState(1600); // start a little into the lap so the boat is visible at once
-  const[mark,setMark]=React.useState(null);
-  const wrapRef=React.useRef(null);
-  useSpmLoop(wrapRef,dt=>setClock(c=>c+dt),reduced);
-  const T=(cfg.loopSeconds||24)*1000,XY=SPM_COURSE_XY;
-  const report=m=>{ // hover text goes to the shared bottom info line, never over the diagram
-    if(!onInfo)return;
-    if(m){const mk=(cfg.marks||[]).find(x=>x.id===m);onInfo(mk?{t:mk.label,d:mk.desc}:null);}
-    else onInfo({t:cfg.title,d:(cfg.explainer||[]).join(" ")});
-  };
-  const onMove=e=>{const m=(e.target.dataset&&e.target.dataset.mark)||null;if(m!==mark){setMark(m);report(m);}};
-  const hi=id=>mark===id;
-  const t=reduced?0.30:(clock/T)%1;
-  const s=spmBoatAt(course,t);
-  const back=Math.max(0,s.idx-72); // fading contrail over the last ~25% of track
-  const seg=(from,to)=>course.pts.slice(from,to+1).map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ");
-  const i1=back+Math.floor((s.idx-back)/3),i2=back+Math.floor(2*(s.idx-back)/3);
-  // committee vessels at both ends of the shared start/finish line
-  const rcBoat="M0,-7 C2,-4 2.6,-1 2.6,2 L2.6,6 L-2.6,6 L-2.6,2 C-2.6,-1 -2,-4 0,-7 Z";
-  return(
-    <div ref={wrapRef} className="spm-holo" onPointerEnter={()=>report(null)} onPointerLeave={()=>{setMark(null);if(onInfo)onInfo(null);}}>
-      <svg viewBox="0 0 520 430" style={{display:"block",width:"100%"}} onPointerMove={onMove}>
-        <g>
-          <text x={XY.wind[0]} y="16" textAnchor="middle" fill={hi("wind")?"#0a84ff":"#33425e"} fontSize="15" fontWeight="800" letterSpacing="2">WIND</text>
-          <path d="M260,22 L260,50 M251,41 L260,51 L269,41" stroke={hi("wind")?"#0a84ff":"rgba(19,49,78,.75)"} strokeWidth="2.4" fill="none" strokeLinecap="round"/>
-          <circle cx={XY.wind[0]} cy={XY.wind[1]+8} r="22" fill="transparent" data-mark="wind"/>
-        </g>
-        <g>
-          <line x1={XY.sfA[0]} y1={XY.sfA[1]} x2={XY.sfB[0]} y2={XY.sfB[1]}
-            stroke={hi("startfinish")?"#0a84ff":"rgba(6,99,196,.8)"} strokeWidth={hi("startfinish")?2.4:1.7} strokeDasharray="6 7"/>
-          <g transform={"translate("+XY.sfA[0]+","+XY.sfA[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
-          <g transform={"translate("+XY.sfB[0]+","+XY.sfB[1]+") scale(1.2)"}><path d={rcBoat} fill="rgba(19,49,78,.7)" stroke="rgba(19,49,78,.85)" strokeWidth=".6"/></g>
-          <text x={(XY.sfA[0]+XY.sfB[0])/2} y={XY.sfA[1]+26} textAnchor="middle" fill={hi("startfinish")?"#0a84ff":"rgba(51,66,94,.85)"} fontSize="13.5" fontWeight="700" letterSpacing="1.5">START &amp; FINISH</text>
-          <line x1={XY.sfA[0]} y1={XY.sfA[1]} x2={XY.sfB[0]} y2={XY.sfB[1]} stroke="#000" strokeOpacity="0" strokeWidth="22" data-mark="startfinish"/>
-        </g>
-        {[["windward",XY.windward,"1",16,5],["gate",XY.gateL,"2s",-19,5],["gate",XY.gateR,"2p",19,5]].map(([id,xy,lab,dx,dy],k)=>(
-          <g key={k}>
-            <circle cx={xy[0]} cy={xy[1]} r="14" className="spm-halo" fill="rgba(10,132,255,.28)"/>
-            <circle cx={xy[0]} cy={xy[1]} r="7.5" fill={hi(id)?"#0663c4":"#0a78e8"} stroke="rgba(19,49,78,.5)" strokeWidth="1.2"/>
-            <text x={xy[0]+dx*1.5} y={xy[1]+dy+1} textAnchor="middle" fill={hi(id)?"#0a84ff":"rgba(51,66,94,.95)"} fontSize="18" fontWeight="800">{lab}</text>
-            <circle cx={xy[0]} cy={xy[1]} r="20" fill="transparent" data-mark={id}/>
-          </g>
-        ))}
-        <g opacity={s.op}>
-          {s.idx-back>4&&<g fill="none" strokeLinecap="round">
-            <polyline points={seg(back,i1)} stroke="rgba(10,132,255,.20)" strokeWidth="3"/>
-            <polyline points={seg(i1,i2)} stroke="rgba(10,132,255,.40)" strokeWidth="3"/>
-            <polyline points={seg(i2,s.idx)} stroke="rgba(10,132,255,.62)" strokeWidth="3.2"/>
-          </g>}
-          <g transform={"translate("+s.x.toFixed(1)+","+s.y.toFixed(1)+") rotate("+s.ang.toFixed(1)+") scale(1.78)"}>
-            {/* top-down 49er: fine bow, hull, wing flares */}
-            <path d="M0,-8.5 C2.4,-5.5 3.1,-2.5 3.1,0.5 L3.1,1.6 C5.3,1.9 5.3,5.6 3.1,5.9 L3.1,6.8 L-3.1,6.8 L-3.1,5.9 C-5.3,5.6 -5.3,1.9 -3.1,1.6 L-3.1,0.5 C-3.1,-2.5 -2.4,-5.5 0,-8.5 Z"
-              fill="rgba(9,111,214,.95)" stroke="rgba(13,35,60,.9)" strokeWidth=".9" strokeLinejoin="round"/>
-            <line x1="0" y1="-6.5" x2="0" y2="5.5" stroke="rgba(255,255,255,.85)" strokeWidth=".8"/>
-            <circle cx="0" cy="0.5" r="1.2" fill="rgba(255,255,255,.95)"/>
-          </g>
-        </g>
-      </svg>
-    </div>
-  );
-}
-
-/* The two models side by side + one shared info line underneath — hover text lands here,
-   at the very bottom, so nothing ever covers the diagrams. */
-function SpmDuo({cfg}){
-  const[info,setInfo]=React.useState(null);
-  return(
-    <div className="spm-duo">
-      <div className="spm-duorow">
-        <EquipmentModel3D cfg={cfg.equipment} onInfo={setInfo}/>
-        <CourseDiagram cfg={cfg.course} onInfo={setInfo}/>
-      </div>
-      <div className="spm-info">
-        {info
-          ?(<><b>{info.t}</b><span> — {info.d}</span></>)
-          :(<span className="spm-info-hint">Drag the boat to spin it · hover any part or course mark for details</span>)}
-      </div>
-    </div>
-  );
-}
-
-function SportShowcase({clsId}){
-  const cfg=SPORT_MODELS[clsId];
-  if(!cfg)return null;
-  return(
-    <div className="spm-sec">
-      <SpmDuo cfg={cfg}/>
-    </div>
-  );
-}
-
-function FootprintLegend({label="Competitions / country",showHost=false,rank=false,maxCount=0}={}){
-  if(rank){
-    return(<div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",fontSize:11.5,color:"#9fbdd9",padding:"10px 4px 2px"}}>
-      <span style={{fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",fontSize:10.5}}>{label}</span>
-      <span style={{display:"flex",alignItems:"center",gap:8}}>
-        <span style={{fontSize:10.5}}>Fewer</span>
-        <span style={{width:120,height:11,borderRadius:6,background:"linear-gradient(90deg,#f0a79e,#7a0d04)",boxShadow:"0 0 0 1px rgba(255,255,255,.15)"}}/>
-        <span style={{fontSize:10.5}}>More{maxCount>0?` (max ${maxCount})`:""}</span>
-      </span>
-      {showHost&&<span style={{display:"flex",alignItems:"center",gap:6}}>
-        <span style={{width:13,height:13,borderRadius:"50%",background:"#f2c037",boxShadow:"0 0 0 1px rgba(255,255,255,.15)"}}/>Host country</span>}
-    </div>);
-  }
-  const items=[["1",TIER_COLORS[0]],["2–3",TIER_COLORS[1]],["4+",TIER_COLORS[2]]];
-  if(showHost)items.push(["Host country","#f2c037"]);
-  return(<div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",fontSize:11.5,color:"#9fbdd9",padding:"10px 4px 2px"}}>
-    <span style={{fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",fontSize:10.5}}>{label}</span>
-    {items.map(([lab,col])=>(<span key={lab} style={{display:"flex",alignItems:"center",gap:6}}>
-      <span style={{width:13,height:13,borderRadius:"50%",background:col,boxShadow:"0 0 0 1px rgba(255,255,255,.15)"}}/>{lab}</span>))}
-  </div>);
-}
-
-/* ── FootprintModal: dark popup · big globe · sticky country spotlight ──────── */
-function FootprintModal({name,ag,countryCounts,onClose,hostMode=false,titleSuffix="Globe",webProps=null,initialTab="footprint"}){
-  const [sel,setSel]=React.useState(null); // selected ISO (sticky)
-  const [ftab,setFtab]=React.useState(webProps?initialTab:"footprint"); // footprint(globe) | web
-  const [webSel,setWebSel]=React.useState(null); // athlete selected inside the web
-  const [deselectKey,setDeselectKey]=React.useState(0); // bump to clear the web selection
-  const groups=React.useMemo(()=>{
-    const m={};
-    ag.history.forEach(h=>{
-      const ioc=h.ev.country||"";const iso=IOC_ISO[ioc]||"";
-      const cname=GLOBE_NAMES[iso]||ioc||"Unknown";const key=iso||ioc||"ZZ";
-      if(!m[key])m[key]={iso,cname,items:[]};
-      m[key].items.push(h);
-    });
-    return Object.values(m).sort((a,b)=>a.cname.localeCompare(b.cname));
-  },[ag]);
-
-  return(
-    <div className="ov" onClick={onClose}>
-      <div className="modal wide" onClick={e=>e.stopPropagation()}
-        style={{maxWidth:1000,background:"linear-gradient(160deg,rgba(13,35,64,0.82),rgba(9,26,49,0.82))",border:"1px solid rgba(120,160,210,.22)"}}>
-        <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
-          <Flag size={18}/><h3>{name} — {ftab==="web"?"Athlete web":titleSuffix}</h3>
-          {((ftab==="footprint"&&sel)||(ftab==="web"&&webSel))&&
-            <button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}}
-              onClick={()=>{if(ftab==="web")setDeselectKey(k=>k+1);else setSel(null);}}>Deselect</button>}
-          {webProps&&<div style={{display:"flex",gap:4}}>
-            {[["footprint","Globe",Globe],["web","Web",WebIcon]].map(([k,lab,Ico])=>(
-              <button key={k} onClick={()=>setFtab(k)}
-                style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,letterSpacing:".02em",
-                  border:"1px solid rgba(120,160,210,.3)",borderRadius:980,padding:"4px 12px",cursor:"pointer",transition:"all .2s ease",
-                  boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)",
-                  background:ftab===k?"rgba(146,180,222,.34)":"rgba(120,160,210,.16)",color:ftab===k?"#fff":"#cfe0f2"}}>
-                <Ico size={12}/>{lab}
-              </button>
-            ))}
-          </div>}
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        {ftab==="web"
-        ? <div style={{height:540}}><AthleteWeb {...webProps} enlarged height={540} dark onSelectionChange={setWebSel} deselectKey={deselectKey}/></div>
-        : <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
-          <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
-            <SailingGlobe countryData={countryCounts} height={460} pulseIso={sel} dark/>
-            <FootprintLegend/>
-          </div>
-          <div style={{flex:"1 1 360px",minWidth:280,maxHeight:520,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)",padding:"8px 0"}}
-               onClick={e=>{if(e.target===e.currentTarget)setSel(null);}}>
-            {groups.map(g=>(
-              <div key={g.cname}>
-                <div style={{position:"sticky",top:0,padding:"9px 14px 7px",zIndex:1,display:"flex"}}>
-                  <span style={{display:"inline-flex",alignItems:"center",gap:8,
-                     background:"rgba(120,160,210,.16)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",
-                     border:"1px solid rgba(120,160,210,.3)",
-                     borderRadius:980,padding:"5px 13px",color:"#eaf3fc",fontWeight:700,
-                     fontFamily:"'Barlow',sans-serif",fontSize:13,letterSpacing:".02em",
-                     boxShadow:"inset 0 1px 0 rgba(255,255,255,.12)"}}>
-                    <span style={{fontSize:16,lineHeight:1}}>{g.iso?[...g.iso].map(ch=>String.fromCodePoint(0x1F1E6+ch.charCodeAt(0)-65)).join(""):""}</span>
-                    {g.cname}
-                    <span style={{color:"#9fc4ec",fontWeight:800,fontVariantNumeric:"tabular-nums"}}>{g.items.length}</span>
-                  </span>
-                </div>
-                {g.items.map((h,i)=>{
-                  const active=sel&&sel===g.iso;
-                  return(
-                  <div key={i}
-                    onMouseEnter={()=>setSel(g.iso||null)}
-                    onClick={e=>{e.stopPropagation();setSel(g.iso||null);}}
-                    style={{margin:"7px 12px",padding:"11px 14px",borderRadius:11,cursor:"pointer",transition:"all .15s",
-                      background:active?"rgba(90,150,215,.22)":"rgba(120,160,210,.08)",
-                      border:"1px solid "+(active?"rgba(120,180,235,.55)":"rgba(120,160,210,.16)")}}>
-                    <div style={{fontWeight:700,color:"#eaf3fc",fontSize:14,marginBottom:3}}>{h.ev.name}</div>
-                    <div style={{display:"flex",flexWrap:"wrap",gap:"4px 12px",fontSize:12.5,color:"#9fbdd9"}}>
-                      {!hostMode&&<span style={{color:h.row.rank<=3?"#ffd86b":"#cfe0f2",fontWeight:700}}>
-                        {h.row.rank}<span style={{color:"#9fbdd9",fontWeight:500}}> of {h.fleet} players</span></span>}
-                      {hostMode&&<span style={{color:"#cfe0f2",fontWeight:600}}>{h.fleet} players</span>}
-                      {h.countries>0&&<span>{h.countries} countr{h.countries===1?"y":"ies"}</span>}
-                      <span>{formatDate(h.ev.date)}</span>
-                      {h.ev.cls?(()=>{const ng=nuggetFor(h.ev.cls,h.ev.subclass);return(
-                        <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"2px 10px",fontWeight:700,fontSize:11.5,fontFamily:"'Barlow',sans-serif",letterSpacing:".01em",boxShadow:"inset 0 1px 0 rgba(255,255,255,.3)"}}>{ng.label}</span>
-                      );})():(h.ev.class?<span style={{background:"rgba(120,160,210,.2)",color:"#cfe0f2",borderRadius:980,padding:"2px 10px",fontWeight:600,fontSize:11.5}}>{h.ev.class}</span>:null)}
-                    </div>
-                  </div>);
-                })}
-              </div>
-            ))}
-            {groups.length===0&&<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>No competitions recorded yet.</div>}
-          </div>
-        </div>}
-      </div>
-    </div>
-  );
-}
-
-
-/* ── RegattaFootprintModal: who's racing — countries → # of sailors ───────── */
-function RegattaFootprintModal({event,onClose,homeCountry={},onPickAthlete}){
-  const [sel,setSel]=React.useState(null);            // spotlit ISO (globe)
-  const [openSet,setOpenSet]=React.useState(()=>new Set());  // expanded country keys
-  const hostIso=React.useMemo(()=>IOC_ISO[event.country]||(event.country&&event.country.length===2?event.country.toUpperCase():""),[event]);
-  const {natCounts,groups}=React.useMemo(()=>{
-    const counts={},gmap={};
-    const isoForSailor=(entryIso,name)=>homeCountry[name]||entryIso||"";
-    (event.entries||[]).forEach(e=>{
-      const entryIso=IOC_ISO[e.nat||""]||"";
-      const add=(name,role)=>{
-        if(!name)return;
-        const iso=isoForSailor(entryIso,name);
-        const key=iso||"ZZ";
-        const cname=GLOBE_NAMES[iso]||"Unknown";
-        if(!gmap[key])gmap[key]={key,iso,cname,sailors:[]};
-        gmap[key].sailors.push({name,role});
-        if(iso)counts[iso]=(counts[iso]||0)+1;
-      };
-      add(e.helm,"Helm");
-      add(e.crew,"Crew");
-    });
-    // names alphabetical within each country
-    Object.values(gmap).forEach(g=>g.sailors.sort((x,y)=>x.name.localeCompare(y.name)));
-    // alphabetical by country name, Unknown last
-    const groups=Object.values(gmap).sort((a,b)=>{
-      if(a.key==="ZZ")return 1; if(b.key==="ZZ")return -1;
-      return a.cname.localeCompare(b.cname);
-    });
-    return{natCounts:counts,groups};
-  },[event,homeCountry]);
-  const totalSailors=groups.reduce((a,g)=>a+g.sailors.length,0);
-  const toggle=key=>setOpenSet(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);return n;});
-  const allOpen=groups.length>0&&groups.every(g=>openSet.has(g.key));
-  const toggleAll=()=>setOpenSet(allOpen?new Set():new Set(groups.map(g=>g.key)));
-  return(
-    <div className="ov" onClick={onClose}>
-      <div className="modal wide" onClick={e=>e.stopPropagation()}
-        style={{maxWidth:1000,background:"linear-gradient(160deg,rgba(13,35,64,0.82),rgba(9,26,49,0.82))",border:"1px solid rgba(120,160,210,.22)"}}>
-        <div className="mhead" style={{background:"rgba(8,22,42,.6)"}}>
-          <Flag size={18}/><h3>{event.name}</h3>
-          {sel&&<button className="btn ghost" style={{background:"rgba(255,255,255,.1)",color:"#dcecf8",border:"1px solid rgba(255,255,255,.18)",fontSize:12,padding:"5px 11px",marginRight:8}} onClick={()=>setSel(null)}>Deselect</button>}
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        <ErrorBoundary resetKey={event.id} fallback={<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>Couldn't render this competition's map.</div>}>
-        <div style={{display:"flex",flexWrap:"wrap"}} onClick={()=>setSel(null)}>
-          <div style={{flex:"1 1 440px",minWidth:300,padding:18}} onClick={e=>e.stopPropagation()}>
-            <SailingGlobe countryData={natCounts} height={460} pulseIso={sel} dark countLabel="athlete" hostIso={hostIso} rankShade markersHostOnly/>
-            <FootprintLegend label="Athletes / country" showHost={!!hostIso} rank maxCount={Object.values(natCounts).reduce((a,b)=>Math.max(a,b),0)}/>
-          </div>
-          <div style={{flex:"1 1 360px",minWidth:280,maxHeight:520,overflowY:"auto",borderLeft:"1px solid rgba(120,160,210,.18)",padding:"8px 0"}}
-               onClick={e=>{if(e.target===e.currentTarget)setSel(null);}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,padding:"6px 18px 10px"}}>
-              <span style={{color:"#9fbdd9",fontSize:12.5,fontWeight:600}}>{groups.length} countr{groups.length!==1?"ies":"y"} · {totalSailors} athlete{totalSailors!==1?"s":""}</span>
-              {groups.length>0&&<button onClick={e=>{e.stopPropagation();toggleAll();}}
-                style={{marginLeft:"auto",background:"rgba(120,160,210,.14)",color:"#cfe0f2",border:"1px solid rgba(120,160,210,.28)",borderRadius:7,fontSize:11.5,fontWeight:600,padding:"4px 10px",cursor:"pointer"}}>
-                {allOpen?"Collapse all":"Expand all"}</button>}
-            </div>
-            {groups.map(g=>{
-              const active=sel&&sel===g.iso;
-              const isOpen=openSet.has(g.key);
-              const isHost=hostIso&&g.iso===hostIso;
-              return(
-              <div key={g.key}
-                style={{margin:"7px 12px",borderRadius:11,transition:"all .15s",overflow:"hidden",
-                  background:active?"rgba(90,150,215,.22)":"rgba(120,160,210,.08)",
-                  border:"1px solid "+(active?"rgba(120,180,235,.55)":isHost?"rgba(242,192,55,.5)":"rgba(120,160,210,.16)")}}>
-                <div
-                  onMouseEnter={()=>setSel(g.iso||null)}
-                  onClick={e=>{e.stopPropagation();setSel(g.iso||null);toggle(g.key);}}
-                  style={{display:"flex",alignItems:"center",gap:8,padding:"11px 14px",cursor:"pointer"}}>
-                  <ChevronRight size={14} color="#9fbdd9" style={{flex:"none",transform:isOpen?"rotate(90deg)":"none",transition:".15s"}}/>
-                  <span style={{fontSize:17}}>{isoFlag(g.iso)}</span>
-                  <span style={{fontWeight:700,color:"#eaf3fc",fontSize:14,fontFamily:"'Barlow',sans-serif"}}>{g.cname}</span>
-                  {isHost&&<span style={{fontSize:9.5,fontWeight:700,color:"#f2c037",background:"rgba(242,192,55,.14)",border:"1px solid rgba(242,192,55,.4)",borderRadius:5,padding:"1px 6px",letterSpacing:".03em"}}>HOST</span>}
-                  <span style={{marginLeft:"auto",color:"#7fa8d4",fontWeight:700,fontSize:13}}>{g.sailors.length} athlete{g.sailors.length!==1?"s":""}</span>
-                </div>
-                {isOpen&&g.sailors.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:"5px 7px",padding:"0 14px 12px 32px"}}>
-                  {g.sailors.map((sa,i)=>(
-                    <span key={i} role="button" tabIndex={0}
-                      onClick={e=>{e.stopPropagation();onPickAthlete&&onPickAthlete(sa.name);}}
-                      style={{fontSize:12,color:"#cfe0f2",background:"rgba(120,160,210,.13)",borderRadius:6,padding:"2px 8px",cursor:"pointer",transition:"background .12s"}}
-                      onMouseEnter={e=>e.currentTarget.style.background="rgba(120,180,235,.32)"}
-                      onMouseLeave={e=>e.currentTarget.style.background="rgba(120,160,210,.13)"}>
-                      {sa.name}{sa.role==="Crew"?<span style={{color:"#8aa8cc"}}> · crew</span>:null}</span>
-                  ))}
-                </div>}
-              </div>);
-            })}
-            {groups.length===0&&<div style={{padding:24,color:"#9fbdd9",fontSize:13}}>No entries recorded.</div>}
-          </div>
-        </div>
-        </ErrorBoundary>
-      </div>
-    </div>
-  );
-}
-
-/* ── IOC country list for dropdown ───────────────────────────────────── */
-const COUNTRIES=[
-  {code:"HKG",name:"Hong Kong"},{code:"NZL",name:"New Zealand"},{code:"GBR",name:"Great Britain"},
-  {code:"AUS",name:"Australia"},{code:"USA",name:"United States"},{code:"FRA",name:"France"},
-  {code:"GER",name:"Germany"},{code:"ITA",name:"Italy"},{code:"ESP",name:"Spain"},
-  {code:"NED",name:"Netherlands"},{code:"DEN",name:"Denmark"},{code:"SWE",name:"Sweden"},
-  {code:"NOR",name:"Norway"},{code:"FIN",name:"Finland"},{code:"JPN",name:"Japan"},
-  {code:"CHN",name:"China"},{code:"KOR",name:"South Korea"},{code:"SGP",name:"Singapore"},
-  {code:"THA",name:"Thailand"},{code:"MAS",name:"Malaysia"},{code:"INA",name:"Indonesia"},
-  {code:"PHI",name:"Philippines"},{code:"IND",name:"India"},{code:"PAK",name:"Pakistan"},
-  {code:"SRI",name:"Sri Lanka"},{code:"BAN","name":"Bangladesh"},{code:"ARG",name:"Argentina"},
-  {code:"BRA",name:"Brazil"},{code:"CHI",name:"Chile"},{code:"COL",name:"Colombia"},
-  {code:"URU",name:"Uruguay"},{code:"PER",name:"Peru"},{code:"ECU",name:"Ecuador"},
-  {code:"CAN",name:"Canada"},{code:"MEX",name:"Mexico"},{code:"CRC",name:"Costa Rica"},
-  {code:"IRL",name:"Ireland"},{code:"POR",name:"Portugal"},{code:"BEL",name:"Belgium"},
-  {code:"SUI",name:"Switzerland"},{code:"AUT",name:"Austria"},{code:"POL",name:"Poland"},
-  {code:"CZE",name:"Czech Republic"},{code:"HUN",name:"Hungary"},{code:"CRO",name:"Croatia"},
-  {code:"SLO",name:"Slovenia"},{code:"ROU",name:"Romania"},{code:"BUL",name:"Bulgaria"},
-  {code:"GRE",name:"Greece"},{code:"TUR",name:"Turkey"},{code:"ISR",name:"Israel"},
-  {code:"RSA",name:"South Africa"},{code:"MAR",name:"Morocco"},{code:"EGY",name:"Egypt"},
-  {code:"KEN",name:"Kenya"},{code:"NGR",name:"Nigeria"},{code:"GHA",name:"Ghana"},
-  {code:"UAE",name:"United Arab Emirates"},{code:"KSA",name:"Saudi Arabia"},{code:"QAT",name:"Qatar"},
-  {code:"BRN",name:"Bahrain"},{code:"OMA",name:"Oman"},{code:"KUW",name:"Kuwait"},
-  {code:"IRI",name:"Iran"},{code:"IRQ",name:"Iraq"},{code:"SYR",name:"Syria"},
-  {code:"RUS",name:"Russia"},{code:"UKR",name:"Ukraine"},{code:"EST",name:"Estonia"},
-  {code:"LAT",name:"Latvia"},{code:"LTU",name:"Lithuania"},{code:"SVK",name:"Slovakia"},
-  {code:"SRB",name:"Serbia"},{code:"MNE",name:"Montenegro"},{code:"BIH",name:"Bosnia"},
-  {code:"MKD",name:"North Macedonia"},{code:"ALB",name:"Albania"},{code:"CYP",name:"Cyprus"},
-  {code:"MLT",name:"Malta"},{code:"ISL",name:"Iceland"},{code:"LIE",name:"Liechtenstein"},
-  {code:"LUX",name:"Luxembourg"},{code:"AND",name:"Andorra"},{code:"MON",name:"Monaco"},
-  {code:"SMR",name:"San Marino"},{code:"IVB",name:"British Virgin Islands"},
-  {code:"ANT",name:"Antigua & Barbuda"},{code:"BAR",name:"Barbados"},{code:"JAM",name:"Jamaica"},
-  {code:"TTO",name:"Trinidad & Tobago"},{code:"CUB",name:"Cuba"},{code:"DOM",name:"Dominican Republic"},
-  {code:"PUR",name:"Puerto Rico"},{code:"CAY",name:"Cayman Islands"},{code:"BER",name:"Bermuda"},
-  {code:"ISV",name:"US Virgin Islands"},{code:"FIJ",name:"Fiji"},{code:"PNG",name:"Papua New Guinea"},
-  {code:"SAM",name:"Samoa"},{code:"TGA",name:"Tonga"},{code:"ASA",name:"American Samoa"},
-  {code:"NZL",name:"New Zealand"},{code:"NRU",name:"Nauru"},
-];
-
-function CountrySelect({value,onChange,placeholder="Select country..."}){
-  const[open,setOpen]=React.useState(false);
-  const[q,setQ]=React.useState("");
-  const sel=COUNTRIES.find(c=>c.code===value);
-  const filtered=q?COUNTRIES.filter(c=>c.code.includes(q.toUpperCase())||c.name.toLowerCase().includes(q.toLowerCase())):COUNTRIES;
-  const ref=React.useRef();
-  React.useEffect(()=>{
-    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
-  },[]);
-  return(
-    <div style={{position:"relative"}} ref={ref}>
-      <div onClick={()=>setOpen(o=>!o)} style={{border:"1px solid var(--line)",borderRadius:7,padding:"7px 10px",fontSize:13,background:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"}}>
-        {sel?<>{iocFlag(sel.code)} <b>{sel.code}</b> {sel.name}</>:<span style={{color:"var(--mut)"}}>{placeholder}</span>}
-        <ChevronRight size={12} style={{marginLeft:"auto",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s"}}/>
-      </div>
-      {open&&(
-        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:90,background:"#fff",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.2)",maxHeight:220,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-          <div style={{padding:"8px 10px",borderBottom:"1px solid var(--line)"}}>
-            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search country..." style={{width:"100%",border:0,outline:0,font:"inherit",fontSize:13,color:"var(--ink)"}}/>
-          </div>
-          <div style={{overflowY:"auto",flex:1}}>
-            {filtered.slice(0,80).map(co=>(
-              <div key={co.code} onClick={()=>{onChange(co.code);setOpen(false);setQ("");}}
-                style={{padding:"8px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:8,fontSize:13,background:co.code===value?"var(--sky)":"#fff",transition:".1s"}}
-                onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
-                onMouseLeave={e=>e.currentTarget.style.background=co.code===value?"var(--sky)":"#fff"}>
-                <span>{iocFlag(co.code)}</span>
-                <b style={{color:"var(--navy)",minWidth:36}}>{co.code}</b>
-                <span style={{color:"var(--mut)"}}>{co.name}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ── Searchable host attribution combobox ──────────────────────────────
-   value = host id (attribute to a host on AthLink) or null (nothing /
-   Other host). The "Other host — not listed" row carries sentinel
-   HOST_OTHER; picking it sets _orgHost to null and reveals the free-text
-   organizer-name input (rendered here, only in that case).
-   onChange(id|null) writes _orgHost. orgName/onOrgName drive _orgName. */
-const HOST_OTHER="__other__";
-function HostPicker({hosts,value,onChange,orgName,onOrgName}){
-  const[open,setOpen]=React.useState(false);
-  const[q,setQ]=React.useState("");
-  const[other,setOther]=React.useState(false);
-  const sel=hosts.find(h=>h.id===value);
-  const filtered=q?hosts.filter(h=>(h.name||"").toLowerCase().includes(q.toLowerCase())):hosts;
-  const ref=React.useRef();
-  React.useEffect(()=>{
-    const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
-    document.addEventListener("mousedown",fn);return()=>document.removeEventListener("mousedown",fn);
-  },[]);
-  // keep cosmetic "other" flag in sync if a real host gets selected elsewhere
-  React.useEffect(()=>{if(value)setOther(false);},[value]);
-  // Selecting the Other-host sentinel: clear the real host id, mark "other",
-  // and drop any previously attributed host name. A real host clears _orgName.
-  const pick=id=>{
-    if(id===HOST_OTHER){setOther(true);onChange(null);}
-    else{setOther(false);onChange(id);onOrgName("");}
-    setOpen(false);setQ("");
-  };
-  return(<>
-    <div style={{position:"relative",flex:"1 1 180px",minWidth:180}} ref={ref}>
-      <div onClick={()=>setOpen(o=>!o)} style={{border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",fontSize:12.5,background:"var(--card)",color:"var(--ink)",cursor:"pointer",display:"flex",alignItems:"center",gap:8,userSelect:"none"}}>
-        {sel?<span>{sel.name}</span>:other?<span>Other host — not listed</span>:<span style={{color:"var(--mut)"}}>Select host</span>}
-        <ChevronRight size={12} style={{marginLeft:"auto",transform:open?"rotate(-90deg)":"rotate(90deg)",transition:".15s",flex:"none"}}/>
-      </div>
-      {open&&(
-        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,zIndex:90,background:"var(--card)",border:"1px solid var(--line)",borderRadius:10,boxShadow:"0 12px 30px -10px rgba(0,0,0,.2)",maxHeight:240,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-          <div style={{padding:"8px 10px",borderBottom:"1px solid var(--line)"}}>
-            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search hosts..." style={{width:"100%",border:0,outline:0,font:"inherit",fontSize:12.5,color:"var(--ink)",background:"transparent"}}/>
-          </div>
-          <div style={{overflowY:"auto",flex:1}}>
-            <div onClick={()=>pick(HOST_OTHER)}
-              style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,fontWeight:600,color:"var(--navy)",borderBottom:"1px solid var(--line)",background:other&&!value?"var(--sky)":"transparent",transition:".1s"}}
-              onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
-              onMouseLeave={e=>e.currentTarget.style.background=other&&!value?"var(--sky)":"transparent"}>
-              Other host — not listed
-            </div>
-            {filtered.map(h=>(
-              <div key={h.id} onClick={()=>pick(h.id)}
-                style={{padding:"8px 12px",cursor:"pointer",fontSize:12.5,color:"var(--ink)",background:h.id===value?"var(--sky)":"transparent",transition:".1s"}}
-                onMouseEnter={e=>e.currentTarget.style.background="var(--sky)"}
-                onMouseLeave={e=>e.currentTarget.style.background=h.id===value?"var(--sky)":"transparent"}>
-                {h.name}
-              </div>
-            ))}
-            {!filtered.length&&<div style={{padding:"8px 12px",fontSize:12,color:"var(--mut)"}}>No matching hosts</div>}
-          </div>
-        </div>
-      )}
-    </div>
-    {other&&!value&&(
-      <input placeholder="…or type the organizer's name" value={orgName||""}
-        onChange={e=>onOrgName(e.target.value)}
-        style={{flex:"1 1 180px",minWidth:160,padding:"7px 9px",borderRadius:8,border:"1px solid var(--line)",background:"var(--card)",color:"var(--ink)",fontSize:12.5}}/>
-    )}
-  </>);
-}
-
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Multi-step Sign-in / Sign-up modal
-   ───────────────────────────────────────────────────────────────────────
-   Sign-in path:  email+pw → done (or Google OAuth redirect)
-   Sign-up path:  Step 1 credentials → Step 2 role → Step 3 details → done
-   Google OAuth:  redirect → on return, check profile → if none → Step 2+3
-   Guardian path: athlete under 16 → guardian email collected → pending note
-   ═══════════════════════════════════════════════════════════════════════ */
-function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[],federations=[],onCreateHost,onClaimHost,pendingInviteToken=null}){
-  /* ── mode: "signin" | "signup" ── */
-  // If arriving from Google OAuth with no profile yet, jump straight to role-pick
-  const[mode,setMode]=React.useState(googleOnboarding?"signup":"signin");
-  /* ── multi-step signup state ── */
-  // Steps: 1=credentials 2=role 3=name(first/last)+athlete-extras 4=host "Find my club"
-  const[step,setStep]=React.useState(googleOnboarding?2:1);
-  /* step 1 */
-  const[email,setEmail]=React.useState("");
-  const[pw,setPw]=React.useState("");
-  /* step 2 */
-  const[role,setRole]=React.useState("athlete"); // athlete|association|club|federation
-  /* step 3 — name (ALL roles use first + last now) */
-  const[firstName,setFirstName]=React.useState("");
-  const[lastName,setLastName]=React.useState("");
-  const[birthYear,setBirthYear]=React.useState("");
-  const[guardianEmail,setGuardianEmail]=React.useState("");
-  /* step 4 — host "Find my club/association/federation" */
-  const[hostSearch,setHostSearch]=React.useState("");
-  const[selectedHostId,setSelectedHostId]=React.useState(null); // existing host being claimed
-  const[addingNew,setAddingNew]=React.useState(false);          // new-host form open
-  const[newHostName,setNewHostName]=React.useState("");
-  const[newHostScope,setNewHostScope]=React.useState("HK");     // HK | INT
-  const[classId,setClassId]=React.useState("mens");             // association only
-  const[hostCountry,setHostCountry]=React.useState("HKG");      // federation only
-  /* shared */
-  const[busy,setBusy]=React.useState(false);
-  const[err,setErr]=React.useState("");
-  const[info,setInfo]=React.useState("");
-  /* invite redemption state */
-  const[resolvedInvite,setResolvedInvite]=React.useState(null);  // fetched invite row (from link)
-  const[inviteCodeInput,setInviteCodeInput]=React.useState("");   // 8-char code user types
-  const[localInviteCtx,setLocalInviteCtx]=React.useState(null);  // {inv,token} from code lookup
-  const[inviteCodeErr,setInviteCodeErr]=React.useState("");
-  const[inviteCodeBusy,setInviteCodeBusy]=React.useState(false);
-
-  // Invite mode: either link token or code-based context is present
-  const isInviteMode=!!(pendingInviteToken||localInviteCtx);
-
-  // On mount: if arriving via invite link, pre-fetch the invite row (anon key)
-  React.useEffect(()=>{
-    if(!pendingInviteToken) return;
-    setMode("signup"); setStep(1);
-    (async()=>{
-      const rows=await fetchInviteByToken(pendingInviteToken,null);
-      const inv=rows&&rows[0];
-      if(inv&&!inv.used_at&&new Date(inv.expires_at)>new Date()) setResolvedInvite(inv);
-    })();
-  },[pendingInviteToken]);
-
-  const curYear=new Date().getFullYear();
-  const athleteAge=birthYear&&/^\d{4}$/.test(birthYear)?curYear-parseInt(birthYear):null;
-  const isMinor=athleteAge!==null&&athleteAge<16;
-
-  const fullNameStr=`${firstName.trim()} ${lastName.trim()}`.trim();
-  const fallbackName=fullNameStr||email.split("@")[0];
-  const isHost=role!=="athlete";
-
-  // Which existing hosts to show in the "Find my ___" search, by role.
-  const hostPool=role==="club"?clubs:role==="federation"?federations:associations;
-  const hostKind=role==="club"?"club":role==="federation"?"federation":"association";
-  const filteredHosts=hostPool.filter(h=>!hostSearch.trim()||h.name.toLowerCase().includes(hostSearch.toLowerCase()));
-
-  /* ── helpers ── */
-  const resetToSignin=()=>{setMode("signin");setStep(1);setErr("");setInfo("");};
-
-  const step1Valid=mode==="signin"?(email.trim()&&pw):(email.trim()&&pw.length>=8);
-  const step3Valid=firstName.trim()&&lastName.trim()&&(role==="athlete"?(isMinor?guardianEmail.trim():true):true);
-  const step4Valid=addingNew?newHostName.trim():!!selectedHostId;
-
-  /* ── apply invite code (step 4 fast-path) ── */
-  const applyInviteCode=async()=>{
-    const code=inviteCodeInput.trim().toUpperCase().replace(/[^A-Z0-9]/g,"");
-    if(code.length<8){setInviteCodeErr("Enter the full 8-character code from your invitation.");return;}
-    setInviteCodeBusy(true);setInviteCodeErr("");
-    try{
-      const rows=await fetchInviteByShortCode(code,null);
-      if(rows&&rows.length>0){
-        const inv=rows[0];
-        if(inv.used_at){setInviteCodeErr("This invite code has already been used.");return;}
-        if(new Date(inv.expires_at)<new Date()){setInviteCodeErr("This invite code has expired.");return;}
-        setLocalInviteCtx({inv,token:inv.token});
-      } else {
-        setInviteCodeErr("That code wasn't found. Check it and try again, or ask for the invite link instead.");
-      }
-    }catch{
-      setInviteCodeErr("Couldn't validate that code. Please try again.");
-    }finally{setInviteCodeBusy(false);}
-  };
-
-  /* ── sign-in submit ── */
-  const doSignIn=async()=>{
-    setErr("");setBusy(true);
-    try{
-      if(!AUTH_BASE) throw new Error("Auth not configured.");
-      const d=await authSignIn(email.trim(),pw);
-      const tok=d.access_token;const user=d.user;
-      const prof=await fetchProfile(user.id,tok)||{role:"guest"};
-      onAuthed({token:tok,user,profile:prof});
-    }catch(e){setErr(e.message||"Sign-in failed.");}
-    finally{setBusy(false);}
-  };
-
-  /* ── final sign-up submit ── */
-  // Athletes finish at step 3; hosts finish at step 4 (after Find-my-club).
-  const doSignUp=async()=>{
-    setErr("");setBusy(true);
-    try{
-      if(!AUTH_BASE) throw new Error("Auth not configured.");
-      // Obtain a session: Google path already has one; email path signs up now.
-      let tok,user;
-      if(googleOnboarding){
-        tok=googleOnboarding.token; user=googleOnboarding.user;
-      } else {
-        const d=await authSignUp(email.trim(),pw);
-        tok=d.access_token||d.session?.access_token;
-        user=d.user||d;
-        if(!tok){
-          setInfo("Account created — check your email to confirm, then sign in.");
-          resetToSignin();setBusy(false);return;
-        }
-      }
-
-      // ── Write the profile row (all roles capture first/last now) ──
-      const profilePayload={user_id:user.id,role,
-        display_name:fallbackName,
-        class_id:role==="association"?classId:null,
-        athlete_name:role==="athlete"?fullNameStr||null:null,
-        first_name:firstName.trim()||null,
-        last_name:lastName.trim()||null};
-      if(role==="athlete"&&birthYear) profilePayload.birth_year=parseInt(birthYear);
-      if(role==="athlete"&&isMinor&&guardianEmail.trim()){profilePayload.guardian_pending=true;profilePayload.guardian_email=guardianEmail.trim();}
-      await upsertProfile(profilePayload,tok);
-
-      // ── Athlete: minor guardian path or straight in ──
-      if(role==="athlete"){
-        if(isMinor&&guardianEmail.trim()){
-          setInfo(`Guardian consent email sent to ${guardianEmail.trim()}. Profile activates once approved.`);
-          setTimeout(onClose,5000);setBusy(false);return;
-        }
-        onAuthed({token:tok,user,profile:profilePayload});return;
-      }
-
-      // ── Invite path: link token or code → immediate verified access ──
-      const activeInvRow=resolvedInvite||localInviteCtx?.inv;
-      if(activeInvRow){
-        // Re-validate with the user's token (RLS-safe) before committing.
-        let inv=activeInvRow;
-        const recheck=await fetchInviteByToken(inv.token,tok);
-        if(recheck&&recheck[0]) inv=recheck[0];
-        if(!inv||inv.used_at||new Date(inv.expires_at)<new Date())
-          throw new Error("This invitation is no longer valid. Ask your host admin to send a new one.");
-        // Profile role mirrors the host type (club / association / federation).
-        const hostRows=await sbGet(`hosts?id=eq.${encodeURIComponent(inv.host_id)}&select=type`);
-        const hostType=hostRows?.[0]?.type||hostById(inv.host_id)?.type||"club";
-        profilePayload.role=hostType;
-        delete profilePayload.birth_year; delete profilePayload.guardian_pending; delete profilePayload.guardian_email;
-        profilePayload.athlete_name=null; profilePayload.class_id=hostType==="association"?(hostById(inv.host_id)?.cls||null):null;
-        await upsertProfile(profilePayload,tok);
-        // Create membership: verified:true, active — immediate full access.
-        await hostRest("host_members",{method:"POST",
-          headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
-          body:JSON.stringify({host_id:inv.host_id,user_id:user.id,role:inv.role,status:"active",verified:true})},tok);
-        await markInviteUsed(inv.token,user.id,tok);
-        onAuthed({token:tok,user,profile:{...profilePayload,role:hostType}});
-        return;
-      }
-
-      // ── Host: claim existing OR create new → pending Owner (guest access) ──
-      let hostId=selectedHostId;
-      if(addingNew){
-        const created=await onCreateHost?.({
-          type:hostKind,scope:newHostScope,name:newHostName.trim(),
-          cls:hostKind==="association"?classId:null,
-          country:hostKind==="federation"?(hostCountry||"HKG").toUpperCase():null,
-        },tok);
-        if(!created?.id) throw new Error("Couldn't create the host page.");
-        hostId=created.id;
-      }
-      if(!hostId) throw new Error("Please select or add a host.");
-      // Register the user as Owner, status active but verified=false (gated → guest UX).
-      await onClaimHost?.(hostId,user.id,tok);
-
-      // Sign them in as their (pending) profile; UI stays guest-level until verified.
-      onAuthed({token:tok,user,profile:profilePayload,pendingHostId:hostId});
-    }catch(e){setErr(e.message||"Sign-up failed.");}
-    finally{setBusy(false);}
-  };
-
-  /* ── Google OAuth ── */
-  const doGoogle=()=>{
-    if(!SB_URL||!SB_KEY){setErr("Auth not configured.");return;}
-    authGoogleOAuth();
-  };
-
-  /* ── input style ── */
-  const F={width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"11px 13px",
-    font:"inherit",fontSize:14,background:"rgba(255,255,255,.82)",outline:"none",
-    transition:"box-shadow .15s",marginBottom:0};
-  const FW=(extra={})=>({...F,...extra});
-  const Label=({children})=><p style={{fontSize:11.5,fontWeight:700,color:"var(--mut)",letterSpacing:".05em",textTransform:"uppercase",margin:"0 0 6px"}}>{children}</p>;
-
-  /* ── role option cards ── */
-  const RoleCard=({id,label,desc,icon})=>{
-    const on=role===id;
-    return(
-      <button type="button" onClick={()=>setRole(id)}
-        style={{flex:"1 1 140px",border:"1.5px solid "+(on?"var(--accent)":"var(--line)"),
-          background:on?"rgba(10,132,255,.08)":"rgba(255,255,255,.6)",
-          backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",
-          borderRadius:14,padding:"14px 12px",cursor:"pointer",textAlign:"left",transition:".15s",
-          boxShadow:on?"0 0 0 3px var(--halo)":"none"}}>
-        <div style={{fontSize:22,marginBottom:6}}>{icon}</div>
-        <div style={{fontWeight:700,fontSize:14,color:on?"var(--accent)":"var(--navy)"}}>{label}</div>
-        <div style={{fontSize:12,color:"var(--mut)",marginTop:3,lineHeight:1.4}}>{desc}</div>
-      </button>
-    );
-  };
-
-  /* ── progress bar (athletes = 3 steps, hosts = 4) ── */
-  const totalSteps=isInviteMode?2:isHost?4:3;
-  const pct=mode==="signup"?Math.round(((step-1)/(totalSteps-1))*100):0;
-
-  return(
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()}
-        style={{maxWidth:440,overflow:"visible"}}>
-
-        {/* ── Header ── */}
-        <div className="mhead" style={{flexDirection:"column",alignItems:"stretch",gap:0,padding:"20px 24px 0"}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{flex:1}}>
-              <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"rgba(255,255,255,.55)"}}>
-                {isInviteMode&&mode==="signup"?(step===1?"Accept invitation":"Your details"):mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":step===3?"Your name":hostKind==="club"?"Find your club":hostKind==="federation"?"Find your federation":"Find your association"}
-              </p>
-              <h3 style={{marginTop:2}}>
-                {isInviteMode&&mode==="signup"?(step===1?"Create your account":"Complete your profile"):mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose your role":step===3?(isHost?"Your details":"Almost done"):"Link your club"}
-              </h3>
-            </div>
-            <button className="x" onClick={onClose}><X size={16}/></button>
-          </div>
-          {/* progress bar — only during signup after step 1 */}
-          {mode==="signup"&&(
-            <div style={{marginTop:14,height:3,borderRadius:3,background:"rgba(255,255,255,.18)",overflow:"hidden"}}>
-              <div style={{height:"100%",width:`${pct}%`,background:"rgba(255,255,255,.75)",borderRadius:3,transition:"width .4s cubic-bezier(.4,0,.2,1)"}}/>
-            </div>
-          )}
-          <div style={{height:20}}/>
-        </div>
-
-        {/* ── Body ── */}
-        <div style={{padding:"12px 24px 26px",display:"flex",flexDirection:"column",gap:15}}>
-
-          {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#c0392b",display:"flex",alignItems:"center",gap:8}}><AlertCircle size={14} style={{flex:"none"}}/>{err}</div>}
-          {info&&<div style={{background:"rgba(10,132,255,.08)",border:"1px solid rgba(10,132,255,.2)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"var(--accent)"}}>{info}</div>}
-
-          {/* ── Invite banner: LINK invites only (code invites show their own banner at step 4) ── */}
-          {(resolvedInvite||pendingInviteToken)&&!localInviteCtx&&mode==="signup"&&(
-            <div style={{background:"rgba(80,180,100,.1)",border:"1px solid rgba(80,180,100,.35)",borderRadius:12,padding:"12px 15px",display:"flex",alignItems:"flex-start",gap:10}}>
-              <BadgeCheck size={16} style={{flex:"none",marginTop:1,color:"#3a9e55"}}/>
-              <div>
-                <div style={{fontWeight:700,fontSize:13,color:"#2a7a3e",marginBottom:2}}>You have an invitation</div>
-                {resolvedInvite
-                  ? <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
-                      Joining as <b>{resolvedInvite.role}</b>. Create your account below — you'll have immediate host access once done.
-                    </div>
-                  : <div style={{fontSize:12.5,color:"#3a7048",lineHeight:1.45}}>
-                      Complete sign-up below to accept your invitation and get host access.
-                    </div>}
-              </div>
-            </div>
-          )}
-
-          {/* ════ SIGN-IN ════ */}
-          {mode==="signin"&&(<>
-            {/* Google */}
-            <button type="button" onClick={doGoogle} disabled={busy}
-              style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:10,
-                border:"1px solid var(--line)",borderRadius:10,padding:"11px",background:"rgba(255,255,255,.82)",
-                backdropFilter:"blur(20px)",cursor:"pointer",fontSize:14,fontWeight:600,color:"var(--navy)",transition:".15s"}}
-              onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,.96)"}
-              onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,.82)"}>
-              <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/><path fill="none" d="M0 0h48v48H0z"/></svg>
-              Continue with Google
-            </button>
-
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
-              <div style={{flex:1,height:1,background:"var(--line)"}}/>
-              <span style={{fontSize:11.5,fontWeight:700,color:"var(--mut)",letterSpacing:".04em"}}>OR</span>
-              <div style={{flex:1,height:1,background:"var(--line)"}}/>
-            </div>
-
-            <div style={{display:"flex",flexDirection:"column",gap:10}}>
-              <div><Label>Email</Label>
-                <input style={FW()} type="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-              </div>
-              <div><Label>Password</Label>
-                <input style={FW()} type="password" placeholder="••••••••" value={pw} onChange={e=>setPw(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
-                  onKeyDown={e=>{if(e.key==="Enter"&&email&&pw)doSignIn();}}/>
-              </div>
-            </div>
-
-            <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}}
-              disabled={busy||!email.trim()||!pw} onClick={doSignIn}>
-              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:null}Sign in</div>
-            </button>
-
-            <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
-              No account?{" "}
-              <button type="button" onClick={()=>{setMode("signup");setStep(1);setErr("");}}
-                style={{border:0,background:"none",color:"var(--accent)",fontWeight:700,cursor:"pointer",fontSize:13}}>
-                Create one
-              </button>
-            </p>
-          </>)}
-
-          {/* ════ SIGN-UP STEP 1: credentials ════ */}
-          {mode==="signup"&&step===1&&(<>
-            <button type="button" onClick={doGoogle} disabled={busy}
-              style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:10,
-                border:"1px solid var(--line)",borderRadius:10,padding:"11px",background:"rgba(255,255,255,.82)",
-                backdropFilter:"blur(20px)",cursor:"pointer",fontSize:14,fontWeight:600,color:"var(--navy)",transition:".15s"}}
-              onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,.96)"}
-              onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,.82)"}>
-              <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/><path fill="none" d="M0 0h48v48H0z"/></svg>
-              Continue with Google
-            </button>
-
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
-              <div style={{flex:1,height:1,background:"var(--line)"}}/>
-              <span style={{fontSize:11.5,fontWeight:700,color:"var(--mut)",letterSpacing:".04em"}}>OR</span>
-              <div style={{flex:1,height:1,background:"var(--line)"}}/>
-            </div>
-
-            <div style={{display:"flex",flexDirection:"column",gap:10}}>
-              <div><Label>Email</Label>
-                <input style={FW()} type="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-              </div>
-              <div><Label>Password <span style={{fontWeight:400,textTransform:"none",fontSize:10.5}}>(min 8 characters)</span></Label>
-                <input style={FW()} type="password" placeholder="Choose a password" value={pw} onChange={e=>setPw(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
-                  onKeyDown={e=>{if(e.key==="Enter"&&step1Valid)setStep(2);}}/>
-              </div>
-            </div>
-
-            <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}}
-              disabled={busy||!step1Valid} onClick={()=>{setErr("");setStep(isInviteMode?3:2);}}>
-              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
-            </button>
-
-            <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
-              Already have an account?{" "}
-              <button type="button" onClick={resetToSignin}
-                style={{border:0,background:"none",color:"var(--accent)",fontWeight:700,cursor:"pointer",fontSize:13}}>
-                Sign in
-              </button>
-            </p>
-          </>)}
-
-          {/* ════ SIGN-UP STEP 2: role ════ */}
-          {mode==="signup"&&step===2&&(<>
-            <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
-              <RoleCard id="athlete" label="Athlete" icon="🏆" desc="Build your profile from your results."/>
-              <RoleCard id="association" label="Association" icon="⛳" desc="Manage results for your golf association."/>
-              <RoleCard id="club" label="Club" icon="🌊" desc="Host competitions for your yacht club."/>
-              <RoleCard id="federation" label="Federation" icon="🏳️" desc="Govern your national golf federation."/>
-            </div>
-
-            <div style={{display:"flex",gap:10}}>
-              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(1)}>
-                <ArrowLeft size={15}/>Back
-              </button>
-              <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={()=>{setErr("");setStep(3);}}>
-                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
-              </button>
-            </div>
-          </>)}
-
-          {/* ════ SIGN-UP STEP 3: name (all roles) + athlete extras ════ */}
-          {mode==="signup"&&step===3&&(<>
-            <div style={{display:"flex",gap:10}}>
-              <div style={{flex:1}}>
-                <Label>First name</Label>
-                <input style={FW()} placeholder="Casey" value={firstName} onChange={e=>setFirstName(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-              </div>
-              <div style={{flex:1}}>
-                <Label>Last name</Label>
-                <input style={FW()} placeholder="Smith" value={lastName} onChange={e=>setLastName(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-              </div>
-            </div>
-
-            {/* Athlete-only extras — never shown in invite mode (host co-admin) */}
-            {role==="athlete"&&!isInviteMode&&(<>
-              <p style={{fontSize:12,color:"var(--mut)",margin:"-4px 0 0",lineHeight:1.5}}>
-                Use your name <b>exactly as it appears in results</b> — this is how AthLink links your profile to your results history.
-              </p>
-              <div>
-                <Label>Year of birth</Label>
-                <input style={FW({maxWidth:140})} type="number" placeholder="e.g. 2003" min="1930" max={curYear}
-                  value={birthYear} onChange={e=>setBirthYear(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-                {athleteAge!==null&&<span style={{marginLeft:10,fontSize:13,color:"var(--mut)",fontWeight:600}}>Age {athleteAge}</span>}
-              </div>
-              {isMinor&&(
-                <div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:12,padding:"14px 16px"}}>
-                  <p style={{margin:"0 0 10px",fontSize:13,fontWeight:700,color:"#a85c00",display:"flex",alignItems:"center",gap:7}}>
-                    <Clock size={14}/>Guardian approval required
-                  </p>
-                  <p style={{margin:"0 0 10px",fontSize:12.5,color:"#a85c00",lineHeight:1.5}}>
-                    Athletes under 16 need a parent or guardian to approve their profile before it goes live. Enter their email and we'll send an approval link.
-                  </p>
-                  <Label>Guardian email</Label>
-                  <input style={FW()} type="email" placeholder="parent@example.com" value={guardianEmail}
-                    onChange={e=>setGuardianEmail(e.target.value)}
-                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px rgba(255,149,0,.3)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-                </div>
-              )}
-            </>)}
-
-            <div style={{display:"flex",gap:10}}>
-              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(isInviteMode?1:2)}>
-                <ArrowLeft size={15}/>Back
-              </button>
-              {/* Athlete finishes here; host advances to step 4; invite mode finishes here */}
-              {(role==="athlete"||isInviteMode)
-                ? <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">
-                    {busy?<Loader2 size={15} className="spin"/>:null}
-                    {isInviteMode?"Accept invitation":isMinor?"Send guardian approval":"Create account"}
-                    </div>
-                  </button>
-                : <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={()=>{setErr("");setStep(4);}}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
-                  </button>}
-            </div>
-          </>)}
-
-          {/* ════ SIGN-UP STEP 4: "Find my club/association/federation" (hosts) ════ */}
-          {mode==="signup"&&step===4&&isHost&&(<>
-
-            {/* ── Invite code fast-path (top of step 4) ── */}
-            {!localInviteCtx&&!addingNew&&(
-              <div style={{background:"rgba(10,132,255,.05)",border:"1px solid rgba(10,132,255,.18)",borderRadius:12,padding:"13px 15px"}}>
-                <p style={{margin:"0 0 9px",fontWeight:700,fontSize:13,color:"var(--navy)",display:"flex",alignItems:"center",gap:7}}>
-                  <Link2 size={14}/>Got an invite code?
-                </p>
-                <div style={{display:"flex",gap:8}}>
-                  <input style={{flex:1,border:"1px solid var(--line)",borderRadius:8,padding:"9px 12px",font:"inherit",fontSize:13.5,
-                    letterSpacing:".08em",textTransform:"uppercase",outline:"none",fontFamily:"monospace",background:"rgba(255,255,255,.85)"}}
-                    placeholder="XXXXXXXX" maxLength={8} value={inviteCodeInput}
-                    onChange={e=>{ setInviteCodeInput(e.target.value.toUpperCase().replace(/[^A-Za-z0-9]/g,"")); setInviteCodeErr(""); }}
-                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
-                    onKeyDown={async e=>{ if(e.key==="Enter"&&inviteCodeInput.length>=6) await applyInviteCode(); }}/>
-                  <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 14px",whiteSpace:"nowrap"}}
-                    disabled={inviteCodeBusy||inviteCodeInput.length<6} onClick={applyInviteCode}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{inviteCodeBusy?<Loader2 size={13} className="spin"/>:null}Apply</div>
-                  </button>
-                </div>
-                {inviteCodeErr&&<p style={{margin:"7px 0 0",fontSize:12,color:"#c0392b"}}>{inviteCodeErr}</p>}
-              </div>
-            )}
-            {/* Accepted code: show success and skip the search UI */}
-            {localInviteCtx&&(
-              <div style={{background:"rgba(80,180,100,.1)",border:"1px solid rgba(80,180,100,.35)",borderRadius:12,padding:"13px 15px",display:"flex",alignItems:"center",gap:10}}>
-                <CheckCircle size={16} style={{flex:"none",color:"#3a9e55"}}/>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:700,fontSize:13,color:"#2a7a3e"}}>Invite code accepted</div>
-                  <div style={{fontSize:12.5,color:"#3a7048",marginTop:2}}>Joining as <b>{localInviteCtx.inv.role}</b>. Submit below to create your account with immediate access.</div>
-                </div>
-                <button className="btn ghost" style={{fontSize:11.5,padding:"4px 9px"}} onClick={()=>{setLocalInviteCtx(null);setInviteCodeInput("");}}>Change</button>
-              </div>
-            )}
-
-            {!addingNew&&!localInviteCtx&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:0,lineHeight:1.5}}>
-                Search for your {hostKind} below and select it to request ownership. Can't find it? Add it.
-              </p>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <div style={{flex:1,position:"relative"}}>
-                  <Search size={15} color="#9fb2c8" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}/>
-                  <input style={FW({paddingLeft:34})} placeholder={`Search ${hostKind}s…`} value={hostSearch}
-                    onChange={e=>{setHostSearch(e.target.value);setSelectedHostId(null);}}
-                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-                </div>
-                <button className="btn ghost" style={{fontSize:13,padding:"10px 13px",whiteSpace:"nowrap"}} onClick={()=>{setAddingNew(true);setNewHostName(hostSearch);setSelectedHostId(null);}}>
-                  <Plus size={15}/>Add a {hostKind}
-                </button>
-              </div>
-
-              {/* Results list */}
-              <div style={{maxHeight:240,overflowY:"auto",display:"flex",flexDirection:"column",gap:6,margin:"2px 0"}}>
-                {filteredHosts.length===0&&(
-                  <div style={{textAlign:"center",padding:"18px 0",color:"var(--mut)",fontSize:13}}>
-                    No {hostKind}s found.{" "}
-                    <button onClick={()=>{setAddingNew(true);setNewHostName(hostSearch);}} style={{border:0,background:"none",color:"var(--accent)",fontWeight:700,cursor:"pointer",fontSize:13}}>Add "{hostSearch||"new "+hostKind}"</button>
-                  </div>
-                )}
-                {filteredHosts.map(h=>{
-                  const on=selectedHostId===h.id;
-                  return(
-                    <button key={h.id} type="button" onClick={()=>setSelectedHostId(h.id)}
-                      style={{display:"flex",alignItems:"center",gap:10,textAlign:"left",
-                        border:"1.5px solid "+(on?"var(--accent)":"var(--line)"),
-                        background:on?"rgba(10,132,255,.08)":"rgba(255,255,255,.6)",
-                        borderRadius:12,padding:"11px 13px",cursor:"pointer",transition:".12s"}}>
-                      <span style={{fontSize:18}}>{hostKind==="club"?"🌊":hostKind==="federation"?"🏳️":"⚓"}</span>
-                      <span style={{flex:1,minWidth:0}}>
-                        <span style={{display:"block",fontWeight:700,fontSize:13.5,color:on?"var(--accent)":"var(--navy)"}}>{h.name}</span>
-                        <span style={{fontSize:11.5,color:"var(--mut)"}}>{h.scope==="INT"?"International":"Hong Kong"}</span>
-                      </span>
-                      {on&&<CheckCircle size={17} color="var(--accent)"/>}
-                    </button>
-                  );
-                })}
-              </div>
-            </>)}
-
-            {/* New host form */}
-            {addingNew&&(<>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
-                <button className="cal-back" style={{color:"var(--accent)"}} onClick={()=>{setAddingNew(false);}}><ArrowLeft size={14}/>Back to search</button>
-              </div>
-              <div>
-                <Label>{hostKind==="club"?"Club":hostKind==="federation"?"Federation":"Association"} name</Label>
-                <input style={FW()} placeholder={hostKind==="club"?"e.g. Aberdeen Boat Club":"Name"} value={newHostName}
-                  onChange={e=>setNewHostName(e.target.value)}
-                  onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-              </div>
-              <div>
-                <Label>Region</Label>
-                <div className="seg" style={{alignSelf:"flex-start"}}>
-                  <button className={newHostScope==="HK"?"on":""} onClick={()=>setNewHostScope("HK")}>Hong Kong</button>
-                  <button className={newHostScope==="INT"?"on":""} onClick={()=>setNewHostScope("INT")}>International</button>
-                </div>
-              </div>
-              {hostKind==="association"&&(
-                <div><Label>Division</Label><ClassPicker value={classId} onChange={setClassId}/></div>
-              )}
-              {hostKind==="federation"&&(
-                <div><Label>Governing country (IOC code)</Label>
-                  <input style={FW({maxWidth:120,textTransform:"uppercase"})} placeholder="HKG" maxLength={3}
-                    value={hostCountry} onChange={e=>setHostCountry(e.target.value.toUpperCase().slice(0,3))}
-                    onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
-                </div>
-              )}
-            </>)}
-
-            {/* Pending-approval note — only for ownership claims, NOT invite-code joins (those are instant) */}
-            {!localInviteCtx&&(
-              <div style={{background:"rgba(10,132,255,.06)",border:"1px solid rgba(10,132,255,.16)",borderRadius:12,padding:"12px 14px",fontSize:12.5,color:"var(--navy)",lineHeight:1.5}}>
-                <b>Heads up:</b> your ownership request is reviewed by the AthLink team. Until it's approved you'll browse as a guest — you'll get full host access once we verify you.
-              </div>
-            )}
-
-            <div style={{display:"flex",gap:10}}>
-              <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>{addingNew?setAddingNew(false):setStep(3);}}>
-                <ArrowLeft size={15}/>Back
-              </button>
-              <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!(localInviteCtx||step4Valid)} onClick={doSignUp}>
-                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">
-                {busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}
-                {localInviteCtx?"Accept invitation & create account":addingNew?`Create ${hostKind} & request ownership`:"Request ownership"}
-                </div>
-              </button>
-            </div>
-          </>)}
-
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Host members / trust management modal
-   ───────────────────────────────────────────────────────────────────────
-   - Claim: first signed-in user with no members becomes Owner (pending verify)
-   - Member list with role badges + active/pending status
-   - Grant / Deny pending requests
-   - Promote to Owner / Demote to Editor
-   - Revoke membership (can't remove the last Owner; only Owner can remove Owner)
-   - Create single-use, 7-day invite links
-   - Audit trail
-   ═══════════════════════════════════════════════════════════════════════ */
-function HostMembersModal({hostId,hostName,auth,myMembership,pendingClaims=[],pendingEventClaims=[],canVouch=false,onDecideClaim,onDecideEventClaim,onClose,onChanged,embedded=false,canManage=false}){
-  const tok=auth?.token; const uid=auth?.user?.id;
-  const[members,setMembers]=React.useState(null);
-  const[invites,setInvites]=React.useState([]);
-  const[audit,setAudit]=React.useState([]);
-  const[memberNames,setMemberNames]=React.useState({});
-  const[memberUsernames,setMemberUsernames]=React.useState({});
-  const[busy,setBusy]=React.useState(false);
-  const[err,setErr]=React.useState("");
-  const[newInvite,setNewInvite]=React.useState(null); // {url,role}
-  const[inviteRole,setInviteRole]=React.useState("editor");
-  const[tab,setTab]=React.useState("members"); // members | claims | audit
-  const[claimBusy,setClaimBusy]=React.useState(null); // claim id being decided
-
-  const iAmOwner=(myMembership?.role==="owner"&&myMembership?.status==="active")||canManage;
-  const iAmMember=(!!myMembership&&myMembership.status==="active")||canManage;
-  const ownerCount=(members||[]).filter(m=>m.role==="owner"&&m.status==="active").length;
-
-  const load=React.useCallback(async()=>{
-    const[m,inv,a]=await Promise.all([
-      fetchHostMembers(hostId,tok),
-      fetchHostInvites(hostId,tok),
-      fetchHostAudit(hostId,tok),
-    ]);
-    setMembers(m||[]); setInvites(inv||[]); setAudit(a||[]);
-    const ids=[...new Set([...(m||[]).map(x=>x.user_id),...(a||[]).flatMap(x=>[x.actor_user_id,x.target_user_id])])].filter(Boolean);
-    if(ids.length){ const {names,usernames}=await fetchProfileNames(ids,tok); setMemberNames(names); setMemberUsernames(usernames); }
-  },[hostId,tok]);
-  const displayName=(id)=>id?(memberNames[id]||`User ${id.slice(0,8)}`):"—";
-  const usernameOf=(id)=>id?(memberUsernames[id]||null):null;
-  React.useEffect(()=>{ load(); },[load]);
-
-  const refresh=async()=>{ await load(); onChanged&&onChanged(); };
-
-  // ── Claim host as first Owner ──
-  const claim=async()=>{
-    setErr("");setBusy(true);
-    try{
-      const r=await hostRest("host_members",{method:"POST",body:JSON.stringify({
-        host_id:hostId,user_id:uid,role:"owner",status:"active",verified:false})},tok);
-      if(!r) throw new Error("Couldn't claim this host.");
-      await logHostAudit(hostId,uid,"claim",uid,"first owner",tok);
-      await refresh();
-    }catch(e){setErr(e.message||"Claim failed.");}
-    finally{setBusy(false);}
-  };
-
-  // ── Grant / Deny a pending request ──
-  const grant=async(m)=>{
-    setBusy(true);
-    await hostRest(`host_members?id=eq.${m.id}`,{method:"PATCH",body:JSON.stringify({status:"active"})},tok);
-    await logHostAudit(hostId,uid,"grant",m.user_id,m.role,tok);
-    await refresh();setBusy(false);
-  };
-  const deny=async(m)=>{
-    setBusy(true);
-    await hostRest(`host_members?id=eq.${m.id}`,{method:"DELETE"},tok);
-    await logHostAudit(hostId,uid,"deny",m.user_id,null,tok);
-    await refresh();setBusy(false);
-  };
-  // ── Promote / Demote ──
-  const setMemberRole=async(m,role)=>{
-    if(role!=="owner"&&m.role==="owner"&&ownerCount<=1){setErr("Can't demote the last owner.");return;}
-    setBusy(true);
-    await hostRest(`host_members?id=eq.${m.id}`,{method:"PATCH",body:JSON.stringify({role})},tok);
-    await logHostAudit(hostId,uid,role==="owner"?"promote":"demote",m.user_id,role,tok);
-    await refresh();setBusy(false);
-  };
-  // ── Revoke ──
-  const revoke=async(m)=>{
-    if(m.role==="owner"&&!iAmOwner){setErr("Only an owner can remove another owner.");return;}
-    if(m.role==="owner"&&ownerCount<=1){setErr("Can't remove the last owner.");return;}
-    setBusy(true);
-    await hostRest(`host_members?id=eq.${m.id}`,{method:"DELETE"},tok);
-    await logHostAudit(hostId,uid,"revoke",m.user_id,m.role,tok);
-    await refresh();setBusy(false);
-  };
-  // ── Create invite link (single use, 7 days) ──
-  const createInvite=async()=>{
-    setErr("");setBusy(true);
-    try{
-      const token=randToken();
-      const shortCode=randShortCode();
-      const expires=new Date(Date.now()+7*24*3600*1000).toISOString();
-      const r=await hostRest("host_invites",{method:"POST",body:JSON.stringify({
-        token,short_code:shortCode,host_id:hostId,role:inviteRole,created_by:uid,expires_at:expires})},tok);
-      if(!r) throw new Error("Couldn't create invite.");
-      await logHostAudit(hostId,uid,"invite",null,inviteRole,tok);
-      const url=`${window.location.origin}${window.location.pathname}?invite=${token}`;
-      setNewInvite({url,role:inviteRole,shortCode});
-      await load();
-    }catch(e){setErr(e.message||"Invite failed.");}
-    finally{setBusy(false);}
-  };
-  const revokeInvite=async(t)=>{
-    setBusy(true);
-    await hostRest(`host_invites?token=eq.${encodeURIComponent(t)}`,{method:"DELETE"},tok);
-    await load();setBusy(false);
-  };
-  const copy=(txt)=>{try{navigator.clipboard.writeText(txt);}catch{}};
-
-  const shortId=(id)=>id?id.slice(0,8):"—";
-  const RoleBadge=({role})=><span style={{fontSize:10,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",
-    color:role==="owner"?"#7a5600":"var(--navy)",background:role==="owner"?"rgba(255,200,40,.22)":"var(--sky)",
-    borderRadius:980,padding:"2px 9px"}}>{role}</span>;
-
-  const pending=(members||[]).filter(m=>m.status==="pending");
-  const active=(members||[]).filter(m=>m.status==="active");
-  const noMembers=members!==null&&members.length===0;
-
-  const body=(
-        <div style={{padding:embedded?0:"18px 24px 24px",display:"flex",flexDirection:"column",gap:16}}>
-          {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"9px 13px",fontSize:12.5,color:"#c0392b"}}>{err}</div>}
-
-          {members===null&&<div style={{display:"flex",alignItems:"center",gap:8,color:"var(--mut)",fontSize:13}}><Loader2 size={15} className="spin"/>Loading members…</div>}
-
-          {/* ── Claim panel (no members yet, I'm not a member) ── */}
-          {noMembers&&!myMembership&&(
-            <div style={{textAlign:"center",padding:"10px 0"}}>
-              <p style={{margin:"0 0 6px",fontWeight:700,fontSize:15,color:"var(--navy)"}}>This host has no owner yet</p>
-              <p style={{margin:"0 0 16px",fontSize:13,color:"var(--mut)",lineHeight:1.5}}>
-                Claim <b>{hostName}</b> to become its first Owner. Your access will be activated once the AthLink team verifies your account.
-              </p>
-              <button className="btn cta liquidGlass-wrapper" style={{justifyContent:"center"}} disabled={busy} onClick={claim}>
-                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}Claim as Owner</div>
-              </button>
-            </div>
-          )}
-
-          {/* ── My pending status ── */}
-          {myMembership?.status==="pending"&&(
-            <div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:12,padding:"12px 15px",fontSize:13,color:"#a85c00"}}>
-              <Clock size={14} style={{verticalAlign:"-2px",marginRight:6}}/>
-              Your request to join is pending approval from an owner.
-            </div>
-          )}
-          {myMembership&&myMembership.status==="active"&&!myMembership.verified&&!canManage&&(
-            <div style={{background:"rgba(10,132,255,.07)",border:"1px solid rgba(10,132,255,.2)",borderRadius:12,padding:"12px 15px",fontSize:13,color:"var(--navy)"}}>
-              You're an active <b>{myMembership.role}</b>, pending AthLink verification before import/edit access is enabled.
-            </div>
-          )}
-
-          {/* ── Tabs (active members or managers) ── */}
-          {iAmMember&&(<>
-            <div className="seg" style={{alignSelf:"flex-start"}}>
-              <button className={tab==="members"?"on":""} onClick={()=>setTab("members")}>Members</button>
-              <button className={tab==="claims"?"on":""} onClick={()=>setTab("claims")}>Profile claims{pendingClaims.length>0?` (${pendingClaims.length})`:""}</button>
-              <button className={tab==="eventclaims"?"on":""} onClick={()=>setTab("eventclaims")}>Competition claims{pendingEventClaims.length>0?` (${pendingEventClaims.length})`:""}</button>
-              <button className={tab==="audit"?"on":""} onClick={()=>setTab("audit")}>Audit log</button>
-            </div>
-
-            {tab==="members"&&(<>
-              {/* Pending requests */}
-              {pending.length>0&&(
-                <div>
-                  <p className="seclabel" style={{margin:"0 0 8px"}}>Pending requests</p>
-                  {pending.map(m=>(
-                    <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:"1px solid var(--line)"}}>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{displayName(m.user_id)}{usernameOf(m.user_id)&&<span style={{marginLeft:6,fontSize:12,color:"var(--mut)",fontWeight:500}}>@{usernameOf(m.user_id)}</span>}</div>
-                        <div style={{fontSize:11.5,color:"var(--mut)"}}>requested {m.role}</div>
-                      </div>
-                      <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={busy} onClick={()=>grant(m)}><CheckCircle size={13}/>Grant</button>
-                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={busy} onClick={()=>deny(m)}>Deny</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Active members */}
-              <div>
-                <p className="seclabel" style={{margin:"0 0 8px"}}>Members</p>
-                {active.map(m=>{
-                  const isMe=m.user_id===uid;
-                  return(
-                    <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid var(--line)"}}>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{displayName(m.user_id)}{usernameOf(m.user_id)&&<span style={{marginLeft:6,fontSize:12,color:"var(--mut)",fontWeight:500}}>@{usernameOf(m.user_id)}</span>}{isMe?" (you)":""}{!m.verified&&<span style={{marginLeft:6,fontSize:10.5,color:"#a85c00",fontWeight:700}}>unverified</span>}</div>
-                      </div>
-                      <RoleBadge role={m.role}/>
-                      {!isMe&&(
-                        <>
-                          {m.role==="editor"
-                            ? <button className="btn ghost" style={{fontSize:11.5,padding:"4px 9px"}} disabled={busy} onClick={()=>setMemberRole(m,"owner")}>Make owner</button>
-                            : (iAmOwner&&ownerCount>1&&<button className="btn ghost" style={{fontSize:11.5,padding:"4px 9px"}} disabled={busy} onClick={()=>setMemberRole(m,"editor")}>Make editor</button>)}
-                          {!(m.role==="owner"&&(!iAmOwner||ownerCount<=1))&&(
-                            <button className="delbtn" title="Remove" disabled={busy} onClick={()=>revoke(m)}><Trash2 size={15}/></button>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Invites */}
-              <div>
-                <p className="seclabel" style={{margin:"0 0 8px"}}>Invite a co-admin</p>
-                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                  <div className="seg">
-                    <button className={inviteRole==="editor"?"on":""} onClick={()=>setInviteRole("editor")}>Editor</button>
-                    <button className={inviteRole==="owner"?"on":""} onClick={()=>setInviteRole("owner")}>Owner</button>
-                  </div>
-                  <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"7px 13px"}} disabled={busy} onClick={createInvite}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Link2 size={14}/>Create invite link</div>
-                  </button>
-                </div>
-                {newInvite&&(
-                  <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:8,background:"var(--sky)",borderRadius:10,padding:"10px 13px"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <div style={{flex:1}}>
-                        <div style={{fontSize:10.5,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",color:"var(--mut)",marginBottom:3}}>Invite link</div>
-                        <input readOnly value={newInvite.url} style={{width:"100%",border:0,background:"none",font:"inherit",fontSize:11.5,color:"var(--navy)",outline:"none"}} onClick={e=>e.target.select()}/>
-                      </div>
-                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",whiteSpace:"nowrap"}} onClick={()=>copy(newInvite.url)}><ClipboardPaste size={13}/>Copy link</button>
-                    </div>
-                    <div style={{display:"flex",alignItems:"center",gap:8,borderTop:"1px solid var(--line)",paddingTop:8}}>
-                      <div style={{flex:1}}>
-                        <div style={{fontSize:10.5,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",color:"var(--mut)",marginBottom:2}}>Short code</div>
-                        <span style={{fontFamily:"monospace",fontSize:15,fontWeight:700,letterSpacing:".12em",color:"var(--navy)"}}>{newInvite.shortCode}</span>
-                      </div>
-                      <button className="btn ghost" style={{fontSize:12,padding:"5px 11px",whiteSpace:"nowrap"}} onClick={()=>copy(newInvite.shortCode||"")}><ClipboardPaste size={13}/>Copy code</button>
-                    </div>
-                  </div>
-                )}
-                {invites.filter(i=>!i.used_at&&new Date(i.expires_at)>new Date()).length>0&&(
-                  <div style={{marginTop:10}}>
-                    {invites.filter(i=>!i.used_at&&new Date(i.expires_at)>new Date()).map(i=>(
-                      <div key={i.token} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--mut)",padding:"5px 0"}}>
-                        <Link2 size={12}/>
-                        <span style={{flex:1}}>{i.role} · expires {new Date(i.expires_at).toLocaleDateString()}</span>
-                        <span style={{fontFamily:"monospace",fontWeight:700,fontSize:12,letterSpacing:".06em",color:"var(--navy)",marginRight:2}}>{i.short_code||"—"}</span>
-                        <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} onClick={()=>copy(`${window.location.origin}${window.location.pathname}?invite=${i.token}`)}>Copy link</button>
-                        <button className="btn ghost" style={{fontSize:11,padding:"3px 9px"}} disabled={!i.short_code} onClick={()=>copy(i.short_code||"")}>Copy code</button>
-                        <button className="delbtn" title="Revoke invite" onClick={()=>revokeInvite(i.token)}><X size={13}/></button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>)}
-
-            {tab==="claims"&&(
-              <div>
-                <p style={{fontSize:12.5,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.5}}>
-                  Athletes who've claimed a profile that appears in <b>{hostName}</b>'s results. Approving vouches for them and adds a verified badge.
-                </p>
-                {!canVouch&&<div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:10,padding:"9px 13px",fontSize:12.5,color:"#a85c00",marginBottom:10}}>Your account must be verified before you can vouch for athletes.</div>}
-                {pendingClaims.length===0&&<p style={{fontSize:13,color:"var(--mut)"}}>No pending profile claims for this host's athletes.</p>}
-                {pendingClaims.map(c=>(
-                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid var(--line)"}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{c.profile_name}</div>
-                      <div style={{fontSize:11.5,color:"var(--mut)"}}>claimed by user {c.user_id?.slice(0,8)} · {new Date(c.created_at).toLocaleDateString()}</div>
-                    </div>
-                    <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
-                      onClick={async()=>{setClaimBusy(c.id);await onDecideClaim(c,true);setClaimBusy(null);}}>
-                      {claimBusy===c.id?<Loader2 size={13} className="spin"/>:<CheckCircle size={13}/>}Approve
-                    </button>
-                    <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
-                      onClick={async()=>{setClaimBusy(c.id);await onDecideClaim(c,false);setClaimBusy(null);}}>Deny</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {tab==="eventclaims"&&(
-              <div>
-                <p style={{fontSize:12.5,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.5}}>
-                  Competitions contributed by another host and attributed to <b>{hostName}</b> as organizer. Approving confirms <b>{hostName}</b> ran the event — it then appears in this portal.
-                </p>
-                {!canVouch&&<div style={{background:"rgba(255,149,0,.08)",border:"1px solid rgba(255,149,0,.3)",borderRadius:10,padding:"9px 13px",fontSize:12.5,color:"#a85c00",marginBottom:10}}>Your account must be verified before you can approve competition claims.</div>}
-                {pendingEventClaims.length===0&&<p style={{fontSize:13,color:"var(--mut)"}}>No pending competition claims for this host.</p>}
-                {pendingEventClaims.map(c=>(
-                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:"1px solid var(--line)"}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{c._eventName||"(event)"}</div>
-                      <div style={{fontSize:11.5,color:"var(--mut)"}}>claimed by user {c.user_id?.slice(0,8)}{c.ts?` · ${new Date(c.ts).toLocaleDateString()}`:""}{c.detail?` · ${c.detail}`:""}</div>
-                    </div>
-                    <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
-                      onClick={async()=>{setClaimBusy(c.id);await onDecideEventClaim(c,true);setClaimBusy(null);}}>
-                      {claimBusy===c.id?<Loader2 size={13} className="spin"/>:<CheckCircle size={13}/>}Approve
-                    </button>
-                    <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={!canVouch||claimBusy===c.id}
-                      onClick={async()=>{setClaimBusy(c.id);await onDecideEventClaim(c,false);setClaimBusy(null);}}>Deny</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {tab==="audit"&&(
-              <div>
-                {audit.length===0&&<p style={{fontSize:13,color:"var(--mut)"}}>No actions logged yet.</p>}
-                {audit.map(a=>(
-                  <div key={a.id} style={{display:"flex",gap:10,padding:"7px 0",borderBottom:"1px solid var(--line)",fontSize:12.5}}>
-                    <span style={{fontWeight:700,color:"var(--navy)",minWidth:64,textTransform:"capitalize"}}>{a.action}</span>
-                    <span style={{flex:1,color:"var(--mut)"}}>
-                      by {displayName(a.actor_user_id)}{a.target_user_id?` → ${displayName(a.target_user_id)}`:""}{a.detail?` · ${a.detail}`:""}
-                    </span>
-                    <span style={{color:"var(--mut)",whiteSpace:"nowrap"}}>{new Date(a.ts).toLocaleDateString()}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>)}
-        </div>
-  );
-  if(embedded) return body;
-  return(
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:560}}>
-        <div className="mhead" style={{padding:"18px 24px"}}>
-          <BadgeCheck size={18}/>
-          <h3 style={{flex:1}}>{hostName} — Members</h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        {body}
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Dev-only "Pending approvals" panel
-   ───────────────────────────────────────────────────────────────────────
-   Lists every unverified host_members row across all hosts. For each:
-   - Approve  → set verified=true (host gains full access)
-   - Delete   → remove membership; if it was a newly-created host with no
-                results and no other members, delete the portal too
-   - Reassign → move the membership to a different host (wrong-club fix)
-   ═══════════════════════════════════════════════════════════════════════ */
-function DevApprovalsModal({auth,hosts,nameForHost,eventCountFor,memberCountFor,onApprove,onDelete,onReassign,onClose}){
-  const tok=auth?.token;
-  const[rows,setRows]=React.useState(null);
-  const[names,setNames]=React.useState({});
-  const[busyId,setBusyId]=React.useState(null);
-  const[reassignFor,setReassignFor]=React.useState(null); // membership row being reassigned
-  const[reassignSearch,setReassignSearch]=React.useState("");
-
-  const load=React.useCallback(async()=>{
-    const r=await fetchUnverifiedMembers(tok);
-    setRows(r||[]);
-    const {names}=await fetchProfileNames((r||[]).map(x=>x.user_id),tok);
-    setNames(names);
-  },[tok]);
-  React.useEffect(()=>{load();},[load]);
-
-  const nameFor=(id)=>id?(names[id]||`User ${id.slice(0,8)}`):"—";
-
-  const[confirm,setConfirm]=React.useState(null);
-  const doApprove=async(m)=>{setBusyId(m.id);await onApprove(m);await load();setBusyId(null);};
-  const doDelete=(m)=>setConfirm({
-    title:"Delete request?",
-    message:`Delete ${nameFor(m.user_id)}'s ${m.role} request for "${nameForHost(m.host_id)}"?`,
-    confirmLabel:"Delete",
-    onConfirm:async()=>{setBusyId(m.id);await onDelete(m);await load();setBusyId(null);}});
-  const doReassign=async(m,newHostId)=>{
-    setBusyId(m.id);await onReassign(m,newHostId);setReassignFor(null);setReassignSearch("");await load();setBusyId(null);
-  };
-
-  const reassignOptions=(hosts||[]).filter(h=>!reassignSearch.trim()||h.name.toLowerCase().includes(reassignSearch.toLowerCase()));
-
-  return(<>
-    <ConfirmModal state={confirm} onClose={()=>setConfirm(null)}/>
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:600}}>
-        <div className="mhead" style={{padding:"18px 24px"}}>
-          <BadgeCheck size={18}/>
-          <h3 style={{flex:1}}>Pending approvals <span style={{fontWeight:400,opacity:.6,fontSize:14}}>(dev)</span></h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        <div style={{padding:"18px 24px 24px"}}>
-          {rows===null&&<div style={{display:"flex",alignItems:"center",gap:8,color:"var(--mut)",fontSize:13}}><Loader2 size={15} className="spin"/>Loading…</div>}
-          {rows!==null&&rows.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:0}}>No pending host approvals.</p>}
-          {(rows||[]).map(m=>{
-            const evCount=eventCountFor(m.host_id);
-            const memCount=memberCountFor?memberCountFor(m.host_id):null;
-            const isReassigning=reassignFor===m.id;
-            return(
-              <div key={m.id} style={{borderBottom:"1px solid var(--line)",padding:"12px 0"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{nameForHost(m.host_id)}</div>
-                    <div style={{fontSize:12,color:"var(--mut)"}}>
-                      {nameFor(m.user_id)} · {m.role} · requested {new Date(m.created_at).toLocaleDateString()}
-                      {" · "}<span style={{color:evCount>0?"var(--mut)":"#c8860a"}}>{evCount} result{evCount===1?"":"s"}</span>
-                    </div>
-                  </div>
-                  <button className="btn green" style={{fontSize:12,padding:"5px 11px"}} disabled={busyId===m.id} onClick={()=>doApprove(m)}>
-                    {busyId===m.id?<Loader2 size={13} className="spin"/>:<CheckCircle size={13}/>}Approve
-                  </button>
-                  <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} disabled={busyId===m.id} onClick={()=>{setReassignFor(isReassigning?null:m.id);setReassignSearch("");}}>
-                    <Pencil size={12}/>Reassign
-                  </button>
-                  <button className="delbtn" title="Delete request" disabled={busyId===m.id} onClick={()=>doDelete(m)}><Trash2 size={15}/></button>
-                </div>
-                {isReassigning&&(
-                  <div style={{marginTop:10,background:"var(--grouped)",borderRadius:10,padding:"10px 12px"}}>
-                    <p style={{margin:"0 0 7px",fontSize:12,color:"var(--mut)",fontWeight:600}}>Move this request to a different host:</p>
-                    <input style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"8px 11px",font:"inherit",fontSize:13,marginBottom:8,outline:"none"}}
-                      placeholder="Search hosts…" value={reassignSearch} onChange={e=>setReassignSearch(e.target.value)}/>
-                    <div style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-                      {reassignOptions.map(h=>(
-                        <button key={h.id} disabled={h.id===m.host_id} onClick={()=>doReassign(m,h.id)}
-                          style={{textAlign:"left",border:"1px solid var(--line)",background:h.id===m.host_id?"var(--grouped)":"#fff",
-                            borderRadius:8,padding:"7px 10px",fontSize:12.5,cursor:h.id===m.host_id?"default":"pointer",
-                            color:h.id===m.host_id?"var(--mut)":"var(--navy)",fontWeight:600}}>
-                          {h.name} <span style={{fontWeight:400,color:"var(--mut)"}}>· {h.type}{h.id===m.host_id?" (current)":""}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  </>);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Dev-only "All profiles" panel
-   ───────────────────────────────────────────────────────────────────────
-   Lists every profile row across all hosts (for test cleanup). For each:
-   - shows name / email-less id / role / host memberships / created date
-   - Delete → removes the profile + its memberships + claims (hard delete)
-   Filter to quickly find empty test accounts.
-   ═══════════════════════════════════════════════════════════════════════ */
-function DevProfilesModal({auth,nameForHost,hosts=[],onClose}){
-  const tok=auth?.token;
-  const[profiles,setProfiles]=React.useState(null);
-  const[members,setMembers]=React.useState([]);
-  const[busyId,setBusyId]=React.useState(null);
-  const[q,setQ]=React.useState("");
-  const[onlyEmpty,setOnlyEmpty]=React.useState(false);
-  const[editId,setEditId]=React.useState(null);      // profile being reassigned
-  const[addHost,setAddHost]=React.useState("");       // host id to add membership to
-  const[addRole,setAddRole]=React.useState("editor");
-
-  const load=React.useCallback(async()=>{
-    const[p,m]=await Promise.all([fetchAllProfiles(tok),fetchAllMembers(tok)]);
-    setProfiles(p||[]); setMembers(m||[]);
-  },[tok]);
-  React.useEffect(()=>{load();},[load]);
-
-  const membersFor=(uid)=>members.filter(m=>m.user_id===uid);
-  const nameOf=(p)=>`${p.first_name||""} ${p.last_name||""}`.trim()||p.display_name||(p.username?"@"+p.username:null)||`User ${String(p.user_id).slice(0,8)}`;
-
-  const[confirm,setConfirm]=React.useState(null);
-  const del=(p)=>setConfirm({
-    title:"Delete profile?",
-    message:`Delete profile "${nameOf(p)}" and all its memberships?\n\nThis cannot be undone.`,
-    confirmLabel:"Delete",
-    onConfirm:async()=>{setBusyId(p.user_id);await devDeleteProfile(p.user_id,tok);await load();setBusyId(null);}});
-  // ── Reassign helpers (persisted to host_members) ──
-  const patchMember=async(m,patch)=>{
-    setBusyId(m.user_id);
-    await hostRest(`host_members?id=eq.${m.id}`,{method:"PATCH",body:JSON.stringify(patch)},tok);
-    await load(); setBusyId(null);
-  };
-  const removeMember=async(m)=>{
-    setBusyId(m.user_id);
-    await hostRest(`host_members?id=eq.${m.id}`,{method:"DELETE"},tok);
-    await load(); setBusyId(null);
-  };
-  const addMembership=async(p)=>{
-    if(!addHost) return;
-    setBusyId(p.user_id);
-    await hostRest("host_members",{method:"POST",body:JSON.stringify({
-      host_id:addHost,user_id:p.user_id,role:addRole,status:"active",verified:true})},tok);
-    setAddHost(""); await load(); setBusyId(null);
-  };
-
-  const rows=(profiles||[]).filter(p=>{
-    const mem=membersFor(p.user_id);
-    if(onlyEmpty&&mem.length>0) return false;
-    if(!q.trim()) return true;
-    const hay=`${nameOf(p)} ${p.username||""} ${p.role||""} ${mem.map(m=>nameForHost(m.host_id)).join(" ")}`.toLowerCase();
-    return hay.includes(q.toLowerCase());
-  });
-
-  return(<>
-    <ConfirmModal state={confirm} onClose={()=>setConfirm(null)}/>
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:680}}>
-        <div className="mhead" style={{padding:"18px 24px"}}>
-          <Users size={18}/>
-          <h3 style={{flex:1}}>All profiles <span style={{fontWeight:400,opacity:.6,fontSize:14}}>(dev)</span></h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        <div style={{padding:"16px 24px 24px"}}>
-          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
-            <div style={{flex:1,minWidth:180,position:"relative"}}>
-              <Search size={14} color="#9fb2c8" style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)"}}/>
-              <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search profiles…"
-                style={{width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"8px 11px 8px 32px",font:"inherit",fontSize:13,outline:"none",background:"rgba(255,255,255,.85)"}}/>
-            </div>
-            <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{rows.length} shown</span>
-          </div>
-          {profiles===null&&<div style={{display:"flex",alignItems:"center",gap:8,color:"var(--mut)",fontSize:13}}><Loader2 size={15} className="spin"/>Loading profiles…</div>}
-          {profiles!==null&&rows.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:0}}>No profiles match.</p>}
-          <div style={{maxHeight:"60vh",overflowY:"auto"}}>
-            {rows.map(p=>{
-              const mem=membersFor(p.user_id);
-              const editing=editId===p.user_id;
-              return(
-                <div key={p.user_id} style={{padding:"11px 0",borderBottom:"1px solid var(--line)"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:10}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:13.5,fontWeight:700,color:"var(--ink)"}}>{nameOf(p)}{p.username&&<span style={{marginLeft:6,fontSize:11.5,color:"var(--mut)",fontWeight:600}}>@{p.username}</span>}</div>
-                      <div style={{fontSize:11.5,color:"var(--mut)",marginTop:2}}>
-                        <span style={{textTransform:"capitalize"}}>{p.role||"guest"}</span>
-                        {mem.length>0&&<> · {mem.map(m=>`${nameForHost(m.host_id)} (${m.role}${m.verified?"":", unverified"})`).join(", ")}</>}
-                        {p.created_at?<> · {new Date(p.created_at).toLocaleDateString()}</>:null}
-                      </div>
-                    </div>
-                    <button className="btn ghost" style={{fontSize:12,padding:"6px 10px",...(editing?{background:"var(--accent)",color:"#fff"}:{})}} onClick={()=>{setEditId(editing?null:p.user_id);setAddHost("");}}>
-                      <Pencil size={12}/>Reassign
-                    </button>
-                    <button className="delbtn" title="Delete profile" disabled={busyId===p.user_id} onClick={()=>del(p)}>
-                      {busyId===p.user_id?<Loader2 size={15} className="spin"/>:<Trash2 size={15}/>}
-                    </button>
-                  </div>
-                  {editing&&(
-                    <div style={{marginTop:10,background:"var(--grouped)",borderRadius:10,padding:"10px 12px"}}>
-                      {/* Existing memberships: change role, verify, remove */}
-                      {mem.length===0&&<div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>No memberships yet.</div>}
-                      {mem.map(m=>(
-                        <div key={m.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
-                          <span style={{fontSize:12.5,fontWeight:600,color:"var(--navy)",flex:1,minWidth:120}}>{nameForHost(m.host_id)}</span>
-                          <div className="seg" style={{fontSize:11}}>
-                            <button className={m.role==="owner"?"on":""} onClick={()=>patchMember(m,{role:"owner"})}>Owner</button>
-                            <button className={m.role==="editor"?"on":""} onClick={()=>patchMember(m,{role:"editor"})}>Editor</button>
-                          </div>
-                          <button className="btn ghost" style={{fontSize:11.5,padding:"5px 9px",...(m.verified?{color:"#2e9e5b"}:{})}} onClick={()=>patchMember(m,{verified:!m.verified})}>
-                            {m.verified?<><CheckCircle size={12}/>Verified</>:<><Clock size={12}/>Unverified</>}
-                          </button>
-                          <button className="delbtn" title="Remove from host" onClick={()=>removeMember(m)}><Trash2 size={13}/></button>
-                        </div>
-                      ))}
-                      {/* Add membership to a different host */}
-                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginTop:6,paddingTop:10,borderTop:"1px solid var(--line)"}}>
-                        <select value={addHost} onChange={e=>setAddHost(e.target.value)}
-                          style={{flex:1,minWidth:140,border:"1px solid var(--line)",borderRadius:8,padding:"7px 9px",font:"inherit",fontSize:12.5,background:"#fff"}}>
-                          <option value="">Add to host…</option>
-                          {hosts.filter(h=>!mem.some(m=>m.host_id===h.id)).map(h=><option key={h.id} value={h.id}>{h.name}</option>)}
-                        </select>
-                        <div className="seg" style={{fontSize:11}}>
-                          <button className={addRole==="owner"?"on":""} onClick={()=>setAddRole("owner")}>Owner</button>
-                          <button className={addRole==="editor"?"on":""} onClick={()=>setAddRole("editor")}>Editor</button>
-                        </div>
-                        <button className="btn cta liquidGlass-wrapper" style={{fontSize:12,padding:"6px 11px"}} disabled={!addHost||busyId===p.user_id} onClick={()=>addMembership(p)}>
-                          <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Plus size={13}/>Add</div>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </div>
-  </>);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Guided athlete-claim modal — surfaces auto-built profiles whose name is
-   similar to the signed-in athlete, each expandable to a mini result
-   preview, with a one-tap "This is me — claim". A fallback button opens the
-   full all-athletes page for manual search. Uses existing data only
-   (people list + aggregate) — no new storage.
-   ═══════════════════════════════════════════════════════════════════════ */
-function ClaimProfileModal({myName="",people=[],events=[],alreadyClaimed=null,onClaim,onSearchAll,onClose}){
-  const[q,setQ]=React.useState(myName||"");
-  const[openName,setOpenName]=React.useState(null);
-  const[busy,setBusy]=React.useState(null);
-  const norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9\s]/g," ").replace(/\s+/g," ").trim();
-  const myTokens=norm(myName).split(" ").filter(Boolean);
-  const qn=norm(q);
-  const scored=React.useMemo(()=>{
-    const qTokens=qn.split(" ").filter(Boolean);
-    return people.map(p=>{
-      const pn=norm(p.name);
-      const pTokens=pn.split(" ").filter(Boolean);
-      let score=0;
-      for(const t of qTokens){ if(pTokens.includes(t))score+=2; else if(t.length>=3&&pn.includes(t))score+=1; }
-      for(const t of myTokens){ if(pTokens.includes(t))score+=0.5; }
-      return{name:p.name,score};
-    })
-    .filter(x=>x.score>0)
-    .sort((a,b)=>b.score-a.score||a.name.localeCompare(b.name))
-    .slice(0,40);
-  },[qn,people]);
-  const claim=async(name)=>{ setBusy(name); try{await onClaim(name);}finally{setBusy(null);} };
-  return(
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:560}}>
-        <div className="mhead" style={{padding:"18px 24px"}}>
-          <BadgeCheck size={18}/>
-          <h3 style={{flex:1}}>Claim your profile</h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        <div style={{padding:"14px 24px 24px"}}>
-          {alreadyClaimed
-            ? <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 4px",lineHeight:1.45}}>You've already claimed <b style={{color:"var(--navy)"}}>{alreadyClaimed}</b>. You can only claim one profile.</p>
-            : <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.45}}>Find the auto-built profile that's you, preview the results, and claim it. A verified host admin from a competition you played will confirm it.</p>}
-          {!alreadyClaimed&&<>
-          <div style={{position:"relative",marginBottom:14}}>
-            <Search size={14} color="#9fb2c8" style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)"}}/>
-            <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Type your name…"
-              style={{width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"9px 11px 9px 32px",font:"inherit",fontSize:13.5,outline:"none",background:"rgba(255,255,255,.85)"}}/>
-          </div>
-          <div style={{maxHeight:"52vh",overflowY:"auto",margin:"0 -4px"}}>
-            {qn&&scored.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:"6px 4px"}}>No profiles match "{q}". Try a different spelling, or search the full list below.</p>}
-            {!qn&&scored.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:"6px 4px"}}>Type your name to find your profile.</p>}
-            {scored.map(({name})=>{
-              const open=openName===name;
-              const ag=open?aggregate(name,events):null;
-              const recent=ag?.history?.[0];
-              const attrs=ATHLETE_ATTRS.get(canonName(name));
-              const nug=attrs?.recentCls?nuggetFor(attrs.recentCls,attrs.recentSub):null;
-              return(
-                <div key={name} style={{padding:"0 4px",borderBottom:"1px solid var(--line)"}}>
-                  <div onClick={()=>setOpenName(open?null:name)} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 6px",cursor:"pointer"}}>
-                    <div className="av" style={{background:avatarColor(name),width:34,height:34,fontSize:13,flex:"none"}}>{initials(name)}</div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:14,fontWeight:700,color:"var(--ink)",display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>{name}{nug&&<span className="cls" style={{background:nug.color,fontSize:10,padding:"1px 8px"}}>{nug.label}</span>}</div>
-                    </div>
-                    <ChevronRight size={15} color="#9fb2c8" style={{flex:"none",transform:open?"rotate(90deg)":"none",transition:".15s"}}/>
-                  </div>
-                  {open&&(
-                    <div style={{padding:"2px 8px 12px 50px"}}>
-                      {ag.events>0?(<>
-                        <div style={{display:"flex",gap:16,marginBottom:8}}>
-                          <span style={{fontSize:12.5,color:"var(--mut)"}}><b style={{color:"var(--navy)",fontSize:14}}>{ag.events}</b> comps</span>
-                          <span style={{fontSize:12.5,color:"var(--mut)"}}><b style={{color:"var(--navy)",fontSize:14}}>{ag.best?"#"+ag.best:"—"}</b> best</span>
-                          <span style={{fontSize:12.5,color:"var(--mut)"}}><b style={{color:"var(--navy)",fontSize:14}}>{ag.podiums}</b> podiums</span>
-                        </div>
-                        {recent&&<div style={{fontSize:12,color:"var(--mut)",marginBottom:10,display:"flex",alignItems:"center",gap:6}}><Trophy size={12} style={{flex:"none"}}/>Latest: {recent.ev.name} · {recent.ev.date} · #{recent.row.rank}</div>}
-                      </>):<div style={{fontSize:12.5,color:"var(--mut)",marginBottom:10}}>No competition results on this profile yet.</div>}
-                      <button className="btn cta liquidGlass-wrapper" disabled={busy===name} onClick={()=>claim(name)} style={{fontSize:13}}>
-                        <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy===name?<Loader2 size={14} className="spin"/>:<BadgeCheck size={14}/>}This is me — claim</div>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          </>}
-          <button className="btn ghost" onClick={onSearchAll} style={{marginTop:16,width:"100%",fontSize:13,padding:"9px 12px"}}>
-            <Search size={13}/>{alreadyClaimed?"Browse all athletes":"Search the full athlete list instead"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Verified-owner profile edit modal — lets the approved owner (or dev) set
-   the presentation extras that aren't derived from PDFs: photo, display
-   name, nationality, bio, and an Instagram link. Results stay PDF-sourced.
-   Photo uploads go to the public `athlete-photos` storage bucket.
-   ═══════════════════════════════════════════════════════════════════════ */
-// Google-style circular photo cropper: drag to reposition + zoom slider, then
-// renders the visible circle to a square canvas and returns a JPEG blob.
-// initialSrc may be a File or an existing image URL; a "Change image" button
-// lets the user swap in a different file without leaving the cropper.
-function PhotoCropper({initialSrc=null,onCancel,onConfirm}){
-  const V=288, OUT=512;
-  const[src,setSrc]=React.useState(initialSrc); // File | url string | null
-  const[img,setImg]=React.useState(null);
-  const[base,setBase]=React.useState(1);
-  const[scale,setScale]=React.useState(1);
-  const[off,setOff]=React.useState({x:0,y:0});
-  const[busy,setBusy]=React.useState(false);
-  const drag=React.useRef(null);
-  const fileRef=React.useRef(null);
-  React.useEffect(()=>{
-    if(!src){setImg(null);return;}
-    const isFile=typeof src!=="string";
-    const url=isFile?URL.createObjectURL(src):src;
-    const im=new Image();
-    if(!isFile) im.crossOrigin="anonymous";   // allow canvas export of stored photos
-    im.onload=()=>{
-      const b=Math.max(V/im.naturalWidth,V/im.naturalHeight);
-      setImg(im);setBase(b);setScale(1);
-      setOff({x:(V-im.naturalWidth*b)/2,y:(V-im.naturalHeight*b)/2});
-    };
-    im.onerror=()=>setImg(null);
-    im.src=url;
-    return()=>{ if(isFile) URL.revokeObjectURL(url); };
-  },[src]);
-  const eff=base*scale;
-  const dispW=img?img.naturalWidth*eff:0;
-  const dispH=img?img.naturalHeight*eff:0;
-  const clamp=(o)=>({x:Math.min(0,Math.max(V-dispW,o.x)),y:Math.min(0,Math.max(V-dispH,o.y))});
-  React.useEffect(()=>{ if(img) setOff(o=>clamp(o)); /* re-clamp on zoom */ },[scale,img]);// eslint-disable-line
-  const pt=e=>e.touches?e.touches[0]:e;
-  const onDown=e=>{if(!img)return;const p=pt(e);drag.current={sx:p.clientX,sy:p.clientY,ox:off.x,oy:off.y};};
-  const onMove=e=>{if(!drag.current)return;const p=pt(e);setOff(clamp({x:drag.current.ox+(p.clientX-drag.current.sx),y:drag.current.oy+(p.clientY-drag.current.sy)}));};
-  const onUp=()=>{drag.current=null;};
-  const pickFile=e=>{const f=e.target.files?.[0];e.target.value="";if(f)setSrc(f);};
-  const confirm=()=>{
-    if(!img)return; setBusy(true);
-    try{
-      const c=document.createElement("canvas");c.width=OUT;c.height=OUT;
-      const ctx=c.getContext("2d");
-      const sSize=V/eff, sx=(-off.x)/eff, sy=(-off.y)/eff;
-      ctx.drawImage(img,sx,sy,sSize,sSize,0,0,OUT,OUT);
-      c.toBlob(b=>onConfirm(b),"image/jpeg",0.9);
-    }catch(e){console.error("crop export",e);setBusy(false);onConfirm(null);}
-  };
-  return(
-    <div className="ov" style={{zIndex:120}} onClick={onCancel}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:360}}>
-        <div className="mhead" style={{padding:"16px 22px"}}><Upload size={16}/><h3 style={{flex:1}}>Position photo</h3><button className="x" onClick={onCancel}><X size={16}/></button></div>
-        <div style={{padding:"18px 22px 22px",display:"flex",flexDirection:"column",alignItems:"center"}}>
-          <div onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
-            onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
-            style={{position:"relative",width:V,height:V,borderRadius:"50%",overflow:"hidden",cursor:img?"grab":"default",background:"#0b1f38",boxShadow:"inset 0 0 0 2px rgba(255,255,255,.45)",touchAction:"none",userSelect:"none",display:"grid",placeItems:"center"}}>
-            {img
-              ? <img src={img.src} alt="" draggable={false} style={{position:"absolute",left:off.x,top:off.y,width:dispW,height:dispH,maxWidth:"none",pointerEvents:"none"}}/>
-              : <span style={{color:"#9fbdd9",fontSize:12.5,padding:"0 30px",textAlign:"center"}}>Choose an image below</span>}
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:10,width:"100%",margin:"16px 0 4px",opacity:img?1:.4}}>
-            <span style={{fontSize:11,fontWeight:700,color:"var(--mut)"}}>ZOOM</span>
-            <input type="range" min="1" max="4" step="0.01" disabled={!img} value={scale} onChange={e=>setScale(parseFloat(e.target.value))} style={{flex:1}}/>
-          </div>
-          <p style={{fontSize:11.5,color:"var(--mut)",margin:"4px 0 0"}}>Drag to reposition · slide to zoom</p>
-          <input ref={fileRef} type="file" accept="image/*" onChange={pickFile} style={{display:"none"}}/>
-          <button className="btn ghost" onClick={()=>fileRef.current&&fileRef.current.click()} style={{marginTop:12,fontSize:12.5,padding:"7px 13px"}}><Upload size={13}/>Change image</button>
-          <div style={{display:"flex",gap:10,width:"100%",marginTop:12}}>
-            <button className="btn cta liquidGlass-wrapper" disabled={busy||!img} onClick={confirm} style={{flex:1}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={14} className="spin"/>:<CheckCircle size={14}/>}Use photo</div></button>
-            <button className="btn ghost" onClick={onCancel} style={{padding:"0 16px"}}>Cancel</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Athlete media gallery — popup opened from the profile (button between
-   Calendar and Instagram). Shows photos + uploaded videos. The verified owner
-   (or dev) can add, caption, remove, and save; visitors get a read-only gallery
-   with a click-to-expand lightbox. Files upload to the athlete-photos bucket
-   via uploadMedia; the array persists to athlete_profiles.media via onSaveMedia.
-   ═══════════════════════════════════════════════════════════════════════ */
-const MAX_MEDIA_MB=50;
-function MediaModal({name,media,canEdit,uploadMedia,onSaveMedia,onClose}){
-  const[items,setItems]=React.useState(Array.isArray(media)?media:[]);
-  const[uploading,setUploading]=React.useState(false);
-  const[busy,setBusy]=React.useState(false);
-  const[err,setErr]=React.useState("");
-  const[light,setLight]=React.useState(null); // index in lightbox, or null
-  const dirty=JSON.stringify(items)!==JSON.stringify(Array.isArray(media)?media:[]);
-
-  const onPick=async(e)=>{
-    const files=Array.from(e.target.files||[]); e.target.value="";
-    if(!files.length) return;
-    setErr(""); setUploading(true);
-    const added=[];
-    for(const f of files){
-      if(f.size>MAX_MEDIA_MB*1024*1024){setErr(`"${f.name}" is over ${MAX_MEDIA_MB}MB — please upload a smaller file.`);continue;}
-      const res=await uploadMedia(f);
-      if(res&&res.url) added.push({url:res.url,type:res.type||"image",caption:""});
-      else setErr("Upload failed — make sure you're signed in and try again.");
-    }
-    if(added.length) setItems(prev=>[...prev,...added]);
-    setUploading(false);
-  };
-  const setCaption=(i,v)=>setItems(prev=>prev.map((it,j)=>j===i?{...it,caption:v.slice(0,140)}:it));
-  const remove=(i)=>setItems(prev=>prev.filter((_,j)=>j!==i));
-  const save=async()=>{ setBusy(true); try{ await onSaveMedia(name,items); onClose(); }catch(e){console.error("media save",e);setErr("Couldn't save. Try again.");setBusy(false);} };
-
-  const tile={position:"relative",borderRadius:12,overflow:"hidden",background:"var(--grouped,#eef3f9)",aspectRatio:"1 / 1",cursor:"pointer"};
-  const mediaFit={width:"100%",height:"100%",objectFit:"cover",display:"block"};
-  return(<>
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:720}}>
-        <div className="mhead" style={{padding:"18px 24px"}}>
-          <LayoutGrid size={18}/>
-          <h3 style={{flex:1}}>{name} — Media</h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        <div style={{padding:"18px 24px 24px"}}>
-          {canEdit&&(
-            <div style={{marginBottom:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-              <label className="btn cta liquidGlass-wrapper" style={{cursor:uploading?"default":"pointer"}}>
-                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
-                <div className="liquidGlass-text">{uploading?<Loader2 size={14} className="spin"/>:<Upload size={14}/>}{uploading?"Uploading…":"Add photos or videos"}</div>
-                <input type="file" accept="image/*,video/*" multiple disabled={uploading} style={{display:"none"}} onChange={onPick}/>
-              </label>
-              <span style={{fontSize:11.5,color:"var(--mut)"}}>Images & video, up to {MAX_MEDIA_MB}MB each.</span>
-            </div>
-          )}
-          {err&&<div style={{fontSize:12.5,color:"#c0392b",margin:"0 0 12px"}}>{err}</div>}
-          {items.length===0
-            ? <div style={{padding:"38px 0",textAlign:"center",color:"var(--mut)",fontSize:13.5}}>{canEdit?"No media yet — add photos or videos to showcase your golf.":"No media yet."}</div>
-            : <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
-                {items.map((it,i)=>(
-                  <div key={i}>
-                    <div style={tile} onClick={()=>setLight(i)}>
-                      {it.type==="video"
-                        ? <><video src={it.url} style={mediaFit} muted playsInline preload="metadata"/>
-                            <div style={{position:"absolute",inset:0,display:"grid",placeItems:"center",pointerEvents:"none"}}>
-                              <span style={{width:38,height:38,borderRadius:"50%",background:"rgba(8,24,45,.62)",color:"#fff",display:"grid",placeItems:"center",fontSize:15,paddingLeft:3}}>▶</span>
-                            </div></>
-                        : <img src={it.url} alt={it.caption||""} style={mediaFit}/>}
-                      {canEdit&&<button onClick={e=>{e.stopPropagation();remove(i);}} title="Remove"
-                        style={{position:"absolute",top:6,right:6,width:26,height:26,borderRadius:980,border:0,background:"rgba(8,24,45,.66)",color:"#fff",display:"grid",placeItems:"center",cursor:"pointer"}}><Trash2 size={13}/></button>}
-                    </div>
-                    {canEdit
-                      ? <input value={it.caption||""} onChange={e=>setCaption(i,e.target.value)} placeholder="Caption (optional)"
-                          style={{width:"100%",border:"1px solid var(--line)",borderRadius:8,padding:"6px 8px",font:"inherit",fontSize:12,marginTop:6,outline:"none",background:"rgba(255,255,255,.9)"}}/>
-                      : (it.caption?<div style={{fontSize:12,color:"var(--mut)",marginTop:6,lineHeight:1.4}}>{it.caption}</div>:null)}
-                  </div>
-                ))}
-              </div>}
-          {canEdit&&(
-            <div style={{display:"flex",gap:10,marginTop:18}}>
-              <button className="btn cta liquidGlass-wrapper" disabled={busy||uploading||!dirty} onClick={save} style={{flex:1}}>
-                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={14} className="spin"/>:<CheckCircle size={14}/>}Save changes</div>
-              </button>
-              <button className="btn ghost" onClick={onClose} style={{padding:"0 18px"}}>Cancel</button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-    {light!=null&&items[light]&&(
-      <div className="ov" style={{zIndex:120,background:"rgba(6,18,36,.86)"}} onClick={()=>setLight(null)}>
-        <div onClick={e=>e.stopPropagation()} style={{maxWidth:"92vw",maxHeight:"88vh",position:"relative",display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
-          <button className="x" onClick={()=>setLight(null)} style={{position:"absolute",top:-6,right:-6,zIndex:2}}><X size={18}/></button>
-          {items.length>1&&<button onClick={()=>setLight((light-1+items.length)%items.length)} title="Previous"
-            style={{position:"absolute",left:-52,top:"50%",transform:"translateY(-50%)",width:40,height:40,borderRadius:980,border:0,background:"rgba(255,255,255,.16)",color:"#fff",cursor:"pointer",fontSize:18}}>‹</button>}
-          {items[light].type==="video"
-            ? <video src={items[light].url} controls autoPlay playsInline style={{maxWidth:"92vw",maxHeight:"80vh",borderRadius:12,background:"#000"}}/>
-            : <img src={items[light].url} alt={items[light].caption||""} style={{maxWidth:"92vw",maxHeight:"80vh",borderRadius:12,objectFit:"contain"}}/>}
-          {items.length>1&&<button onClick={()=>setLight((light+1)%items.length)} title="Next"
-            style={{position:"absolute",right:-52,top:"50%",transform:"translateY(-50%)",width:40,height:40,borderRadius:980,border:0,background:"rgba(255,255,255,.16)",color:"#fff",cursor:"pointer",fontSize:18}}>›</button>}
-          {items[light].caption&&<div style={{color:"#dce8f8",fontSize:13,textAlign:"center",maxWidth:640}}>{items[light].caption}</div>}
-        </div>
-      </div>
-    )}
-  </>);
-}
-
-function AthleteEditModal({name,profile,onSaveExtras,onRename,onSaveUsername,uploadPhoto,onClose}){
-  const parts=(name||"").trim().split(/\s+/);
-  const[first,setFirst]=React.useState(parts.length>1?parts.slice(0,-1).join(" "):(parts[0]||""));
-  const[last,setLast]=React.useState(parts.length>1?parts[parts.length-1]:"");
-  const[username,setUsername]=React.useState(usernameForName(name));
-  const[uErr,setUErr]=React.useState("");
-  const[bio,setBio]=React.useState(profile?.bio||"");
-  const[insta,setInsta]=React.useState(profile?.instagram_url||"");
-  const[nat,setNat]=React.useState(profile?.nat_override||"");
-  const[photo,setPhoto]=React.useState(profile?.photo_url||"");
-  const[cropOpen,setCropOpen]=React.useState(false);
-  const[uploading,setUploading]=React.useState(false);
-  const[busy,setBusy]=React.useState(false);
-  const[err,setErr]=React.useState("");
-  const field={width:"100%",border:"1px solid var(--line)",borderRadius:9,padding:"9px 11px",font:"inherit",fontSize:13.5,outline:"none",background:"rgba(255,255,255,.9)"};
-  const lbl={fontSize:11.5,fontWeight:700,color:"var(--mut)",textTransform:"uppercase",letterSpacing:".03em",margin:"0 0 5px"};
-
-  const onCropped=async(blob)=>{
-    setCropOpen(false); if(!blob){setErr("Couldn't process that image — try another.");return;}
-    setUploading(true);
-    const url=await uploadPhoto(blob);
-    setUploading(false);
-    if(url) setPhoto(url); else setErr("Photo upload failed — make sure you're signed in.");
-  };
-  const normIg=(v)=>{
-    let ig=(v||"").trim(); if(!ig) return null;
-    if(ig.startsWith("@")) return `https://instagram.com/${ig.slice(1)}`;
-    if(/^https?:\/\//i.test(ig)) return ig;
-    if(/instagram\.com/i.test(ig)) return `https://${ig}`;
-    return `https://instagram.com/${ig.replace(/^\/+/,"")}`;
-  };
-  const save=async()=>{
-    setBusy(true); setErr(""); setUErr("");
-    const newName=`${first} ${last}`.trim()||name;
-    const patch={bio:bio.trim()||null,instagram_url:normIg(insta),nat_override:(nat||"").trim().toUpperCase()||null,photo_url:photo||null};
-    try{
-      if(newName!==name) await onRename(name,newName);   // rename follows ownership + migrates extras key
-      await onSaveExtras(newName,patch);
-      // Public username (URL). Save last so it keys off the final name.
-      if(onSaveUsername&&(username||"").trim()&&username.trim()!==usernameForName(newName)){
-        const r=await onSaveUsername(newName,username.trim());
-        if(r&&r.error){setUErr(r.error);setBusy(false);return;}
-      }
-      onClose(newName);
-    }catch(e){console.error("athlete edit save",e);setErr("Couldn't save changes. Try again.");setBusy(false);}
-  };
-  return(<>
-    {cropOpen&&<PhotoCropper initialSrc={photo||null} onCancel={()=>setCropOpen(false)} onConfirm={onCropped}/>}
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:460}}>
-        <div className="mhead" style={{padding:"18px 24px"}}>
-          <Pencil size={17}/>
-          <h3 style={{flex:1}}>Edit profile</h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        <div style={{padding:"18px 24px 24px"}}>
-          {/* Photo (click to edit/crop) with small label, name fields to the right */}
-          <div style={{display:"flex",gap:16,marginBottom:16,alignItems:"flex-start"}}>
-            <div style={{flex:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
-              <div onClick={()=>!uploading&&setCropOpen(true)} title="Click to edit photo"
-                style={{width:96,height:96,borderRadius:"50%",overflow:"hidden",cursor:uploading?"default":"pointer"}}>
-                {uploading
-                  ? <div className="av" style={{width:96,height:96,background:"var(--navy)"}}><Loader2 size={22} className="spin"/></div>
-                  : photo
-                    ? <img src={photo} alt="" style={{width:96,height:96,objectFit:"cover",display:"block"}}/>
-                    : <div className="av" style={{width:96,height:96,fontSize:30,background:avatarColor(name)}}>{initials(name)}</div>}
-              </div>
-              <button type="button" onClick={()=>!uploading&&setCropOpen(true)} style={{border:0,background:"none",cursor:"pointer",fontSize:10.5,fontWeight:700,color:"var(--accent)",padding:0,letterSpacing:".02em"}}>click to edit</button>
-            </div>
-            <div style={{flex:1,minWidth:0}}>
-              <p style={lbl}>First name</p>
-              <input value={first} onChange={e=>setFirst(e.target.value)} style={{...field,marginBottom:11}}/>
-              <p style={lbl}>Last name</p>
-              <input value={last} onChange={e=>setLast(e.target.value)} style={field}/>
-            </div>
-          </div>
-          {/* Public username — drives the profile URL (athlink.win/<username>) */}
-          <div style={{marginBottom:14}}>
-            <p style={lbl}>Profile link (username)</p>
-            <div style={{display:"flex",alignItems:"center",gap:0,...field,padding:0,overflow:"hidden"}}>
-              <span style={{padding:"9px 2px 9px 11px",fontSize:13.5,color:"var(--mut)",whiteSpace:"nowrap"}}>athlink.win/</span>
-              <input value={username}
-                onChange={e=>{setUsername(e.target.value.replace(/[^A-Za-z0-9]/g,"").slice(0,30));setUErr("");}}
-                placeholder="CaseyLaw"
-                style={{flex:1,minWidth:0,border:0,outline:"none",background:"transparent",font:"inherit",fontSize:13.5,padding:"9px 11px 9px 0"}}/>
-            </div>
-            {uErr
-              ? <div style={{fontSize:12,color:"#c0392b",marginTop:5,fontWeight:600}}>{uErr}</div>
-              : <div style={{fontSize:11,color:"var(--mut)",marginTop:4}}>Letters and numbers only. This is your shareable link.</div>}
-          </div>
-          {/* Nationality — dropdown, on the row below the photo */}
-          <div style={{marginBottom:14}}>
-            <p style={lbl}>Nationality</p>
-            <CountrySelect value={nat} onChange={setNat} placeholder="Select country (overrides sail-number guess)"/>
-          </div>
-          {/* Instagram */}
-          <div style={{marginBottom:14}}>
-            <p style={lbl}>Instagram</p>
-            <input value={insta} onChange={e=>setInsta(e.target.value)} placeholder="@handle or full link" style={field}/>
-          </div>
-          {/* Bio */}
-          <div style={{marginBottom:8}}>
-            <p style={lbl}>Bio</p>
-            <textarea value={bio} onChange={e=>setBio(e.target.value.slice(0,600))} rows={4} placeholder="A short bio (optional)" style={{...field,resize:"vertical",lineHeight:1.5}}/>
-            <div style={{fontSize:11,color:"var(--mut)",textAlign:"right",marginTop:2}}>{bio.length}/600</div>
-          </div>
-          {err&&<div style={{fontSize:12.5,color:"#c0392b",margin:"4px 0 10px"}}>{err}</div>}
-          <div style={{display:"flex",gap:10,marginTop:10}}>
-            <button className="btn cta liquidGlass-wrapper" disabled={busy||uploading} onClick={save} style={{flex:1}}>
-              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={14} className="spin"/>:<CheckCircle size={14}/>}Save changes</div>
-            </button>
-            <button className="btn ghost" onClick={onClose} style={{padding:"0 18px"}}>Cancel</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </>);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Host portal edit modal — tabbed: Details (name + location + globe) and
-   Members (embedded member management). Owners/editors/dev use this to rename
-   the host, set its location (→ globe by the title), and manage co-admins.
-   ═══════════════════════════════════════════════════════════════════════ */
-function HostEditModal({host,onSave,onSaveSlug,onClose,canManage,membersProps}){
-  const[tab,setTab]=React.useState("details");
-  const[name,setName]=React.useState(host?.name||"");
-  const[country,setCountry]=React.useState(host?.country||"");
-  const[slug,setSlug]=React.useState(host?.slug||pascalSlug(host?.name||""));
-  const[slugErr,setSlugErr]=React.useState("");
-  const[busy,setBusy]=React.useState(false);
-  const iso=IOC_ISO[(country||"").toUpperCase()]||"";
-  const barStyle={width:"100%",border:"0",borderRadius:980,padding:"13px 18px",font:"inherit",fontSize:15,outline:"none",
-    background:"rgba(255,255,255,.55)",backdropFilter:"blur(28px) saturate(195%)",WebkitBackdropFilter:"blur(28px) saturate(195%)",
-    boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",transition:"box-shadow .16s"};
-  const save=async()=>{
-    setBusy(true); setSlugErr("");
-    await onSave({name:name.trim()||host.name,country:(country||"").toUpperCase()||null});
-    // Public slug (URL). Saved separately so a "taken" clash can be reported.
-    if(onSaveSlug&&(slug||"").trim()&&slug.trim()!==(host?.slug||pascalSlug(host?.name||""))){
-      const r=await onSaveSlug(host.id,slug.trim());
-      if(r&&r.error){setSlugErr(r.error);setBusy(false);return;}
-    }
-    setBusy(false); onClose();
-  };
-  return(
-    <div className="ov" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:860}}>
-        <div className="mhead" style={{padding:"20px 28px"}}>
-          <Settings size={20}/><h3 style={{flex:1}}>Edit page</h3>
-          <button className="x" onClick={onClose}><X size={16}/></button>
-        </div>
-        {canManage&&(
-          <div className="seg" style={{margin:"18px 28px 0"}}>
-            <button className={tab==="details"?"on":""} onClick={()=>setTab("details")}>Details</button>
-            <button className={tab==="members"?"on":""} onClick={()=>setTab("members")}>Members</button>
-          </div>
-        )}
-        <div style={{padding:"22px 28px 28px"}}>
-          {tab==="details"&&(
-            <div style={{display:"flex",gap:24,alignItems:"flex-start"}}>
-              {/* Globe left — top aligns with name bar, bottom aligns with the buttons */}
-              <div style={{flex:"0 0 200px"}}>
-                {iso
-                  ? <SailingGlobe countryData={{[iso]:1}} height={200} dark mini bare hostIso={iso}/>
-                  : <div style={{width:200,height:200,borderRadius:16,background:"rgba(31,78,128,.06)",border:"1px dashed rgba(31,78,128,.25)",display:"grid",placeItems:"center",color:"var(--mut)",fontSize:12,textAlign:"center",padding:16}}>Enter a location code to show a globe</div>}
-              </div>
-              {/* Right column: name → location (tight) → buttons (pushed to bottom = globe bottom) */}
-              <div style={{flex:1,minWidth:0,minHeight:200,display:"flex",flexDirection:"column"}}>
-                <div>
-                  <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Name</label>
-                  <input value={name} onChange={e=>setName(e.target.value)} style={barStyle}/>
-                </div>
-                <div style={{marginTop:14}}>
-                  <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Public link <span style={{fontWeight:400}}>(username)</span></label>
-                  <div style={{...barStyle,display:"flex",alignItems:"center",padding:0,overflow:"hidden"}}>
-                    <span style={{padding:"13px 2px 13px 18px",fontSize:15,color:"var(--mut)",whiteSpace:"nowrap"}}>athlink.win/</span>
-                    <input value={slug}
-                      onChange={e=>{setSlug(e.target.value.replace(/[^A-Za-z0-9]/g,"").slice(0,30));setSlugErr("");}}
-                      placeholder="HKSF"
-                      style={{flex:1,minWidth:0,border:0,outline:"none",background:"transparent",font:"inherit",fontSize:15,padding:"13px 18px 13px 0"}}/>
-                  </div>
-                  {slugErr&&<div style={{fontSize:12,color:"#c0392b",marginTop:6,fontWeight:600}}>{slugErr}</div>}
-                </div>
-                <div style={{marginTop:14}}>
-                  <label style={{fontSize:12,fontWeight:700,color:"var(--mut)",display:"block",marginBottom:6}}>Location <span style={{fontWeight:400}}>(IOC country code)</span></label>
-                  <div style={{position:"relative"}}>
-                    <input value={country} onChange={e=>setCountry(e.target.value.toUpperCase().slice(0,3))} placeholder="HKG" maxLength={3} style={{...barStyle,paddingRight:46}}/>
-                    {iso&&<span style={{position:"absolute",right:18,top:"50%",transform:"translateY(-50%)",fontSize:17,pointerEvents:"none"}}>{iocFlag(country)}</span>}
-                  </div>
-                </div>
-                <div style={{display:"flex",gap:10,marginTop:"auto",paddingTop:18}}>
-                  <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={onClose}>Cancel</button>
-                  <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={save}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes</div>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-          {tab==="members"&&canManage&&membersProps&&(
-            <HostMembersModal {...membersProps} embedded canManage/>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function AthLinkMVP(){
   const[events,setEvents]=useState([]);
+  const[initialLoading,setInitialLoading]=useState(true); // true until the first Supabase load settles (drives the branded splash)
   const[showDevProfiles,setShowDevProfiles]=useState(false);    // dev-only all-profiles panel
   const[showHostEdit,setShowHostEdit]=useState(false);          // host portal edit modal
+  const[showDiscovery,setShowDiscovery]=useState(false);        // host auto-grab: import-past-results view
+  const[discoveryReview,setDiscoveryReview]=useState(false);    // open discovery straight into needs-review
+  const[discoveryImport,setDiscoveryImport]=useState(null);     // {statuses:{key:st}, done, total, running}
+  const[discoverySeed,setDiscoverySeed]=useState(null);         // scrape-tab: [urls] to research; null = research by host name
+  const[scrapeText,setScrapeText]=useState("");                 // "Scrape website" import tab: pasted URLs
   const[hostsVersion,setHostsVersion]=useState(0);  // bump to re-render after host registry changes
   const reloadHosts=async()=>{
     const rows=await sbGet("hosts?select=*");
@@ -5501,13 +258,17 @@ export default function AthLinkMVP(){
     if(existing) return existing.id;
     const color=CUSTOM_CLASS_PALETTE[CUSTOM_CLASSES.length%CUSTOM_CLASS_PALETTE.length];
     const cc={id:`custom:${canonical}`,short:nm,full:nm,color,canonical};
-    CUSTOM_CLASSES=[...CUSTOM_CLASSES,cc];
+    setCustomClassRegistry([...CUSTOM_CLASSES,cc]);
     setCustomClasses(CUSTOM_CLASSES);
     persistCustomClass(cc);
     return cc.id;
   };
   const[auth,setAuth]=useState(null);
+  // Keep the core REST wrappers on the signed-in JWT — RLS (0015) scopes writes
+  // `to authenticated`, so sbPost/sbPatch must carry the user token, not the anon key.
+  useEffect(()=>{setSbUserToken(auth?.token||null);},[auth]);
   const[showSignIn,setShowSignIn]=useState(false);
+  const[signupRole,setSignupRole]=useState(null); // preselected signup role from ?role= deep-link
   const[accountOpen,setAccountOpen]=useState(false);
   const[myMemberships,setMyMemberships]=useState([]);  // host_members rows for the signed-in user
   const[showMembers,setShowMembers]=useState(false);   // members-management panel open
@@ -5516,6 +277,16 @@ export default function AthLinkMVP(){
   const[allEventClaims,setAllEventClaims]=useState([]);// every event_claims row (host claims on contributed events)
   const[claimNote,setClaimNote]=useState(null);        // toast after submitting a claim
   const[showClaimModal,setShowClaimModal]=useState(false); // guided claim modal open
+  // Shared "which button is mid-DB-write" flag so any async action can show a
+  // spinner + guard against double-clicks. runBusy(id, fn) sets it for the run.
+  const[busyAction,setBusyAction]=useState(null);
+  const runBusy=async(id,fn)=>{
+    if(busyAction) return;
+    setBusyAction(id);
+    try{ return await fn(); }
+    catch(err){ console.error("runBusy["+id+"] failed",err); }
+    finally{ setBusyAction(null); }
+  };
   const[athleteProfiles,setAthleteProfiles]=useState({});  // name_key -> athlete_profiles row (owner extras)
   const[showAthEdit,setShowAthEdit]=useState(null);        // profile name being edited by its owner
   const[showMedia,setShowMedia]=useState(null);            // profile name whose media gallery is open
@@ -5528,6 +299,7 @@ export default function AthLinkMVP(){
   const[usernameBusy,setUsernameBusy]=useState(false);
   const[usernameErr,setUsernameErr]=useState("");
   const[navSearchOpen,setNavSearchOpen]=useState(false); // top-bar nav pill flipped into search mode
+  const[navMenuOpen,setNavMenuOpen]=useState(false); // mobile: nav links collapsed into a menu
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
   // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
@@ -5552,6 +324,9 @@ export default function AthLinkMVP(){
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
   },[devEligible]);
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
+  const viewerTypeOf=r=>r==="athlete"?"athlete":r==="scout"?"scout":r==="club"||r==="association"||r==="federation"?"host":"guest"; // 3 viewer types: athlete|host|scout (everyone else browses as guest)
+  const viewerType=viewerTypeOf(effectiveRole);
+  const isScout=effectiveRole==="scout"||devMode; // scout workspace is scout-only; devMode keeps access for admin/testing
   const role=effectiveRole;
   const canEditRole=effectiveRole==="association";
   // A profile is "verified-claimed" if any approved claim exists for that name.
@@ -5610,9 +385,10 @@ export default function AthLinkMVP(){
     const rows=await fetchMyMemberships(a2.user.id,a2.token);
     if(rows) setMyMemberships(rows);
   };
-  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null);
+  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null); setSignupRole(null);
     if(a2.pendingHostId) setPendingHostNotice(a2.pendingHostId);
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{}
+    if(a2.profile?.role==="scout") goTop("scout"); // scouts land in the scout workspace; athletes/fans/hosts keep current behavior
     loadMembershipsFor(a2); };
   const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
   // Save host portal edits (name + location). Persists to the hosts table and
@@ -5620,7 +396,9 @@ export default function AthLinkMVP(){
   const saveHost=async(hostId,patch)=>{
     // Update local registry immediately (optimistic).
     const h=hostById(hostId);
-    if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country; }
+    if(h){ if(patch.name!=null)h.name=patch.name; if("country"in patch)h.country=patch.country;
+      if("logo_url"in patch){ if(patch.logo_url) h.logo_url=patch.logo_url; else delete h.logo_url; }
+      if("dossier"in patch){ if(patch.dossier) h.dossier=patch.dossier; else delete h.dossier; } }
     setHostsVersion(v=>v+1);
     // Persist. PATCH alone silently no-ops if the row was never inserted
     // (the 11 defaults aren't in the hosts table until seeded), so UPSERT:
@@ -5630,10 +408,178 @@ export default function AthLinkMVP(){
       const hit=Array.isArray(patched)&&patched.length>0;
       if(!hit&&h){
         const row={id:h.id,type:h.type,scope:h.scope||"HK",name:h.name,
-          ...(h.cls?{cls:h.cls}:{}),...(h.country?{country:h.country}:{})};
+          ...(h.cls?{cls:h.cls}:{}),...(h.country?{country:h.country}:{}),
+          ...(h.logo_url?{logo_url:h.logo_url}:{}),
+          ...(h.dossier?{dossier:h.dossier}:{})};
         await sbPost("hosts",row);
       }
     }catch(e){console.error("saveHost persist",e);}
+  };
+  // (dismissHostGrab removed with the auto-grab invitation banner — hosts' home
+  //  websites are no longer scraped automatically.)
+  // Host auto-grab: open one OR MORE parsed results in the STANDARD import
+  // preview/publish modal (identical to drag-drop). The host reviews and publishes
+  // each — nothing is auto-committed, so there are no silent imports and no
+  // duplicates (importPreview's fingerprint dedup guards publish).
+  const openPreviewsInImport=(entries)=>{
+    const ok=(entries||[]).filter(e=>e&&e.previewEv);
+    if(!ok.length) return;
+    setShowDiscovery(false); setDiscoveryImport(null);
+    setEditResultsEv(null);
+    // Reopening: restore any stashed queue first so these results JOIN it.
+    if(!open&&!restoreImportDraft()) resetImport();
+    setTab("ai"); setImportStep("upload");
+    setActivePending(null); setPreviewEv(null);
+    setPending(prev=>[...prev,...ok]);   // append to the hub queue — review each via its Review button
+    setOpen(true);
+  };
+  // Bulk "import": parse each selected discovered competition (small pool, live
+  // per-row status in the discovery modal), then route ALL parseable results into
+  // the preview/publish modal so the host reviews + publishes each. If everything
+  // fails, the discovery modal stays open showing the failures.
+  const importDiscoveredCompetitions=async(rows,hostObj)=>{
+    if(!rows?.length) return;
+    const total=rows.length;
+    const statuses={}; rows.forEach(r=>{statuses[hgCompKey(r)]="queued";});
+    let done=0;
+    setDiscoveryImport({statuses:{...statuses},done:0,total,running:true});
+    const setStatus=(k,s)=>{ statuses[k]=s; setDiscoveryImport(d=>({...(d||{}),statuses:{...statuses}})); };
+    const bump=()=>{ done++; setDiscoveryImport(d=>({...(d||{}),done,statuses:{...statuses}})); };
+    const entries=[];
+    const build=(data,row)=>{
+      const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+      // Carry the source URL so importPreview records it as a source on publish.
+      const withUrl=pv=>{ pv.sources=[...new Set([...(pv.sources||[]),row.url].filter(Boolean))]; return pv; };
+      if(data.multi&&Array.isArray(data.fleets)&&data.fleets.length){
+        const gid="fg_grab_"+stamp, gdisc=Math.max(...data.fleets.map(f=>f.discards||1));
+        data.fleets.forEach((fl,fi)=>entries.push({id:gid+"_f"+fi,
+          name:`${data.name||row.name} · ${fl.name||"Field "+(fi+1)}`,status:"ok",error:null,
+          previewEv:withUrl(previewFromData(data.name||row.name,data.date||"",fl,!!data.ai_parsed,data.detected_class||row.class||"",data.detected_host||hostObj?.name||"")),
+          subclass:null,collabs:[],fleetGroupId:gid,fleetGroupBaseName:data.name||row.name,fleetGroupDiscards:gdisc}));
+      }else{
+        entries.push({id:"grab_"+stamp,name:data.name||row.name,status:"ok",error:null,
+          previewEv:withUrl(previewFromData(data.name||row.name,data.date||"",{name:"",entries:data.entries||[],discards:data.discards},!!data.ai_parsed,data.detected_class||row.class||"",data.detected_host||hostObj?.name||"")),
+          subclass:null,collabs:[]});
+      }
+    };
+    const worker=async(row)=>{
+      const k=hgCompKey(row);
+      try{
+        setStatus(k,"parsing");
+        const data=MOCK_RESEARCH?mockParse(row):await parseLink(row.url,"ai");
+        if(!data||!data.ok){ setStatus(k,"failed"); bump(); return; }
+        build(data,row); setStatus(k,"parsed"); bump();
+      }catch(e){ console.error("[host-autograb] parse failed",e); setStatus(k,"failed"); bump(); }
+    };
+    await hgRunPool(rows.map(r=>()=>worker(r)),2);
+    setDiscoveryImport(d=>({...(d||{}),running:false}));
+    if(entries.length) openPreviewsInImport(entries);   // → review + publish
+  };
+  // Back-compat entry (needs-review item → preview). Delegates to the shared helper.
+  const openReviewInImport=(item)=>{
+    if(!item?.previewEv) return;
+    openPreviewsInImport([{id:"nr_"+Date.now(),name:item.name||"Competition",status:"ok",error:null,previewEv:item.previewEv,subclass:null,collabs:[]}]);
+  };
+  // Fuzzy "is this competition already on AthLink?" — same conservative matcher
+  // the discovery modal uses (name + year + class must not disagree).
+  const eventAlreadyOnAthLink=(c)=>{
+    const cn=_hg_norm(c.name); if(!cn) return null;
+    const cy=c.year?String(c.year):""; const cc=c.class?canonClass(c.class):"";
+    return events.find(ev=>{
+      const en=_hg_norm(ev.name); if(!en) return false;
+      const nameHit=en===cn||(cn.length>=6&&(en.includes(cn)||cn.includes(en)));
+      if(!nameHit) return false;
+      const ey=(dateKey(ev.date)||"").slice(0,4);
+      if(cy&&ey&&cy!==ey) return false;
+      const ec=ev.cls?canonClass(ev.cls):"";
+      if(cc&&ec&&cc!==ec) return false;
+      return true;
+    })||null;
+  };
+  // ── Shared tail of discovery: turn researched competitions ({name,url,year,class})
+  //    into import-queue nuggets — already imported → ticked off, no URL → failed,
+  //    the rest parsed (2 at a time) into ready-to-review previews. `placeRows`
+  //    decides how the initial rows enter the queue (append, or replace a site seed).
+  const compsIntoQueue=async(comps,idPrefix,hostObj,placeRows)=>{
+    const rows=comps.map((c,ci)=>{
+      const base={id:idPrefix+"_c"+ci,name:c.name||"Competition",status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]};
+      if(eventAlreadyOnAthLink(c)) return {...base,status:"published",publishedMsg:"Already on AthLink",notes:[]};
+      if(!c.url) return {...base,status:"error",error:"No results link found — upload its file above.",notes:["No results link found — upload its file above."]};
+      return {...base,notes:["Reading the results page…"],_comp:c};
+    });
+    placeRows(rows);
+    // Parse the readable ones (2 at a time) → ready-to-review queue items.
+    await hgRunPool(rows.filter(r=>r._comp).map(row=>async()=>{
+      const c=row._comp;
+      let out;
+      try{
+        const data=MOCK_RESEARCH?mockParse({url:c.url,name:c.name,class:c.class}):await parseLink(c.url,"ai");
+        if(!data||!data.ok) throw new Error(data?.error||"Couldn't read this results page.");
+        const withUrl=pv=>{pv.sources=[...new Set([...(pv.sources||[]),c.url].filter(Boolean))];return pv;};
+        if(data.multi&&Array.isArray(data.fleets)&&data.fleets.length){
+          const gdisc=Math.max(...data.fleets.map(f=>f.discards||1));
+          out=data.fleets.map((fl,fi)=>({id:row.id+"_f"+fi,name:`${data.name||c.name} · ${fl.name||"Field "+(fi+1)}`,status:"ok",error:null,
+            previewEv:withUrl(previewFromData(data.name||c.name,data.date||"",fl,!!data.ai_parsed,data.detected_class||c.class||"",data.detected_host||hostObj?.name||"")),
+            subclass:null,collabs:[],fleetGroupId:row.id,fleetGroupBaseName:data.name||c.name,fleetGroupDiscards:gdisc,notes:data.notes||["Parsed."]}));
+        }else{
+          out=[{id:row.id,name:data.name||c.name,status:"ok",error:null,notes:data.notes||["Parsed."],
+            previewEv:withUrl(previewFromData(data.name||c.name,data.date||"",{name:"",entries:data.entries||[],discards:data.discards},!!data.ai_parsed,data.detected_class||c.class||"",data.detected_host||hostObj?.name||"")),
+            subclass:null,collabs:[]}];
+        }
+      }catch(e){
+        const msg=(e&&e.message)||"Couldn't read this results page.";
+        out=[{...row,_comp:undefined,status:"error",error:msg,notes:[msg]}];
+      }
+      setPending(prev=>prev.flatMap(p=>p.id===row.id?out:[p]));
+    }),2);
+  };
+  // ── Saved discoveries: feed hosts.dossier.competitions (researched earlier, with
+  //    known result URLs) straight into the import queue — no re-scan of any site.
+  const dossierIntoQueue=async()=>{
+    const hostObj=(portal&&!isClassPortal)?hostById(portal):null;
+    const comps=hostObj?.dossier?.competitions||[];
+    if(!comps.length) return;
+    const seen=new Set();
+    const uniq=comps.filter(c=>{const k=hgCompKey(c); if(seen.has(k))return false; seen.add(k); return true;});
+    const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    await compsIntoQueue(uniq,"dossier_"+stamp,hostObj,rows=>setPending(prev=>[...prev,...rows]));
+  };
+  // ── "Import result database": research the pasted sites and feed every found
+  //    competition through the SAME import queue as single results — no separate
+  //    discovery pop-up. Each site appears as a scanning nugget, then expands into
+  //    one nugget per competition: parsed → ready to review, already imported →
+  //    ticked off, unreadable → failed with the reason. Runs inside the import
+  //    modal, concurrently with any file/link parses.
+  const discoverIntoQueue=async(urls)=>{
+    const hostObj=(portal&&!isClassPortal)?hostById(portal):null;
+    const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    const siteSeeds=urls.map((u,i)=>({id:"site_"+stamp+"_"+i,name:u,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],
+      notes:["Scanning this site for competitions…"]}));
+    setPending(prev=>[...prev,...siteSeeds]);
+    const fail=(id,msg)=>setPending(prev=>prev.map(p=>p.id===id?{...p,status:"error",error:msg,notes:[msg]}:p));
+    const researchOne=async(i)=>{
+      const url=urls[i], sid=siteSeeds[i].id;
+      let comps=[];
+      try{
+        let d;
+        if(MOCK_RESEARCH) d=mockResearchCompetitions(hostObj?.name||"",hostObj?.type||"club",hostObj?.country||"",url);
+        else{
+          const r=await fetch("/api/research_host",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({name:hostObj?.name||"",type:hostObj?.type||"club",
+              country_hint:(hostObj?.country||"").length===3?hostObj.country:"",
+              website:url,mode:"competitions"})});
+          d=await r.json();
+        }
+        if(!d||!d.ok) throw new Error(d?.error||"Couldn't scan this site.");
+        comps=Array.isArray(d.competitions)?d.competitions:[];
+      }catch(e){ fail(sid,(e&&e.message)||"Couldn't scan this site."); return; }
+      const seen=new Set();
+      comps=comps.filter(c=>{const k=hgCompKey(c); if(seen.has(k))return false; seen.add(k); return true;});
+      if(!comps.length){ fail(sid,"No competitions found on this site."); return; }
+      // Expand the site's scanning nugget into one nugget per competition, in place.
+      await compsIntoQueue(comps,sid,hostObj,rows=>setPending(prev=>prev.flatMap(p=>p.id===sid?rows:[p])));
+    };
+    await hgRunPool(urls.map((_,i)=>()=>researchOne(i)),2);
   };
   // ── Save a username to the user's profile (unique, lowercase, alnum + underscore) ──
   const saveUsername=async()=>{
@@ -5674,14 +620,32 @@ export default function AthLinkMVP(){
     const name=(spec.name||"").trim(); if(!name) return null;
     const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"").slice(0,32)||"host";
     const id=slug+"-"+Math.random().toString(36).slice(2,6);
-    const payload={id,type:spec.type,scope:spec.scope||"HK",name,
-      cls:spec.type==="association"?spec.cls:null,
-      country:spec.type==="federation"?(spec.country||"HKG").toUpperCase():null};
-    // Persist to DB (use the user's token so RLS allows it if configured), then registry.
-    try{ await sbPost("hosts",payload); }catch(e){ console.error("createHostFromSignup",e); }
+    const country=spec.country?String(spec.country).toUpperCase():null;
+    // Host auto-grab: fold the confirmed dossier + the typed results website into
+    // hosts.dossier (migration 0012). Website goes under identity so discovery can
+    // scope competition research to it. A signup that skipped research still
+    // records the website (minimal, unconfirmed dossier).
+    let dossier=spec.dossier||null;
+    if(spec.website){
+      dossier=dossier
+        ?{...dossier,identity:{...(dossier.identity||{}),website:spec.website}}
+        :{identity:{website:spec.website},confirmed:false};
+    }
+    const base={id,type:spec.type,scope:spec.scope||"HK",name,
+      cls:spec.type==="association"?spec.cls:null,country};
+    // Persist. The host row is ESSENTIAL (it's what makes the club/association/
+    // federation appear in the directory); the dossier is best-effort. The
+    // dossier column may not exist yet (migration 0012 pending) and PostgREST
+    // rejects the WHOLE insert on an unknown column — which would silently drop
+    // the new host. So try WITH dossier, and on failure retry WITHOUT it so the
+    // host always gets created (dossier just isn't stored until 0012 lands).
+    let ins=dossier?await sbPost("hosts",{...base,dossier}):null;
+    if(!ins) ins=await sbPost("hosts",base);
+    if(!ins) console.error("createHostFromSignup: hosts insert failed for",name);
     addHostLocal({id,type:spec.type,scope:spec.scope||"HK",name,
-      ...(spec.type==="association"?{cls:spec.cls}:{}),
-      ...(spec.type==="federation"?{country:(spec.country||"HKG").toUpperCase()}:{})});
+      ...(spec.type==="association"&&spec.cls?{cls:spec.cls}:{}),
+      ...(country?{country}:{}),
+      ...(dossier?{dossier}:{})});
     setHostsVersion(v=>v+1);
     await reloadHosts();
     return {id};
@@ -5762,7 +726,7 @@ export default function AthLinkMVP(){
       const rows=await fetchCustomClasses(auth?.token);
       if(Array.isArray(rows)&&rows.length){
         const db=new Map(rows.filter(r=>r.canonical).map(r=>[r.canonical,{id:r.id,short:r.short,full:r.full||r.short,color:r.color,canonical:r.canonical}]));
-        CUSTOM_CLASSES=[...db.values(),...CUSTOM_CLASSES.filter(c=>!db.has(c.canonical))];
+        setCustomClassRegistry([...db.values(),...CUSTOM_CLASSES.filter(c=>!db.has(c.canonical))]);
         setCustomClasses(CUSTOM_CLASSES);
         rows.forEach(r=>dropPendingCustomClass(r.canonical)); // already in DB — no retry needed
       }
@@ -5787,22 +751,23 @@ export default function AthLinkMVP(){
       const nm=prettifyClassSlug(canonical);
       missing.set(canonical,{id,short:nm,full:nm,color,canonical});
     });
-    if(missing.size){ CUSTOM_CLASSES=[...CUSTOM_CLASSES,...missing.values()]; setCustomClasses(CUSTOM_CLASSES); }
+    if(missing.size){ setCustomClassRegistry([...CUSTOM_CLASSES,...missing.values()]); setCustomClasses(CUSTOM_CLASSES); }
   },[events,customClasses]);
   // Extras row for a profile name (or null).
   const athleteProfileOf=(nm)=>athleteProfiles[profileNameKey(nm)]||null;
   // Can the signed-in user edit this profile's extras? Verified owner, or dev.
   const isProfileOwner=(nm)=>devMode||(myClaimFor(nm)?.status==="approved");
-  // Persist extras for a profile name, then refresh.
+  // Persist extras for a profile name, then refresh. Dev view saves without a
+  // session: anon writes, updated_by null (RLS policy from migration 0013).
   const saveAthleteExtras=async(nm,patch)=>{
-    if(!auth?.user?.id||!auth?.token) return;
-    await upsertAthleteProfile(nm,patch,auth.user.id,auth.token);
+    if(!devMode&&(!auth?.user?.id||!auth?.token)) return;
+    await upsertAthleteProfile(nm,patch,auth?.user?.id||null,auth?.token||null);
     await reloadAthleteProfiles();
   };
   // Persist the athlete's media gallery (array of {url,type,caption}), then refresh.
   const saveAthleteMedia=async(nm,media)=>{
-    if(!auth?.user?.id||!auth?.token) return;
-    await upsertAthleteProfile(nm,{media:media||[]},auth.user.id,auth.token);
+    if(!devMode&&(!auth?.user?.id||!auth?.token)) return;
+    await upsertAthleteProfile(nm,{media:media||[]},auth?.user?.id||null,auth?.token||null);
     await reloadAthleteProfiles();
   };
   // Owner/dev rename: rename entries everywhere, keep the approved claim pointing
@@ -5816,8 +781,8 @@ export default function AthLinkMVP(){
       try{await hostRest(`athlete_claims?id=eq.${mine.id}`,{method:"PATCH",body:JSON.stringify({profile_name:nn})},auth.token);}catch(e){console.error("rename: claim follow",e);}
       await reloadClaims();
     }
-    if(extras&&auth?.user?.id){
-      await upsertAthleteProfile(nn,{bio:extras.bio,instagram_url:extras.instagram_url,nat_override:extras.nat_override,photo_url:extras.photo_url,media:extras.media||[]},auth.user.id,auth.token);
+    if(extras&&(devMode||auth?.user?.id)){
+      await upsertAthleteProfile(nn,{bio:extras.bio,instagram_url:extras.instagram_url,nat_override:extras.nat_override,photo_url:extras.photo_url,media:extras.media||[]},auth?.user?.id||null,auth?.token||null);
       await reloadAthleteProfiles();
     }
   };
@@ -5827,7 +792,7 @@ export default function AthLinkMVP(){
   // athlete_usernames; host slugs in hosts.slug. Case preserved (CaseyLaw, HKSF);
   // uniqueness is case-insensitive and spans BOTH athletes and hosts.
   const[usernamesVersion,setUsernamesVersion]=useState(0); // bump → routing re-reads the map
-  const USERNAME_RESERVED=new Set(["sailing","golf","athletes","ranking","rankings","event","competition","competitions","clubs","class","classes","division","divisions","api","sailti","host","hosts","athlete","profile","landing"]);
+  const USERNAME_RESERVED=new Set(["sailing","golf","athletes","ranking","rankings","event","competition","competitions","clubs","class","classes","division","divisions","scout","api","sailti","host","hosts","athlete","profile","landing"]);
   const validateUsername=(u)=>{
     const s=String(u||"").trim();
     if(!/^[A-Za-z0-9]{3,30}$/.test(s)) return {ok:false,msg:"3–30 characters, letters and numbers only (no spaces or symbols)."};
@@ -5845,12 +810,12 @@ export default function AthLinkMVP(){
   };
   const saveAthleteUsername=async(name,desired)=>{
     const v=validateUsername(desired); if(!v.ok) return {error:v.msg};
-    if(!auth?.user?.id||!auth?.token) return {error:"Please sign in again."};
+    if(!devMode&&(!auth?.user?.id||!auth?.token)) return {error:"Please sign in again."};
     const nk=profileNameKey(name);
     if((ATHLETE_USERNAMES.byKey.get(nk)||"")===v.value) return {ok:true,username:v.value};
     if(!(await usernameAvailable(v.value,{selfNameKey:nk}))) return {error:"That username is taken. Try another."};
-    const body={name_key:nk,username:v.value,display_name:name,is_custom:true,updated_by:auth.user.id,updated_at:new Date().toISOString()};
-    const res=await hostRest("athlete_usernames",{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=representation"},body:JSON.stringify(body)},auth.token);
+    const body={name_key:nk,username:v.value,display_name:name,is_custom:true,updated_by:auth?.user?.id||null,updated_at:new Date().toISOString()};
+    const res=await hostRest("athlete_usernames",{method:"POST",headers:{"Prefer":"resolution=merge-duplicates,return=representation"},body:JSON.stringify(body)},auth?.token||null);
     if(!res) return {error:"Couldn't save — you may not be the verified owner of this profile."};
     const old=ATHLETE_USERNAMES.byKey.get(nk); if(old) ATHLETE_USERNAMES.byUser.delete(old.toLowerCase());
     ATHLETE_USERNAMES.byKey.set(nk,v.value); ATHLETE_USERNAMES.byUser.set(v.value.toLowerCase(),name);
@@ -5860,11 +825,11 @@ export default function AthLinkMVP(){
   };
   const saveHostSlug=async(hostId,desired)=>{
     const v=validateUsername(desired); if(!v.ok) return {error:v.msg};
-    if(!auth?.token) return {error:"Please sign in again."};
+    if(!devMode&&!auth?.token) return {error:"Please sign in again."};
     const h=hostById(hostId); if(!h) return {error:"Host not found."};
     if((h.slug||"")===v.value) return {ok:true,slug:v.value};
     if(!(await usernameAvailable(v.value,{selfHostId:hostId}))) return {error:"That username is taken. Try another."};
-    const res=await hostRest(`hosts?id=eq.${encodeURIComponent(hostId)}`,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify({slug:v.value})},auth.token);
+    const res=await hostRest(`hosts?id=eq.${encodeURIComponent(hostId)}`,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify({slug:v.value})},auth?.token||null);
     if(!res) return {error:"Couldn't save — you may not have permission."};
     h.slug=v.value; setHostsVersion(x=>x+1);
     if(portal===hostId) window.history.replaceState(null,"",stateToPath(portal,view));
@@ -5927,8 +892,10 @@ export default function AthLinkMVP(){
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
     if(params.get("signup")!=="1") return;
-    const clean=new URL(window.location.href); clean.searchParams.delete("signup");
+    const rl=params.get("role"); // athlete|scout|fan|host|club|association|federation
+    const clean=new URL(window.location.href); clean.searchParams.delete("signup"); clean.searchParams.delete("role");
     window.history.replaceState(null,"",clean.pathname+(clean.search||""));
+    if(rl) setSignupRole(rl);
     setShowSignIn(true);
   },[]);
 
@@ -6029,12 +996,10 @@ export default function AthLinkMVP(){
       return{total,net:total-dropped};
     });
   },[mf]);
-  const[pdfLoading,setPdfLoading]=useState(false);
   const[pdfError,setPdfError]=useState("");
-  const[liveUrl,setLiveUrl]=useState("");               // AI parser: paste a results link
-  const[parseLog,setParseLog]=useState([]);             // [{name,status,notes:[]}] thinking stream
-  const[parseProgress,setParseProgress]=useState({done:0,total:0});
+  const[liveUrl,setLiveUrl]=useState("");               // AI Entry: paste a results link
   const[importStep,setImportStep]=useState("upload");
+  const[importKind,setImportKind]=useState("past");   // mhead tab: "past" results vs "upcoming" entry lists
   // Drag-and-drop upload state. dragDepth is a counter: dragenter/dragleave fire on
   // child elements too, so a bare boolean flickers — count nested enters/leaves and
   // treat depth>0 as "dragging over the zone".
@@ -6043,11 +1008,22 @@ export default function AthLinkMVP(){
   const[pdfMeta,setPdfMeta]=useState(null);
   const[previewEv,setPreviewEv]=useState(null);
   const[previewEdit,setPreviewEdit]=useState(null);
-  // Multi-file import: each pending result = {id,name,status:'ok'|'error'|'parsing',
-  //   error, previewEv, subclass, collabs}. activePending = index being edited.
+  // Import queue: each pending result = {id,name,status:'parsing'|'ok'|'error'|'published',
+  //   error, previewEv, subclass, collabs, notes:[…], publishedMsg}. The import pop-up is
+  //   the hub: parses append here (never replace), items are reviewed via their own
+  //   editor tab and stay in the list — ticked off — once published.
+  // activePending = the ID of the item open in the editor (null = on the hub list).
+  //   IDs, not indexes: concurrent parses expand multi-fleet files in place, which
+  //   shifts positions under an open editor.
   const[pending,setPending]=useState([]);
-  const[activePending,setActivePending]=useState(0);
+  const[activePending,setActivePending]=useState(null);
+  // Busy = anything still parsing. Derived, so concurrent batches can't fight over
+  // a boolean; used for spinners only — the hub NEVER locks uploads while parsing.
+  const pdfLoading=pending.some(p=>p.status==="parsing");
   const[previewEditVal,setPreviewEditVal]=useState("");
+  // Div-header rename popover: {x,y,rows:[{from,val}]} — rename a division tag
+  // (e.g. "Jr" → "U18") across EVERY row of the active preview at once.
+  const[divHdrEdit,setDivHdrEdit]=useState(null);
   // Web-lookup enrichment suggestions, keyed by pending-item id →
   //   {date,country,source,dismissed}. Populated best-effort by the enrichment
   //   effect when a parsed preview still lacks a date/country. UI-only, never
@@ -6066,6 +1042,9 @@ export default function AthLinkMVP(){
   const[profileFilterLoading,setProfileFilterLoading]=useState(false);
   const[footprintOpen,setFootprintOpen]=useState(false);
   const[profileTab,setProfileTab]=useState("footprint");
+  // Shared profile year selection {key:athleteName, years:[...]}; null = all years.
+  // Keyed by athlete so switching profiles cleanly falls back to that athlete's full career.
+  const[yearSel,setYearSel]=useState(null);
   const[hostFootprintOpen,setHostFootprintOpen]=useState(false);
   const[confirmState,setConfirmState]=useState(null); // in-app confirm dialog (replaces window.confirm)
   const[editingAthName,setEditingAthName]=useState(null); // {orig} when renaming on the profile page
@@ -6078,6 +1057,13 @@ export default function AthLinkMVP(){
   const[profileSuggestions,setProfileSuggestions]=useState([]);
   const[profileSugLoading,setProfileSugLoading]=useState(false);
   const[profileSugTimer,setProfileSugTimer]=useState(null);
+  // Fast-suggestion plumbing (§5c): cancel the in-flight request on every new
+  // keystroke (AbortController) so a slow earlier query never overwrites a newer
+  // one, and cache completed suggestions per query so backspacing is instant.
+  const evSugAbortRef=React.useRef(null);
+  const evSugCacheRef=React.useRef(new Map());
+  const profileSugAbortRef=React.useRef(null);
+  const profileSugCacheRef=React.useRef(new Map());
   // Global search
   const[gSearch,setGSearch]=useState("");
   // Calendar
@@ -6174,30 +1160,46 @@ export default function AthLinkMVP(){
 
   useEffect(()=>{
     (async()=>{
+     try{
       if(!sbH){
         console.warn("No Supabase credentials — no events to show");
         setEvents([]);
         return;
       }
       console.log("Loading from Supabase:", SB_URL);
-      const data=await sbGet("events?select=*,entries(*)&order=created_at.desc");
+      // Fetch events, hosts and the athlete-username registry IN PARALLEL. These
+      // are independent queries; running them as a waterfall (as before) stacked
+      // their latencies and left the screen blank for ~5s. We still APPLY hosts +
+      // usernames before setEvents so the clean-URL resolvers can map
+      // slugs/usernames on first paint.
+      const [data,hostRows,uRows]=await Promise.all([
+        sbGet("events?select=*,entries(*)&order=created_at.desc"),
+        sbGet("hosts?select=*"),
+        sbGet("athlete_usernames?select=name_key,username,display_name"),
+      ]);
       if(data===null){
         console.error("Supabase load failed — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY");
         setEvents([]);
         return;
       }
       console.log("Loaded",data.length,"events from Supabase");
-      // Load hosts (with slugs) + the public athlete-username registry BEFORE
-      // events, so the clean-URL resolvers can map slugs/usernames on first paint.
-      const hostRows=await sbGet("hosts?select=*");
       if(hostRows){applyDbHosts(hostRows);setHostsVersion(v=>v+1);}
-      const uRows=await sbGet("athlete_usernames?select=name_key,username,display_name");
       if(uRows){applyAthleteUsernames(uRows);}
       setEvents(data.map(dbToApp));
+     } finally { setInitialLoading(false); }
     })();
   },[]);
 
   /* ── derived ──────────────────────────────────────────────── */
+  // The athlete-directory / stats aggregations below are O(all events × all
+  // entries) — ~300ms to rebuild on this dataset. They must NOT re-run
+  // synchronously on every `events` mutation, or a bulk import (which changes
+  // `events` twice per published fleet) freezes the UI for seconds at a time.
+  // Deferring `events` for those memos lets React recompute them at low
+  // priority: rapid successive imports collapse into ONE trailing recompute,
+  // and interaction (clicks, typing, navigation) stays responsive. The
+  // directory just shows the previous frame's data until the work lands.
+  const evDir=useDeferredValue(events);
   const isClassPortal=typeof portal==="string"&&portal.startsWith("class:");
   const portalCls=isClassPortal?portal.slice(6):null; // base class id for a class portal
   // Membership of the CURRENT portal for the signed-in user (if any).
@@ -6238,14 +1240,14 @@ export default function AthLinkMVP(){
   const classEvents=useMemo(()=>{
     if(!portal) return [];
     const scoped=isClassPortal
-      ? events.filter(e=>e.cls===portalCls)            // global class portal
-      : events.filter(e=>eventAssocs(e).includes(portal)); // association portal
+      ? evDir.filter(e=>e.cls===portalCls)            // global class portal
+      : evDir.filter(e=>eventAssocs(e).includes(portal)); // association portal
     return dedupEvents(scoped);
-  },[events,portal,isClassPortal,portalCls]);
-  const homeCountry=useMemo(()=>buildHomeCountry(events),[events]);
+  },[evDir,portal,isClassPortal,portalCls]);
+  const homeCountry=useMemo(()=>buildHomeCountry(evDir),[evDir]);
   // Rebuild the per-athlete attribute memory (gender/birth-year/recent class)
   // whenever events change. Downstream gender chips read ATHLETE_ATTRS.
-  useMemo(()=>buildAthleteAttrs(events),[events]);
+  useMemo(()=>buildAthleteAttrs(evDir),[evDir]);
   // Pick the best display variant for a canonical group: the raw name that
   // appears in the most events (ties → the more "normal" mixed-case spelling).
   const displayNameFor=useMemo(()=>{
@@ -6285,7 +1287,7 @@ export default function AthLinkMVP(){
     return[...map.values()].sort((a,b)=>a.name.localeCompare(b.name));
   };
   const people=useMemo(()=>buildPeople(classEvents),[classEvents,displayNameFor]);
-  const allPeople=useMemo(()=>buildPeople(events),[events,displayNameFor]);
+  const allPeople=useMemo(()=>buildPeople(evDir),[evDir,displayNameFor]);
 
   // ── Host competition footprint (for the clickable title globe) ──
   // countryCounts (ISO → # competitions) drives the globe; hostHistory feeds the
@@ -6325,6 +1327,23 @@ export default function AthLinkMVP(){
     return prevRow[n];
   };
   const regCount=nm=>{const t=canonName(nm);return events.filter(ev=>ev.entries.some(e=>canonName(e.helm)===t||canonName(e.crew)===t)).length;};
+  // O(1) lookup version of regCount, precomputed once per `events` change. The manual-merge
+  // search box was calling regCount() — an O(events) scan — inside a sort comparator on every
+  // keystroke, which for a broad query (matching hundreds of names) froze the input for seconds.
+  const regCountMap=useMemo(()=>{
+    const m=new Map();
+    for(const ev of events){
+      const seen=new Set();
+      for(const e of ev.entries){
+        [e.helm,e.crew].forEach(nm=>{
+          if(!nm) return;const t=canonName(nm);if(seen.has(t)) return;seen.add(t);
+          m.set(t,(m.get(t)||0)+1);
+        });
+      }
+    }
+    return m;
+  },[events]);
+  const regCountFast=nm=>regCountMap.get(canonName(nm))||0;
   // Exact raw-name count — used to choose the merge primary so the most-used
   // first/last name ORDER wins (regCount is order-blind because it uses canon).
   const rawNameCount=nm=>events.filter(ev=>ev.entries.some(e=>e.helm===nm||e.crew===nm)).length;
@@ -6334,7 +1353,28 @@ export default function AthLinkMVP(){
     return s;
   };
 
+  // Nickname / abbreviation match on two canonical (sorted-token) keys: every
+  // token identical except one pair, where the shorter is a prefix of the longer
+  // — e.g. "chris lam" ⟷ "christopher lam". Levenshtein can't catch these (the
+  // length gap is too big), so they were never surfaced for merging.
+  const nickPair=(a,b)=>{
+    const ta=a.split(" "),tb=b.split(" ");
+    if(ta.length<2||tb.length<2) return false;            // need a surname for context
+    const rem=new Map(); tb.forEach(t=>rem.set(t,(rem.get(t)||0)+1));
+    const onlyA=[]; ta.forEach(t=>{const c=rem.get(t)||0; if(c>0) rem.set(t,c-1); else onlyA.push(t);});
+    const onlyB=[...rem.entries()].flatMap(([t,c])=>Array(Math.max(0,c)).fill(t));
+    if(onlyA.length!==1||onlyB.length!==1) return false;  // exactly one differing token each side
+    const x=onlyA[0],y=onlyB[0];
+    const short=x.length<=y.length?x:y, long=x.length<=y.length?y:x;
+    return short.length>=3&&short!==long&&long.startsWith(short);
+  };
   const dupGroups=useMemo(()=>{
+    // This is an O(n²) Levenshtein sweep over EVERY athlete name — only the admin
+    // "Duplicates" review tab consumes it. Computing it eagerly meant every event
+    // publish (which changes `events`) re-ran it over the whole athlete set on the
+    // main thread, freezing the UI for seconds during a bulk import. Compute it
+    // only when that tab is actually open; the badge count fills in on open.
+    if(!canEdit||filter!=="duplicates") return [];
     // distinct canonical keys (already display-deduped) → find near neighbours
     const keys=[...new Set(allPeople.map(p=>canonName(p.name)).filter(Boolean))];
     const groups=[];
@@ -6342,17 +1382,18 @@ export default function AthLinkMVP(){
       const a=keys[i];
       for(let j=i+1;j<keys.length;j++){
         const b=keys[j];
-        if(Math.abs(a.length-b.length)>2) continue;
-        if(Math.min(a.length,b.length)<4) continue;
-        const dist=lev(a,b);
-        if(dist>0&&dist<=2){
+        // Near-spelling match: Levenshtein ≤2 on similarly-sized keys.
+        const near=Math.abs(a.length-b.length)<=2&&Math.min(a.length,b.length)>=4&&(()=>{const d=lev(a,b);return d>0&&d<=2;})();
+        // Nickname/abbreviation match (same surname, first name shortened).
+        const nick=!near&&nickPair(a,b);
+        if(near||nick){
           const na=displayNameFor(a),nb=displayNameFor(b);
-          if(na&&nb) groups.push({names:[na,nb].sort((x,y)=>rawNameCount(y)-rawNameCount(x)||regCount(y)-regCount(x)),kind:"near",key:[a,b].sort().join("~")});
+          if(na&&nb) groups.push({names:[na,nb].sort((x,y)=>rawNameCount(y)-rawNameCount(x)||regCount(y)-regCount(x)),kind:near?"near":"nick",key:[a,b].sort().join("~")});
         }
       }
     }
     return groups;
-  },[allPeople,displayNameFor,events]);
+  },[allPeople,displayNameFor,evDir,canEdit,filter]);
 
   const myAssoc=auth?.profile?.class_id||null;
   // Persist "don't merge" dismissals across reloads (localStorage).
@@ -6367,14 +1408,43 @@ export default function AthLinkMVP(){
   })();},[]);
   // True if a name competes in the given class (canonical match).
   const nameInClass=(nm,clsId)=>{const t=canonName(nm);return events.some(e=>e.cls===clsId&&e.entries.some(en=>canonName(en.helm)===t||canonName(en.crew)===t));};
+  // Cards mid exit-animation: stay rendered (still matched by dismissedDups2) so the
+  // fade/collapse can play instead of the list just snapping the next card into place.
+  const[exitingDups,setExitingDups]=useState(new Set());
   const visibleDupGroups=useMemo(()=>{
     const dupClsId=isClassPortal?portalCls:(assoc?.cls||null); // class scope of the current portal, if any
-    let g=dupGroups.filter(x=>!dismissedDups2.has(x.key));
+    let g=dupGroups.filter(x=>!dismissedDups2.has(x.key)||exitingDups.has(x.key));
     // Within a class-scoped portal, only show duplicates whose athletes belong to THAT class.
     if(dupClsId) g=g.filter(x=>x.names.some(nm=>nameInClass(nm,dupClsId)));
     if(myAssoc) g=g.filter(x=>x.names.some(nm=>athleteHostAssocs(nm).has(myAssoc)));
     return g;
-  },[dupGroups,dismissedDups2,myAssoc,events,portal,isClassPortal,portalCls]);
+  },[dupGroups,dismissedDups2,exitingDups,myAssoc,events,portal,isClassPortal,portalCls]);
+
+  // Manual merge — lets an admin pick ANY two profiles the auto-detector missed
+  // (e.g. "Chris Lam" vs "Christopher Lam" when names diverge too far) and merge
+  // them directly via mergeAthletes(). mmA = primary kept, mmB = folded in.
+  const[mmA,setMmA]=useState(null);
+  const[mmB,setMmB]=useState(null);
+  const[mmActive,setMmActive]=useState(null); // which slot the picker is filling: "a"|"b"|null
+  const[mmQ,setMmQ]=useState("");
+  // Which flagged duplicate-review cards have had their merge direction flipped
+  // by clicking the "merge into" arrow (default direction is g.names[0] ← g.names[last]).
+  const[flippedDups,setFlippedDups]=useState(new Set());
+  const dismissDupCard=(key,after)=>{
+    setExitingDups(prev=>new Set(prev).add(key));
+    after();
+    setTimeout(()=>{
+      setExitingDups(prev=>{const s=new Set(prev);s.delete(key);return s;});
+    },380);
+  };
+  const doManualMerge=async()=>{
+    if(!mmA||!mmB||canonName(mmA)===canonName(mmB)) return;
+    await mergeAthletes(mmA,mmB);
+    const key=[canonName(mmA),canonName(mmB)].sort().join("~");
+    setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});
+    saveDupDismissals([key]);
+    setMmA(null);setMmB(null);setMmActive(null);setMmQ("");
+  };
 
   const previewScored=useMemo(()=>previewEv?scorePreview(previewEv):null,[previewEv]);
   const previewMaxRaces=useMemo(()=>{
@@ -6390,7 +1460,7 @@ export default function AthLinkMVP(){
   // Precompute every athlete's card stats in ONE pass (events count, best rank,
   // nationality, most-recent class/subclass). Avoids calling aggregate()/athleteNat()
   // — each O(events) — once per card, which was making All Athletes very slow.
-  const statScope=isGlobal?events:classEvents;
+  const statScope=isGlobal?evDir:classEvents;
   const cardStats=useMemo(()=>{
     const m=new Map();
     for(const ev of statScope){
@@ -6422,12 +1492,17 @@ export default function AthLinkMVP(){
   const athClsSet=useMemo(()=>{
     if(!athCls) return null;
     const s2=new Set();
-    events.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
+    evDir.forEach(ev=>{if(ev.status==="Draft"||ev.cls!==athCls)return;(ev.entries||[]).forEach(e=>{if(e.helm)s2.add(canonName(e.helm));if(e.crew)s2.add(canonName(e.crew));});});
     return s2;
-  },[events,athCls]);
-  const lensPeople=(athClsSet||athCountry)
+  },[evDir,athCls]);
+  // Memoised so an active class/country lens doesn't produce a NEW filtered array
+  // on every render — that fresh reference used to invalidate athleteGridContent's
+  // memo on unrelated state changes (e.g. every keystroke/click in the import
+  // modal), rebuilding the whole athlete grid each time.
+  const lensPeople=useMemo(()=>(athClsSet||athCountry)
     ?currentPeople.filter(p=>(!athClsSet||athClsSet.has(canonName(p.name)))&&(!athCountry||statOf(p.name).nat===athCountry))
-    :currentPeople;
+    :currentPeople
+  ,[athClsSet,athCountry,currentPeople,cardStats]);
   // Progressive reveal so the page paints immediately and fills in as you scroll.
   const[athLimit,setAthLimit]=useState(120);
   const athSentinelRef=React.useRef(null);
@@ -6440,6 +1515,77 @@ export default function AthLinkMVP(){
   },[view.name,athLimit,filter,q]);
   const evLoc=ev=>[ev.country].filter(Boolean).join(" · ");
   const manualReady=!!mf.rows.filter(r=>r.helm.trim()).length;
+  // Memoized so this (up to several hundred cards, each with a backdrop-filter blur) only
+  // rebuilds when the underlying data/filters actually change — not on every unrelated
+  // re-render (e.g. the floating top bar toggling on scroll), which was the "flashing" the
+  // athlete thumbnails did while scrolling: the whole grid was being torn down and rebuilt
+  // on every scroll-driven state update.
+  const athleteGridContent=useMemo(()=>{
+    if(filter==="duplicates") return null;
+    const evScope=isGlobal?evDir:classEvents;
+    const qlc=q.trim().toLowerCase();
+    const shown=lensPeople
+      .filter(p=>true)
+      .filter(p=>{
+        if(athleteSmart){
+          try{ if(!athleteSmart.fn(athleteSummaryFor(p.name,evScope))) return false; }catch{}
+        } else if(qlc){
+          // live substring match on name OR country while no smart filter is set
+          const nat=athleteNat(p.name,evScope);
+          const cname=(GLOBE_NAMES[IOC_ISO[nat]]||nat||"").toLowerCase();
+          if(!p.name.toLowerCase().includes(qlc)&&!cname.includes(qlc)) return false;
+        }
+        return true;
+      });
+    // group by nationality, country groups alphabetical, names alphabetical within
+    const byCountry={};
+    shown.forEach(p=>{
+      const nat=statOf(p.name).nat;
+      const key=nat||"ZZZ";
+      if(!byCountry[key])byCountry[key]={nat,cname:GLOBE_NAMES[IOC_ISO[nat]]||nat||"Unknown",people:[]};
+      byCountry[key].people.push(p);
+    });
+    const groups=Object.values(byCountry).sort((a,b)=>a.cname.localeCompare(b.cname));
+    groups.forEach(g=>g.people.sort((a,b)=>a.name.localeCompare(b.name)));
+    if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No athletes match.</p>;
+    let gi=0,rendered=0;                       // cap total cards rendered for fast paint
+    const out=[];
+    for(const g of groups){
+      if(rendered>=athLimit) break;
+      const slice=g.people.slice(0,Math.max(0,athLimit-rendered));rendered+=slice.length;
+      out.push(
+      <div key={g.cname} style={{marginBottom:22}}>
+        <div className="cgroup-head" style={{display:"flex",alignItems:"center",gap:9,margin:"4px 0 11px"}}>
+          <span style={{fontSize:18}}>{g.nat?iocFlag(g.nat):""}</span>
+          <span style={{fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:15,color:"var(--navy)"}}>{g.cname}</span>
+          <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{g.people.length}</span>
+          <div style={{flex:1,height:1,background:"var(--line)"}}/>
+        </div>
+        <div className="agrid">
+          {slice.map(p=>{
+            const st=statOf(p.name);
+            const nat=st.nat;
+            // Boat-class nugget = most-recent competition's class (ILCA 6 etc. if subclass present)
+            const nug=st.recentCls?nuggetFor(st.recentCls,st.recentSub):null;
+            return(<div className="acard" key={p.name} style={{animationDelay:`${(Math.min(gi++,40))*12}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
+              <div className="achead">
+                <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
+                <div style={{minWidth:0,flex:1}}>
+                  <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {p.name}</div>
+                </div>
+              </div>
+              <div className="acstat">
+                <div><b>{st.events}</b>competitions</div><div><b>{st.best?"#"+st.best:"—"}</b>best</div>
+                {nug&&<span className="cls" style={{background:nug.color,fontSize:9.5,marginLeft:"auto"}}>{nug.label}</span>}
+              </div>
+            </div>);
+          })}
+        </div>
+      </div>);
+    }
+    out.push(<div key="__sentinel" ref={athSentinelRef} style={{height:1}}/>);
+    return out;
+  },[filter,isGlobal,evDir,classEvents,q,lensPeople,athleteSmart,cardStats,athLimit]);
 
   /* ── navigation ───────────────────────────────────────────── */
   // ── Navigation with universal history ───────────────────────
@@ -6451,6 +1597,7 @@ export default function AthLinkMVP(){
   const goTop=(name,extra)=>{pushNav();setPortal(null);setView({name,...(extra||{})});setQ("");setAthleteSmart(null);setEvFilterChips([]);setEvFilter("");window.scrollTo(0,0);};
   // Which of the 4 nav doors the current page lives behind (drives the .on state).
   const navOn=view.name==="ranking"?"ranking"
+    :view.name==="scout"?"scout"
     :(view.name==="competitions"||view.name==="event")?"competitions"
     :(view.name==="hosts"||(portal&&!String(portal).startsWith("class:")))?"hosts"
     :((view.name==="athletes"&&!portal)||view.name==="profile")?"athletes"
@@ -6466,24 +1613,33 @@ export default function AthLinkMVP(){
       ...FEDERATIONS.map(h=>({...h,htype:"federation"})),
       ...CLUBS.map(h=>({...h,htype:"club"})),
       ...ASSOCIATIONS.map(h=>({...h,htype:"association"})),
-    ].map(h=>({...h,n:pub.filter(ev=>eventAssocs(ev).includes(h.id)).length,loc:hostLocation(h.id,events)||""}))
+    ].map(h=>({...h,n:pub.filter(ev=>eventAssocs(ev).includes(h.id)).length,
+      // Flag/location next to the host name reads the EXPLICIT country only — never
+      // derived from events or scope, so a country-less host shows no flag (Fix 2).
+      loc:h.country?String(h.country).toUpperCase():""}))
      .sort((a,b)=>b.n-a.n);
   })();
   const hostCountries=[...new Set(navHosts.map(h=>h.loc).filter(Boolean))]
     .sort((a,b)=>(GLOBE_NAMES[IOC_ISO[a]]||a).localeCompare(GLOBE_NAMES[IOC_ISO[b]]||b));
   // Floating top bar: hide on scroll-down, reveal on scroll-up. Reset to shown on page change.
+  // rAF-throttled — raw scroll events can fire many times per frame (esp. trackpad/momentum
+  // scroll), and each one was triggering a full re-render of the whole page (incl. the
+  // multi-hundred-card athlete grid, each with an expensive backdrop-filter blur), which is
+  // what showed up as the thumbnails "flashing on and off" while scrolling.
   useEffect(()=>{
-    let lastY=window.scrollY;
-    const onScroll=()=>{
+    let lastY=window.scrollY,ticking=false;
+    const apply=()=>{
+      ticking=false;
       const y=window.scrollY;
-      if(y>lastY+6&&y>90){setBarHidden(true);setNavSearchOpen(false);}
+      if(y>lastY+6&&y>90){setBarHidden(true);setNavSearchOpen(false);setNavMenuOpen(false);}
       else if(y<lastY-6){setBarHidden(false);}
       lastY=y;
     };
+    const onScroll=()=>{ if(!ticking){ticking=true;requestAnimationFrame(apply);} };
     window.addEventListener("scroll",onScroll,{passive:true});
     return()=>window.removeEventListener("scroll",onScroll);
   },[]);
-  useEffect(()=>{setBarHidden(false);setNavSearchOpen(false);},[view.name,portal]);
+  useEffect(()=>{setBarHidden(false);setNavSearchOpen(false);setNavMenuOpen(false);},[view.name,portal]);
 
   /* ── Clean-URL sync (shareable links + native back/forward) ───────────────
      stateToPath / pathToState (module scope) define the mapping. This block is
@@ -6495,7 +1651,7 @@ export default function AthLinkMVP(){
     const seg=decodeURIComponent(path).split("/").filter(Boolean);
     if((seg[0]||"").toLowerCase()===SPORT_BASE.slice(1)) seg.shift(); // strip /golf prefix
     const s0=(seg[0]||"").toLowerCase();
-    const RESERVED=["","athletes","ranking","rankings","event","competition","competitions","hosts","class"];
+    const RESERVED=["","athletes","ranking","rankings","event","competition","competitions","hosts","scout","class"];
     // Athlete slugs can only be resolved after events (hence names) have loaded.
     const needsAthlete=seg.length>0&&!RESERVED.includes(s0)&&!hostBySlug(seg[0]);
     if(needsAthlete&&events.length===0) return; // wait for events, effect re-runs on load
@@ -6539,11 +1695,80 @@ export default function AthLinkMVP(){
     else if(v.name==="ranking") t="Rankings";
     else if(v.name==="competitions") t=v.cls?`${classLabel(v.cls)} — Competitions`:"Competitions";
     else if(v.name==="hosts") t="Hosts";
+    else if(v.name==="scout") t="Scout · AthLink";
     else if(v.name==="athletes")t=portal?`${hostName(portal)||"Golf"} — Athletes`:(v.cls?`${classLabel(v.cls)} — Athletes`:"Athletes");
     else if(v.name==="events")  t=hostName(portal)||"AthLink"; // named portal, else golf home
     else                        t="AthLink"; // portals home
     document.title=t||"AthLink";
   },[portal,view,events]);
+
+  // ── Scout activity ledger: log ONE "viewed_profile" per profile visit. The ref
+  //    holds the last-logged athlete key so re-renders (hover, tab switches) don't
+  //    re-fire; only a change of the viewed profile (or leaving it) logs again.
+  const _viewedProfileRef=useRef(null);
+  useEffect(()=>{
+    if(view.name==="profile"&&view.id){
+      const key=canonName(view.id);
+      if(_viewedProfileRef.current!==key){
+        _viewedProfileRef.current=key;
+        logActivity(scoutOwnerId(auth),key,"viewed_profile");
+      }
+    } else _viewedProfileRef.current=null;
+  },[view.name,view.id]);
+
+  // ── Pinned results: owner-pinned rows lifted to a "Pinned" section at the top
+  //    of the results lists. Array order == render order (fetch sorts by
+  //    sort_order asc). One list per context: the open athlete profile and the
+  //    open host portal.
+  const[profilePins,setProfilePins]=useState([]);
+  const[portalPins,setPortalPins]=useState([]);
+  const[pinDrag,setPinDrag]=useState(null);           // index of the pinned row being dragged
+  useEffect(()=>{
+    setPinDrag(null);
+    if(view.name!=="profile"||!view.id){setProfilePins([]);return;}
+    let alive=true;
+    fetchPins("athlete",canonName(view.id)).then(p=>{if(alive)setProfilePins(p||[]);});
+    return()=>{alive=false;};
+  },[view.name,view.id]);
+  useEffect(()=>{
+    setPinDrag(null);
+    if(!portal){setPortalPins([]);return;}
+    let alive=true;
+    fetchPins("host",portal).then(p=>{if(alive)setPortalPins(p||[]);});
+    return()=>{alive=false;};
+  },[portal]);
+  // Pin/unpin one result (keyed by event id). New pins go ABOVE existing ones —
+  // "pin jumps it all the way to the top". Optimistic; rolls back on failure.
+  // Writes carry the session token: RLS (0015_role_rls_hardening) only lets the
+  // verified owner — approved athlete claim / verified host member / admin —
+  // write pins, so anon writes are rejected server-side.
+  const togglePinFor=(ownerKind,ownerKey,pins,setPins)=>async({event_id,entry_id=null,snapshot})=>{
+    const existing=pins.find(p=>String(p.event_id)===String(event_id));
+    if(existing){
+      setPins(ps=>ps.filter(p=>p.id!==existing.id));
+      if(String(existing.id).startsWith("tmp_")) return;   // never persisted
+      // RLS-blocked deletes come back 200 with no rows — treat as failure too.
+      const gone=await removePin(existing.id,auth?.token);
+      if(gone==null||(Array.isArray(gone)&&gone.length===0))
+        setPins(ps=>[existing,...ps.filter(p=>p.id!==existing.id)].sort((a,b)=>a.sort_order-b.sort_order));
+    }else{
+      const sort=(pins[0]?.sort_order??1)-1;
+      const optimistic={id:"tmp_"+Date.now(),owner_kind:ownerKind,owner_key:ownerKey,event_id,entry_id,snapshot,sort_order:sort};
+      setPins(ps=>[optimistic,...ps]);
+      const real=await addPin(ownerKind,ownerKey,{event_id,entry_id,snapshot,sort_order:sort},auth?.token);
+      setPins(ps=>real?ps.map(p=>p===optimistic?real:p):ps.filter(p=>p!==optimistic));
+    }
+  };
+  // Drag-to-reorder within the Pinned section: reorder locally while dragging,
+  // persist 0..n-1 on drop.
+  const movePinLocal=(setPins,from,to)=>setPins(ps=>{
+    if(from===to||from<0||to<0||from>=ps.length||to>=ps.length) return ps;
+    const a=ps.slice();const[m]=a.splice(from,1);a.splice(to,0,m);return a;
+  });
+  const commitPinOrder=(pins,setPins)=>{
+    setPins(ps=>ps.map((p,i)=>({...p,sort_order:i})));
+    reorderPins(pins.map(p=>p.id).filter(id=>!String(id).startsWith("tmp_")),auth?.token);
+  };
 
   const navBack=()=>{
     // Drive the in-app Back button through real browser history so it stays in
@@ -6579,10 +1804,12 @@ export default function AthLinkMVP(){
     // Delete this event AND every duplicate row of the same competition, so no
     // ghost copy survives on the global class page or another association.
     const victims=target?events.filter(ev=>eventKey(ev)===eventKey(target)):events.filter(ev=>ev.id===deleteConfirm.id);
-    for(const v of victims) await sbDel("events",`id=eq.${v.id}`);
     const ids=new Set(victims.map(v=>v.id));
+    // Optimistic: drop the rows from the UI + close the popover immediately, then
+    // delete from the DB in the background so the click never blocks.
     setEvents(p=>p.filter(ev=>!ids.has(ev.id)));
     setDeleteConfirm(null);
+    (async()=>{ for(const v of victims){ try{await sbDel("events",`id=eq.${v.id}`);}catch(err){console.error("confirmDelete: DB delete failed",err);} } })();
   };
   const confirmDraft=async(evId)=>{
     await updateEventStatus(evId,"Final");
@@ -6593,7 +1820,7 @@ export default function AthLinkMVP(){
 
   /* ── AI smart filter ─────────────────────────────────────── */
   const buildFilterPrompt=(query,context)=>
-    `You are a golf results filter engine. The user has described a filter in natural language.
+    `You are a sailing results filter engine. The user has described a filter in natural language.
 Return ONLY a JSON object (no markdown, no explanation) with two fields:
   "label": short human-readable description of the filter (max 8 words)
   "code": a JavaScript arrow function body string that takes an event object "ev" and returns true/false.
@@ -6643,7 +1870,7 @@ Query: "${query}"`;
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
           task:"filter",
-          prompt:`You convert a natural-language golf-results filter into one or more conditions.
+          prompt:`You convert a natural-language sailing-results filter into one or more conditions.
 A query may contain SEVERAL conditions (e.g. "finished top 15 in the world championships" = a placing condition AND an event-type condition). Split them.
 Return ONLY a JSON array (no markdown). Each element: {"label": short human label (max 6 words), "code": a JS arrow-function BODY string operating on item "h"}.
 "h" has: h.ev (event with .name string, .date "dd/mm/yyyy", .country), h.row.rank (number), h.row.net, h.fleet (number), h.role ('Helm'|'Crew'), h.partner.
@@ -6710,42 +1937,58 @@ Query: "${qq}"`,
   /* ── AI suggestions (debounced) ─────────────────────────── */
   const fetchEvSuggestions=async(q)=>{
     if(!q.trim()||q.length<3){setEvSuggestions([]);return;}
+    const key=q.trim().toLowerCase();
+    // Cache hit → instant, no network (backspacing to a prior prefix is free).
+    if(evSugCacheRef.current.has(key)){setEvSuggestions(evSugCacheRef.current.get(key));setEvSugLoading(false);return;}
+    // Cancel any in-flight request so a slower older one can't clobber this.
+    if(evSugAbortRef.current)evSugAbortRef.current.abort();
+    const ctrl=new AbortController();evSugAbortRef.current=ctrl;
     setEvSugLoading(true);
     try{
       const eventCtx=classEvents.slice(0,5).map(e=>`"${e.name}" (${scoreEvent(e).fleet} players)`).join(", ");
-      const prompt=`You are a golf results filter suggestion engine. Given a partial query, suggest 4 short filter query completions.
+      const prompt=`You are a sailing results filter suggestion engine. Given a partial query, suggest 4 short filter query completions.
 Return ONLY a JSON array of 4 strings (no markdown). Each string is a complete natural-language filter query.
 Context: portal=${host?.name||"unknown"}, recent events: ${eventCtx}
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        signal:ctrl.signal,
         body:JSON.stringify({task:"filter",prompt,max_tokens:200})});
       const data=await res.json();
       if(data.ok){
         const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
         const arr=JSON.parse(clean);
-        setEvSuggestions(Array.isArray(arr)?arr.slice(0,4):[]);
+        const out=Array.isArray(arr)?arr.slice(0,4):[];
+        evSugCacheRef.current.set(key,out);
+        setEvSuggestions(out);
       }
-    }catch{setEvSuggestions([]);}
-    finally{setEvSugLoading(false);}
+    }catch(e){if(e?.name==="AbortError")return;setEvSuggestions([]);}
+    finally{if(evSugAbortRef.current===ctrl){evSugAbortRef.current=null;setEvSugLoading(false);}}
   };
 
   const fetchProfileSuggestions=async(q)=>{
     if(!q.trim()||q.length<3){setProfileSuggestions([]);return;}
+    const key=q.trim().toLowerCase();
+    if(profileSugCacheRef.current.has(key)){setProfileSuggestions(profileSugCacheRef.current.get(key));setProfileSugLoading(false);return;}
+    if(profileSugAbortRef.current)profileSugAbortRef.current.abort();
+    const ctrl=new AbortController();profileSugAbortRef.current=ctrl;
     setProfileSugLoading(true);
     try{
-      const prompt=`Suggest 4 short golf result filter queries for an athlete profile.
+      const prompt=`Suggest 4 short sailing result filter queries for an athlete profile.
 Return ONLY a JSON array of 4 strings. Each is a complete filter query.
 Partial query: "${q}"`;
       const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        signal:ctrl.signal,
         body:JSON.stringify({task:"filter",prompt,max_tokens:150})});
       const data=await res.json();
       if(data.ok){
         const clean=data.text.replace(/\`\`\`json|\`\`\`/g,"").trim();
         const arr=JSON.parse(clean);
-        setProfileSuggestions(Array.isArray(arr)?arr.slice(0,4):[]);
+        const out=Array.isArray(arr)?arr.slice(0,4):[];
+        profileSugCacheRef.current.set(key,out);
+        setProfileSuggestions(out);
       }
-    }catch{setProfileSuggestions([]);}
-    finally{setProfileSugLoading(false);}
+    }catch(e){if(e?.name==="AbortError")return;setProfileSuggestions([]);}
+    finally{if(profileSugAbortRef.current===ctrl){profileSugAbortRef.current=null;setProfileSugLoading(false);}}
   };
 
   /* ── Global search ───────────────────────────────────────── */
@@ -6766,7 +2009,7 @@ Partial query: "${q}"`;
     });
     // Global class portals
     CLASSES.filter(c=>c.short.toLowerCase().includes(ql)||(c.full||"").toLowerCase().includes(ql)).forEach(c=>{
-      results.push({type:"portal",label:`${c.short} — all competitions`,sub:"Division",nav:{type:"competitions",cls:c.id}});
+      results.push({type:"portal",label:`${c.short} — all competitions`,sub:"Class",nav:{type:"competitions",cls:c.id}});
     });
     // Club portals
     CLUBS.filter(c=>c.name.toLowerCase().includes(ql)).forEach(c=>{
@@ -6781,8 +2024,8 @@ Partial query: "${q}"`;
       results.push({type:"portal",label:a.name,sub:"Association",nav:{type:"portal",assoc:a.id}});
     });
     // Nav shortcuts
-    if("home all divisions portals golf associations".includes(ql))
-      results.push({type:"nav",label:"Golf — Home",sub:"Navigate",nav:{type:"home"}});
+    if("home all classes portals sailing associations".includes(ql))
+      results.push({type:"nav",label:"Sailing — Home",sub:"Navigate",nav:{type:"home"}});
     if("all athletes".includes(ql)||ql.includes("athlete"))
       results.push({type:"nav",label:"Athletes",sub:"Navigate",nav:{type:"athletes"}});
     setGSearchResults(results.slice(0,10));
@@ -6795,7 +2038,22 @@ Partial query: "${q}"`;
   const[eventSummaries,setEventSummaries]=useState({}); // key=event.id → competition blurb
   const[eventSummaryOpen,setEventSummaryOpen]=useState({}); // key=event.id → revealed?
 
-  const SPONSOR_LENS=`Write for a prospective SPONSOR/INVESTOR evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-field finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the field, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
+  const SCOUT_LENS=`Write for a talent scout or sponsor evaluating an athlete. The reader needs to judge how impressive a result is RELATIVE TO THE LEVEL of the competition. A mid-fleet finish at a World/Olympic-level event can be more valuable than a win at a small regional one. Focus on: the competition's reputation and level (international championship vs national vs club/regional), the depth/strength of the fleet, and what a strong or weak placing there would signify for an athlete's trajectory. Be specific and factual; no marketing fluff, no markdown, no headings.`;
+
+  // POST to the AI summary endpoint with a hard timeout. Throws on a non-2xx
+  // response (e.g. a 504 HTML gateway page that res.json() would choke on) or a
+  // timeout, so callers can log the real failure instead of silently rendering
+  // a blank "no summary" tab. Returns parsed {ok,text,model}.
+  const aiFilter=async(task,prompt,max_tokens)=>{
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(),15000);
+    try{
+      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({task,prompt,max_tokens}),signal:ctrl.signal});
+      if(!res.ok) throw new Error(`ai_filter HTTP ${res.status}`);
+      return await res.json();
+    } finally { clearTimeout(t); }
+  };
 
   const fetchEventSummary=async(ev)=>{
     if(eventSummaries[ev.id]!==undefined) return;
@@ -6803,15 +2061,13 @@ Partial query: "${q}"`;
     try{
       const sc=scoreEvent(ev);
       const yr=ev.date?.split('/')?.[2]||"";
-      const prompt=`${SPONSOR_LENS}
-In 2-4 sentences, summarize this golf competition for a sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical field strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club event) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
+      const prompt=`${SCOUT_LENS}
+In 2-4 sentences, summarize this golf competition for a talent scout or sponsor deciding what an athlete's result here is worth. If you recognize this specific event, use what you know about its reputation, history and typical field strength. If you are not certain, infer the likely level from its name (e.g. "World Championship", "Europeans", "Nationals", club event) and say so cautiously — do not invent specific facts. End with one sentence on how to read an athlete's placing here.
 Event name: "${ev.name}". Division: ${ev.cls}. Year: ${yr}. Host country: ${ev.country||"unknown"}. Field size: ${sc.fleet} players. Rounds played: ${sc.races}.`;
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"overview",prompt,max_tokens:220})});
-      const data=await res.json();
+      const data=await aiFilter("overview",prompt,220);
       if(data.ok) setEventSummaries(m=>({...m,[ev.id]:cleanAISummary(data.text)}));
       else setEventSummaries(m=>({...m,[ev.id]:""}));
-    }catch{setEventSummaries(m=>({...m,[ev.id]:""}));}
+    }catch(e){console.warn("fetchEventSummary failed:",e);setEventSummaries(m=>({...m,[ev.id]:""}));}
   };
 
   const execGSearch=(r)=>{
@@ -6877,12 +2133,10 @@ Together: ${togLine}`;
         prompt=`Write a SHORT scouting blurb for a golf PLAYER: 2 sentences, MAX 32 words. Focus mainly on how they performed RELATIVE TO COMPETITORS OF SIMILAR CALIBRE — i.e. where they placed within the field at their events, and against peers who finished near them. Factual, no markdown, no heading. Always refer to the athlete by their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name.
 Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins} wins. Placings: ${peerNote||"unknown"}.`;
       }
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"hover",prompt,max_tokens:90})});
-      const data=await res.json();
+      const data=await aiFilter("hover",prompt,90);
       if(data.ok) setHoverSummaries(h=>({...h,[key]:cleanAISummary(data.text)}));
       else setHoverSummaries(h=>({...h,[key]:""}));
-    }catch{setHoverSummaries(h=>({...h,[key]:""}));}
+    }catch(e){console.warn("fetchHoverSummary failed:",e);setHoverSummaries(h=>({...h,[key]:""}));}
   };
 
   // Signature of an athlete's result set — changes only when a competition is
@@ -6913,16 +2167,14 @@ Athlete: ${name} (since ${firstYr||"?"}). Best ${best}, ${pods} podiums, ${wins}
       const recentLine=recent?`Most recent: ${recent.ev.name} (${recent.ev.date?.split('/')?.[2]||''}), finished #${recent.row.rank} of ${recent.fleet}.`:"";
       const prompt=`Write a SHORT athlete bio: 2 sentences, MAX 45 words total, third person. Focus on the athlete's JOURNEY — when they started competing, any class change, the class they've excelled in, and where they place now. Do NOT list every stat. No heading, no markdown, no "#", do not begin with the name. Whenever you refer to the athlete, use their FULL name exactly as "${name}" (first and last together) — never just the first name or just the last name on its own.
 Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${journey||'unknown'}. Best result: ${ag.best?"#"+ag.best:"unknown"}. Podiums: ${ag.podiums}. ${recentLine}`;
-      const res=await fetch("/api/ai_filter",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({task:"overview",prompt,max_tokens:110})});
-      const data=await res.json();
+      const data=await aiFilter("overview",prompt,110);
       if(data.ok){
         const text=cleanAISummary(data.text);
         setProfileSummaries(h=>({...h,[name]:text}));
         try{localStorage.setItem("athlink_bio_v2_"+name,JSON.stringify({sig,text}));}catch{}
       }
       else setProfileSummaries(h=>({...h,[name]:""}));
-    }catch{setProfileSummaries(h=>({...h,[name]:""}));}
+    }catch(e){console.warn("fetchFullProfileSummary failed:",e);setProfileSummaries(h=>({...h,[name]:""}));}
   };
 
 
@@ -6949,7 +2201,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const saveEvMeta=async()=>{
     if(!editEvMeta) return;
     const{id,name,date,country,discards}=editEvMeta;
-    await sbPatch("events",`id=eq.${id}`,{name,date,country:country||null,discards:parseInt(discards)||1});
+    // RLS filters unauthorised PATCHes to zero rows (200 + empty body) — treat
+    // that as a failure instead of pretending the edit stuck until refresh.
+    const res=await sbPatch("events",`id=eq.${id}`,{name,date,country:country||null,discards:parseInt(discards)||1});
+    if(!res||res.length===0){
+      setConfirmState({title:"Couldn't save changes",message:"The database rejected this edit — make sure you're signed in with an account that can edit this competition, then try again.",confirmLabel:"OK",danger:false,onConfirm:()=>setConfirmState(null)});
+      return;
+    }
     setEvents(p=>p.map(ev=>ev.id===id?{...ev,name,date,country,discards:parseInt(discards)||1}:ev));
     setEditEvMeta(null);
   };
@@ -6975,7 +2233,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   const saveEditedResults=async(asDraft)=>{
     if(!previewEv||!editResultsEv) return;
-    const status=asDraft?"Draft":"Final";
+    // Editing an upcoming event's entry list keeps it Upcoming — it only becomes
+    // "Final" when real race scores are attached (see the results-attach path).
+    const stillUpcoming=previewEv.status==="Upcoming"&&(previewEv.entries||[]).every(e=>!(e.races||[]).length);
+    const status=asDraft?"Draft":(stillUpcoming?"Upcoming":"Final");
     // Resolve the (possibly changed) organizer host from the picker, mirroring
     // the import flow, so host re-assignment on an existing event persists.
     const importerHost=(portal&&!isClassPortal)?portal:null;
@@ -6987,12 +2248,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       owner:attributedHost||null,
       organizer_name:attributedHost?null:(previewEv._orgName||previewEv.organizer_name||null),
       doublehanded};
-    // Update event metadata
-    await sbPatch("events",`id=eq.${editResultsEv}`,{
+    // Update event metadata. RLS filters unauthorised PATCHes to zero rows
+    // (200 + empty body) — bail out BEFORE touching entries and tell the user,
+    // instead of showing a "Results updated." toast for an edit that never stuck.
+    const patched=await sbPatch("events",`id=eq.${editResultsEv}`,{
       name:ev.name,date:ev.date,country:ev.country||null,
       discards:ev.discards,status,subclass:ev.subclass,collabs:ev.collabs,
       cls:ev.cls,owner:ev.owner,organizer_name:ev.organizer_name,doublehanded:ev.doublehanded,
     });
+    if(!patched||patched.length===0){
+      setConfirmState({title:"Couldn't save changes",message:"The database rejected this edit — make sure you're signed in with an account that can edit this competition, then try again.",confirmLabel:"OK",danger:false,onConfirm:()=>setConfirmState(null)});
+      return;
+    }
     // Update entries (delete old, insert new)
     if(sbH){
       await sbDel("entries",`event_id=eq.${editResultsEv}`);
@@ -7013,10 +2280,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   /* ── PDF / import flow ────────────────────────────────────── */
   const resetImport=()=>{
-    setPdfLoading(false);setPdfError("");setImportStep("upload");
+    setPdfError("");setImportStep("upload");setImportKind("past");
     setFleetChoices([]);setPdfMeta(null);setPreviewEv(null);setPreviewEdit(null);
-    setPending([]);setActivePending(0);
-    setLiveUrl("");setParseLog([]);setParseProgress({done:0,total:0});
+    setPending([]);setActivePending(null);
+    setLiveUrl("");
   };
   // ── Import-draft persistence (in-memory, session-scoped) ──
   // The import pop-up is inline JSX gated on `open` (not a separately-mounted
@@ -7027,17 +2294,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // fresh batch starts. NOT persisted to storage — a page reload clears it by design.
   const clearImportDraft=()=>{IMPORT_DRAFT=null;};
   const snapshotImportDraft=()=>{
-    // Nothing meaningful to keep? (no parsed batch / no preview) → drop any old draft.
-    if(editResultsEv||(!pending.length&&!previewEv)){IMPORT_DRAFT=null;return;}
+    // Nothing meaningful to keep? (no unpublished items / no preview) → drop any old
+    // draft. A queue that's ALL published is finished business — don't resurrect it.
+    const hasLive=pending.some(p=>p.status!=="published");
+    if(editResultsEv||(!hasLive&&!previewEv)){IMPORT_DRAFT=null;return;}
     // Fold the active editor (previewEv + subclass/collabs live in mf) into its slot.
-    const snapPending=pending.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
-    IMPORT_DRAFT={pending:snapPending,activePending,previewEv,mf,importStep,tab,fleetChoices,pdfMeta};
+    const snapPending=pending.map(p=>(p.id===activePending&&previewEv)?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
+    IMPORT_DRAFT={pending:snapPending,activePending,previewEv,mf,importStep,tab,importKind,fleetChoices,pdfMeta};
   };
   const restoreImportDraft=()=>{
     const d=IMPORT_DRAFT;if(!d) return false;
-    setPending(d.pending||[]);setActivePending(d.activePending||0);
+    setPending(d.pending||[]);setActivePending(d.activePending||null);
     setPreviewEv(d.previewEv||null);setMf(d.mf||emptyForm());
-    setImportStep(d.importStep||"upload");setTab(d.tab||"ai");
+    setImportStep(d.importStep||"upload");setTab(d.tab||"ai");setImportKind(d.importKind||"past");
     setFleetChoices(d.fleetChoices||[]);setPdfMeta(d.pdfMeta||null);
     return true;
   };
@@ -7052,37 +2321,50 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   // Snapshot current editor (previewEv + class/subclass/collab) into the active pending slot.
   const syncActivePending=()=>{
-    setPending(prev=>prev.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p));
+    setPending(prev=>prev.map(p=>(p.id===activePending&&previewEv)?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p));
   };
-  // Switch to another pending result tab.
-  const switchPending=idx=>{
-    if(idx===activePending||idx<0||idx>=pending.length) return;
-    setPending(prev=>{
-      const next=prev.map((p,i)=>i===activePending?{...p,previewEv,subclass:mf.subclass,collabs:mf.collabs}:p);
-      const target=next[idx];
-      if(target?.previewEv){
-        setPreviewEv(target.previewEv);
-        setMf(f=>({...f,subclass:target.subclass||null,collabs:target.collabs||[]}));
-      }
-      return next;
-    });
-    setActivePending(idx);
+  // Open one queued result in its own editor tab (the hub's "Review" portal button).
+  const openPendingEditor=id=>{
+    const t=pending.find(p=>p.id===id);
+    if(!t||!t.previewEv) return;
+    syncActivePending();   // fold whatever editor was open back into its slot first
+    setPreviewEv(t.previewEv);
+    setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));
+    setActivePending(id);
+    setImportStep("preview");
   };
-  // Remove a single pending result from the import (without discarding the rest).
-  const removePending=idx=>{
-    const remaining=pending.filter((_,i)=>i!==idx);
-    if(!remaining.length){closeImport();return;}
+  // Close the editor tab back to the hub list, keeping the queue intact.
+  const backToHub=()=>{
+    syncActivePending();
+    setActivePending(null);setPreviewEv(null);setImportStep("upload");
+  };
+  // Switch to another pending result tab (by id).
+  const switchPending=id=>{
+    if(id===activePending) return;
+    openPendingEditor(id);
+  };
+  // Remove a single pending result from the queue (without discarding the rest).
+  const removePending=id=>{
+    const idx=pending.findIndex(p=>p.id===id);
+    if(idx<0) return;
+    const remaining=pending.filter(p=>p.id!==id);
     setPending(remaining);
-    const ni=Math.min(idx<=activePending?activePending-1:activePending,remaining.length-1);
-    const safe=Math.max(0,ni);
-    setActivePending(safe);
-    const t=remaining[safe];
-    if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
-    else setPreviewEv(null);
+    if(id===activePending){
+      // Removed the open editor → jump to the next reviewable item, else back to the hub.
+      const next=remaining.find(p=>p.status==="ok");
+      if(next&&importStep==="preview"){
+        setPreviewEv(next.previewEv);
+        setMf(f=>({...f,subclass:next.subclass||null,collabs:next.collabs||[]}));
+        setActivePending(next.id);
+      }else{
+        setActivePending(null);setPreviewEv(null);setImportStep("upload");
+      }
+    }
   };
   // Merge all pending tabs that share a fleetGroupId into one combined tab.
+  // Only unpublished fleets combine — a fleet already ticked off stays published.
   const combineFleetGroup=(groupId)=>{
-    const groupItems=pending.filter(p=>p.fleetGroupId===groupId);
+    const groupItems=pending.filter(p=>p.fleetGroupId===groupId&&p.status!=="published");
     if(groupItems.length<2) return;
     const allEntries=groupItems.flatMap(p=>p.previewEv?.entries||[]);
     const seen=new Set();
@@ -7092,10 +2374,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const maxDisc=groupItems[0].fleetGroupDiscards||Math.max(...groupItems.map(p=>p.previewEv?.discards||1));
     const combinedPreview={...groupItems[0].previewEv,name:baseName,discards:maxDisc,entries:merged,ai_parsed:false};
     const combinedItem={id:"combined_"+groupId,name:baseName,status:"ok",error:null,previewEv:combinedPreview,subclass:groupItems[0].subclass,collabs:groupItems[0].collabs};
-    const newPending=[...pending.filter(p=>p.fleetGroupId!==groupId),combinedItem];
-    const newIdx=newPending.length-1;
+    const newPending=[...pending.filter(p=>p.fleetGroupId!==groupId||p.status==="published"),combinedItem];
     setPending(newPending);
-    setActivePending(newIdx);
+    setActivePending(combinedItem.id);
     setPreviewEv(combinedPreview);
     setMf(f=>({...f,subclass:combinedItem.subclass||null,collabs:combinedItem.collabs||[]}));
   };
@@ -7125,13 +2406,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
   // Parse a single file → {ok, name, date, entries, discards, multi, fleets, notes, error}
   const parseOneFile=async(file,mode="ai")=>{
-    const isHtml=file.name.toLowerCase().endsWith(".html")||file.type==="text/html";
+    // Entry lists are server-only: the in-browser HTML parser is results-shaped
+    // (it would answer "No results table" and mask the real entries error).
+    const isHtml=mode!=="entries"&&(file.name.toLowerCase().endsWith(".html")||file.type==="text/html");
     // Server parser handles PDF, HTML and images, and carries the full format
     // support (fleet splitting, crew columns, Sailti, sail-number headers…), so
     // send everything there first. For HTML, fall back to the in-browser parser
     // only if the server is unreachable or can't read the page.
     try{
-      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const res=await fetch(`/api/sailing/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const data=await res.json();
       if(data.ok) return data;
       if(!isHtml){
@@ -7139,7 +2422,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         // B: when the built-in parser doesn't recognise a PDF, point to the AI parser.
         if(mode==="rule"&&/not found|unsupported|unknown|couldn'?t|supported:/i.test(err))
           err=err.replace(/\s*For other formats use Manual entry\.?/i,"")
-              +" — switch to the AI parser tab (it reads odd or non-standard layouts), or use Manual entry.";
+              +" — switch to the AI Entry tab (it reads odd or non-standard layouts), or use Manual entry.";
         return{ok:false,error:err};
       }
       // server reachable but couldn't read the HTML → try the browser parser below
@@ -7183,7 +2466,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // 1) page count (instant, server-side via pypdf)
     let pageCount=1;
     try{
-      const cres=await fetch(`/api/parse_pdf?count=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const cres=await fetch(`/api/sailing/parse_pdf?count=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       const cdata=await cres.json();
       if(cdata.ok&&cdata.page_count) pageCount=Math.max(1,cdata.page_count|0);
     }catch{ /* fall back to a single whole-file AI call below */ }
@@ -7196,17 +2479,21 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       return d;
     }
 
-    // 2) parse each page on its OWN request, strictly SEQUENTIAL with one retry.
-    //    (Firing pages concurrently tripped Anthropic's per-minute rate limit,
-    //    so only the final page survived — hence "last page only".)
+    // 2) parse each page on its OWN request, with BOUNDED CONCURRENCY (§4.3).
+    //    The old design was strictly sequential because Anthropic's per-minute
+    //    rate limit meant firing pages at once left only the last page alive.
+    //    Gemini's limits are far higher, so we now run up to PAGE_CONCURRENCY
+    //    pages at a time — a 9-page scan drops from ~90s to ~25s. Results are
+    //    stored by page index, so order is preserved regardless of finish order.
     onProgress&&onProgress(0,pageCount);
     const pageResults=new Array(pageCount).fill(null);
     const pageErrors=[];
     const fetchPage=async(pi)=>{
-      const r=await fetch(`/api/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
+      const r=await fetch(`/api/sailing/parse_pdf?page=${pi}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:file});
       return r.json();
     };
-    for(let pi=0;pi<pageCount;pi++){
+    let doneP=0;
+    const parseOnePage=async(pi)=>{
       let d=null,err="page failed";
       for(let attempt=0;attempt<2;attempt++){
         try{
@@ -7214,12 +2501,16 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           if(d&&d.ok&&Array.isArray(d.entries)) break;
           err=(d&&d.error)||"page failed"; d=null;
         }catch(e){ err="network/timeout"; d=null; }
-        if(attempt===0) await new Promise(r=>setTimeout(r,8000)); // backoff long enough for a provider rate-limit window to clear
+        if(attempt===0) await new Promise(r=>setTimeout(r,8000)); // backoff for a rate-limit window
       }
       if(d) pageResults[pi]={entries:d.entries,name:d.name,date:d.date,discards:d.discards,division:d.division||""};
       else pageErrors.push({page:pi+1,error:err});
-      onProgress&&onProgress(pi+1,pageCount);
-    }
+      onProgress&&onProgress(++doneP,pageCount);
+    };
+    const PAGE_CONCURRENCY=4;
+    let nextPage=0;
+    const pageWorker=async()=>{ while(nextPage<pageCount){ const pi=nextPage++; await parseOnePage(pi); } };
+    await Promise.all(Array.from({length:Math.min(PAGE_CONCURRENCY,pageCount)},pageWorker));
 
     // 3) group pages into DIVISIONS by their section heading. A page that
     //    repeats the current heading — or carries none (a continuation page) —
@@ -7283,7 +2574,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // Fetch + parse a live results link server-side (browser can't, due to CORS).
   const parseLink=async(url,mode="ai")=>{
     try{
-      const res=await fetch(`/api/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,mode})});
+      const res=await fetch(`/api/sailing/parse_pdf?mode=${mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url,mode})});
       const data=await res.json();
       if(!data.ok) return{ok:false,error:data.error||"Could not parse that link."};
       return data;
@@ -7328,8 +2619,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     let detCls="";
     if(detectedClass)
       detCls=CLASSES.some(c=>c.id===detectedClass)?detectedClass:(addCustomClass(detectedClass)||"");
-    const cls=lockedCls||inferred||detCls||"mens"; // golf: single default division (sailing picked 29er/optimist by crew count)
-    const sh=SINGLE_ATHLETE||cls==="ilca"||cls==="optimist";
+    const cls=lockedCls||inferred||detCls||"mens"; // golf: single default division
+    const sh=SINGLE_ATHLETE;
     return{
       id:"imp_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
       name:(fleet.name?`${name} — ${fleet.name}`:name)||"Imported Competition",
@@ -7349,129 +2640,140 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     };
   };
 
+  // Reshape a parsed preview into an UPCOMING entry list: no scores, no ranks, no
+  // discards. status:"Upcoming" is what flips the preview editor and the publish
+  // path into entry-list mode; the event page itself keys off the empty races.
+  const toUpcomingPreview=pv=>({...pv,status:"Upcoming",source:"Entry list",discards:0,scoring:"",
+    entries:(pv.entries||[]).map(e=>({...e,races:[],race_codes:null,pdf_rank:null,pdf_net:null}))});
+
   // ── MULTI-FILE: parse all chosen files into the pending list ──
   // Drag-and-drop: same code path as the file input's onChange (handleFiles). Depth
   // counter guards against dragleave firing when the pointer crosses child elements.
-  const onDragEnter=e=>{e.preventDefault();e.stopPropagation();if(!pdfLoading)setDragDepth(d=>d+1);};
+  // No pdfLoading gate: the hub accepts new files while earlier ones still parse.
+  const onDragEnter=e=>{e.preventDefault();e.stopPropagation();setDragDepth(d=>d+1);};
   const onDragOver=e=>{e.preventDefault();e.stopPropagation();};
   const onDragLeave=e=>{e.preventDefault();e.stopPropagation();setDragDepth(d=>Math.max(0,d-1));};
   const onDropFiles=(e,mode)=>{
     e.preventDefault();e.stopPropagation();setDragDepth(0);
-    if(pdfLoading) return;
     const files=e.dataTransfer?.files;
     if(files&&files.length) handleFiles(files,mode);
   };
   const handleFiles=async(fileList,mode="ai")=>{
     const files=[...(fileList||[])];
     if(!files.length) return;
-    setPdfError("");setPdfLoading(true);
-    setParseProgress({done:0,total:files.length});
-    setParseLog(files.map(f=>({name:f.name,status:"parsing",notes:[mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]})));
-    const seed=files.map((f,i)=>({id:"pf_"+Date.now()+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[]}));
-    setPending(seed);setActivePending(0);
-    // Parse files concurrently (was sequential). Total time ≈ slowest file, not the sum.
-    // Cap concurrency so a large batch doesn't fire dozens of simultaneous AI calls.
-    let done=0;
+    setPdfError("");
+    // APPEND to the hub queue — never clobber batches already parsing. The host can
+    // keep adding files/links while earlier ones are still working.
+    const stamp=Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    const entriesMode=mode==="entries";
+    const seed=files.map((f,i)=>({id:"pf_"+stamp+"_"+i,name:f.name,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],
+      ...(entriesMode?{kind:"upcoming"}:{}),
+      notes:[entriesMode?"Reading the entry list with AI…":mode==="ai"?"Sending to the AI parser…":"Reading with the built-in parser…"]}));
+    setPending(prev=>[...prev,...seed]);
+    const note=(id,txt)=>setPending(prev=>prev.map(p=>p.id===id?{...p,notes:[txt]}:p));
+    // Parse files concurrently. Total time ≈ slowest file, not the sum. Cap
+    // concurrency so a large batch doesn't fire dozens of simultaneous AI calls.
     const handleOne=async(i)=>{
-      const f=files[i];
-      const isPdf=f.name.toLowerCase().endsWith(".pdf")||f.type==="application/pdf";
-      let data;
-      if(mode==="ai"&&isPdf){
-        // Flow: built-in (rule) parser → per-page Claude for multi-page scans.
-        // parseOnePdfPaged tries the rule parser FIRST (handles Sailwave /
-        // Manage2sail / Sailti instantly, all pages, exact names), does ONE
-        // whole-file Claude call for single-page unknowns, and only chunks
-        // page-by-page for MULTI-PAGE image/unknown PDFs — where a single
-        // whole-file pass silently returns just page 1 (each page is often its
-        // own division). Most files finish in the rule parser with no AI at all.
-        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading with the built-in parser…"]}:l));
-        data=await parseOnePdfPaged(f,(p,t)=>{
-          setParseLog(prev=>prev.map((l,li)=>li===i
-            ?{...l,status:"parsing",notes:[t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"]}
-            :l));
-        });
-      }else{
-        data=await parseOneFile(f,mode);
-      }
-      // Flag-image nationalities: when the rule parser found a Nat column but it
-      // was empty (flags, not text), read them with one small AI call and merge
-      // by SAIL NUMBER (never by row order — so a flag can't land on the wrong
-      // boat). Best-effort: a failure leaves the result with blank nat.
-      if(data.ok&&data.nat_from_flags&&isPdf){
-        try{
-          setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"parsing",notes:["Reading nationalities from flags…"]}:l));
-          const nr=await fetch(`/api/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
-          const nd=await nr.json();
-          if(nd.ok&&nd.nats&&Object.keys(nd.nats).length){
-            const norm=v=>String(v||"").replace(/\s+/g,"").toLowerCase();
-            const apply=ents=>(ents||[]).forEach(e=>{const code=nd.nats[norm(e.sail)];if(code&&!(e.nat||"").trim())e.nat=code;});
-            if(data.entries) apply(data.entries);
-            if(data.fleets) data.fleets.forEach(fl=>apply(fl.entries));
-          }
-        }catch(e){ /* best-effort — keep the parsed result without nationalities */ }
-      }
+      const id=seed[i].id;
       let rows;
-      if(!data.ok){
-        rows=[{...seed[i],status:"error",error:data.error}];
-        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"error",notes:[data.error]}:l));
-      }else if(data.multi&&data.fleets?.length){
-        const groupId="fg_"+Date.now()+"_"+i;
-        const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
-        rows=data.fleets.map((fl,fi)=>({id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Field "+(fi+1)}`,status:"ok",error:null,
-          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
-          fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc}));
-        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]}:l));
-      }else{
-        rows=[{...seed[i],status:"ok",previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"")}];
-        setParseLog(prev=>prev.map((l,li)=>li===i?{...l,status:"ok",notes:data.notes||["Done."]}:l));
+      try{
+        const f=files[i];
+        const isPdf=f.name.toLowerCase().endsWith(".pdf")||f.type==="application/pdf";
+        let data;
+        if(mode==="ai"&&isPdf){
+          // Flow: built-in (rule) parser → per-page Claude for multi-page scans.
+          // parseOnePdfPaged tries the rule parser FIRST (handles Sailwave /
+          // Manage2sail / Sailti instantly, all pages, exact names), does ONE
+          // whole-file Claude call for single-page unknowns, and only chunks
+          // page-by-page for MULTI-PAGE image/unknown PDFs — where a single
+          // whole-file pass silently returns just page 1 (each page is often its
+          // own division). Most files finish in the rule parser with no AI at all.
+          note(id,"Reading with the built-in parser…");
+          data=await parseOnePdfPaged(f,(p,t)=>note(id,t>1?`AI reading page ${Math.min(p+1,t)} of ${t}…`:"Sending to the AI parser…"));
+        }else{
+          data=await parseOneFile(f,mode);
+        }
+        // Flag-image nationalities: when the rule parser found a Nat column but it
+        // was empty (flags, not text), read them with one small AI call and merge
+        // by SAIL NUMBER (never by row order — so a flag can't land on the wrong
+        // boat). Best-effort: a failure leaves the result with blank nat.
+        if(data.ok&&data.nat_from_flags&&isPdf){
+          try{
+            note(id,"Reading nationalities from flags…");
+            const nr=await fetch(`/api/sailing/parse_pdf?nat=1`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:files[i]});
+            const nd=await nr.json();
+            if(nd.ok&&nd.nats&&Object.keys(nd.nats).length){
+              const norm=v=>String(v||"").replace(/\s+/g,"").toLowerCase();
+              const apply=ents=>(ents||[]).forEach(e=>{const code=nd.nats[norm(e.sail)];if(code&&!(e.nat||"").trim())e.nat=code;});
+              if(data.entries) apply(data.entries);
+              if(data.fleets) data.fleets.forEach(fl=>apply(fl.entries));
+            }
+          }catch(e){ /* best-effort — keep the parsed result without nationalities */ }
+        }
+        if(!data.ok){
+          rows=[{...seed[i],status:"error",error:data.error,notes:[data.error]}];
+        }else if(data.multi&&data.fleets?.length){
+          const groupId="fg_"+stamp+"_"+i;
+          const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
+          rows=data.fleets.map((fl,fi)=>{
+            let pv=previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||"");
+            if(entriesMode) pv=toUpcomingPreview(pv);
+            return{id:seed[i].id+"_f"+fi,name:`${files[i].name} · ${fl.name||"Field "+(fi+1)}`,status:"ok",error:null,
+            previewEv:pv,subclass:null,collabs:[],...(entriesMode?{kind:"upcoming"}:{}),
+            fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc,
+            notes:[...(data.notes||[]),`Split into ${data.fleets.length} fleets.`]};});
+        }else{
+          let pv=previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"");
+          if(entriesMode) pv=toUpcomingPreview(pv);
+          rows=[{...seed[i],status:"ok",notes:data.notes||["Done."],previewEv:pv}];
+        }
+      }catch(err){
+        // §6: one bad file must never fail the whole batch. Any unexpected throw
+        // becomes this file's own error row; siblings continue.
+        const msg=(err&&err.message)?err.message:"Couldn't read this file — try exporting it as PDF, Excel, or HTML.";
+        rows=[{...seed[i],status:"error",error:msg,notes:[msg]}];
       }
-      done++; setParseProgress({done,total:files.length});
-      return rows;
+      // Swap the placeholder for its parsed row(s) in place — a multi-fleet file
+      // expands to one row per fleet. Id-keyed, so parallel batches can't collide.
+      setPending(prev=>prev.flatMap(p=>p.id===id?rows:[p]));
     };
-    const perFile=new Array(files.length);
     let next=0;
-    const worker=async()=>{ while(next<files.length){ const i=next++; perFile[i]=await handleOne(i); } };
+    const worker=async()=>{ while(next<files.length){ const i=next++; await handleOne(i); } };
     await Promise.all(Array.from({length:Math.min(3,files.length)},worker));
-    const results=perFile.flat();
-    setPending(results);setActivePending(0);
-    const firstOk=results.findIndex(r=>r.status==="ok");
-    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);setImportStep("preview");}
-    // If every file errored, stay on the upload screen so the error list is visible.
-    setPdfLoading(false);
+    // No auto-open: parsed results wait in the hub queue — the host opens each
+    // via its Review button, in any order, whenever it suits them.
   };
 
-  // ── LIVE LINK: fetch + parse a results URL server-side, add to pending ──
+  // ── LIVE LINK: fetch + parse a results URL server-side, append to the queue ──
   const handleLink=async(url,mode="ai")=>{
     const u=(url||"").trim();
     if(!u) return;
-    setPdfError("");setPdfLoading(true);
-    setParseProgress({done:0,total:1});
-    setParseLog([{name:u,status:"parsing",notes:["Fetching the page server-side…"]}]);
+    setPdfError("");
+    setLiveUrl("");   // clear the bar right away so the next link can be pasted while this one parses
+    const id="link_"+Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    const entriesMode=mode==="entries";
+    setPending(prev=>[...prev,{id,name:u,status:"parsing",error:null,previewEv:null,subclass:null,collabs:[],...(entriesMode?{kind:"upcoming"}:{}),
+      notes:[entriesMode?"Fetching the entries page server-side…":"Fetching the page server-side…"]}]);
     const data=await parseLink(u,mode);
+    let rows;
     if(!data.ok){
-      setPending([{id:"link_"+Date.now(),name:u,status:"error",error:data.error,previewEv:null,subclass:null,collabs:[]}]);
-      setParseLog([{name:u,status:"error",notes:[data.error]}]);
-      setActivePending(0);setParseProgress({done:1,total:1});setPdfLoading(false);
-      return;
-    }
-    const results=[];
-    if(data.multi&&data.fleets?.length){
-      const groupId="fg_link_"+Date.now();
+      rows=[{id,name:u,status:"error",error:data.error,previewEv:null,subclass:null,collabs:[],notes:[data.error]}];
+    }else if(data.multi&&data.fleets?.length){
       const groupDisc=Math.max(...data.fleets.map(f=>f.discards||1));
-      data.fleets.forEach((fl,fi)=>{
-        results.push({id:groupId+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Field "+(fi+1)}`,status:"ok",error:null,
-          previewEv:previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[],
-          fleetGroupId:groupId,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc});
-      });
+      rows=data.fleets.map((fl,fi)=>{
+        let pv=previewFromData(data.name,data.date||"",fl,data.ai_parsed||false,data.detected_class||"",data.detected_host||"");
+        if(entriesMode) pv=toUpcomingPreview(pv);
+        return{id:id+"_f"+fi,name:`${data.name||"Link"} · ${fl.name||"Field "+(fi+1)}`,status:"ok",error:null,
+        previewEv:pv,subclass:null,collabs:[],...(entriesMode?{kind:"upcoming"}:{}),
+        fleetGroupId:id,fleetGroupBaseName:data.name,fleetGroupDiscards:groupDisc,notes:data.notes||["Parsed."]};});
     }else{
-      results.push({id:"link_"+Date.now(),name:data.name||u,status:"ok",error:null,
-        previewEv:previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||""),subclass:null,collabs:[]});
+      let pv=previewFromData(data.name,data.date||"",{name:"",entries:data.entries,discards:data.discards},data.ai_parsed||false,data.detected_class||"",data.detected_host||"");
+      if(entriesMode) pv=toUpcomingPreview(pv);
+      rows=[{id,name:data.name||u,status:"ok",error:null,notes:data.notes||["Parsed."],
+        previewEv:pv,subclass:null,collabs:[],...(entriesMode?{kind:"upcoming"}:{})}];
     }
-    setPending(results);
-    const firstOk=results.findIndex(r=>r.status==="ok");
-    if(firstOk>=0){setActivePending(firstOk);setPreviewEv(results[firstOk].previewEv);setImportStep("preview");}
-    setParseLog([{name:u,status:"ok",notes:data.notes||["Parsed."]}]);
-    setParseProgress({done:1,total:1});setPdfLoading(false);
+    // No auto-open — the result waits in the hub queue with a Review button.
+    setPending(prev=>prev.flatMap(p=>p.id===id?rows:[p]));
   };
 
   const handlePdf=async file=>{
@@ -7486,10 +2788,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // applied to all fleets of that file. Other fields stay per-tab via updPMeta.
   const updSharedMeta=(k,v)=>{
     setPreviewEv(ev=>ev?{...ev,[k]:v}:ev);            // active (live editor)
-    const gid=pending[activePending]?.fleetGroupId;
+    const gid=pending.find(p=>p.id===activePending)?.fleetGroupId;
     if(!gid) return;                                  // single-file → nothing to sync
-    setPending(prev=>prev.map((p,i)=>
-      (i!==activePending&&p.fleetGroupId===gid&&p.previewEv)
+    setPending(prev=>prev.map(p=>
+      (p.id!==activePending&&p.fleetGroupId===gid&&p.previewEv)
         ? {...p,previewEv:{...p.previewEv,[k]:v}}
         : p));
   };
@@ -7498,7 +2800,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // to all fleets of that event (same behaviour as Host Country / Date above).
   const updSharedCollabs=(v)=>{
     updMeta("collabs",v);                              // active editor (mf)
-    const gid=pending[activePending]?.fleetGroupId;
+    const gid=pending.find(p=>p.id===activePending)?.fleetGroupId;
     if(!gid) return;                                   // single-file → nothing to sync
     setPending(prev=>prev.map(p=>p.fleetGroupId===gid?{...p,collabs:v}:p));
   };
@@ -7527,7 +2829,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   // (guarded by item._enriched), never auto-applies — it only stores a
   // low-confidence suggestion the strip below the fields can offer.
   useEffect(()=>{
-    const item=pending[activePending];
+    const item=pending.find(p=>p.id===activePending);
     if(!item||item.status!=="ok"||!item.previewEv||item._enriched) return;
     const pv=item.previewEv;
     const missing=[];
@@ -7556,20 +2858,38 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     })();
   },[pending,activePending,_pvResolvedHost]);
   // Build the DivisionToggle string from an entry's real gender + category.
+  // Carry the ACTUAL age band (U17/U18/Jr…), not a flattened Jr flag, so the
+  // picker shows the real division.
   const divFromEntry=(e)=>{
     const g=normGender(e.gender)||parseDiv(e.div||"").gender||"";
-    const jr=normCategory(e.category)==="Jr"||parseDiv(e.div||"").jr;
-    return [g,jr?"Jr":null].filter(Boolean).join(" ");
+    const cat=normCategory(e.category)||(parseDiv(e.div||"").jr?"Jr":"");
+    return [g,cat].filter(Boolean).join(" ");
   };
   // Toggle in preview writes the REAL gender + category fields (preserves U17 etc.).
   const applyPreviewDiv=(idx,v)=>{
-    const g=/mix/i.test(v)?"Mix":/\bF\b/.test(v)?"F":/\bM\b/.test(v)?"M":"";
-    const jr=/\bJr\b/.test(v);
-    setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>{
-      if(i!==idx) return e;
-      let category=e.category||"";
-      if(jr&&!category) category="Jr"; else if(!jr&&category==="Jr") category="";
-      return {...e,div:v,gender:g,category};
+    const parts=String(v||"").trim().split(/\s+/).filter(Boolean);
+    const isGender=t=>/^(m|f|mix)$/i.test(t);
+    const gTok=parts.find(isGender)||"";
+    const g=/mix/i.test(gTok)?"Mix":gTok.toUpperCase();
+    const category=parts.find(t=>!isGender(t))||"";   // U17 / U18 / Jr / …
+    setPreviewEv(ev=>({...ev,entries:ev.entries.map((e,i)=>
+      i!==idx?e:{...e,div:v,gender:g,category})}));
+  };
+  // The division tag of one entry, exactly as the row's toggle displays it.
+  const _divCatOf=(e)=>{
+    const parts=String(divFromEntry(e)||"").split(/\s+/).filter(Boolean);
+    return parts.find(t=>!/^(m|f|mix)$/i.test(t))||"";
+  };
+  // Rename a division tag across EVERY row of the active preview (Jr → U18 …).
+  const renameDivToken=(from,to)=>{
+    const t=String(to||"").trim().replace(/\s+/g,"");
+    if(!t||t===from) return;
+    setPreviewEv(ev=>({...ev,entries:ev.entries.map(e=>{
+      if(_divCatOf(e)!==from) return e;
+      const parts=String(divFromEntry(e)||"").split(/\s+/).filter(Boolean);
+      const gTok=parts.find(x=>/^(m|f|mix)$/i.test(x))||"";
+      const g=/mix/i.test(gTok)?"Mix":gTok.toUpperCase();
+      return {...e,category:t,gender:g,div:[g,t].filter(Boolean).join(" ")};
     })}));
   };
 
@@ -7599,9 +2919,54 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     setPreviewEdit(null);
   };
 
+  // ── Announced-event matcher: does an imported RESULT correspond to an
+  // upcoming competition we already published as an entry list? Same class +
+  // similar name (token Jaccard ≥ .5) + dates within 45 days (when both known).
+  // Used to ATTACH results to the announced event instead of duplicating it.
+  const _nameTokens=s=>new Set(String(s||"").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z0-9 ]+/g," ").split(/\s+/).filter(Boolean));
+  const _dkTs=dk=>Date.UTC(+dk.slice(0,4),+dk.slice(4,6)-1,+dk.slice(6,8));
+  const findUpcomingMatch=(cand)=>{
+    const tks=_nameTokens(cand.name); if(!tks.size) return null;
+    const dkNew=dateKey(cand.date)||"";
+    let best=null,bestScore=0;
+    events.forEach(x=>{
+      if(x.status==="Draft"||!isUpcomingEvent(x)) return;
+      if((x.cls||"")!==(cand.cls||"")) return;
+      const xt=_nameTokens(x.name); if(!xt.size) return;
+      let inter=0; xt.forEach(t=>{if(tks.has(t))inter++;});
+      const jac=inter/(new Set([...xt,...tks]).size);
+      if(jac<0.5) return;
+      const dkOld=dateKey(x.date)||"";
+      let boost=0;
+      if(dkNew&&dkOld){
+        const days=Math.abs(_dkTs(dkNew)-_dkTs(dkOld))/86400000;
+        if(days>45) return;                 // same name but a different edition
+        if(days<=10) boost=0.15;
+      }
+      if(jac+boost>bestScore){best=x;bestScore=jac+boost;}
+    });
+    return best;
+  };
+
+  // After a result is filed (published, drafted, or deduped): tick its queue item
+  // off and drop back to the hub list — its editor tab closes automatically. The
+  // legacy no-queue path (fleet picker) still closes the whole pop-up.
+  const finishPublished=(msg)=>{
+    if(activePending&&pending.some(p=>p.id===activePending)){
+      // Keep the competition's display name on the ticked nugget; drop the heavy
+      // entries payload (a published item is never reopened in the editor).
+      const finalName=previewEv?.name||null;
+      setPending(prev=>prev.map(p=>p.id===activePending?{...p,status:"published",publishedMsg:msg,name:finalName||p.previewEv?.name||p.name,previewEv:null}:p));
+      setActivePending(null);setPreviewEv(null);setImportStep("upload");
+    }else{
+      closeImport();
+    }
+  };
   const importPreview=async(asDraft)=>{
     if(!previewEv) return;
-    const status=asDraft?"Draft":"Final";
+    const isUpcomingPublish=previewEv.status==="Upcoming";
+    const status=asDraft?"Draft":(isUpcomingPublish?"Upcoming":"Final");
     // Source ≠ organizer. Importing makes you the CONTRIBUTOR (imported_by);
     // you only become the ORGANIZER (owner) when you assert you ran it.
     const importerHost=(portal&&!isClassPortal)?portal:null;
@@ -7631,7 +2996,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // has no confirmed organizer — transfer confirmed ownership to them. Only
     // dedups when there's a real sail set (guards against blank/draft collisions).
     const fpSails=(ev.fingerprint||"").split("|")[3];
-    const dup=fpSails?events.find(x=>x.id!==ev.id&&eventFingerprint(x)===ev.fingerprint):null;
+    // When publishing RESULTS, an announced entry list with the same fingerprint is
+    // NOT a duplicate — it's the same event awaiting its results (attach path below).
+    const dup=fpSails?events.find(x=>x.id!==ev.id&&eventFingerprint(x)===ev.fingerprint&&(isUpcomingPublish||!isUpcomingEvent(x))):null;
     if(dup){
       const mergedSources=[...new Set([...(dup.sources||[]),...(ev.sources||[])])];
       const patch={sources:mergedSources};
@@ -7644,19 +3011,34 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       clearImportDraft();   // this result is filed — drop it from any stashed draft
       setNote({name:dup.name,matched:0,created:0,msg:`Already on AthLink — linked ${who} as an additional source (no duplicate created).`});
       setTimeout(()=>setNote(null),7000);
-      if(pending.length){
-        const remaining=pending.filter((_,i)=>i!==activePending);
-        if(remaining.length){
-          setPending(remaining);
-          const nextIdx=Math.min(activePending,remaining.length-1);
-          const firstOk=remaining[nextIdx]?.status==="ok"?nextIdx:remaining.findIndex(r=>r.status==="ok");
-          setActivePending(firstOk<0?0:firstOk);
-          const t=remaining[firstOk<0?0:firstOk];
-          if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
-        } else { closeImport(); }
-      } else { closeImport(); }
+      finishPublished("Already on AthLink — linked as a source");
       const isSaved=!String(dup.id).startsWith("imp_")&&!String(dup.id).startsWith("fg_");
       if(isSaved){(async()=>{try{await sbPatch("events",`id=eq.${dup.id}`,patch);}catch(err){console.error("importPreview dedup patch failed",err);}})();}
+      return;
+    }
+    // Phase B½ — attach to an announced upcoming competition. Publishing REAL
+    // results that match an entry-list event we announced earlier UPDATES that
+    // event in place (same id/URL — shared forecast links keep working) instead
+    // of creating a duplicate. The announced owner/collabs are kept; results,
+    // name, date and status replace the entry-list versions. The preview banner
+    // lets the host opt out (_noAttach) and publish separately.
+    const upMatch=(!asDraft&&!isUpcomingPublish&&!previewEv._noAttach)?findUpcomingMatch(ev):null;
+    delete ev._noAttach;
+    if(upMatch){
+      const merged={...upMatch,
+        name:ev.name,cls:ev.cls,subclass:ev.subclass||null,doublehanded:ev.doublehanded,
+        venue:ev.venue||upMatch.venue,country:ev.country||upMatch.country,date:ev.date||upMatch.date,
+        discards:ev.discards,scoring:ev.scoring,source:ev.source,status:"Final",
+        fingerprint:ev.fingerprint,
+        sources:[...new Set([...(upMatch.sources||[]),...(ev.sources||[])])],
+        entries:ev.entries};
+      setEvents(p=>p.map(x=>x.id===upMatch.id?merged:x));
+      clearImportDraft();
+      setNote({name:merged.name,matched:0,created:0,msg:"Results attached to your announced competition — its forecast page now shows the real results."});
+      setTimeout(()=>setNote(null),7000);
+      finishPublished("Results attached to announced event");
+      const isSaved=!String(upMatch.id).startsWith("imp_")&&!String(upMatch.id).startsWith("fg_");
+      if(isSaved){(async()=>{try{await replaceEventResultsInDb(upMatch.id,merged);}catch(err){console.error("importPreview: attach-results save failed",err);}})();}
       return;
     }
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
@@ -7665,24 +3047,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     // Optimistic: drop the event into the list and close the popup immediately
     setEvents(p=>[ev,...p.filter(x=>x.id!==ev.id)]);
     clearImportDraft();   // this result is filed — drop it from any stashed draft
-    setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":null});
+    setNote({name:ev.name,matched,created,msg:asDraft?"Saved as draft — confirm when ready.":isUpcomingPublish?"Entry list published — the event page now shows the fleet forecast.":null});
     setTimeout(()=>setNote(null),7000);
-    // Multi-file: remove this published tab; advance to the next pending one, or close.
-    if(pending.length){
-      const remaining=pending.filter((_,i)=>i!==activePending);
-      if(remaining.length){
-        setPending(remaining);
-        const nextIdx=Math.min(activePending,remaining.length-1);
-        const firstOk=remaining[nextIdx]?.status==="ok"?nextIdx:remaining.findIndex(r=>r.status==="ok");
-        setActivePending(firstOk<0?0:firstOk);
-        const t=remaining[firstOk<0?0:firstOk];
-        if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
-      } else {
-        closeImport();
-      }
-    } else {
-      closeImport();
-    }
+    // The editor tab closes automatically; the item stays in the hub queue,
+    // ticked off, so the host keeps a gauge of what's done vs still importing.
+    finishPublished(asDraft?"Saved as draft":isUpcomingPublish?"Entry list published":"Published");
     // Persist in the background; swap in the DB copy (with real ids) once saved.
     // DETACHED (not awaited) so importPreview resolves as soon as the optimistic
     // UI above is done — the Publish/Draft button's loading state then clears
@@ -7742,27 +3111,58 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   const addRow=()=>setMf(f=>({...f,rows:[...f.rows,defRow(f.numRaces)]}));
   const delRow=i=>setMf(f=>({...f,rows:f.rows.filter((_,ri)=>ri!==i)}));
   const setNumRaces=n=>setMf(f=>({...f,numRaces:n,rows:f.rows.map(r=>({...r,scores:Array(n).fill("").map((_,i)=>r.scores[i]||"")}))}));
-  const buildManualEvent=()=>{
+  const buildManualEvent=(upcoming=false)=>{
     const rows=mf.rows.filter(r=>r.helm.trim());if(!rows.length)return null;
-    const disc=Math.min(mf.discards,Math.max(0,mf.numRaces-1));
+    const disc=upcoming?0:Math.min(mf.discards,Math.max(0,mf.numRaces-1));
     const evCls=assoc?.cls||mf.cls||"mens";
-    const sh=SINGLE_ATHLETE||evCls==="ilca"||evCls==="optimist";
+    const sh=SINGLE_ATHLETE;
     return{id:"imp_"+Date.now(),name:mf.name||"Imported Competition",cls:evCls,
       subclass:mf.subclass||null,owner:portal||null,collabs:mf.collabs||[],
       doublehanded:!sh&&rows.some(r=>r.crew.trim()),venue:mf.club||"—",country:mf.club||mf.country||"",
-      date:mf.date||"",discards:disc,scoring:'Appendix A',
-      source:"Manual import",status:"Final",
+      date:mf.date||"",discards:disc,scoring:upcoming?"":'Appendix A',
+      source:upcoming?"Entry list":"Manual import",status:upcoming?"Upcoming":"Final",
       entries:rows.map(r=>({helm:r.helm.trim(),crew:sh?"":r.crew.trim(),sail:r.sail.trim()||"—",nat:(r.nat||"").trim(),div:(r.div||"").trim(),
-        races:r.scores.map(s=>s.trim()).filter(Boolean).map(s=>/^\d+(\.\d+)?$/.test(s)?parseFloat(s):s.toUpperCase())}))};
+        races:upcoming?[]:r.scores.map(s=>s.trim()).filter(Boolean).map(s=>/^\d+(\.\d+)?$/.test(s)?parseFloat(s):s.toUpperCase())}))};
   };
-  const doImportManual=async()=>{
-    const ev=buildManualEvent();if(!ev)return;
+  const doImportManual=async(upcoming=false)=>{
+    const ev=buildManualEvent(upcoming);if(!ev)return;
+    // Manually-entered RESULTS that match an announced upcoming competition
+    // attach to it (same rule as the AI import path) — no duplicate event.
+    const upMatch=upcoming?null:findUpcomingMatch(ev);
+    if(upMatch){
+      const merged={...upMatch,name:ev.name,cls:ev.cls,subclass:ev.subclass||null,doublehanded:ev.doublehanded,
+        venue:ev.venue||upMatch.venue,country:ev.country||upMatch.country,date:ev.date||upMatch.date,
+        discards:ev.discards,scoring:ev.scoring,source:ev.source,status:"Final",entries:ev.entries};
+      setEvents(p=>p.map(x=>x.id===upMatch.id?merged:x));
+      clearImportDraft();setNote({name:merged.name,matched:0,created:0,msg:"Results attached to your announced competition."});
+      setOpen(false);setMf(emptyForm());
+      setTimeout(()=>setNote(null),6500);
+      const isSaved=!String(upMatch.id).startsWith("imp_")&&!String(upMatch.id).startsWith("fg_");
+      if(isSaved){try{await replaceEventResultsInDb(upMatch.id,merged);}catch(err){console.error("doImportManual: attach-results save failed",err);}}
+      return;
+    }
     const existing=new Set();events.forEach(e=>e.entries.forEach(en=>{existing.add(en.helm);if(en.crew)existing.add(en.crew);}));
     const incoming=new Set();ev.entries.forEach(en=>{incoming.add(en.helm);if(en.crew)incoming.add(en.crew);});
     let matched=0,created=0;incoming.forEach(n=>existing.has(n)?matched++:created++);
-    await saveEventToDb(ev);setEvents(p=>[ev,...p]);
+    // Optimistic: show the event + close the popup immediately, then persist in
+    // the BACKGROUND so the UI never blocks on the DB round-trip. Swap in the
+    // saved copy (with real ids) once it lands.
+    setEvents(p=>[ev,...p]);
     clearImportDraft();setNote({name:ev.name,matched,created});setOpen(false);setMf(emptyForm());
     setTimeout(()=>setNote(null),6500);
+    (async()=>{
+      try{
+        const saved=await saveEventToDb(ev);
+        if(saved?.[0]?.id){
+          const fresh=await sbGet(`events?select=*,entries(*)&id=eq.${saved[0].id}`);
+          if(fresh?.[0]){
+            const dbEv=dbToApp(fresh[0]);
+            setEvents(p=>p.map(x=>x.id===ev.id?dbEv:x));
+            setView(v=>(v.name==="event"&&v.id===ev.id)?{...v,id:dbEv.id}:v);
+          }
+        }
+      }catch(err){ console.error("doImportManual: background save failed",err); }
+    })();
   };
 
   /* ── sail display helper ───────────────────────────────────── */
@@ -7775,6 +3175,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   /* ═════════════════════════════════════════════════════════════ */
   return(
   <div className="al-root">
+  {initialLoading&&(
+    <div className="al-splash" role="status" aria-label="Loading AthLink">
+      <img src="/brand/icon-white.png" alt="AthLink" className="al-splash-logo"/>
+      <div className="al-splash-bar"><span/></div>
+    </div>
+  )}
   <svg xmlns="http://www.w3.org/2000/svg" style={{display:'none'}} aria-hidden="true">
     <filter id="glass-distortion" x="-20%" y="-20%" width="140%" height="140%" filterUnits="objectBoundingBox">
       <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch" result="turbulence"/>
@@ -7786,6 +3192,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   <LiquidBackground/>
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&display=swap');
+    /* Branded initial-load splash — shown while the first Supabase fetch settles
+       so the app never reads as a broken blank white screen. */
+    .al-splash{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;
+      background:radial-gradient(120% 120% at 50% 0%,#1f4e80 0%,#13314e 55%,#0e2137 100%);}
+    .al-splash-logo{width:78px;height:78px;object-fit:contain;filter:drop-shadow(0 8px 24px rgba(0,0,0,.35));animation:al-splash-pulse 1.5s ease-in-out infinite;}
+    .al-splash-bar{width:160px;height:4px;border-radius:980px;background:rgba(255,255,255,.18);overflow:hidden;}
+    .al-splash-bar span{display:block;height:100%;width:40%;border-radius:980px;background:rgba(255,255,255,.88);animation:al-splash-slide 1.1s ease-in-out infinite;}
+    @keyframes al-splash-pulse{0%,100%{transform:scale(1);opacity:.9;}50%{transform:scale(1.08);opacity:1;}}
+    @keyframes al-splash-slide{0%{transform:translateX(-120%);}100%{transform:translateX(320%);}}
     .al-root{
       --navy:#13314e;--navy2:#1f4e80;--accent:#0a84ff;--accent2:#409cff;--sky:#e8f1fc;
       --paper:#eef3fb;--ink:#1d1d1f;--mut:rgba(44,52,68,0.86);--line:rgba(60,60,67,0.12);
@@ -7838,6 +3253,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .seclabel{font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#33425e;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
     .ev{background:var(--mat-reg);backdrop-filter:blur(34px) saturate(195%);-webkit-backdrop-filter:blur(34px) saturate(195%);border:0;border-radius:var(--radius);padding:18px 20px;margin-bottom:12px;cursor:pointer;transition:.18s;display:flex;align-items:center;gap:14px;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .ev:hover{transform:translateY(-3px) scale(1.008);box-shadow:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 .5px rgba(255,255,255,.5),0 18px 40px -16px rgba(0,0,0,.28);}
+    /* Inline pin control (owners only) + pinned-row dressing */
+    .pinbtn{border:0;background:none;color:var(--mut);width:24px;height:24px;border-radius:8px;display:inline-grid;place-items:center;cursor:pointer;transition:.15s;flex:none;padding:0;}
+    .pinbtn:hover{background:var(--grouped);color:var(--accent);transform:rotate(-12deg);}
+    .pinbtn.on{color:var(--accent);}
+    .pinbadge{position:absolute;top:-7px;left:-7px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;box-shadow:0 2px 8px -2px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.35);z-index:2;pointer-events:none;}
+    .pingrip{color:var(--mut);opacity:.5;cursor:grab;flex:none;display:inline-flex;margin-right:-6px;}
+    .pingrip:active{cursor:grabbing;}
     .ev.draft{opacity:.72;}
     .evicon{width:44px;height:44px;border-radius:13px;background:var(--sky);color:var(--navy);display:grid;place-items:center;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.6);}
     .evicon-date{width:48px;height:48px;border-radius:12px;background:var(--sky);display:flex;flex-direction:column;align-items:center;justify-content:center;flex:none;gap:0;}
@@ -7917,7 +3339,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .divtag.junior{color:#0a6b41;background:#d4f0e0;}
     .cellinput{width:44px;text-align:center;border:1.5px solid var(--accent);border-radius:5px;padding:3px;font:inherit;font-size:13px;outline:none;background:#fff;color:var(--ink);}
     .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px;}
-    .acard{background:rgba(255,255,255,0.80);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border:0;border-radius:16px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);}
+    .acard{background:rgba(255,255,255,0.80);backdrop-filter:blur(30px) saturate(195%);-webkit-backdrop-filter:blur(30px) saturate(195%);border:0;border-radius:16px;padding:16px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);
+      /* Skip layout/paint for off-screen cards — with hundreds of cards each running an
+         expensive backdrop-filter blur, the browser was repainting all of them on every
+         scroll frame even the ones nowhere near the viewport, which is what caused the
+         visible flashing while scrolling up/down. */
+      content-visibility:auto;contain-intrinsic-size:auto 128px;}
     .acard:hover{transform:translateY(-4px) scale(1.015);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.92),0 20px 40px -18px rgba(0,0,0,.28);}
     .achead{display:flex;align-items:center;gap:11px;margin-bottom:12px;}
     .achead>.av{flex:none;}
@@ -7950,6 +3377,21 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .phead .av{width:74px;height:74px;font-size:26px;border:3px solid rgba(255,255,255,.22);}
     .globe-wrap .expand-tip{opacity:0;transition:opacity .15s;}
     .globe-wrap:hover .expand-tip{opacity:1;}
+    /* Year nuggets — per-year chips (same pill size as All) with a class-coloured ring */
+    .ynugs{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;}
+    .ynug{padding:2px;border:0;border-radius:980px;cursor:pointer;transition:transform .12s,filter .12s;background:rgba(140,170,205,.6);}
+    .ynug:hover{transform:translateY(-1px);filter:brightness(1.1);}
+    .ynug-in{display:block;border-radius:980px;padding:3px 10px;font-size:10.5px;line-height:1.1;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.02em;background:#2b4d74;color:#bcd2ea;transition:.12s;}
+    .ynug.on .ynug-in{background:#4a76ad;color:#fff;}
+    .ynug-all{border:0;border-radius:980px;padding:5px 12px;font-size:10.5px;line-height:1.1;font-weight:800;letter-spacing:.02em;cursor:pointer;background:rgba(120,160,210,.16);color:#9fbdd9;transition:.12s;}
+    .ynug-all:hover{filter:brightness(1.1);}
+    .ynug-all.on{background:rgba(146,180,222,.34);color:#fff;}
+    /* Progress trend line: always shown, with a slow soft glow gliding left → right.
+       dasharray period (0.4+0.6) = pathLength(1), and the animation shifts by exactly
+       one period, so the loop is seamless (no jump back to the start). */
+    @keyframes pgPulse{from{stroke-dashoffset:1;}to{stroke-dashoffset:0;}}
+    .pg-pulse{stroke-dasharray:0.4 0.6;animation:pgPulse 12s linear infinite;}
+    @media(prefers-reduced-motion:reduce){.pg-pulse{display:none;}}
     .pname{font-family:'Barlow',sans-serif;font-weight:800;font-size:28px;margin:0;line-height:1;}
     .pflag{font-size:28px;line-height:1;margin-right:4px;}
     .pmeta{color:#bcd2e8;font-size:14px;margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;}
@@ -7981,6 +3423,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .rc.g1{background:#fbe7a6;color:#7a5600;border:1.5px solid #c79a16;}
     .rc.g2{background:#bfe0fb;color:#0d5a96;border:1.5px solid #2a86d6;}
     .rc.g3{background:#fbcaca;color:#9a2222;border:1.5px solid #d65050;}
+    /* Compact miniraces for the Rankings cumulative cells: same .rc colour classes
+       as the profile, smaller, flowing into at most 2 rows (grow horizontally). */
+    .rank-mini{display:grid;grid-auto-flow:column;grid-template-rows:repeat(2,auto);gap:3px;justify-content:start;margin-top:0;}
+    .rank-mini .rc{width:17px;height:17px;border-radius:5px;font-size:9px;}
+    .rank-mini .rc.g1,.rank-mini .rc.g2,.rank-mini .rc.g3{border-width:1px;}
     /* Home */
     .home-hero{background:none;color:var(--ink);padding:8px 0 0;}
     .home-hero h1{font-family:'Barlow',sans-serif;color:var(--ink);font-size:36px;font-weight:800;margin:0 0 6px;}
@@ -7989,11 +3436,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        z-index sits above the click-away overlay (55) so the field stays interactive. */
     .hero-srch{position:relative;z-index:56;display:flex;align-items:center;gap:10px;max-width:640px;margin:20px 0 8px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:14px 20px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 8px 26px -14px rgba(0,0,0,.25);transition:box-shadow .16s,background .16s;}
     .hero-srch:focus-within{background:rgba(255,255,255,.74);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 0 0 4px var(--halo),0 8px 26px -14px rgba(0,0,0,.25);}
-    .hero-srch input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:16px;color:var(--ink);}
+    .hero-srch input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:16px;color:var(--ink);-webkit-appearance:none;appearance:none;border-radius:inherit;}
     .hero-srch input::placeholder{color:var(--mut);}
     .hero-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:380px;overflow:auto;z-index:5;}
     /* Breadth strip — quiet chips + cards under the hero */
     .strip-chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 30px;}
+    /* Forces the country/host selects onto their own row below the class chips
+       (Fix 9b) — the strip-chips row gap gives a tight vertical gap between them. */
+    .strip-break{flex-basis:100%;height:0;margin:0;padding:0;}
     .strip-chip{display:inline-flex;align-items:center;gap:8px;font:inherit;font-size:13.5px;font-weight:700;color:var(--navy);border:0;background:var(--mat-reg);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);border-radius:980px;padding:9px 16px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.7),0 1px 2px rgba(0,0,0,.08);transition:.16s;}
     .strip-chip:hover{transform:translateY(-2px);background:rgba(255,255,255,.85);}
     .strip-chip .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.35);}
@@ -8008,7 +3458,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .np-item{position:relative;}
     .np-drop{position:absolute;top:calc(100% + 10px);left:50%;transform:translateX(-50%) translateY(-6px);min-width:232px;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:12px;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:70;}
     .np-drop::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px;}
-    .np-item:hover .np-drop,.np-item:focus-within .np-drop{opacity:1;pointer-events:auto;transform:translateX(-50%);}
+    /* Hover-only reveal. :has(:focus-visible) keeps keyboard (Tab) access without
+       pinning on mouse-click — a mouse click never triggers :focus-visible, so the
+       dropdown closes the moment the pointer leaves (no click-out needed). */
+    .np-item:hover .np-drop,.np-item:has(:focus-visible) .np-drop{opacity:1;pointer-events:auto;transform:translateX(-50%);}
     .nd-label{margin:2px 4px 8px;font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);}
     .nd-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 2px 10px;}
     .nd-chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;font-weight:700;color:var(--navy);border:0;background:rgba(255,255,255,.6);border-radius:980px;padding:6px 12px;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),0 1px 2px rgba(0,0,0,.06);transition:.14s;}
@@ -8048,31 +3501,47 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .topbar2{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 20px;pointer-events:none;transition:transform .42s cubic-bezier(.2,.85,.2,1),opacity .42s;}
     .topbar2.hidden{transform:translateY(-135%);opacity:0;}
     .topbar2>*{pointer-events:auto;}
-    .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 8px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;}
-    .tb-logo{width:32px;height:32px;border-radius:980px;overflow:hidden;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;}
+    /* Brand pill — same capsule grammar as the landing .tb-brand + .tb-word so
+       landing↔sailing reads as one component. Two click targets: icon → AthLink
+       landing, "Golf" → golf home (divider between). */
+    .tb-brand{display:inline-flex;align-items:center;gap:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:6px 14px 6px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);flex:none;}
+    .tb-logo{width:28px;height:28px;border-radius:980px;overflow:hidden;display:grid;place-items:center;flex:none;cursor:pointer;transition:.15s;}
     .tb-logo img{width:100%;height:100%;display:block;border-radius:inherit;}
     .tb-logo:hover{transform:scale(1.06);box-shadow:0 4px 12px -3px rgba(22,58,99,.5);}
     .tb-divider{width:1px;height:18px;background:rgba(0,0,0,.12);flex:none;margin:0 4px 0 10px;}
-    .tb-sport{font-family:'Barlow',sans-serif;font-weight:800;font-size:16px;color:var(--navy);letter-spacing:-.01em;cursor:pointer;padding:5px 11px 5px 6px;border-radius:980px;transition:.15s;}
-    .tb-sport:hover{background:rgba(19,49,78,.10);}
+    /* SF Pro wordmark treatment matching landing .tb-word (19px/800/-.04em); no
+       Barlow, no bg-pill padding so brand height == landing brand height (40px). */
+    .tb-sport{font-weight:800;font-size:19px;color:var(--navy);letter-spacing:-.04em;cursor:pointer;padding:0 6px 0 5px;transition:color .15s;}
+    .tb-sport:hover{color:var(--accent);}
     .tb-center{flex:1;display:flex;justify-content:center;min-width:0;pointer-events:none;}
     /* Fixed 25px radius (≈ half the closed bar height, so it reads as a capsule when
        closed). Height-independent: as the panel elongates only the body grows — the
        top half keeps its exact shape, no radius reflow, no stretch-and-snap. */
     .menupill{pointer-events:auto;position:relative;width:100%;max-width:440px;min-width:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);transition:background .34s ease;}
-    .menupill.navmode{width:auto;}
+    /* In nav mode the pill must size to its content; the 440px cap (meant for
+       the search field) squeezed the flex row so the last item — the search
+       button — spilled ~5px past the pill's right edge and read as detached. */
+    .menupill.navmode{width:auto;max-width:none;border-radius:980px;}  /* full capsule in nav mode == landing .tb-nav */
     .menupill.searching{background:rgba(255,255,255,.70);}
     /* 3-item primary nav — seg-control idiom inside the glass capsule */
     .np-bar{display:flex;align-items:center;gap:2px;padding:5px;}
-    .np-link{font:inherit;font-size:14px;font-weight:700;border:0;background:none;color:var(--mut);padding:9px 18px;border-radius:980px;cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);white-space:nowrap;letter-spacing:-.01em;}
-    .np-link:hover{color:var(--navy);}
+    .np-link{font:inherit;font-size:14px;font-weight:700;border:0;background:none;color:var(--mut);padding:9px 18px;border-radius:980px;cursor:pointer;transition:.16s cubic-bezier(.2,.85,.2,1);white-space:nowrap;}
+    .np-link:hover{color:var(--navy);background:rgba(255,255,255,.85);}  /* hover treatment == landing .tb-link */
     .np-link.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .np-srchbtn{flex:none;width:36px;height:36px;margin-left:2px;border-radius:980px;border:0;background:var(--mat-reg);backdrop-filter:blur(20px) saturate(190%);-webkit-backdrop-filter:blur(20px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.58),inset 0 1px 0 rgba(255,255,255,.68),0 1px 2px rgba(0,0,0,.07);transition:.15s;}
     .np-srchbtn:hover{background:rgba(255,255,255,.85);}
+    /* Mobile: nav links collapse into a hamburger that opens a flat menu */
+    .np-menubtn{display:none;flex:none;width:36px;height:36px;border-radius:980px;border:0;background:none;color:var(--navy);place-items:center;cursor:pointer;transition:.15s;padding:0;}
+    .np-menubtn:hover{background:rgba(255,255,255,.5);}
+    .np-menu{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);min-width:220px;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;z-index:80;animation:fade .15s both;}
+    .np-mrow{display:flex;align-items:center;gap:11px;width:100%;border:0;background:none;font:inherit;font-size:14px;font-weight:700;color:var(--navy);padding:11px 14px;border-radius:12px;cursor:pointer;transition:.12s;text-align:left;letter-spacing:-.01em;}
+    .np-mrow svg{flex:none;color:var(--navy2);}
+    .np-mrow:hover{background:rgba(255,255,255,.55);}
+    .np-mrow.on{background:rgba(255,255,255,.92);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 2px 8px -2px rgba(0,0,0,.16);}
     .mp-bar{display:flex;align-items:center;gap:8px;padding:6px 7px;}
     .mp-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.45);border-radius:980px;padding:8px 13px;box-shadow:inset 0 1px 0 rgba(255,255,255,.55);}
     .mp-star{color:var(--accent);flex:none;}
-    .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);}
+    .mp-search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;font-size:13.5px;color:var(--ink);-webkit-appearance:none;appearance:none;border-radius:inherit;}
     .mp-search input::placeholder{color:var(--mut);}
     .mp-clear{flex:none;border:0;background:none;cursor:pointer;color:var(--mut);display:flex;padding:0;}
     .mp-drop{position:absolute;top:calc(100% + 8px);left:0;right:0;background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:16px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:6px;max-height:340px;overflow:auto;z-index:5;}
@@ -8092,7 +3561,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .tb-profile:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
     .tb-acct{position:absolute;right:0;top:calc(100% + 8px);background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;min-width:200px;z-index:80;}
     @media(max-width:640px){.np-link{font-size:12.5px;padding:8px 10px;}.np-srchbtn{width:32px;height:32px;}}
-    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}.tb-divider{display:none;}}
+    @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}.tb-divider{display:none;}.np-bar .np-item{display:none;}.np-menubtn{display:grid;}}
     .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
     .class-card{background:var(--mat-reg);backdrop-filter:blur(36px) saturate(195%);-webkit-backdrop-filter:blur(36px) saturate(195%);border:0;border-radius:16px;padding:24px;cursor:pointer;transition:.18s;animation:rise .5s both;box-shadow:inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 2px rgba(0,0,0,.05);}
     .class-card:hover{transform:translateY(-5px) scale(1.012);box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),inset 0 0 0 .5px rgba(255,255,255,.55),0 24px 48px -20px rgba(0,0,0,.34);}
@@ -8112,11 +3581,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .fleet-card .fcount{font-size:13px;color:var(--mut);}
     /* Preview modal */
     .preview-meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;}
-    .preview-meta.wide{grid-template-columns:2fr 1fr 1fr 1fr;}
+    /* One-row import header: name · host country · date · discards stepper · class dropdown */
+    .preview-meta.wide{grid-template-columns:1.7fr 1.2fr 1.1fr auto minmax(118px,.9fr);align-items:end;}
+    @media(max-width:860px){.preview-meta.wide{grid-template-columns:1fr 1fr;}}
     .preview-meta label{font-size:11px;color:var(--mut);display:block;margin-bottom:3px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;}
-    .preview-meta input{width:100%;border:0;border-radius:12px;padding:8px 11px;font:inherit;font-size:13px;background:var(--grouped);outline:none;transition:box-shadow .15s;}
-    .preview-meta input:focus{box-shadow:0 0 0 4px var(--halo);}
-    .preview-meta input.pmissing{box-shadow:0 0 0 1.5px #e8921a;background:rgba(255,149,0,.08);}
+    /* Liquid-glass bar — the ONE material every preview control shares (inputs,
+       country picker, class nugget, organizer chips) so shapes/colours line up. */
+    .preview-meta input,.glassbar{width:100%;border:0;border-radius:12px;padding:0 12px;height:35px;box-sizing:border-box;font:inherit;font-size:13px;outline:none;transition:box-shadow .15s;
+      background:rgba(255,255,255,.55);backdrop-filter:blur(24px) saturate(190%);-webkit-backdrop-filter:blur(24px) saturate(190%);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05);}
+    .preview-meta input:focus{box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 0 0 4px var(--halo);}
+    .preview-meta input.pmissing{box-shadow:inset 0 0 0 1.5px #e8921a,0 1px 3px rgba(0,0,0,.05);background:rgba(255,149,0,.08);}
     .pmissing-hint{font-size:11px;color:#e8921a;margin-bottom:10px;display:flex;align-items:center;gap:5px;}
     .preview-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:52vh;}
     .pe-input{width:100%;border:0;border-bottom:1.5px solid var(--accent);background:#fffbec;font:inherit;font-size:12px;text-align:center;padding:3px 2px;outline:none;}
@@ -8141,9 +3616,17 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .x:hover{background:rgba(255,255,255,.26);}
     .mhead .x{background:rgba(255,255,255,.14);border:0;color:#fff;width:34px;height:34px;border-radius:980px;cursor:pointer;display:grid;place-items:center;transition:.15s;}
     .mhead .x:hover{background:rgba(255,255,255,.26);transform:scale(1.05);}
-    .mtabs{display:flex;gap:6px;padding:14px 22px 0;}
-    .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;background:none;color:var(--mut);padding:9px 14px;border-radius:9px 9px 0 0;cursor:pointer;display:flex;align-items:center;gap:7px;}
-    .mtabs button.on{color:var(--navy);background:#fff;border:1px solid var(--line);border-bottom:0;}
+    .mhead .mktab{font-family:'Barlow',sans-serif;font-weight:700;font-size:14.5px;border:0;color:rgba(255,255,255,.68);background:rgba(255,255,255,.1);padding:8px 16px;border-radius:980px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.15s;white-space:nowrap;}
+    .mhead .mktab:hover{background:rgba(255,255,255,.2);color:#fff;}
+    .mhead .mktab.on{background:rgba(255,255,255,.92);color:var(--navy);box-shadow:0 2px 10px rgba(0,0,0,.18);}
+    /* Liquid-glass segmented tabs (was flat white tab shapes). */
+    .mtabs{display:flex;gap:8px;padding:16px 22px 0;}
+    .mtabs button{font-family:'Barlow',sans-serif;font-weight:600;font-size:14px;border:0;color:var(--mut);padding:8px 16px;border-radius:980px;cursor:pointer;display:flex;align-items:center;gap:7px;
+      background:rgba(255,255,255,.3);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);
+      box-shadow:inset 0 0 0 .5px rgba(255,255,255,.4);transition:.15s;}
+    .mtabs button:hover{background:rgba(255,255,255,.5);}
+    .mtabs button.on{color:var(--navy);background:rgba(255,255,255,.85);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 .5px rgba(255,255,255,.6),0 2px 10px -2px rgba(8,30,60,.18);}
     .mbody{padding:22px 28px 28px;max-height:88vh;overflow-y:auto;}
     .prev.ok{background:#d8f0e3;color:#0a6b41;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
     .prev.err{background:#fbe7e4;color:#a8362a;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:12px;}
@@ -8151,10 +3634,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     /* Floating save/publish bar — pinned to the bottom of the modal's scroll
        container (.mbody) so it stays visible while the preview scrolls. Liquid-glass
        material consistent with .draft-banner. */
-    .import-actionbar{position:sticky;bottom:0;left:0;right:0;z-index:40;display:flex;gap:10px;justify-content:flex-end;align-items:center;
-      margin:16px -28px -28px;padding:14px 28px;border-top:1px solid var(--line);
-      background:rgba(252,253,255,0.72);backdrop-filter:blur(28px) saturate(195%);-webkit-backdrop-filter:blur(28px) saturate(195%);
-      box-shadow:inset 0 1px 0 rgba(255,255,255,.5);}
+    .import-actionbar{position:sticky;bottom:14px;z-index:40;display:flex;gap:10px;justify-content:flex-end;align-items:center;
+      margin:12px 0 0;padding:0;pointer-events:none;}
+    .import-actionbar>*{pointer-events:auto;}
+    .import-actionbar .btn{box-shadow:0 10px 26px -10px rgba(8,30,60,.45);}
+    .import-actionbar .btn.ghost{background:rgba(252,253,255,.88);backdrop-filter:blur(16px) saturate(180%);-webkit-backdrop-filter:blur(16px) saturate(180%);}
     /* Reclaim space beneath the sticky bar so the last table rows aren't hidden. */
     .mbody.has-actionbar{padding-bottom:0;}
     .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
@@ -8185,6 +3669,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .scorecell .scode{font-size:8px;font-weight:800;color:#e74c3c;letter-spacing:.04em;text-transform:uppercase;}
 
     .spin{animation:spin 1s linear infinite;}@keyframes spin{to{transform:rotate(360deg);}}
+    /* Host auto-grab: subtle "Looking you up…" text shimmer (no spinner). */
+    .hostResearchShimmer{animation:hostResearchShimmer 1.3s ease-in-out infinite;}
+    @keyframes hostResearchShimmer{0%,100%{opacity:.5;}50%{opacity:1;}}
     /* Calendar — Apple Calendar style */
     .cal-modal{background:rgba(252,253,255,0.88);backdrop-filter:blur(56px) saturate(210%);-webkit-backdrop-filter:blur(56px) saturate(210%);width:100%;max-width:1020px;border-radius:22px;overflow:hidden;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.8),inset 0 0 0 .5px rgba(255,255,255,.5),0 40px 90px -28px rgba(0,0,0,.45),0 0 0 .5px rgba(60,60,67,.08);animation:rise .3s both;max-height:92vh;display:flex;flex-direction:column;}
     .cal-head{background:linear-gradient(135deg,rgba(31,78,128,.78),rgba(19,49,78,.84));backdrop-filter:blur(44px) saturate(195%);-webkit-backdrop-filter:blur(44px) saturate(195%);color:#fff;padding:14px 20px;display:flex;align-items:flex-start;gap:10px;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.16);}
@@ -8275,30 +3762,258 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
        (up to a few wrapped lines of hover text) so it never overlaps the next
        section ("Recent competitions" on the sailing home page). */
     .spm-sec{margin:26px 0 92px}
+    /* home: tighter reserve below the models — the hover text hangs lower (see
+       .spm-duo--home .spm-info) but sits closer to the "Results…" line beneath. */
+    .spm-sec--home{margin-bottom:60px}
     /* class/competitions/portal/results pages: title/search/filters take 50%, the two
        models take 50% on the same row. align-items:end bottom-aligns the models to the
        header's last line — the reserved margin-bottom below the WHOLE GRID (not inside
        either grid item) is what keeps the hover info clear of the content beneath,
        without affecting that alignment or the row's height. */
-    .spm-classgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:end;margin-bottom:80px}
+    .spm-classgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch;margin-bottom:22px}
     .spm-classhead{min-width:0}
-    @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}}
+    /* the header column is the taller one; stretch makes .spm-duo match its height so
+       the bottom-anchored .spm-info lands on the header's bottom baseline. Zero the
+       trailing margin under the last header control so that baseline == filter/buttons. */
+    .spm-classhead>*:last-child{margin-bottom:0!important}
+    /* association/host portal header sits inside .strip (which adds its own 18px
+       padding-bottom); trim the grid's own margin there so the content below the
+       Athletes/Calendar buttons isn't pushed down twice. Global-class grid lives in
+       .wrap.sec (no .strip) and keeps the 22px above. */
+    .strip .spm-classgrid{margin-bottom:4px}
+    /* The hover-info line is bottom-anchored and grows UPWARD. On the global-class page the
+       header and the models are nearly the same height, so there's no clearance and the long
+       3-line "How a race works" course blurb climbs up into the diagram. Reserve a fixed zone
+       below the models (>= the 3-line text height) so the text sits under them, never over
+       them. Self-scoping: this only makes the models column taller than the header on the
+       global-class page; the association header is already taller, so its layout is unchanged. */
+    .spm-classgrid .spm-duo{padding-bottom:62px}
+    /* stacked (single column): no cross-column alignment to preserve, so let the info flow
+       IN-FLOW below the models — it self-sizes to any wrap count (long text wraps to 4-5
+       lines on a phone) and can never overlap the models or the results. */
+    @media(max-width:1150px){.spm-classgrid{grid-template-columns:1fr}.spm-classgrid .spm-duo{padding-bottom:0}.spm-classgrid .spm-info{position:static;margin-top:10px}}
+    /* ── Host portal header WITH an interactive model (spm-classgrid--host) ──
+       Unlike the global-class / competitions grids above, this one must NEVER stack:
+       the model belongs on the same row as the title at every width. Re-assert the
+       two-column track (higher specificity than the stack rule above) and let BOTH
+       columns shrink — the SVG models are width:100% so they scale down fluidly.
+       Placed AFTER the max-width:1150px media block so it wins by source order. */
+    .strip .spm-classgrid--host{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(10px,1.6vw,16px)}
+    .spm-classgrid--host .spm-duo{padding-bottom:62px}                 /* keep overlay clearance (2-col, not stacked) */
+    .spm-classgrid--host .spm-info{position:absolute;margin-top:0}
+    /* ── Fluid header sizing — EVERY host portal header, model or not ──
+       The whole header (title, globe, logo, stat pills, action pills) lives in .strip,
+       so scope the clamp()s there. As the viewport narrows everything scales down
+       together instead of wrapping or overflowing. */
+    .strip .page-title{font-size:clamp(15px,2.3vw,28px)}
+    .strip .pillbar{gap:clamp(9px,1.4vw,20px)}
+    .strip .pill{font-size:clamp(11.5px,1.15vw,15px)}
+    .strip .portal-pill{min-width:0;font-size:clamp(11px,1.05vw,13.5px);padding:9px clamp(11px,1.3vw,18px)}
+    /* Header globe + logo: fluid heights so they shrink with the header. SailingGlobe
+       fill=true reads .hdr-globe's height; the square aspect keeps the projection round.
+       .hdr-logo drives the logo height in CSS (width follows via its aspect-ratio). */
+    .hdr-globe{width:clamp(88px,12vw,150px);aspect-ratio:1}
+    .hdr-logo{height:clamp(45px,6.9vw,84px)}
     .spm-duo{position:relative;min-width:0}
     .spm-duorow{display:flex;gap:0;justify-content:center;align-items:flex-start}
     /* pull the two boats together — their outer whitespace overlaps, closing the empty gap */
     .spm-duorow .spm-holo{flex:1 1 0;min-width:0;max-width:480px}
     .spm-duorow .spm-holo:first-child{margin-right:-6%}
     .spm-duorow .spm-holo:last-child{margin-left:-6%}
+    /* Home showcase models shrink fluidly with the viewport — same effect as the host-page
+       models, but 30% larger overall (the host's ~0.25vw rate scaled ×1.3 → ~0.325vw per holo,
+       capped at 437px, floored at 143px so they stay legible). Replaces the old fixed 336px,
+       which held full size until a hard mobile breakpoint. */
+    .spm-duorow--home .spm-holo{max-width:clamp(143px,32.5vw,437px)}
     .spm-holo{position:relative} /* frameless — the models sit directly on the page */
     /* absolutely placed OVERLAY below the row — out of flow, so it never shifts the
        models or (on the grid pages) the header; callers reserve real space for it via
        margin-bottom on their own container (.spm-classgrid above, .spm-sec below). */
-    .spm-info{position:absolute;top:100%;left:0;right:0;margin-top:6px;font-size:12.5px;line-height:1.45;color:var(--mut);text-align:left}
+    .spm-info{position:absolute;bottom:0;left:0;right:0;font-size:12.5px;line-height:1.45;color:var(--mut);text-align:left}
+    /* home isn't a grid, so there's no header to bottom-align to — hang the hover
+       text below the models with a comfortable gap, then keep it close to "Results…". */
+    .spm-duo--home .spm-info{top:100%;bottom:auto;margin-top:22px}
     .spm-info b{color:var(--ink);font-weight:700}
     .spm-info-hint{opacity:.75}
     .spm-halo{transform-box:fill-box;transform-origin:center;animation:spmPulse 2.4s ease-out infinite}
     @keyframes spmPulse{0%{transform:scale(.55);opacity:.75}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}
     @media (prefers-reduced-motion:reduce){.spm-halo{animation:none;opacity:.35}}
+    /* ── Home class rotation (spm-rot): crossfading model carousel + label + class pips ── */
+    .spm-rotator{position:relative}
+    .spm-rotstage{transition:opacity .3s ease}
+    .spm-rotbar{display:flex;align-items:center;justify-content:center;gap:12px;margin:0 0 6px;position:relative;z-index:2}
+    .spm-rotlabel{font-size:12.5px;font-weight:700;letter-spacing:.04em;color:var(--ink);min-width:52px;text-align:right}
+    .spm-rotpips{display:inline-flex;align-items:center;gap:8px}
+    .spm-rotpip{width:9px;height:9px;padding:0;border-radius:50%;border:1.5px solid rgba(31,78,128,.4);background:rgba(31,78,128,.18);cursor:pointer;transition:transform .2s ease,background .2s ease,border-color .2s ease}
+    .spm-rotpip:hover{transform:scale(1.25)}
+    .spm-rotpip.on{transform:scale(1.15)}
+    @media (prefers-reduced-motion:reduce){.spm-rotstage,.spm-rotpip{transition:none}}
+    @media(max-width:700px){.spm-rotbar{margin:0 0 2px}}
+
+    /* ══════════ MOBILE OPTIMIZATION (≤700px unless noted) ══════════
+       Additive layer only — desktop (≥701px) must render pixel-identical.
+       Later-in-cascade rules win; !important appears ONLY where an inline
+       style={{...}} in the JSX would otherwise beat the mobile override. */
+
+    /* ── Touch affordances (any coarse-pointer device, any width) ── */
+    .spm-hint-touch{display:none;}
+    @media (pointer:coarse){
+      .al-root button,.al-root select,.al-root input,.al-root .acard,.al-root .strip-card,
+      .al-root .class-card,.al-root .ev,.al-root .histrow,.al-root .namelink,
+      .al-root .strip-chip,.al-root .lens-chip{-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
+      .globe-wrap .expand-tip{display:none;}
+      .row-ai-tooltip{display:none;}          /* hover-driven scout tooltip has no tap path */
+      .spm-hint-mouse{display:none;}
+      .spm-hint-touch{display:inline;}
+    }
+    @media (pointer:coarse) and (prefers-reduced-motion:no-preference){
+      .acard:active,.strip-card:active,.class-card:active,.ev:active,.histrow:active,
+      .strip-chip:active,.lens-chip:active,.cal-cls-mini:active,.filter-chip:active{transform:scale(.98);transition:transform .08s;}
+    }
+
+    /* ── duplicate-review card: swift exit on Merge/Don't merge instead of an abrupt jump ── */
+    .dup-card{max-height:2000px;opacity:1;transform:scale(1) translateY(0);overflow:hidden;
+      transition:opacity .22s ease,transform .22s ease,max-height .26s ease .1s,margin-bottom .26s ease .1s,padding .26s ease .1s;}
+    .dup-card-exit{opacity:0;transform:scale(.97) translateY(-4px);max-height:0;margin-bottom:0;padding-top:0;padding-bottom:0;}
+    .dup-flip{border-radius:8px;transition:background .15s,transform .12s;}
+    .dup-flip:hover{background:var(--sky);}
+    .dup-flip:active{transform:scale(.92);}
+
+    @media (max-width:700px){
+      /* ── §1 safe areas ── */
+      .al-root{padding-bottom:env(safe-area-inset-bottom);}
+      .foot{padding:24px 0 calc(24px + env(safe-area-inset-bottom));}
+      .notice{bottom:calc(16px + env(safe-area-inset-bottom));max-width:calc(100% - 24px);}
+
+      /* ── §2 global scale ── */
+      .wrap{padding:0 14px;}
+      .topin{padding:10px 14px;}
+      .sec{padding:18px 0 44px;}
+      .strip{padding:12px 0;}
+      .page-head{margin-bottom:14px;}
+      .page-title,.strip h1{font-size:clamp(21px,5.5vw,28px);}
+      .home-hero h1{font-size:clamp(26px,8vw,36px);}
+      .page-sub{font-size:13px;}
+      .seclabel{margin:0 0 10px;}
+      .cal-head-glass{padding:12px 14px;border-radius:18px;}
+      .phead{padding:18px 16px;gap:14px;border-radius:18px;}
+      .phead .av{width:88px!important;height:88px!important;font-size:30px!important;} /* profile photo is inline-sized to 111px */
+      .pname,.pflag{font-size:clamp(20px,6vw,28px);}
+      .pmeta{font-size:13px;gap:10px;}
+      .pstats{gap:18px;margin-top:14px;}
+      .pstats .v{font-size:19px;}
+      .histrow{padding:12px 13px;gap:11px;margin-bottom:8px;}
+      .hrk{width:40px;font-size:18px;}
+      .mbody{padding:16px 16px 20px;}
+      .import-actionbar{margin:12px 0 0;padding:0;bottom:10px;}
+      .team-summary{padding:10px 12px;}
+      .x{width:40px;height:40px;}
+      .np-srchbtn,.np-menubtn{width:44px;height:44px;}
+      .back{min-height:44px;}
+
+      /* ── §3 athlete cards → compact rows (~8 per screen) ── */
+      .agrid{grid-template-columns:1fr;gap:8px;}
+      .acard{display:grid;grid-template-columns:40px minmax(0,1fr);column-gap:12px;row-gap:2px;align-items:center;padding:10px 12px;border-radius:14px;}
+      .achead{display:contents;}
+      .achead .av{width:40px;height:40px;font-size:13px;grid-row:1/span 2;}
+      .achead>div{min-width:0;}
+      .acn{font-size:16px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .acstat{grid-column:2;border-top:0;padding-top:0;gap:5px;font-size:12.5px;flex-wrap:nowrap;min-width:0;overflow:hidden;}
+      .acstat div{display:flex;align-items:baseline;gap:3px;white-space:nowrap;}
+      .acstat b{display:inline;font-size:12.5px;}
+      .acstat div+div::before{content:"·";margin-right:4px;color:var(--mut);}
+
+      /* ── §10 country group headers ── */
+      .cgroup-head{margin:2px 0 8px!important;gap:7px!important;}
+      .cgroup-head span:first-child{font-size:15px!important;}
+      .cgroup-head span:nth-child(2){font-size:13px!important;}
+
+      /* ── §4 competition / featured cards → compact rows ── */
+      .strip-cards{grid-template-columns:1fr;gap:8px;margin-bottom:22px;}
+      .strip-card{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:2px;align-items:center;padding:11px 13px;border-radius:14px;}
+      .strip-card .sc-top{display:contents;}
+      .strip-card .sc-top>*{grid-column:1;grid-row:2;justify-self:start;margin:0;}
+      .strip-card .sc-top>.cls{grid-column:2;grid-row:1/span 3;justify-self:end;align-self:center;}
+      .strip-card .sc-name{grid-column:1;grid-row:1;font-size:15.5px;line-height:1.25;margin:0;}
+      .strip-card .sc-date{font-size:12.5px;}
+      .strip-card .sc-sub{grid-column:1;grid-row:3;margin:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      /* event list rows (.ev) — drop the vertical year + redundant date/count lines */
+      .ev{padding:12px 13px;gap:10px;margin-bottom:8px;}
+      .evicon-year{display:none;}
+      .evicon-date{width:44px;height:44px;}
+      .evicon-date .eid{font-size:18px;}
+      .evname{font-size:15.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+      .evmeta{font-size:12.5px;gap:9px;}
+      .evmeta span.ev-cal,.evmeta span.ev-count{display:none;}
+
+      /* ── §5 host / association cards → compact rows ── */
+      .classes-grid{grid-template-columns:1fr;gap:8px;}
+      .class-card{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:2px;align-items:center;padding:12px 13px;}
+      .class-card>div:first-child{grid-column:2;grid-row:1/span 2;flex-direction:column;align-items:flex-end!important;justify-content:center;gap:5px!important;margin-bottom:0!important;max-width:40vw;}
+      .class-card>div:first-child>*{flex:none!important;max-width:100%;min-width:0;}
+      .class-card>div:first-child div{flex-wrap:wrap!important;row-gap:4px;justify-content:flex-end;}
+      .class-card .cls{font-size:10.5px;padding:3px 8px;}
+      .class-card .class-name{grid-column:1;grid-row:1;font-size:16px;margin:0;line-height:1.3;}
+      .class-card .class-stats{grid-column:1;grid-row:2;gap:5px;font-size:12.5px;margin:0;}
+      .class-card .class-stats div{display:flex;align-items:baseline;gap:3px;white-space:nowrap;}
+      .class-card .class-stats b{display:inline;font-size:12.5px;}
+      .class-card .class-stats div+div::before{content:"·";margin-right:4px;color:var(--mut);}
+      .class-card>img{display:none;}
+
+      /* ── §6 chip / control rows → one horizontally scrollable line each ── */
+      .strip-chips,.pagetabs .wrap,.rank-src-row,.rank-sel-row,.rank-year-row,.rank-mode-row{
+        display:flex;flex-wrap:nowrap!important;overflow-x:auto;-webkit-overflow-scrolling:touch;
+        scrollbar-width:none;padding-bottom:2px;
+        -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 26px),transparent);
+        mask-image:linear-gradient(90deg,#000 calc(100% - 26px),transparent);}
+      .strip-chips::-webkit-scrollbar,.pagetabs .wrap::-webkit-scrollbar,.rank-src-row::-webkit-scrollbar,
+      .rank-sel-row::-webkit-scrollbar,.rank-year-row::-webkit-scrollbar,.rank-mode-row::-webkit-scrollbar{display:none;}
+      .strip-chips>*,.rank-src-row>*,.rank-sel-row>*,.rank-year-row>*,.rank-mode-row>*{flex:none;white-space:nowrap;}
+      .strip-break{display:none;} /* Fix 9b's row-break: selects stay inline in the one-line scroll rail */
+      .pagetabs button{flex:none;white-space:nowrap;min-height:44px;}
+      .strip-chip,.lens-chip,.filter-chip,.cal-cls-mini,.nd-chip,.lens-select{min-height:44px;}
+      .seg button{min-height:44px;}
+      .rank-src-row button,.rank-year-row button,.rank-sel-row button,.rank-mode-row button{min-height:44px;}
+      .rank-disc-btn{width:44px!important;height:44px!important;}
+      .rank-src-row{margin-bottom:8px!important;}
+      .rank-mode-row{gap:10px!important;margin-bottom:10px!important;align-items:center;}
+      .rank-year-row{padding:4px 0!important;}
+
+      /* ── §7 results & rankings tables — sticky rank + name columns ── */
+      .panel{-webkit-overflow-scrolling:touch;}
+      table{min-width:0;font-size:12px;}
+      thead th{padding:8px 5px;font-size:11px;white-space:nowrap;}
+      thead th.l{padding-left:10px;}
+      tbody td{padding:6px 5px;}
+      tbody td.l{padding-left:10px;}
+      .rk{font-size:13px;}
+      .panel table thead th>div{max-width:84px!important;}
+      .panel table thead th:first-child{position:sticky;left:0;z-index:4;width:40px!important;min-width:40px!important;background:linear-gradient(180deg,rgb(31,78,128),rgb(19,49,78));}
+      .panel table thead th:nth-child(2){position:sticky;left:40px;z-index:4;background:linear-gradient(180deg,rgb(31,78,128),rgb(19,49,78));box-shadow:2px 0 4px rgba(20,33,58,.18);}
+      .panel table tbody td.rk{position:sticky;left:0;z-index:2;background:#fff;width:40px;min-width:40px;max-width:40px;}
+      .panel table tbody td.rk+td{position:sticky;left:40px;z-index:2;background:#fff;box-shadow:2px 0 4px rgba(20,33,58,.08);}
+      .panel table tbody td.rk+td .namelink{display:inline-block;max-width:31vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;}
+      .boat{gap:8px;}
+      .panel table .boat>*:first-child{display:none;} /* avatars: density over decoration in phone tables */
+      .cn{font-size:11px;max-width:31vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      /* import-preview table (admin) gets the same treatment, lighter */
+      .rtable-wrap{-webkit-overflow-scrolling:touch;}
+      .rtable thead th{padding:6px 3px;}
+      .rtable thead th:first-child,.rtable tbody td:first-child{position:sticky;left:0;z-index:2;background:#fff;}
+      .rtable thead th:first-child{z-index:3;background:linear-gradient(180deg,rgb(31,78,128),rgb(19,49,78));}
+
+      /* ── §9 landing page ── */
+      .home-hero{padding:4px 0 0;}
+      .spm-sec{margin:18px 0 44px;}
+      .spm-sec--home{margin:6px 0 30px;}
+      .spm-duorow--home{justify-content:center;}
+      /* Home models now shrink fluidly at every width (see the .spm-duorow--home .spm-holo
+         clamp above) — matching the host-page shrink. Both the boat and the course diagram
+         stay visible and scale down together, instead of the boat jumping to 82vw and the
+         course diagram being hidden on phones. */
+      .spm-duo--home .spm-info{position:static;margin-top:8px;text-align:center;min-height:36px;}
+      .hero-srch{padding:12px 15px;margin:14px 0 6px;}
+    }
   `}</style>
 
   {/* ── FLOATING TOP BAR (no frame; glass pills that hide on scroll-down) ── */}
@@ -8327,9 +4042,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             </div>
           : <div className="np-bar">
+              {/* Mobile: hamburger collapses the four links into a flat menu */}
+              <button className="np-menubtn" title="Menu" aria-label="Menu" onClick={()=>setNavMenuOpen(o=>!o)}><Menu size={18}/></button>
               {/* Athletes — by class / by country / by host */}
               <div className="np-item">
-                <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={()=>goTop("athletes")}>Athletes</button>
+                <button className={`np-link${navOn==="athletes"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("athletes");}}>Athletes</button>
                 <div className="np-drop">
                   <p className="nd-label">By division</p>
                   <div className="nd-chips">
@@ -8352,7 +4069,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               {/* Competitions — by class / by country / by host */}
               <div className="np-item">
-                <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={()=>goTop("competitions")}>Competitions</button>
+                <button className={`np-link${navOn==="competitions"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("competitions");}}>Competitions</button>
                 <div className="np-drop">
                   <p className="nd-label">By division</p>
                   <div className="nd-chips">
@@ -8375,7 +4092,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               {/* Hosts — by type / by country */}
               <div className="np-item">
-                <button className={`np-link${navOn==="hosts"?" on":""}`} onClick={()=>goTop("hosts")}>Hosts</button>
+                <button className={`np-link${navOn==="hosts"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("hosts");}}>Hosts</button>
                 <div className="np-drop">
                   <p className="nd-label">By type</p>
                   {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
@@ -8390,13 +4107,19 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                           <span className="nd-cnt">{navHosts.filter(h=>h.loc===cc).length}</span>
                         </button>
                       ))}
+                      {navHosts.some(h=>!h.loc)&&(
+                        <button className="nd-row" onClick={()=>goTop("hosts",{country:"__none__"})}>
+                          <span style={{fontSize:15,flex:"none",width:15,display:"inline-block"}}/>Unspecified
+                          <span className="nd-cnt">{navHosts.filter(h=>!h.loc).length}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
               {/* Rankings — by class / by country */}
               <div className="np-item">
-                <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={()=>goTop("ranking")}>Rankings</button>
+                <button className={`np-link${navOn==="ranking"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("ranking");}}>Rankings</button>
                 <div className="np-drop">
                   <p className="nd-label">By division</p>
                   <div className="nd-chips">
@@ -8409,7 +4132,20 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <button className="nd-row" onClick={()=>goTop("ranking")}><Globe size={14} style={{flex:"none",color:"var(--navy2)"}}/>By country</button>
                 </div>
               </div>
+              {/* Scout — talent-scouting workspace (no dropdown); scout-only */}
+              {isScout&&<div className="np-item">
+                <button className={`np-link${navOn==="scout"?" on":""}`} onClick={e=>{e.currentTarget.blur();goTop("scout");}}>Scout</button>
+              </div>}
               <button className="np-srchbtn" title="Search" onClick={()=>setNavSearchOpen(true)}><Search size={16}/></button>
+              {navMenuOpen&&(
+                <div className="np-menu">
+                  <button className={`np-mrow${navOn==="athletes"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("athletes");}}><Users size={16}/>Athletes</button>
+                  <button className={`np-mrow${navOn==="competitions"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("competitions");}}><Anchor size={16}/>Competitions</button>
+                  <button className={`np-mrow${navOn==="hosts"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("hosts");}}><Waves size={16}/>Hosts</button>
+                  <button className={`np-mrow${navOn==="ranking"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("ranking");}}><Trophy size={16}/>Rankings</button>
+                  {isScout&&<button className={`np-mrow${navOn==="scout"?" on":""}`} onClick={()=>{setNavMenuOpen(false);goTop("scout");}}><Eye size={16}/>Scout</button>}
+                </div>
+              )}
             </div>}
         {navSearchOpen&&gSearchOpen&&gSearchResults.length>0&&(
           <div className="mp-drop">
@@ -8460,7 +4196,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>{myHostNames.length>1?"Hosts":"Host"}: <b style={{color:"var(--navy)"}}>{myHostNames.join(", ")}</b></div>
                       : role==="athlete"
                         ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}><b style={{color:"var(--navy)"}}>Athlete</b></div>
-                        : null}
+                        : role==="scout"
+                          ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}><b style={{color:"var(--navy)"}}>Scout</b></div>
+                          : null}
                 </>);
               })()}
               {/* Username reminder — gentle nudge, only if they haven't set one */}
@@ -8502,14 +4240,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <button onClick={()=>setShowDevApprovals(true)}>Pending approvals</button>
       <button onClick={()=>setShowDevProfiles(true)}>All profiles</button>
       <button onClick={()=>setShowAddHost(true)}><Plus size={11}/>Add host</button>
+      {portal&&!isClassPortal&&hostById(portal)&&<button style={{color:"#e74c3c"}} onClick={e=>deleteHost(portal,hostById(portal).name,e)}><Trash2 size={11}/>Delete this host</button>}
       <button onClick={()=>setDevMode(false)}><Pencil size={11}/>Dev view ON — turn off</button>
     </div>
   )}
   <div style={{height:74}}/>
-  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
+  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);setSignupRole(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
     clubs={CLUBS} associations={ASSOCIATIONS} federations={FEDERATIONS}
     onCreateHost={createHostFromSignup} onClaimHost={claimHostFromSignup}
-    pendingInviteToken={pendingInviteToken}/>}
+    initialRole={signupRole} pendingInviteToken={pendingInviteToken}/>}
   {showMembers&&host&&!isClassPortal&&(()=>{
     // Athlete names appearing in this host's events (for vouching scope)
     const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));
@@ -8603,6 +4342,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
     <HostEditModal host={hostById(portal)} canManage={canManageMembers}
       onSave={(patch)=>saveHost(portal,patch)} onSaveSlug={saveHostSlug}
+      onUploadLogo={(file)=>uploadHostLogo(file,hostById(portal),auth?.token)}
       membersProps={{hostId:portal,hostName:hostById(portal).name,auth,myMembership:myPortalMembership,
         pendingClaims:pendingClaimsHere,pendingEventClaims:pendingEventClaimsHere,canVouch:devMode||(!!myPortalMembership&&myPortalMembership.verified),
         onDecideClaim:(claim,approve)=>resolveClaim(claim,approve,portal),
@@ -8615,6 +4355,28 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       onClose={()=>setShowHostEdit(false)}/>
     );
   })()}
+  {/* Host auto-grab: competition discovery + bulk-import view */}
+  {showDiscovery&&portal&&!isClassPortal&&hostById(portal)&&(
+    <HostDiscoveryModal host={hostById(portal)} events={events} auth={auth}
+      canImport={canManageMembers} devMode={devMode}
+      onSaveDossier={(dossier)=>saveHost(portal,{dossier})}
+      onClaimEvent={async(ev)=>{
+        if(!auth?.user?.id) return;
+        try{
+          await createEventClaim(ev.id,portal,auth.user.id,"",auth.token);
+          setClaimNote({name:ev.name,status:"pending"}); setTimeout(()=>setClaimNote(null),6000);
+          await reloadEventClaims();
+        }catch(e){ console.error("discovery event claim",e); }
+      }}
+      onImport={(rows)=>importDiscoveredCompetitions(rows,hostById(portal))}
+      seedSites={discoverySeed}
+      importStatuses={discoveryImport?.statuses||{}}
+      importSummary={discoveryImport}
+      needsReview={hostById(portal)?.dossier?.needs_review||[]}
+      openReviewInitially={discoveryReview}
+      onReviewItem={openReviewInImport}
+      onClose={()=>{setShowDiscovery(false);setDiscoveryImport(null);setDiscoverySeed(null);}}/>
+  )}
   {pendingHostNotice&&(
     <div className="notice"><div className="ico"><Clock size={18}/></div>
       <div><b>Setup complete — pending approval</b>
@@ -8649,7 +4411,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       </div>
     </div>
   )}
-  {(gSearchOpen||navSearchOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setNavSearchOpen(false);}}/>}
+  {(gSearchOpen||navSearchOpen||navMenuOpen)&&<div style={{position:"fixed",inset:0,zIndex:55}} onClick={()=>{setGSearchOpen(false);setNavSearchOpen(false);setNavMenuOpen(false);}}/>}
 
   {/* ── Breadcrumb wayfinding — entity pages only (top-level pages carry their own
       titles; the top bar has no back button by rule, so this is the "you are here"). ── */}
@@ -8723,9 +4485,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     }));
     return(
     <div className="wrap sec">
-      {/* Sport explainer — dormant for golf (sailing's interactive 49er model).
-          Re-enable by adding a golf entry to SPORT_MODELS and passing its id. */}
-      {false&&<SportShowcase clsId="49er"/>}
+      {/* Sport explainer — dormant for golf (sailing's rotating 3D boat models).
+          Re-enable by adding golf entries to SPORT_MODELS. */}
+      {false&&<HomeShowcaseRotator/>}
       <p style={{margin:"0 0 8px",color:"var(--mut)",fontSize:15}}>Results, athlete profiles and division standings for competitive golf</p>
       <div className="hero-srch" style={{maxWidth:"none"}} onClick={e=>e.stopPropagation()}>
         <Search size={19} color="#9fb2c8" style={{flex:"none"}}/>
@@ -8766,7 +4528,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const n=nuggetFor(ev.cls,ev.subclass);
           return(
           <div key={ev.id} className="strip-card" onClick={()=>go({name:"event",id:ev.id})}>
-            <div className="sc-top"><span className="sc-date">{formatDate(ev.date)}</span><span className="cls" style={{background:n.color}}>{n.label}</span></div>
+            <div className="sc-top"><span className="sc-date">{formatDate(ev.date)}</span>
+              {isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}}>UPCOMING</span>}
+              <span className="cls" style={{background:n.color}}>{n.label}</span></div>
             <p className="sc-name">{ev.name}</p>
             {host&&<p className="sc-sub">{host}</p>}
           </div>);
@@ -8847,6 +4611,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </button>
               );
             })}
+            <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
             <span className="lens-selwrap">
               <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
                 <option value="">All countries</option>
@@ -8896,10 +4661,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <div className="evmeta">
               {hostName&&<span><Waves size={13}/>{hostName}</span>}
               <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
-              <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={e=>{e.stopPropagation();openCalendarAt(ev.date);}}>{formatDate(ev.date)}</span></span>
-              <span><Users size={13}/>{s.fleet} players · {s.races} rounds</span>
+              <span className="ev-cal"><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={e=>{e.stopPropagation();openCalendarAt(ev.date);}}>{formatDate(ev.date)}</span></span>
+              <span className="ev-count"><Users size={13}/>{isUpcomingEvent(ev)?`${s.fleet} entered`:`${s.fleet} players · ${s.races} rounds`}</span>
             </div>
           </div>
+          {isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}} title="Entry list published — results pending. Open for the fleet forecast.">UPCOMING</span>}
           {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
           <ChevronRight size={18} color="#9fb2c8"/>
         </div>);
@@ -8933,7 +4699,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     const tLens=view.type||null, cLens=view.country||null;
     const list=navHosts
       .filter(h=>!tLens||h.htype===tLens)
-      .filter(h=>!cLens||h.loc===cLens)
+      .filter(h=>!cLens||(cLens==="__none__"?!h.loc:h.loc===cLens))
       .filter(h=>!q||h.name.toLowerCase().includes(q));
     const published=events.filter(ev=>ev.status!=="Draft");
     return(
@@ -8953,10 +4719,12 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {[["federation","Federations"],["club","Clubs"],["association","Associations"]].map(([t,label])=>(
           <button key={t} className={`lens-chip${tLens===t?" on":""}`} onClick={()=>setView(v=>({...v,type:v.type===t?undefined:t}))}>{label}<span className="cnt">{navHosts.filter(h=>h.htype===t).length}</span></button>
         ))}
+        <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
         <span className="lens-selwrap">
           <select className="lens-select" value={cLens||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
             <option value="">All countries</option>
             {hostCountries.map(cc=>(<option key={cc} value={cc}>{iocFlag(cc)} {GLOBE_NAMES[IOC_ISO[cc]]||cc}</option>))}
+            {navHosts.some(h=>!h.loc)&&<option value="__none__">Unspecified</option>}
           </select>
           <ChevronRight size={13} className="lens-selchev"/>
         </span>
@@ -8970,7 +4738,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const main=CLASSES.filter(c=>ids.includes(c.id)).map(c=>c.id);
           const clsIds=[...main,...ids.filter(id=>!main.includes(id))];
           return(
-          <div className="class-card" key={h.id} style={{animationDelay:`${Math.min(i,10)*60}ms`}} onClick={()=>enterPortal(h.id)}>
+          <div className="class-card" key={h.id} style={{animationDelay:`${Math.min(i,10)*60}ms`,position:"relative"}} onClick={()=>enterPortal(h.id)}>
             <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
               <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#5b6b80",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px",background:"transparent",whiteSpace:"nowrap"}}>{typeLabel}</span>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flex:"1 1 0",minWidth:0}}>
@@ -8979,6 +4747,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
             <p className="class-name">{h.loc?<span style={{marginRight:6}}>{iocFlag(h.loc)}</span>:null}{h.name}</p>
             <div className="class-stats" style={{marginBottom:0}}><div><b>{h.n}</b>competitions</div><div><b>{ppl.size}</b>athletes</div></div>
+            {h.logo_url&&<img src={h.logo_url} alt="" style={{position:"absolute",right:16,bottom:16,width:60,height:60,objectFit:"contain",pointerEvents:"none",background:"transparent"}}/>}
+            {devMode&&<button className="delbtn" title="Delete host (dev)" style={{position:"absolute",top:10,right:10}} onClick={e=>deleteHost(h.id,h.name,e)}><Trash2 size={15}/></button>}
           </div>);
         })}
       </div>
@@ -8987,13 +4757,24 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     );
   })()}
 
+  {/* ── SCOUT: talent-scouting workspace ── */}
+  {!portal&&view.name==="scout"&&(
+    <div className="wrap sec" style={{paddingTop:16}}>
+      {isScout
+        ? <ScoutPortal events={events} auth={auth} hostById={hostById}
+            onPick={name=>go({name:"profile",id:name})}
+            onOpenEvent={id=>go({name:"event",id})}/>
+        : <ScoutLocked onSignUp={()=>{setSignupRole("scout");setShowSignIn(true);}}/>}
+    </div>
+  )}
+
   {/* ── HOME: Ranking ── */}
   {!portal&&view.name==="ranking"&&(()=>{
     const yearOf=ev=>{const m=(ev.date||"").match(/(\d{4})/);return m?m[1]:null;};
     const dateKey=ev=>{const m=(ev.date||"").match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);return m?`${m[3]}${m[2].padStart(2,"0")}${m[1].padStart(2,"0")}`:"00000000";};
     const mode=arr=>{const c={};arr.forEach(v=>c[v]=(c[v]||0)+1);const t=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];return t?t[0]:null;};
     const genderOf=div=>{const d=String(div||"").trim().toLowerCase();if(["m","men","male","boy","boys"].includes(d))return"M";if(["f","w","women","female","girl","girls"].includes(d))return"F";return null;};
-    const dh=rankCls==="29er"||rankCls==="49er";
+    const dh=false; // golf: single-competitor, never a doublehanded ranking
     // Class events (non-draft, deduped), split into federation-governed vs international
     const clsEvents=dedupEvents(events.filter(e=>e.cls===rankCls&&e.status!=="Draft"));
     const fedEvents=clsEvents.filter(e=>governingFeds(e).length>0).sort((a,b)=>dateKey(b).localeCompare(dateKey(a)));
@@ -9021,7 +4802,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       const fleetN=ev.entries.length||sc.rows.length||1;
       compMeta[ev.id]={fleetN,dncVal:fleetN+1,raceCount};
       sc.rows.forEach(r=>{
-        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,pts:r.pts||[]};
+        const cell={net:r.net,rank:r.rank,races:r.races||[],race_codes:r.race_codes||null,sail:r.sail,pts:r.pts||[],discardSet:r.discardSet};
         if(dh){
           const hk=canonName(r.helm||""),ck=canonName(r.crew||"");
           const key=[hk,ck].filter(Boolean).sort().join("|")||hk||ck;if(!key) return;
@@ -9096,7 +4877,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     return(
       <div className="wrap sec" style={{paddingTop:16}}>
         <div className="page-head">
-          <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
           <h1 className="page-title">Rankings</h1>
           <p className="page-sub">{comps.length} competition{comps.length!==1?"s":""} · {rankAthleteCount} athlete{rankAthleteCount!==1?"s":""} in the {clsShort} series</p>
         </div>
@@ -9107,6 +4887,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <span className="dot" style={{background:classColor(c.id)}}/>{c.short}
             </button>
           ))}
+          <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
           <span className="lens-selwrap">
             <select className="lens-select" value={rankCountry} onChange={e=>setRankCountry(e.target.value)}>
               <option value="">All countries</option>
@@ -9116,7 +4897,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </span>
         </div>
         {/* Source nuggets */}
-        <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <div className="rank-src-row" style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
           {[["federation","Federation",fedEvents.length],["international","International",intEvents.length]].map(([id,label,n])=>{
             const on=rankSourceOpen===id;
             return<button key={id} onClick={()=>setRankSourceOpen(o=>o===id?null:id)}
@@ -9132,7 +4913,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {rankSourceOpen&&<div style={{marginBottom:16}}>
           {years.length===0&&<p style={{fontSize:13,color:"var(--mut)",margin:0}}>No {clsShort} {rankSourceOpen==="federation"?"federation":"international"} competitions yet.</p>}
           {years.map(y=>(
-            <div key={y} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"5px 0"}}>
+            <div key={y} className="rank-year-row" style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"5px 0"}}>
               <span style={{fontSize:12,fontWeight:800,color:"var(--mut)",letterSpacing:".04em",minWidth:38}}>{y}</span>
               {byYear[y].map(ev=>{
                 const sel=rankSelected.has(ev.id);
@@ -9150,10 +4931,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           ))}
         </div>}
         {comps.length===0
-          ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Selected competitions combine into one series — lowest total wins.</p>
+          ?<p style={{color:"var(--mut)",fontSize:14,padding:"24px 0"}}>Select one or more competitions above to build the {clsShort} ranking. Selected regattas combine into one series — lowest total wins.</p>
           :<>
           {/* When the source pickers are collapsed, show the selected competitions as removable nuggets */}
-          {!rankSourceOpen&&<div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
+          {!rankSourceOpen&&<div className="rank-sel-row" style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
             {comps.map(c=>(
               <button key={c.id} onClick={()=>setRankSelected(prev=>{const n=new Set(prev);n.delete(c.id);return n;})} title="Remove from ranking"
                 style={{border:"1px solid "+classColor(rankCls),background:classColor(rankCls),color:"#fff",borderRadius:980,padding:"5px 12px",fontSize:12,fontWeight:600,cursor:"pointer",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"inline-flex",alignItems:"center",gap:5,boxShadow:"inset 0 1px 0 rgba(255,255,255,.35)",transition:".12s"}}
@@ -9164,21 +4945,21 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             ))}
           </div>}
           {/* Ranking controls: mode toggle + discard stepper (verified engine) */}
-          <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:14}}>
+          <div className="rank-mode-row" style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:14}}>
             <div style={{display:"inline-flex",borderRadius:980,overflow:"hidden",border:"1px solid var(--line)"}}>
               {[["cumulative","Cumulative"],["position","Position"]].map(([id,label])=>{
                 const on=rankMode===id;
-                return<button key={id} onClick={()=>setRankMode(id)} title={id==="cumulative"?"Weighs every round across the combined series":"Weighs each competition's finishing place equally"}
+                return<button key={id} onClick={()=>setRankMode(id)} title={id==="cumulative"?"Weighs every race across the combined series":"Weighs each competition's finishing place equally"}
                   style={{border:"0",background:on?"var(--navy)":"rgba(255,255,255,.7)",color:on?"#fff":"var(--navy)",padding:"7px 15px",fontSize:12.5,fontWeight:700,cursor:"pointer",transition:".12s"}}>{label}</button>;
               })}
             </div>
             <div style={{display:"inline-flex",alignItems:"center",gap:7,fontSize:12.5,fontWeight:700,color:"var(--navy)"}}>
               Discards
-              <button onClick={()=>setRankDiscards(d=>Math.max(0,d-1))} title="Fewer discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>–</button>
+              <button className="rank-disc-btn" onClick={()=>setRankDiscards(d=>Math.max(0,d-1))} title="Fewer discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>–</button>
               <span style={{minWidth:16,textAlign:"center"}}>{rankDiscards}</span>
-              <button onClick={()=>setRankDiscards(d=>d+1)} title="More discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>+</button>
+              <button className="rank-disc-btn" onClick={()=>setRankDiscards(d=>d+1)} title="More discards" style={{width:26,height:26,borderRadius:8,border:"1px solid var(--line)",background:"rgba(255,255,255,.8)",cursor:"pointer",fontWeight:800,color:"var(--navy)"}}>+</button>
             </div>
-            <span style={{fontSize:11.5,color:"var(--mut)"}}>{rankMode==="cumulative"?"Combined series · every round counts · DNC = entries+1":"Sum of competition placings · DNC = entries+1"}</span>
+            <span style={{fontSize:11.5,color:"var(--mut)"}}>{rankMode==="cumulative"?"Combined series · every race counts · DNC = entries+1":"Sum of competition placings · DNC = entries+1"}</span>
           </div>
           <div className="panel" style={{overflowX:"auto"}}>
             <table>
@@ -9186,9 +4967,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <tr>
                   <th style={{width:48}}>Rank</th>
                   <th className="l">{dh?"Team":"Athlete"}</th>
+                  <th>Div</th>
                   {comps.map((c,i)=><th key={c.id} title={c.name} style={{maxWidth:130}}><div style={{maxWidth:130,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",margin:"0 auto"}}>{c.name}</div></th>)}
                   <th>Total</th>
-                  <th>Div</th>
                 </tr>
               </thead>
               <tbody>
@@ -9205,21 +4986,38 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                           </div>
                           :<span className="namelink" onClick={()=>go({name:"profile",id:r.name})}>{r.name}</span>}
                       </td>
-                      {comps.map(c=>{
-                        const pc=r.perComp[c.id];const pcell=r.per[c.id];
-                        const shown=rankMode==="position"?(pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–")):pcell.contrib;
-                        const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
-                        return <td key={c.id}>
-                          <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this competition (entries+1)":"Tap for round detail"}
-                            style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:pcell.dnc?"var(--mut)":"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:pc?"pointer":"default",fontSize:13,fontStyle:pcell.dnc?"italic":"normal"}}>{shown}{pcell.dnc?" DNC":""}</button>
-                        </td>;
-                      })}
-                      <td style={{fontWeight:800}}>{r.total}</td>
                       <td style={{whiteSpace:"nowrap"}}>
                         {r.gender&&<Nug color={r.gender==="F"?"#c2477f":"#2d6cc9"}>{r.gender}</Nug>}
                         {r.division&&<Nug>{r.division}</Nug>}
                         {!r.gender&&!r.division&&<span style={{color:"#c8d4e0"}}>—</span>}
                       </td>
+                      {comps.map(c=>{
+                        const pc=r.perComp[c.id];const pcell=r.per[c.id];
+                        const ek=`${r.key}|${c.id}`;const open=rankExpanded.has(ek);
+                        // Cumulative mode: show the actual per-race results inline as compact
+                        // nuggets (same .rc colour classes as the profile miniraces), flowing
+                        // into at most 2 rows. Absent athletes keep the italic "DNC".
+                        if(rankMode==="cumulative"){
+                          return <td key={c.id} style={{textAlign:"center"}}>
+                            {pcell.dnc
+                              ?<span style={{color:"var(--mut)",fontSize:12,fontStyle:"italic"}}>DNC</span>
+                              :<button onClick={()=>pc&&toggleRankCell(ek)} title="Tap for race detail"
+                                 style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",borderRadius:8,padding:3,cursor:pc?"pointer":"default"}}>
+                                 <div className="miniraces rank-mini">{(pc.races||[]).map((rc2,j)=>{
+                                   const cls2=isCode(rc2)?"c":pc.discardSet?.has(j)?"d":rc2===1?"g1":rc2===2?"g2":rc2===3?"g3":"";
+                                   return<div key={j} className={`rc ${cls2}`}>{isCode(rc2)?rc2.slice(0,2):rc2}</div>;
+                                 })}</div>
+                               </button>}
+                          </td>;
+                        }
+                        // Position mode: unchanged — the regatta placing (or DNC value).
+                        const shown=pcell.dnc?compMeta[c.id].dncVal:(pcell.rank??"–");
+                        return <td key={c.id}>
+                          <button onClick={()=>pc&&toggleRankCell(ek)} title={pcell.dnc?"DNC — absent from this competition (entries+1)":"Tap for race detail"}
+                            style={{border:"1px solid "+(open?"var(--accent)":"transparent"),background:open?"var(--sky)":"transparent",color:pcell.dnc?"var(--mut)":"var(--navy)",borderRadius:6,padding:"3px 8px",fontWeight:600,cursor:pc?"pointer":"default",fontSize:13,fontStyle:pcell.dnc?"italic":"normal"}}>{shown}{pcell.dnc?" DNC":""}</button>
+                        </td>;
+                      })}
+                      <td style={{fontWeight:800}}>{r.total}</td>
                     </tr>
                     {expanded.map(c=>{
                       const pc=r.perComp[c.id];
@@ -9260,66 +5058,98 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           const modelCfg=SPORT_MODELS[isClassPortal?portalCls:(host&&host.cls)]||null;
           // Globe for BOTH association/club/federation portals AND class portals.
           const globe=(()=>{
-            let hiso=null;
-            if(isClassPortal){
-              const top=Object.entries(hostCountryCounts).sort((a,b)=>b[1]-a[1])[0];
-              hiso=top?top[0]:null;
-            } else {
-              const hc=hostLocation(portal,events);
-              hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
-            }
-            if(!hiso) return null;
-            return(<div style={{width:150,height:150,flex:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} title="Where they compete — click to expand" onClick={()=>setHostFootprintOpen(true)}>
-              <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare hostIso={isClassPortal?null:hiso}/>
+            // Explicit home country → yellow host marker. Class portals never have one.
+            const hc=isClassPortal?null:hostLocation(portal,events);
+            const hiso=hc?IOC_ISO[String(hc).toUpperCase()]:null;
+            // Show the globe whenever there's ANY location to show — the host's own
+            // country OR at least one country in its competition footprint. International
+            // associations have no home country but do compete somewhere, so they still
+            // get a globe (just without the yellow home marker).
+            if(!hiso&&Object.keys(hostCountryCounts).length===0) return null;
+            return(<div className="hdr-globe" style={{flex:"none",cursor:"pointer",position:"relative"}} title="Where they compete — click to expand" onClick={()=>setHostFootprintOpen(true)}>
+              <SailingGlobe countryData={hostCountryCounts} height={150} dark mini bare fill hostIso={hiso}/>
             </div>);
           })();
-          // Actions moved directly BELOW the globe.
-          const actions=(
-            <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",width:150}}>
-              <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
-                <Users size={14} style={{flex:"none"}}/> Athletes
-              </MagneticItem>
-              <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
-                <Calendar size={14} style={{flex:"none"}}/> Calendar
-              </MagneticItem>
-              {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
-                <Trophy size={14} style={{flex:"none"}}/> Rankings
-              </MagneticItem>}
-              {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
-                <Settings size={14} style={{flex:"none"}}/> Edit page
-              </MagneticItem>}
+          // Host logo — read-only display (the upload UI is paused). It stacks ON TOP of the
+          // title (left-aligned to the title), so it's a left-hugging, height-capped box on a
+          // transparent ground. Its top isn't aligned to anything; the title below it is what
+          // bottom-aligns to the globe.
+          const logo=host?.logo_url?<HostLogo src={host.logo_url}/>:null;
+          // OWNER/role badge — sits above the logo/title stack, left-aligned.
+          const badge=(!isClassPortal&&myPortalMembership&&myPortalMembership.verified)?(
+            <div style={{marginBottom:8}}>
+              <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
+                color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
+                <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
+              </span>
             </div>
-          );
-          const titleBlock=(
-            <div style={{minWidth:0,alignSelf:"flex-start"}}>
-              {!isClassPortal&&myPortalMembership&&myPortalMembership.verified&&(
-                <div style={{marginBottom:8}}>
-                  <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",
-                    color:"#6b3fa0",background:"rgba(124,77,196,.13)",border:"1px solid rgba(124,77,196,.34)",borderRadius:980,padding:"3px 11px",whiteSpace:"nowrap"}}>
-                    <BadgeCheck size={12} style={{flex:"none"}}/>{myPortalMembership.role}
-                  </span>
-                </div>
-              )}
-              <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
-                <h1 className="page-title">{portalName}</h1>
-              </div>
-              <div className="pillbar" style={{marginTop:12}}>
-                <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
-                <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
+          ):null;
+          // Identity row: globe on the LEFT; to its right a bottom-aligned column holding the
+          // (badge →) logo → title. flex-end bottom-aligns the column to the globe, and the title
+          // carries a marginBottom that lifts its baseline to the globe's visible circle bottom —
+          // the SailingGlobe canvas has a ~16px transparent inset below the circle, so aligning the
+          // raw boxes would leave the title sitting ~9px low. The logo stacks above the title and
+          // can rise past the globe's top freely.
+          const identity=(
+            <div style={{display:"flex",alignItems:"flex-end",gap:14,minWidth:0}}>
+              {globe}
+              <div style={{minWidth:0,display:"flex",flexDirection:"column",alignItems:"flex-start"}}>
+                {badge}
+                {logo}
+                <h1 className="page-title" style={{margin:"0 0 9px"}}>{portalName}</h1>
               </div>
             </div>
           );
+          const pillbar=(
+            <div className="pillbar" style={{marginTop:14}}>
+              <div className="pill"><Trophy size={16}/><b>{classEvents.length}</b> competitions</div>
+              <div className="pill" style={{cursor:"pointer"}} onClick={()=>go({name:"athletes"})}><Users size={16}/><b>{people.length}</b> athletes</div>
+            </div>
+          );
+          const actionPills=(<>
+            <MagneticItem className="portal-pill" onClick={()=>go({name:"athletes"})} strength={0.28}>
+              <Users size={14} style={{flex:"none"}}/> Athletes
+            </MagneticItem>
+            <MagneticItem className="portal-pill" onClick={()=>openCalendar(portal||null)} strength={0.28}>
+              <Calendar size={14} style={{flex:"none"}}/> Calendar
+            </MagneticItem>
+            {fed&&<MagneticItem className="portal-pill" onClick={()=>{pushNav();setPortal(null);setView({name:"ranking"});setQ("");setAthleteSmart(null);window.scrollTo(0,0);}} strength={0.28}>
+              <Trophy size={14} style={{flex:"none"}}/> Rankings
+            </MagneticItem>}
+            {canManageMembers&&!isClassPortal&&<MagneticItem className="portal-pill" onClick={()=>setShowHostEdit(true)} strength={0.28}>
+              <Settings size={14} style={{flex:"none"}}/> Edit page
+            </MagneticItem>}
+            {/* Host auto-grab: entry is the dismissible "We found your organisation"
+                banner below (not a header pill) + the Host website field in Edit page. */}
+            {/* Host auto-grab: needs-review badge (non-empty queue) */}
+            {!isClassPortal&&(canManageMembers||!!myPortalMembership)&&(host?.dossier?.needs_review?.length>0)&&<MagneticItem className="portal-pill" onClick={()=>{setDiscoveryReview(true);setShowDiscovery(true);}} strength={0.28}>
+              <span style={{display:"inline-flex",alignItems:"center",gap:6,color:"#8a6400"}}><AlertCircle size={14} style={{flex:"none"}}/> {host.dossier.needs_review.length} need review</span>
+            </MagneticItem>}
+          </>);
+          // No interactive model: buttons return to the RIGHT of the title, on the far right of
+          // the page (space-between) and centred against the globe/identity row — as it was before.
+          if(!modelCfg) return(
+            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
+              <div style={{minWidth:0}}>
+                {identity}
+                {pillbar}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch",flex:"none",alignSelf:"center"}}>
+                {actionPills}
+              </div>
+            </div>
+          );
+          // Interactive model present: the model takes the right half, so actions stay stacked
+          // below the pillbar in the left header column.
           const head=(
-            <div style={{minWidth:0,display:"flex",gap:18,alignItems:"flex-start",flexWrap:"wrap"}}>
-              <div style={{display:"flex",flexDirection:"column",gap:14,alignItems:"center",flex:"none"}}>
-                {globe}{actions}
-              </div>
-              {titleBlock}
+            <div style={{minWidth:0}}>
+              {identity}
+              {pillbar}
+              <div style={{marginTop:14,display:"flex",gap:8,flexWrap:"wrap"}}>{actionPills}</div>
             </div>
           );
-          if(!modelCfg) return head;
           return(
-            <div className="spm-classgrid">
+            <div className="spm-classgrid spm-classgrid--host">
               <div className="spm-classhead">{head}</div>
               <SpmDuo cfg={modelCfg}/>
             </div>);
@@ -9337,6 +5167,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </div>
           </div>
         )}
+        {/* Host auto-grab invitation banner REMOVED: a host's home website is never
+            scraped automatically — competitions are found only from sites the host
+            pastes into Import a competition → Import result database. */}
         {fed&&(()=>{
           const feAssoc=ASSOCIATIONS.filter(a=>a.scope===fed.scope);
           if(!feAssoc.length) return null;
@@ -9346,13 +5179,14 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {feAssoc.map(a=>{
                 const ce=events.filter(e=>eventAssocs(e).includes(a.id));
                 const col=classColor(a.cls);const short=classLabel(a.cls);
-                return <div className="class-card" key={a.id} style={{cursor:"pointer"}} onClick={()=>enterPortal(a.id)}>
+                return <div className="class-card" key={a.id} style={{cursor:"pointer",position:"relative"}} onClick={()=>enterPortal(a.id)}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:14,minHeight:24}}>
                     <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)",border:"1px solid rgba(91,107,128,.5)",borderRadius:980,padding:"3px 10px"}}>Association</span>
                     <span className="cls" style={{background:col}}>{short}</span>
                   </div>
                   <p className="class-name">{a.name}</p>
                   <div className="class-stats" style={{marginBottom:0}}><div><b>{ce.length}</b>competitions</div></div>
+                  {a.logo_url&&<img src={a.logo_url} alt="" style={{position:"absolute",right:16,bottom:16,width:60,height:60,objectFit:"contain",pointerEvents:"none",background:"transparent"}}/>}
                 </div>;
               })}
             </div>
@@ -9381,7 +5215,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 onChange={e=>{
                   setEvFilter(e.target.value);
                   clearTimeout(evSugTimer);
-                  setEvSugTimer(setTimeout(()=>fetchEvSuggestions(e.target.value),500));
+                  setEvSugTimer(setTimeout(()=>fetchEvSuggestions(e.target.value),200));
                 }}
                 onKeyDown={e=>{
                   if(e.key==="Enter"){setEvSuggestions([]);runEvFilter();}
@@ -9414,15 +5248,77 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               const db=b.date?.split('/').reverse().join('')||'';
               return db.localeCompare(da);
             });
-          // Build items with year dividers
+          // Hosts pin whole competitions to the top of their list (never on the
+          // dormant class-portal filter view).
+          const canPin=canManageMembers&&!isClassPortal;
+          const togglePin=togglePinFor("host",portal,portalPins,setPortalPins);
+          const pinIdxOf=ev=>isClassPortal?-1:portalPins.findIndex(p=>String(p.event_id)===String(ev.id));
+          const pinnedEvs=allFiltered.filter(ev=>ev.status!=="Draft"&&pinIdxOf(ev)>=0).sort((a,b)=>pinIdxOf(a)-pinIdxOf(b));
+          const rest=allFiltered.filter(ev=>!pinnedEvs.includes(ev));
+          const renderEvRow=(ev,i,pinned)=>{
+            const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
+            const pi=pinned?pinIdxOf(ev):-1;
+            return(<div className={`ev${isDraft?" draft":""}`} key={(pinned?"pin":"")+ev.id} style={{animationDelay:`${i*60}ms`,position:"relative"}} onClick={()=>go({name:"event",id:ev.id})}
+              draggable={pinned&&canPin||undefined}
+              onDragStart={pinned&&canPin?()=>setPinDrag(pi):undefined}
+              onDragOver={pinned&&canPin?e=>{e.preventDefault();if(pinDrag!=null&&pinDrag!==pi){movePinLocal(setPortalPins,pinDrag,pi);setPinDrag(pi);}}:undefined}
+              onDragEnd={pinned&&canPin?()=>{commitPinOrder(portalPins,setPortalPins);setPinDrag(null);}:undefined}>
+              {pinned&&<span className="pinbadge" title="Pinned result"><Pin size={11} fill="currentColor"/></span>}
+              {pinned&&canPin&&<span className="pingrip" title="Drag to reorder"><GripVertical size={15}/></span>}
+{(()=>{
+                const dp=ev.date?.split('/');
+                const hasDate=dp&&dp.length===3&&dp[0]&&dp[2];
+                return(<div style={{display:"flex",alignItems:"center",gap:6}}>
+                  {hasDate&&<div className="evicon-year">
+                    {dp[2].split('').map((ch,ci)=><span key={ci}>{ch}</span>)}
+                  </div>}
+                  {hasDate
+                    ?<div className="evicon-date">
+                        <span className="eid">{dp[0]}</span>
+                        <span className="eim">{MON[parseInt(dp[1])-1]||""}</span>
+                      </div>
+                    :<div className="evicon"><Anchor size={20}/></div>}
+                </div>);
+              })()}
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+                  <p className="evname" style={{margin:0}}>{ev.name}</p>
+                  {canPin&&!isDraft&&(
+                    <button type="button" className={"pinbtn"+(pinned?" on":"")} title={pinned?"Unpin":"Pin to the top"}
+                      onClick={e=>{e.stopPropagation();togglePin({event_id:ev.id,snapshot:{evName:ev.name,evDate:ev.date,cls:ev.cls,subclass:ev.subclass,rank:null,fleet:(ev.entries||[]).length,venue:ev.country||null}});}}>
+                      <Pin size={13} fill={pinned?"currentColor":"none"}/>
+                    </button>
+                  )}
+                </div>
+                <div className="evmeta">
+                  <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
+                  <span className="ev-cal"><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
+                  <span className="ev-count"><Users size={13}/>{isUpcomingEvent(ev)?`${s.fleet} entered`:`${s.fleet} players · ${s.races} rounds`}{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
+                </div>
+              </div>
+              {!isDraft&&isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}} title="Entry list published — results pending. Open for the fleet forecast.">UPCOMING</span>}
+              {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
+              {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
+              {canEdit&&<button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>}
+              <ChevronRight size={18} color="#9fb2c8"/>
+            </div>);
+          };
+          // Build the remaining items with year dividers
           const evItems=[];let lastYear=null;
-          allFiltered.forEach((ev,i)=>{
+          rest.forEach((ev,i)=>{
             const yr=ev.date?.split('/')?.[2]||null;
             if(yr&&yr!==lastYear){evItems.push({type:'divider',year:yr});lastYear=yr;}
             evItems.push({type:'ev',ev,i});
           });
           const filtered=allFiltered;
           return(<>
+            {pinnedEvs.length>0&&(
+              <div key="pinhead" style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+                <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:"var(--accent)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}><Pin size={12} fill="currentColor"/>PINNED</span>
+                <div style={{flex:1,height:1,background:"var(--line)"}}/>
+              </div>
+            )}
+            {pinnedEvs.map((ev,i)=>renderEvRow(ev,i,true))}
             {evItems.map((item,idx)=>{
               if(item.type==='divider') return(
                 <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
@@ -9430,37 +5326,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <div style={{flex:1,height:1,background:"var(--line)"}}/>
                 </div>
               );
-              const{ev,i}=item;
-              const s=scoreEvent(ev);const isDraft=ev.status==="Draft";
-              return(<div className={`ev${isDraft?" draft":""}`} key={ev.id} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:ev.id})}>
-{(()=>{
-                  const dp=ev.date?.split('/');
-                  const hasDate=dp&&dp.length===3&&dp[0]&&dp[2];
-                  return(<div style={{display:"flex",alignItems:"center",gap:6}}>
-                    {hasDate&&<div className="evicon-year">
-                      {dp[2].split('').map((ch,ci)=><span key={ci}>{ch}</span>)}
-                    </div>}
-                    {hasDate
-                      ?<div className="evicon-date">
-                          <span className="eid">{dp[0]}</span>
-                          <span className="eim">{MON[parseInt(dp[1])-1]||""}</span>
-                        </div>
-                      :<div className="evicon"><Anchor size={20}/></div>}
-                  </div>);
-                })()}
-                <div style={{flex:1,minWidth:0}}>
-                  <p className="evname">{ev.name}</p>
-                  <div className="evmeta">
-                    <span><MapPin size={13}/>{ev.country?<CountryTag code={ev.country}/>:"—"}</span>
-                    <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} title="Open calendar" onClick={()=>openCalendarAt(ev.date)}>{formatDate(ev.date)}</span></span>
-                    <span><Users size={13}/>{s.fleet} players · {s.races} rounds{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
-                  </div>
-                </div>
-                {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
-                {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
-                {canEdit&&<button className="delbtn" onClick={e=>deleteEvent(ev.id,ev.name,e)}><Trash2 size={16}/></button>}
-                <ChevronRight size={18} color="#9fb2c8"/>
-              </div>);
+              return renderEvRow(item.ev,item.i,false);
             })}
             {filtered.length===0&&classEvents.length>0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No results match {evFilterChips.length>1?"these filters":"this filter"}. <button style={{border:0,background:"none",color:"var(--accent)",cursor:"pointer",fontWeight:600}} onClick={()=>{setEvFilterChips([]);setEvFilter("");}}>Clear {evFilterChips.length>1?"filters":"filter"}</button></p>}
             {classEvents.length===0&&<p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No competitions yet. Import one to get started.</p>}
@@ -9484,6 +5350,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     let s=null;try{s=scoreEvent(ev);}catch(err){console.error("event page: scoreEvent failed",err);}
     if(!s) return notFound("Couldn't read this competition's scores.");
     const isDraft=ev.status==="Draft";
+    // Published entry list, nothing sailed yet → the page shows the public entry
+    // list AS a prediction ranking (FleetForecast) instead of a results table.
+    const isUpcoming=!isDraft&&s.races===0&&(ev.entries||[]).length>0;
     return(<ErrorBoundary resetKey={ev.id} fallback={
       <div className="wrap sec" style={{paddingTop:18}}>
         <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
@@ -9498,7 +5367,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <strong>Draft results — not yet official</strong>
             <p style={{fontSize:13}}>These results are provisional and excluded from athlete profiles until confirmed.</p>
           </div>
-          <button className="btn green" onClick={()=>confirmDraft(ev.id)}><CheckCircle size={16}/>Confirm Results</button>
+          <button className="btn green" disabled={busyAction==="confirmDraft_"+ev.id} onClick={()=>runBusy("confirmDraft_"+ev.id,()=>confirmDraft(ev.id))}>{busyAction==="confirmDraft_"+ev.id?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}Confirm Results</button>
         </div>
       )}
       {(()=>{
@@ -9506,7 +5375,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         const head=(
         <div style={{display:"flex",alignItems:"stretch",gap:16,marginBottom:16}}>
           {hostIso&&(
-            <div onClick={()=>setRegattaFootprint(ev)} title="Who's playing — click to expand"
+            <div onClick={()=>setRegattaFootprint(ev)} title="Who's racing — click to expand"
               style={{width:118,flex:"none",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center"}}>
               <SailingGlobe countryData={{[hostIso]:1}} height={118} dark mini bare hostIso={hostIso}/>
             </div>
@@ -9555,18 +5424,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             })()}
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
-            {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>Edit results</button>}
+            {isScout&&<SaveButton owner={scoutOwnerId(auth)} events={events} kind={isUpcomingEvent(ev)?"upcoming":"event"} eventId={ev.id} title={ev.name}
+              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}}/>}
+            {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>{isUpcoming?"Edit entry list":"Edit results"}</button>}
           </div>
         </div>);
-        const spmCfg=SPORT_MODELS[ev.cls];
-        if(!spmCfg) return head; // 49er (and any modelled class) gets the explainer beside the header, 50/50
-        return(
-          <div className="spm-classgrid">
-            <div className="spm-classhead">{head}</div>
-            <SpmDuo cfg={spmCfg}/>
-          </div>);
+        // Interactive models are scoped to home/association/global-class pages only — not here.
+        return head;
       })()}
-      {/* Revealable, sponsor-focused competition summary */}
+      {/* Revealable, scout-focused competition summary */}
       <div style={{marginBottom:16}}>
         <button onClick={()=>{const open=!eventSummaryOpen[ev.id];setEventSummaryOpen(m=>({...m,[ev.id]:open}));if(open)fetchEventSummary(ev);}}
           style={{display:"inline-flex",alignItems:"center",gap:7,background:"rgba(10,132,255,.12)",backdropFilter:"blur(18px) saturate(185%)",WebkitBackdropFilter:"blur(18px) saturate(185%)",color:"var(--navy)",border:"0",borderRadius:980,boxShadow:"inset 0 1px 0 rgba(255,255,255,.5)",
@@ -9582,15 +5448,46 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               : eventSummaries[ev.id]
                 ? <p style={{color:"#dce8f8",fontSize:13.5,lineHeight:1.55,margin:0}}>{eventSummaries[ev.id]}</p>
                 : <p style={{color:"#9fbdd9",fontSize:13,fontStyle:"italic",margin:0}}>Add ANTHROPIC_API_KEY to Vercel env vars to enable AI summaries.</p>}
-            <p style={{color:"#6f93b8",fontSize:10.5,margin:"9px 0 0",fontStyle:"italic"}}>AI-generated from the competition's level and field; verify specifics independently.</p>
+            <p style={{color:"#6f93b8",fontSize:10.5,margin:"9px 0 0",fontStyle:"italic"}}>AI-generated from the competition's level and fleet; verify specifics independently.</p>
           </div>
         )}
       </div>
+      {isUpcoming&&(<>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14,
+          background:"rgba(232,146,26,.09)",borderRadius:14,padding:"10px 14px",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.28)"}}>
+          <Clock size={16} color="#b8860b" style={{flex:"none"}}/>
+          <span style={{fontSize:12,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"#b8860b"}}>Upcoming competition</span>
+          <span style={{fontSize:13,color:"var(--mut)"}}>{ev.entries.length} entered · no results yet — the table below is a forecast ranking from current skill ratings.</span>
+        </div>
+        <FleetForecast ev={ev} events={events}
+          onPick={n=>go({name:"profile",id:n,fromEvent:ev.id})}
+          boatCell={r=>(
+            <div className="boat">
+              {r.crew
+                ? <div style={{position:"relative",width:48,height:30,flex:"none"}}>
+                    {(()=>{const cp=athleteProfileOf(r.crew)?.photo_url;return cp
+                      ? <img className="av" src={cp} alt="" style={{position:"absolute",left:18,top:0,objectFit:"cover",boxShadow:"0 0 0 2px #fff"}}/>
+                      : <div className="av" style={{position:"absolute",left:18,top:0,background:avatarColor(r.crew),boxShadow:"0 0 0 2px #fff"}}>{initials(r.crew)}</div>;})()}
+                    {(()=>{const hp=athleteProfileOf(r.helm)?.photo_url;return hp
+                      ? <img className="av" src={hp} alt="" style={{position:"absolute",left:0,top:0,zIndex:2,objectFit:"cover",boxShadow:"0 0 0 2px #fff"}}/>
+                      : <div className="av" style={{position:"absolute",left:0,top:0,zIndex:2,background:avatarColor(r.helm),boxShadow:"0 0 0 2px #fff"}}>{initials(r.helm)}</div>;})()}
+                  </div>
+                : (()=>{const hp=athleteProfileOf(r.helm)?.photo_url;return hp
+                    ? <img className="av" src={hp} alt="" style={{objectFit:"cover"}}/>
+                    : <div className="av" style={{background:avatarColor(r.helm)}}>{initials(r.helm)}</div>;})()}
+              <div>
+                <div className="namelink" onClick={()=>go({name:"profile",id:r.helm,fromEvent:ev.id})}>{r.helm}</div>
+                {r.crew&&<div className="cn">with <span className="namelink" onClick={()=>go({name:"profile",id:r.crew,fromEvent:ev.id})}>{r.crew}</span></div>}
+              </div>
+            </div>
+          )}/>
+      </>)}
+      {!isUpcoming&&(<>
       <div className="panel"><table>
         <thead><tr>
           <th>Pos</th><th className="l">Athlete</th><th aria-label="Gender / Division"></th><th className="l">ID</th>
           {Array.from({length:s.races}).map((_,i)=><th key={i}>R{i+1}</th>)}
-          <th>Net</th>
+          <th>Net</th><th aria-label="Save"></th>
         </tr></thead>
         <tbody>{s.rows.map(r=>(
           <React.Fragment key={r.sail+r.helm}>
@@ -9635,6 +5532,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </td>;
             })}
             <td className="net">{r.net}</td>
+            <td style={{textAlign:"center",whiteSpace:"nowrap"}}>{isScout&&<SaveButton size="sm" owner={scoutOwnerId(auth)} events={events} kind="result"
+              athleteKey={canonName(r.helm)} eventId={ev.id} entryId={r._dbId} title={r.helm}
+              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls,rank:r.rank,fleet:s.fleet,athlete:r.helm}}/>}</td>
           </tr>
           </React.Fragment>
         ))}</tbody>
@@ -9652,6 +5552,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
         );
       })()}
+      </>)}
     </div></ErrorBoundary>);
   })()}
 
@@ -9659,7 +5560,9 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   {(portal||(!portal&&(view.name==="athletes"||view.name==="profile")))&&view.name==="athletes"&&(
     <div className="wrap sec" style={{paddingTop:16}}>
       <div className="page-head">
-        <button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>
+        {/* Back only inside a host portal (drill-down); the global Athletes page is
+            top-level and gets no Back, matching Hosts/Competitions. */}
+        {portal&&<button className="back" onClick={navBack}><ArrowLeft size={16}/>Back</button>}
         <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap",width:"100%"}}>
           <h1 className="page-title">{athleteTitle} <span style={{fontSize:18,fontWeight:400,color:"var(--mut)"}}>{lensPeople.length}</span></h1>
           {portal&&<button className="portal-pill" style={{marginLeft:"auto"}} onClick={()=>{setPortal(null);go({name:"athletes"});}}>
@@ -9687,7 +5590,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <button key={f} className={filter===f?"on":""} onClick={()=>setFilter(f)}>
               <span style={{display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15}}>
                 <span>{f[0].toUpperCase()+f.slice(1)}</span>
-                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?visibleDupGroups.length:lensPeople.length}</span>
+                <span style={{fontSize:9.5,fontWeight:600,opacity:.45,marginTop:1}}>{f==="duplicates"?(filter==="duplicates"?visibleDupGroups.length:"·"):lensPeople.length}</span>
               </span>
             </button>
           ));
@@ -9722,6 +5625,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <span className="dot" style={{background:nuggetFor(c.id).color}}/>{c.label}<span className="cnt">{n}</span>
             </button>);
           })}
+          <span className="strip-break"/>{/* selects onto row 2 (Fix 9b) */}
           <span className="lens-selwrap">
             <select className="lens-select" value={athCountry||""} onChange={e=>setView(v=>({...v,country:e.target.value||undefined}))}>
               <option value="">All countries</option>
@@ -9746,7 +5650,55 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       )}
       {filter==="duplicates"&&canEdit&&(
         <div>
-          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Profiles whose names are close but differ in spelling — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more competitions and moves the other's results into it.</p>
+          {/* Manual merge — pick ANY two profiles the auto-detector didn't flag. */}
+          <div style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:16,marginBottom:18}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <Users size={15} color="var(--accent)"/><b style={{fontSize:14}}>Manual merge</b>
+            </div>
+            <p style={{fontSize:12.5,color:"var(--mut)",margin:"0 0 12px"}}>Same person but not auto-flagged? Pick both profiles below. The first is kept; the second's results move into it.</p>
+            <div style={{display:"flex",alignItems:"flex-end",gap:10,flexWrap:"wrap"}}>
+              {["a","b"].map(slot=>{
+                const val=slot==="a"?mmA:mmB;
+                return(
+                  <div key={slot} style={{flex:1,minWidth:190,position:"relative"}}>
+                    <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",color:"var(--mut)",marginBottom:4}}>{slot==="a"?"Keep (primary)":"Merge in"}</div>
+                    {val
+                      ? <div style={{display:"flex",alignItems:"center",gap:8,background:"var(--sky)",borderRadius:10,padding:"8px 10px"}}>
+                          <div className="av" style={{background:avatarColor(val),width:24,height:24,fontSize:10}}>{initials(val)}</div>
+                          <span style={{fontSize:13,fontWeight:600,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{val}</span>
+                          <button className="mp-clear" onClick={()=>slot==="a"?setMmA(null):setMmB(null)}><X size={14}/></button>
+                        </div>
+                      : <input placeholder="Search athletes…" value={mmActive===slot?mmQ:""}
+                          onFocus={()=>{setMmActive(slot);setMmQ("");}}
+                          onChange={e=>{setMmActive(slot);setMmQ(e.target.value);}}
+                          onBlur={()=>setTimeout(()=>setMmActive(a=>a===slot?null:a),150)}
+                          style={{width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"8px 10px",fontSize:13,outline:"none",background:"var(--card)",color:"var(--ink)"}}/>}
+                    {mmActive===slot&&mmQ.trim()&&(
+                      <div className="hero-drop" style={{maxHeight:220}}>
+                        {(()=>{
+                          const dq=mmQ.trim().toLowerCase();
+                          const other=slot==="a"?mmB:mmA;
+                          const matches=[...new Set(allPeople.map(p=>p.name).filter(Boolean))]
+                            .filter(nm=>nm.toLowerCase().includes(dq)&&nm!==other)
+                            .sort((x,y)=>regCountFast(y)-regCountFast(x)).slice(0,8);
+                          if(!matches.length) return <div className="gsrch-item" style={{cursor:"default"}}><div className="gi-sub">No matches</div></div>;
+                          return matches.map(nm=>(
+                            <div key={nm} className="gsrch-item" onMouseDown={()=>{slot==="a"?setMmA(nm):setMmB(nm);setMmActive(null);setMmQ("");}}>
+                              <div className="av" style={{background:avatarColor(nm),width:26,height:26,fontSize:10}}>{initials(nm)}</div>
+                              <div style={{minWidth:0}}><div className="gi-label">{nm}</div><div className="gi-sub">{regCountFast(nm)} competitions</div></div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <button className="btn cta" disabled={!mmA||!mmB} style={{fontSize:13,padding:"9px 18px",opacity:(!mmA||!mmB)?.5:1,cursor:(!mmA||!mmB)?"not-allowed":"pointer"}}
+                onClick={doManualMerge}><Users size={14}/> Merge</button>
+            </div>
+          </div>
+          <p style={{fontSize:13,color:"var(--mut)",marginBottom:16}}>Below: profiles whose names are close but differ in spelling or use a nickname / short form — these need a human check. (Names that differ only by word order, capitals, accents, hyphens or stray punctuation are merged automatically.) Merging keeps the profile with more competitions and moves the other's results into it.</p>
           {(()=>{
             const dq=q.trim().toLowerCase();
             const shown=visibleDupGroups
@@ -9777,29 +5729,35 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             };
             return shown.map((g)=>{
               const key=g.key;
-              const primary=g.names[0];
-              const other=g.names[g.names.length-1];
+              const flipped=flippedDups.has(key);
+              const orderedNames=flipped?[...g.names].reverse():g.names;
+              const primary=orderedNames[0];
+              const other=orderedNames[orderedNames.length-1];
+              const exiting=exitingDups.has(key);
               return(
-                <div key={key} style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:"16px",marginBottom:14}}>
+                <div key={key} className={exiting?"dup-card dup-card-exit":"dup-card"}
+                  style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:14,padding:"16px",marginBottom:14}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexWrap:"wrap",gap:8}}>
                     <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".05em",
                       color:"#b8860b",background:"#fdf6e3",borderRadius:6,padding:"3px 9px"}}>
-                      <AlertCircle size={12}/>Review — spelling differs
+                      <AlertCircle size={12}/>Review — {g.kind==="nick"?"nickname / short form":"spelling differs"}
                     </span>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                     <MiniCard name={primary}/>
-                    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,flex:"none"}}>
+                    <button className="dup-flip" title="Swap merge direction"
+                      style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,flex:"none",background:"none",border:"none",cursor:"pointer",padding:4}}
+                      onClick={()=>setFlippedDups(prev=>{const s=new Set(prev);s.has(key)?s.delete(key):s.add(key);return s;})}>
                       <ArrowLeft size={22} color="var(--accent)"/>
                       <span style={{fontSize:10,color:"var(--mut)",fontWeight:600,whiteSpace:"nowrap"}}>merge into</span>
-                    </div>
+                    </button>
                     <MiniCard name={other} dim/>
                   </div>
                   <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
                     <button className="btn ghost" style={{fontSize:13,padding:"6px 14px"}}
-                      onClick={()=>{setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);}}>Don't merge</button>
+                      onClick={()=>dismissDupCard(key,()=>{setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);})}>Don't merge</button>
                     <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"6px 14px"}}
-                      onClick={()=>{mergeGroup(g.names);setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);}}>
+                      onClick={()=>dismissDupCard(key,()=>{mergeGroup(orderedNames);setDismissedDups2(prev=>{const s=new Set(prev);s.add(key);return s;});saveDupDismissals([key]);})}>
                       <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Users size={14}/>Merge</div>
                     </button>
                   </div>
@@ -9809,71 +5767,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           })()}
         </div>
       )}
-      {filter!=="duplicates"&&(()=>{
-        const evScope=isGlobal?events:classEvents;
-        const qlc=q.trim().toLowerCase();
-        const shown=lensPeople
-          .filter(p=>true)
-          .filter(p=>{
-            if(athleteSmart){
-              try{ if(!athleteSmart.fn(athleteSummaryFor(p.name,evScope))) return false; }catch{}
-            } else if(qlc){
-              // live substring match on name OR country while no smart filter is set
-              const nat=athleteNat(p.name,evScope);
-              const cname=(GLOBE_NAMES[IOC_ISO[nat]]||nat||"").toLowerCase();
-              if(!p.name.toLowerCase().includes(qlc)&&!cname.includes(qlc)) return false;
-            }
-            return true;
-          });
-        // group by nationality, country groups alphabetical, names alphabetical within
-        const byCountry={};
-        shown.forEach(p=>{
-          const nat=statOf(p.name).nat;
-          const key=nat||"ZZZ";
-          if(!byCountry[key])byCountry[key]={nat,cname:GLOBE_NAMES[IOC_ISO[nat]]||nat||"Unknown",people:[]};
-          byCountry[key].people.push(p);
-        });
-        const groups=Object.values(byCountry).sort((a,b)=>a.cname.localeCompare(b.cname));
-        groups.forEach(g=>g.people.sort((a,b)=>a.name.localeCompare(b.name)));
-        if(!shown.length) return <p style={{color:"var(--mut)",fontSize:14,padding:"20px 0"}}>No athletes match.</p>;
-        let gi=0,rendered=0;                       // cap total cards rendered for fast paint
-        const out=[];
-        for(const g of groups){
-          if(rendered>=athLimit) break;
-          const slice=g.people.slice(0,Math.max(0,athLimit-rendered));rendered+=slice.length;
-          out.push(
-          <div key={g.cname} style={{marginBottom:22}}>
-            <div style={{display:"flex",alignItems:"center",gap:9,margin:"4px 0 11px"}}>
-              <span style={{fontSize:18}}>{g.nat?iocFlag(g.nat):""}</span>
-              <span style={{fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:15,color:"var(--navy)"}}>{g.cname}</span>
-              <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{g.people.length}</span>
-              <div style={{flex:1,height:1,background:"var(--line)"}}/>
-            </div>
-            <div className="agrid">
-              {slice.map(p=>{
-                const st=statOf(p.name);
-                const nat=st.nat;
-                // Boat-class nugget = most-recent competition's class (ILCA 6 etc. if subclass present)
-                const nug=st.recentCls?nuggetFor(st.recentCls,st.recentSub):null;
-                return(<div className="acard" key={p.name} style={{animationDelay:`${(Math.min(gi++,40))*12}ms`}} onClick={()=>go({name:"profile",id:p.name})}>
-                  <div className="achead">
-                    <div className="av" style={{background:avatarColor(p.name)}}>{initials(p.name)}</div>
-                    <div style={{minWidth:0,flex:1}}>
-                      <div className="acn">{nat?<span style={{fontSize:17}}>{iocFlag(nat)}</span>:null} {p.name}</div>
-                    </div>
-                  </div>
-                  <div className="acstat">
-                    <div><b>{st.events}</b>competitions</div><div><b>{st.best?"#"+st.best:"—"}</b>best</div>
-                    {nug&&<span className="cls" style={{background:nug.color,fontSize:9.5,marginLeft:"auto"}}>{nug.label}</span>}
-                  </div>
-                </div>);
-              })}
-            </div>
-          </div>);
-        }
-        out.push(<div key="__sentinel" ref={athSentinelRef} style={{height:1}}/>);
-        return out;
-      })()}
+      {filter!=="duplicates"&&athleteGridContent}
     </div>
   )}
 
@@ -9894,6 +5788,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className="wrap sec" style={{paddingTop:22}}>
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
         <button className="back" onClick={navBack} style={{marginBottom:0}}><ArrowLeft size={16}/>Back</button>
+        {isScout&&<SaveButton owner={scoutOwnerId(auth)} events={events} kind="athlete" athleteKey={canonName(name)} title={name}
+          snapshot={{athlete:name}}/>}
         {!devMode&&(()=>{
           // Claim-my-profile control. Rules: one claim per user, one claim per
           // profile (denied claims don't count). Any host the athlete competed
@@ -9921,12 +5817,44 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       </div>
       {(()=>{
         // compute footprint + overview once, used by both the globe (right) and the strip (below)
-        const countryCounts={};
-        ag.history.forEach(h=>{
-          const country=h.ev.country;
-          if(country){const iso=IOC_ISO[country];if(iso)countryCounts[iso]=(countryCounts[iso]||0)+1;}
+        // ── Shared year selection: one set of nuggets drives Globe · Web · Progress ──
+        const yearOfRow=h=>{const dk=dateKey(h.ev.date);return dk?+dk.slice(0,4):null;};
+        const careerYears=[...new Set(ag.history.map(yearOfRow).filter(y=>y!=null))].sort((a,b)=>a-b);
+        const hasYears=careerYears.length>0;
+        // yearSel is keyed by athlete; a stale selection from another profile falls back to all years.
+        const selSet=(yearSel&&yearSel.key===name&&yearSel.years&&yearSel.years.length)?new Set(yearSel.years):null;
+        const isAllYears=!selSet||careerYears.every(y=>selSet.has(y));
+        const selYears=isAllYears?null:[...selSet].sort((a,b)=>a-b);   // null = all years
+        const yrKey=selYears?selYears.join(","):"";                    // stable memo key for children
+        const inWindow=h=>{if(!selSet)return true;const y=yearOfRow(h);return y!=null&&selSet.has(y);};
+        // Per-year boat-class breakdown for the nugget rings (class -> #competitions that year).
+        const classByYear=new Map();
+        ag.history.forEach(h=>{const y=yearOfRow(h);if(y==null)return;const cls=h.ev.cls||"__none";let m=classByYear.get(y);if(!m){m=new Map();classByYear.set(y,m);}m.set(cls,(m.get(cls)||0)+1);});
+        // Toggle handlers: click a year to isolate it, click more to add, "All" resets.
+        const pickYear=y=>setYearSel(prev=>{
+          const cur=(prev&&prev.key===name&&prev.years)?new Set(prev.years):null;
+          let next;
+          if(!cur)next=[y];                                            // isolate from "all"
+          else if(cur.has(y)){cur.delete(y);next=cur.size?[...cur]:null;} // remove; empty → all
+          else{cur.add(y);next=[...cur];}
+          return next?{key:name,years:next.sort((a,b)=>a-b)}:null;
         });
-        const hasFootprint=Object.keys(countryCounts).length>0;
+        const pickAll=()=>setYearSel(null);
+        // Globe footprint. countryCountsAll = whole career (drives the always-all-years
+        // mini globe on the profile); countryCounts = year-selection-filtered (drives the
+        // popup globe, whose YearNuggets are the ONLY year filter now — Fix 9a).
+        const countryCounts={};
+        const countryCountsAll={};
+        let hasFootprintAll=false;
+        ag.history.forEach(h=>{
+          const country=h.ev.country; if(!country)return;
+          const iso=IOC_ISO[country]; if(!iso)return;
+          hasFootprintAll=true;
+          countryCountsAll[iso]=(countryCountsAll[iso]||0)+1;
+          if(!inWindow(h))return;
+          countryCounts[iso]=(countryCounts[iso]||0)+1;
+        });
+        const hasFootprint=hasFootprintAll;   // frame shows whenever the athlete has ANY footprint ever
         if(ag.events>0&&profileSummaries[name]===undefined) fetchFullProfileSummary(name,ag);
         const summary=profileSummaries[name];
         return(<>
@@ -10008,7 +5936,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
             {/* Footprint globe / Athlete web — toggled, with a shrink/reveal swap */}
             {ag.events>0&&hasFootprint&&(
-              <div className="globe-wrap" style={{flex:"0 0 260px",maxWidth:"100%"}}>
+              <div className="globe-wrap" style={{flex:"0 0 286px",maxWidth:"100%"}}>
                 <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6}}>
                   {[["footprint","Globe",Globe],["web","Web",WebIcon],["progress","Progress",TrendingUp]].map(([k,lab,Ico])=>(
                     <button key={k} onClick={()=>setProfileTab(k)}
@@ -10025,36 +5953,45 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="footprint"?1:0,transform:profileTab==="footprint"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="footprint"?"auto":"none"}}>
-                    <SailingGlobe countryData={countryCounts} height={220} dark bare/>
+                    <SailingGlobe countryData={countryCountsAll} height={220} dark bare/>
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                   </div>
                   <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="web"?1:0,transform:profileTab==="web"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="web"?"auto":"none"}}>
-                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})}/>}
+                    {profileTab==="web"&&<AthleteWeb name={name} events={events} height={220} dark onOpen={()=>setFootprintOpen(true)} onPick={nm=>go({name:"profile",id:nm})} selYears={null} yrKey=""/>}
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click a node to open ⤢</div>
                   </div>
-                  <div style={{position:"absolute",inset:0,transition:"opacity .35s ease,transform .35s ease",
+                  <div onClick={()=>setFootprintOpen(true)} title="Click to expand"
+                    style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="progress"?1:0,transform:profileTab==="progress"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="progress"?"auto":"none"}}>
-                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} height={220}/>}
+                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} selYears={null} yrKey="" height={220} w={286}/>}
+                    <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                   </div>
                 </div>
                 {/* Caption sits below the globe (not over it) so it clears the sphere + glow. */}
                 {profileTab==="footprint"&&<div style={{textAlign:"center",fontSize:10,color:"#7fa0c0",marginTop:10}}>Competition footprint</div>}
+                {/* Year nuggets live ONLY in the expanded popup now (Fix 9a); the mini
+                    displays above always show the entire career. */}
               </div>
             )}
           </div>
 
           {/* expanded footprint popup */}
           {footprintOpen&&hasFootprint&&(
-            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>setFootprintOpen(false)}
-              initialTab={profileTab==="web"?"web":"footprint"}
+            <FootprintModal name={name} ag={ag} countryCounts={countryCounts} onClose={()=>{setFootprintOpen(false);setYearSel(null);}} titleSuffix="Competition Footprint"
+              initialTab={profileTab==="web"?"web":profileTab==="progress"?"progress":"footprint"}
+              years={careerYears} selYears={selYears} yrKey={yrKey} classByYear={classByYear} onPickYear={pickYear} onPickAll={pickAll}
               webProps={{name,events,onPick:nm=>{setFootprintOpen(false);go({name:"profile",id:nm});},onOpenEvent:id=>{setFootprintOpen(false);go({name:"event",id});}}}/>
           )}
         </>);
       })()}
-      <div style={{marginTop:22}}>
+      {/* Upcoming competitions this athlete is entered in — forecast chips above the results history */}
+      <div style={{marginTop:18}}>
+        <UpcomingStrip name={name} events={events} onOpen={id=>go({name:"event",id,fromProfile:name})}/>
+      </div>
+      <div style={{marginTop:4}}>
         <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:10}}>
           <div className="ai-srch-wrap" style={{width:"100%"}}>
             <div className="ai-srch">
@@ -10065,7 +6002,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 onChange={e=>{
                   setProfileFilter(e.target.value);
                   clearTimeout(profileSugTimer);
-                  setProfileSugTimer(setTimeout(()=>fetchProfileSuggestions(e.target.value),500));
+                  setProfileSugTimer(setTimeout(()=>fetchProfileSuggestions(e.target.value),200));
                 }}
                 onKeyDown={e=>{
                   if(e.key==="Enter"){setProfileSuggestions([]);runProfileFilter();}
@@ -10110,27 +6047,36 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               const db=b.ev.date?.split('/').reverse().join('')||'';
               return db.localeCompare(da);
             });
-          // Group into year sections with dividers (same look as the host results list).
-          const items=[]; let lastYear=null;
-          rows.forEach((h,i)=>{
-            const yr=h.ev.date?.split('/')?.[2]||"—";
-            if(yr!==lastYear){items.push({type:'divider',year:yr});lastYear=yr;}
-            items.push({type:'row',h,i});
-          });
-          return items.map((item)=>{
-            if(item.type==='divider') return(
-              <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
-                <span style={{fontSize:12,fontWeight:700,color:"var(--mut)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}>{item.year}</span>
-                <div style={{flex:1,height:1,background:"var(--line)"}}/>
-              </div>
-            );
-            const{h,i}=item;
+          // Only the athlete assigned to this profile (claim or signup link) pins it.
+          const canPin=devMode||isProfileOwner(name)||(auth?.profile?.athlete_name&&canonName(auth.profile.athlete_name)===canonName(name));
+          const togglePin=togglePinFor("athlete",canonName(name),profilePins,setProfilePins);
+          // Pinned rows lift out of the year sections to a "Pinned" block on top,
+          // in the owner's order (profilePins array order == render order).
+          const pinIdxOf=h=>profilePins.findIndex(p=>String(p.event_id)===String(h.ev.id));
+          const pinnedRows=rows.filter(h=>pinIdxOf(h)>=0).sort((a,b)=>pinIdxOf(a)-pinIdxOf(b));
+          const rest=rows.filter(h=>pinIdxOf(h)<0);
+          // Same row markup for both sections — pinned rows just gain a corner
+          // badge, the filled pin, and (owner only) drag-to-reorder.
+          const renderRow=(h,i,pinned)=>{
+            const pi=pinned?pinIdxOf(h):-1;
             return(
-            <div className="ev" key={h.ev.id+i} style={{animationDelay:`${i*60}ms`}} onClick={()=>go({name:"event",id:h.ev.id})}>
+            <div className="ev" key={(pinned?"pin":"")+h.ev.id+i} style={{animationDelay:`${i*60}ms`,position:"relative"}} onClick={()=>go({name:"event",id:h.ev.id})}
+              draggable={pinned&&canPin||undefined}
+              onDragStart={pinned&&canPin?()=>setPinDrag(pi):undefined}
+              onDragOver={pinned&&canPin?e=>{e.preventDefault();if(pinDrag!=null&&pinDrag!==pi){movePinLocal(setProfilePins,pinDrag,pi);setPinDrag(pi);}}:undefined}
+              onDragEnd={pinned&&canPin?()=>{commitPinOrder(profilePins,setProfilePins);setPinDrag(null);}:undefined}>
+              {pinned&&<span className="pinbadge" title="Pinned result"><Pin size={11} fill="currentColor"/></span>}
+              {pinned&&canPin&&<span className="pingrip" title="Drag to reorder"><GripVertical size={15}/></span>}
               <div className={`hrk ${h.row.rank<=3?"p"+h.row.rank:""}`} style={{flex:"none"}}>{h.row.rank}<small>of {h.fleet}</small></div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                   <p className="evname" style={{margin:0}}>{h.ev.name}</p>
+                  {canPin&&(
+                    <button type="button" className={"pinbtn"+(pinned?" on":"")} title={pinned?"Unpin":"Pin to the top"}
+                      onClick={e=>{e.stopPropagation();togglePin({event_id:h.ev.id,snapshot:{evName:h.ev.name,evDate:h.ev.date,cls:h.ev.cls,subclass:h.ev.subclass,rank:h.row.rank,fleet:h.fleet,venue:h.ev.country||null,athlete:canonName(name)}});}}>
+                      <Pin size={13} fill={pinned?"currentColor":"none"}/>
+                    </button>
+                  )}
                   <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
                 </div>
                 <div className="evmeta" style={{marginTop:3}}>
@@ -10151,7 +6097,33 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               {(()=>{const n=nuggetFor(h.ev.cls,h.ev.subclass);return n?<span className="cls" style={{background:n.color}}>{n.label}</span>:null;})()}
               <ChevronRight size={18} color="#9fb2c8"/>
             </div>);
+          };
+          // Group the remaining rows into year sections with dividers (same look
+          // as the host results list).
+          const items=[]; let lastYear=null;
+          rest.forEach((h,i)=>{
+            const yr=h.ev.date?.split('/')?.[2]||"—";
+            if(yr!==lastYear){items.push({type:'divider',year:yr});lastYear=yr;}
+            items.push({type:'row',h,i});
           });
+          return(<>
+            {pinnedRows.length>0&&(
+              <div key="pinhead" style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+                <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:"var(--accent)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}><Pin size={12} fill="currentColor"/>PINNED</span>
+                <div style={{flex:1,height:1,background:"var(--line)"}}/>
+              </div>
+            )}
+            {pinnedRows.map((h,i)=>renderRow(h,i,true))}
+            {items.map((item)=>{
+              if(item.type==='divider') return(
+                <div key={"yr"+item.year} style={{display:"flex",alignItems:"center",gap:12,margin:"18px 0 8px"}}>
+                  <span style={{fontSize:12,fontWeight:700,color:"var(--mut)",letterSpacing:".1em",fontFamily:"'Barlow',sans-serif"}}>{item.year}</span>
+                  <div style={{flex:1,height:1,background:"var(--line)"}}/>
+                </div>
+              );
+              return renderRow(item.h,item.i,false);
+            })}
+          </>);
         })()}
         {ag.history.length===0&&<p style={{color:"var(--mut)",fontSize:14}}>No confirmed results found.</p>}
       </div>
@@ -10164,30 +6136,35 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div className={`modal${importStep==="preview"?" wide":""}`} onClick={e=>e.stopPropagation()}>
         <div className="mhead">
           {importStep==="picker"&&<button className="x" onClick={()=>setImportStep("upload")} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
-          {importStep==="preview"&&!editResultsEv&&<button className="x" onClick={()=>{setPending([]);setActivePending(0);setPreviewEv(null);setImportStep(fleetChoices.length?"picker":"upload");}} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
+          {importStep==="preview"&&!editResultsEv&&<button className="x" onClick={backToHub} title="Back to the import list (keeps this result in the queue)" style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           {importStep==="preview"&&editResultsEv&&<button className="x" onClick={()=>{closeImport();setEditResultsEv(null);}} style={{marginRight:4}}><ArrowLeft size={16}/></button>}
           <Upload size={18}/>
-          <h3>{importStep==="picker"?"Select fleet":importStep==="preview"?"Preview & edit results":"Import a competition"}</h3>
-          {pdfLoading&&importStep==="preview"&&(
+          {importStep==="upload"
+            ? <div style={{flex:1,display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                <button className={`mktab${importKind==="past"?" on":""}`} onClick={()=>setImportKind("past")} title="Import the results of a competition that has been sailed"><Trophy size={14}/>Past competitions</button>
+                <button className={`mktab${importKind==="upcoming"?" on":""}`} onClick={()=>setImportKind("upcoming")} title="Publish an upcoming competition's entry list — AthLink forecasts the fleet"><Calendar size={14}/>Upcoming competitions</button>
+              </div>
+            : <h3>{importStep==="picker"?"Select fleet":previewEv?.status==="Upcoming"?"Preview & edit entry list":"Preview & edit results"}</h3>}
+          {(()=>{const n=pending.filter(p=>p.status==="parsing").length;return n>0&&(
             <span style={{display:"inline-flex",alignItems:"center",gap:7,marginLeft:10,color:"var(--accent)",fontSize:12.5,fontWeight:700,fontFamily:"'Barlow',sans-serif"}}>
               <Loader2 size={15} className="spin"/>
-              {parseProgress.total>1?`Parsing ${parseProgress.done}/${parseProgress.total}…`:"Parsing…"}
+              {n>1?`Parsing ${n}…`:"Parsing…"}
             </span>
-          )}
+          );})()}
           <button className="x" onClick={closeImport}><X size={16}/></button>
         </div>
 
         {importStep==="upload"&&(<>
           <div className="mtabs">
-            <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI parser</button>
+            <button className={tab==="ai"?"on":""} onClick={()=>setTab("ai")}><Sparkles size={15}/>AI Entry</button>
             <button className={tab==="manual"?"on":""} onClick={()=>setTab("manual")}><ClipboardPaste size={15}/>Manual entry</button>
           </div>
-          {(()=>{const dropMode=tab==="rule"?"rule":"ai";const dropActive=tab!=="manual"&&dragDepth>0&&!pdfLoading;return(
+          {(()=>{const fileTab=(tab==="ai"||tab==="rule");const upKind=importKind==="upcoming";const dropMode=tab==="rule"?"rule":upKind?"entries":"ai";const dropActive=fileTab&&dragDepth>0;return(
           <div className="mbody" style={{position:"relative"}}
-            onDragEnter={tab!=="manual"?onDragEnter:undefined}
-            onDragOver={tab!=="manual"?onDragOver:undefined}
-            onDragLeave={tab!=="manual"?onDragLeave:undefined}
-            onDrop={tab!=="manual"?(e=>onDropFiles(e,dropMode)):undefined}>
+            onDragEnter={fileTab?onDragEnter:undefined}
+            onDragOver={fileTab?onDragOver:undefined}
+            onDragLeave={fileTab?onDragLeave:undefined}
+            onDrop={fileTab?(e=>onDropFiles(e,dropMode)):undefined}>
             {dropActive&&(
               <div style={{position:"absolute",inset:10,zIndex:60,borderRadius:14,border:"2px dashed var(--accent)",
                 background:"var(--sky)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
@@ -10197,75 +6174,147 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
             )}
             {tab==="rule"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>For known formats — <strong style={{color:"var(--ink)"}}>Sailwave</strong>, Sailwave HTML, <strong style={{color:"var(--ink)"}}>Manage2sail</strong>, SailingResults.net and Clubspot. Fast and exact, no AI. Select one or more PDF/HTML files; multi-fleet files split into a tab per fleet. If a file isn't recognised, switch to the AI parser.</p>
+              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>For known formats — <strong style={{color:"var(--ink)"}}>Sailwave</strong>, Sailwave HTML, <strong style={{color:"var(--ink)"}}>Manage2sail</strong>, SailingResults.net and Clubspot. Fast and exact, no AI. Select one or more PDF/HTML files; multi-fleet files split into a tab per fleet. If a file isn't recognised, switch to AI Entry.</p>
               <label className="btn cta" style={{cursor:"pointer"}}>
                 {pdfLoading?<><Loader2 size={16} className="spin"/>Parsing…</>:<><Upload size={16}/>Choose files</>}
-                <input type="file" multiple accept={IMPORT_ACCEPT} style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"rule")}/>
+                <input type="file" multiple style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"rule")}/>
               </label>
               <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here</span>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
             </>)}
             {tab==="ai"&&(<>
-              <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>
-              <label className="btn cta" style={{cursor:"pointer"}}>
-                {pdfLoading?<><Loader2 size={16} className="spin"/>Working…</>:<><Sparkles size={16}/>Choose files</>}
-                <input type="file" multiple accept={IMPORT_ACCEPT} style={{display:"none"}} disabled={pdfLoading} onChange={e=>handleFiles(e.target.files,"ai")}/>
+              {/* ── Part 1: single competition (results) / entry list (upcoming) ── */}
+              <div style={{fontSize:11,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--navy)",margin:"2px 0 7px",fontFamily:"'Barlow',sans-serif"}}>{upKind?"Import an entry list":"Import single competition result"}</div>
+              {upKind
+                ? <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>Announce a competition <strong style={{color:"var(--ink)"}}>before it's sailed</strong>. Drop in the entry list — a PDF, screenshot, or the entries page link — and AthLink reads who's racing. Once published, the event page shows a <strong style={{color:"var(--ink)"}}>fleet forecast</strong>: win, podium and top-10 chances for every boat, from current skill ratings. When the racing's done, import the results as usual and they attach to this event.</p>
+                : <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 14px",lineHeight:1.55}}>The catch-all. Drop in <strong style={{color:"var(--ink)"}}>anything</strong> — odd PDFs, photos or screenshots of a results sheet, or a whole batch at once. Known formats are read by the built-in parser; the rest go to <strong style={{color:"var(--ink)"}}>Claude AI</strong>. Review every AI-parsed result before publishing.</p>}
+              <label className="btn cta liquidGlass-wrapper" style={{cursor:"pointer"}}>
+                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                <div className="liquidGlass-text"><Sparkles size={16}/>Choose files</div>
+                <input type="file" multiple style={{display:"none"}} onChange={e=>{handleFiles(e.target.files,upKind?"entries":"ai");e.target.value="";}}/>
               </label>
-              <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here</span>
+              <span style={{fontSize:12,color:"var(--mut)",marginLeft:10}}>…or drag &amp; drop files anywhere here{pdfLoading?" — you can keep adding while others parse":""}</span>
               <div style={{margin:"16px 0 6px",display:"flex",alignItems:"center",gap:10}}>
                 <div style={{flex:1,height:1,background:"var(--line)"}}/>
-                <span style={{fontSize:11,fontWeight:700,letterSpacing:".06em",color:"var(--mut)",textTransform:"uppercase"}}>or paste a results link</span>
+                <span style={{fontSize:11,fontWeight:700,letterSpacing:".06em",color:"var(--mut)",textTransform:"uppercase"}}>{upKind?"or paste the entries page link":"or paste a results link"}</span>
                 <div style={{flex:1,height:1,background:"var(--line)"}}/>
               </div>
               <div style={{display:"flex",gap:8}}>
-                <div style={{flex:1,display:"flex",alignItems:"center",gap:8,border:"1px solid var(--line)",borderRadius:9,padding:"0 11px",background:"#fff"}}>
+                <div className="glassbar" style={{flex:1,display:"flex",alignItems:"center",gap:8,padding:"0 12px"}}>
                   <Link2 size={15} color="#9fb2c8" style={{flex:"none"}}/>
-                  <input value={liveUrl} onChange={e=>setLiveUrl(e.target.value)} disabled={pdfLoading}
-                    onKeyDown={e=>{if(e.key==="Enter"&&liveUrl.trim()&&!pdfLoading)handleLink(liveUrl,"ai");}}
-                    placeholder="https://… Manage2sail / Clubspot / Sailwave results page"
-                    style={{flex:1,border:0,outline:"none",font:"inherit",fontSize:13,padding:"10px 0",background:"transparent"}}/>
+                  <input value={liveUrl} onChange={e=>setLiveUrl(e.target.value)}
+                    onKeyDown={e=>{if(e.key==="Enter"&&liveUrl.trim())handleLink(liveUrl,upKind?"entries":"ai");}}
+                    placeholder={upKind?"https://… the event's entries / entry list page":"https://… Manage2sail / Clubspot / Sailwave results page"}
+                    style={{flex:1,border:0,outline:"none",font:"inherit",fontSize:13,padding:"10px 0",background:"transparent",boxShadow:"none"}}/>
                 </div>
-                <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={pdfLoading||!liveUrl.trim()} onClick={()=>handleLink(liveUrl,"ai")}>
-                  <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{pdfLoading?<Loader2 size={15} className="spin"/>:<>Fetch &amp; parse</>}</div>
+                <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 15px",flex:"none"}} disabled={!liveUrl.trim()} onClick={()=>handleLink(liveUrl,upKind?"entries":"ai")}>
+                  <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Fetch &amp; parse</div>
                 </button>
               </div>
               <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0",lineHeight:1.5}}>Parsing the page's source is usually more accurate than a PDF. The link is fetched on our server (your browser can't, due to cross-origin rules).</p>
               {pdfError&&<div className="prev err" style={{marginTop:14}}><AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:5}}/>{pdfError}</div>}
+              {/* ── Part 2: result database (whole archive → discovery) — past results only ── */}
+              {!upKind&&portal&&!isClassPortal&&host&&(<>
+                <div style={{margin:"20px 0 12px",height:1,background:"var(--line)"}}/>
+                <div style={{fontSize:11,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--navy)",margin:"0 0 7px",fontFamily:"'Barlow',sans-serif"}}>Import result database</div>
+                <p style={{fontSize:13,color:"var(--mut)",margin:"0 0 12px",lineHeight:1.55}}>Point AthLink at the web pages that hold your results — <strong style={{color:"var(--ink)"}}>one link per line</strong>. We scan each site for the competitions you've run, check which we can read, and let you pick and publish them. Great for a results archive or a club's competitions page.</p>
+                <textarea value={scrapeText} onChange={e=>setScrapeText(e.target.value)}
+                  placeholder={"https://www.mysailingclub.org/results\nhttps://www.regattanetwork.com/club/1234\nhttps://…"}
+                  rows={3} spellCheck={false}
+                  style={{width:"100%",boxSizing:"border-box",border:0,borderRadius:12,padding:"11px 13px",font:"inherit",fontSize:13,lineHeight:1.6,resize:"vertical",outline:"none",color:"var(--ink)",
+                    background:"rgba(255,255,255,.55)",backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
+                    boxShadow:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)"}}
+                  onFocus={e=>e.target.style.boxShadow="inset 0 1px 0 rgba(255,255,255,.7),0 0 0 4px var(--halo)"}
+                  onBlur={e=>e.target.style.boxShadow="inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)"}/>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10}}>
+                  <button className="btn cta liquidGlass-wrapper" disabled={!scrapeText.trim()}
+                    onClick={()=>{
+                      const urls=[...new Set(scrapeText.split(/[\s,]+/).map(s=>s.trim()).filter(u=>u&&(/^https?:\/\//i.test(u)||/\.[a-z]{2,}/i.test(u))))];
+                      if(!urls.length) return;
+                      setScrapeText("");
+                      // Same hub as single results: every found competition lands in the
+                      // import queue below — no separate discovery pop-up.
+                      discoverIntoQueue(urls);
+                    }}
+                    style={{...(scrapeText.trim()?{}:{opacity:.55,cursor:"not-allowed"})}}>
+                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                    <div className="liquidGlass-text"><Globe size={16}/>Find results</div>
+                  </button>
+                  {/* Saved discoveries: earlier research stored in hosts.dossier — import
+                      those directly (known result URLs), skipping the site re-scan. */}
+                  {(host?.dossier?.competitions?.length>0)&&(()=>{
+                    const queued=pending.some(p=>String(p.id).startsWith("dossier_"));
+                    return(
+                    <button className="btn cta liquidGlass-wrapper" disabled={queued}
+                      onClick={()=>dossierIntoQueue()}
+                      style={{flex:"none",...(queued?{opacity:.55,cursor:"not-allowed"}:{})}}>
+                      <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/>
+                      <div className="liquidGlass-text"><Sparkles size={16}/>Import {host.dossier.competitions.length} saved discoveries</div>
+                    </button>);
+                  })()}
+                  <span style={{fontSize:12,color:"var(--mut)"}}>Found competitions appear in the import queue below, ready to review one by one.</span>
+                </div>
+              </>)}
             </>)}
-            {(tab==="rule"||tab==="ai")&&(pdfLoading||parseLog.length>0)&&(
-              <div style={{marginTop:16,border:"1px solid var(--line)",borderRadius:11,background:"#f7fafd",padding:"13px 15px"}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:parseProgress.total>0?9:0}}>
-                  {pdfLoading?<Loader2 size={14} className="spin" color="var(--accent)"/>:<CheckCircle size={14} color="#0f8a7e"/>}
-                  <span style={{fontSize:12.5,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
-                    {pdfLoading?(tab==="ai"?"AI is reading your files…":"Parsing…"):"Finished"}
+            {/* ── Import queue: the hub. Every file/link lands here as a compact nugget;
+                   parsed ones carry a Review portal into their own editor tab; published
+                   ones tick off and sink to the bottom. Visible on every tab. ── */}
+            {pending.length>0&&(()=>{
+              const act=pending.filter(p=>p.status!=="published");
+              const done=pending.filter(p=>p.status==="published");
+              const ordered=[...act,...done];   // published sink to the bottom
+              const nP=act.filter(p=>p.status==="parsing").length;
+              const nR=act.filter(p=>p.status==="ok").length;
+              const nE=act.filter(p=>p.status==="error").length;
+              return(
+              <div style={{marginTop:16,border:0,borderRadius:14,padding:"11px 13px",
+                background:"rgba(255,255,255,.45)",backdropFilter:"blur(24px) saturate(190%)",WebkitBackdropFilter:"blur(24px) saturate(190%)",
+                boxShadow:"inset 0 1px 0 rgba(255,255,255,.65),inset 0 0 0 .5px rgba(255,255,255,.45),0 1px 4px rgba(0,0,0,.06)"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  {nP>0?<Loader2 size={14} className="spin" color="var(--accent)"/>:<CheckCircle size={14} color="#0f8a7e"/>}
+                  <span style={{fontSize:12.5,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>Import queue</span>
+                  <span style={{marginLeft:"auto",fontSize:11.5,color:"var(--mut)",fontWeight:600}}>
+                    {[nP?`${nP} parsing`:null,nR?`${nR} ready`:null,nE?`${nE} failed`:null,done.length?`${done.length} published`:null].filter(Boolean).join(" · ")}
                   </span>
-                  {parseProgress.total>0&&<span style={{marginLeft:"auto",fontSize:11.5,color:"var(--mut)",fontWeight:600}}>{parseProgress.done}/{parseProgress.total}</span>}
                 </div>
-                {parseProgress.total>0&&(
-                  <div style={{height:6,borderRadius:4,background:"#e3edf6",overflow:"hidden",marginBottom:11}}>
-                    <div style={{height:"100%",width:`${Math.round((parseProgress.done/Math.max(parseProgress.total,1))*100)}%`,background:"linear-gradient(90deg,var(--accent),#0f8a7e)",borderRadius:4,transition:"width .3s ease"}}/>
-                  </div>
-                )}
-                <div style={{display:"flex",flexDirection:"column",gap:7,maxHeight:190,overflowY:"auto"}}>
-                  {parseLog.map((l,li)=>(
-                    <div key={li} style={{fontSize:12,lineHeight:1.5}}>
-                      <div style={{display:"flex",alignItems:"center",gap:6}}>
-                        {l.status==="parsing"?<Loader2 size={12} className="spin" color="var(--accent)" style={{flex:"none"}}/>
-                          :l.status==="error"?<AlertCircle size={12} color="#c0392b" style={{flex:"none"}}/>
-                          :l.status==="ok"?<CheckCircle size={12} color="#0f8a7e" style={{flex:"none"}}/>
-                          :<Clock size={12} color="#9fb2c8" style={{flex:"none"}}/>}
-                        <span style={{fontWeight:600,color:"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.name}</span>
-                      </div>
-                      {(l.notes||[]).length>0&&(
-                        <div style={{paddingLeft:18,color:l.status==="error"?"#c0392b":"var(--mut)"}}>
-                          {l.notes.map((n,ni)=><div key={ni} style={{display:"flex",gap:5}}><span style={{opacity:.5}}>›</span><span>{n}</span></div>)}
-                        </div>
+                <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:236,overflowY:"auto"}}>
+                  {ordered.map(p=>{
+                    const pub=p.status==="published";
+                    return(
+                    <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,border:0,
+                      background:pub?"transparent":"rgba(255,255,255,.6)",
+                      boxShadow:pub?"none":"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",
+                      borderRadius:10,padding:"5px 6px 5px 10px",opacity:pub?.6:1,minHeight:26}}>
+                      {p.status==="parsing"?<Loader2 size={13} className="spin" color="var(--accent)" style={{flex:"none"}}/>
+                        :p.status==="error"?<AlertCircle size={13} color="#c0392b" style={{flex:"none"}}/>
+                        :pub?<CheckCircle size={13} color="#0f8a7e" style={{flex:"none"}}/>
+                        :<FileText size={13} color="var(--accent)" style={{flex:"none"}}/>}
+                      <span style={{fontSize:12.5,fontWeight:600,color:pub?"var(--mut)":"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:"none",maxWidth:"44%",textDecoration:pub?"line-through":"none"}}>{p.previewEv?.name||p.name}</span>
+                      <span title={p.status==="error"?(p.error||""):undefined} style={{fontSize:11.5,color:p.status==="error"?"#c0392b":"var(--mut)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>
+                        {p.status==="parsing"?((p.notes||[]).slice(-1)[0]||"Parsing…")
+                          :p.status==="error"?(p.error||"Couldn't parse this file.")
+                          :pub?(p.publishedMsg||"Published")
+                          :`${p.previewEv?.entries?.length||0} competitors · ready to review`}
+                      </span>
+                      {p.status==="ok"&&(
+                        <button onClick={()=>openPendingEditor(p.id)} title="Open this result to review & publish"
+                          style={{flex:"none",display:"inline-flex",alignItems:"center",gap:3,border:"1px solid var(--accent)",background:"var(--accent)",color:"#fff",borderRadius:7,padding:"3px 9px 3px 11px",fontSize:11.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",cursor:"pointer"}}>
+                          Review<ChevronRight size={12}/>
+                        </button>
                       )}
-                    </div>
-                  ))}
+                      {!pub&&p.status!=="parsing"&&(
+                        <button onClick={()=>removePending(p.id)} title="Remove from the queue"
+                          style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:22,height:22,borderRadius:6,border:0,cursor:"pointer",background:"transparent",color:"#c0392b",transition:".12s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.background="rgba(192,57,43,.1)";}}
+                          onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+                          <Trash2 size={13}/>
+                        </button>
+                      )}
+                    </div>);
+                  })}
                 </div>
-              </div>
-            )}
+              </div>);
+            })()}
             {tab==="manual"&&(<>
               {(()=>{const evCls=assoc?.cls||mf.cls;return(<>
               <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:10,flexWrap:"wrap"}}>
@@ -10293,44 +6342,44 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <input value={mf.date} onChange={e=>updMeta("date",e.target.value)} placeholder="dd/mm/yyyy" maxLength={10}/>
                   {mf.date?.match(/^\d{1,2}\/\d{1,2}\/\d{4}$/)&&<span style={{fontSize:11.5,color:"var(--accent)",fontWeight:600,display:"block",marginTop:3}}>{formatDate(mf.date)}</span>}
                 </div>
-                <div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>
+                {!upKind&&<div><label>Discards</label><input type="number" min="0" max="10" value={mf.discards} onChange={e=>updMeta("discards",Math.max(0,parseInt(e.target.value)||0))}/></div>}
               </div>
               <CollabPicker owner={portal} value={mf.collabs} onChange={v=>updMeta("collabs",v)}/>
               </>);})()}
-              <div className="race-ctrl">
+              {!upKind&&<div className="race-ctrl">
                 <span>Number of rounds</span>
                 <div className="stepper">
                   <button onClick={()=>mf.numRaces>1&&setNumRaces(mf.numRaces-1)}><Minus size={13}/></button>
                   <span>{mf.numRaces}</span>
                   <button onClick={()=>mf.numRaces<20&&setNumRaces(mf.numRaces+1)}><Plus size={13}/></button>
                 </div>
-              </div>
+              </div>}
               <div className="rtable-wrap">
                 <table className="rtable">
                   <thead><tr>
-                    <th className="l" style={{minWidth:110}}>Athlete Name</th>
-                    {!(SINGLE_ATHLETE||(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist")&&<th className="l" style={{minWidth:110}}>Crew Name</th>}
+                    <th className="l" style={{minWidth:110}}>Helm Name</th>
+                    {!SINGLE_ATHLETE&&<th className="l" style={{minWidth:110}}>Crew Name</th>}
                     <th style={{minWidth:46}}>Nat</th>
-                    <th style={{minWidth:46}}>ID</th>
+                    <th style={{minWidth:46}}>Sail</th>
                     <th style={{minWidth:140}}>Div</th>
-                    {Array.from({length:mf.numRaces}).map((_,i)=><th key={i} style={{minWidth:34}}>R{i+1}</th>)}
-                    <th className="calc" style={{minWidth:38}}>Total</th>
-                    <th className="calc" style={{minWidth:38}}>Net</th>
+                    {!upKind&&Array.from({length:mf.numRaces}).map((_,i)=><th key={i} style={{minWidth:34}}>R{i+1}</th>)}
+                    {!upKind&&<th className="calc" style={{minWidth:38}}>Total</th>}
+                    {!upKind&&<th className="calc" style={{minWidth:38}}>Net</th>}
                     <th style={{width:26}}></th>
                   </tr></thead>
                   <tbody>
                     {mf.rows.map((row,i)=>(
                       <tr key={i}>
-                        <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Athlete name"/></td>
-                        {!(SINGLE_ATHLETE||(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist")&&<td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>}
+                        <td className="l"><input value={row.helm} onChange={e=>updRow(i,"helm",e.target.value)} placeholder="Helm name"/></td>
+                        {!SINGLE_ATHLETE&&<td className="l"><input value={row.crew} onChange={e=>updRow(i,"crew",e.target.value)} placeholder="Crew name"/></td>}
                         <td><NatInput value={row.nat||""} onChange={v=>updRow(i,"nat",v)}/></td>
                         <td><input value={row.sail} onChange={e=>updRow(i,"sail",e.target.value)} placeholder="···" style={{textAlign:"center"}}/></td>
-                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)} noMix={SINGLE_ATHLETE||(assoc?.cls||mf.cls)==="ilca"||(assoc?.cls||mf.cls)==="optimist"}/></td>
-                        {Array.from({length:mf.numRaces}).map((_,j)=>(
+                        <td style={{padding:"4px 6px"}}><DivisionToggle value={row.div} onChange={v=>updRow(i,"div",v)} noMix={SINGLE_ATHLETE}/></td>
+                        {!upKind&&Array.from({length:mf.numRaces}).map((_,j)=>(
                           <td key={j}><input value={row.scores[j]||""} onChange={e=>updScore(i,j,e.target.value)} placeholder="–" style={{textAlign:"center"}}/></td>
                         ))}
-                        <td className="calc-td" style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{manualCalc[i]?.total??<span style={{opacity:.3}}>—</span>}</td>
-                        <td className="calc-td" style={{fontSize:12,color:"var(--navy)",fontWeight:700}}>{manualCalc[i]?.net??<span style={{opacity:.3}}>—</span>}</td>
+                        {!upKind&&<td className="calc-td" style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{manualCalc[i]?.total??<span style={{opacity:.3}}>—</span>}</td>}
+                        {!upKind&&<td className="calc-td" style={{fontSize:12,color:"var(--navy)",fontWeight:700}}>{manualCalc[i]?.net??<span style={{opacity:.3}}>—</span>}</td>}
                         <td className="del-td"><button style={{background:"none",border:0,color:"#c0392b",cursor:"pointer",padding:4,opacity:.55}} onClick={()=>delRow(i)}><X size={13}/></button></td>
                       </tr>
                     ))}
@@ -10339,11 +6388,11 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               </div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                 <button className="btn ghost" style={{fontSize:13,padding:"7px 12px"}} onClick={addRow}><Plus size={14}/>Add boat</button>
-                <span style={{fontSize:11.5,color:"var(--mut)"}}>Codes: DNF DSQ UFD BFD DNC DNS OCS RET SCP STP DPI DNE NSC ZFP RDG</span>
+                {!upKind&&<span style={{fontSize:11.5,color:"var(--mut)"}}>Codes: DNF DSQ UFD BFD DNC DNS OCS RET SCP STP DPI DNE NSC ZFP RDG</span>}
               </div>
               <div className="mfoot">
                 <button className="btn ghost" onClick={closeImport}>Cancel</button>
-                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady} onClick={doImportManual}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><Upload size={16}/>Import competition</div></button>
+                <button className="btn cta liquidGlass-wrapper" disabled={!manualReady||busyAction==="manualImport"} onClick={()=>runBusy("manualImport",()=>doImportManual(upKind))}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busyAction==="manualImport"?<Loader2 size={16} className="spin"/>:<Upload size={16}/>}{upKind?"Publish entry list":"Import competition"}</div></button>
               </div>
             </>)}
           </div>);})()}
@@ -10351,7 +6400,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
 
         {importStep==="picker"&&(
           <div className="mbody">
-            <p style={{fontSize:14,color:"var(--mut)",margin:"0 0 4px"}}>Multiple fields found in <strong style={{color:"var(--ink)"}}>{pdfMeta?.name}</strong>. Select which field to import, or combine all into one overall results page:</p>
+            <p style={{fontSize:14,color:"var(--mut)",margin:"0 0 4px"}}>Multiple fleets found in <strong style={{color:"var(--ink)"}}>{pdfMeta?.name}</strong>. Select which fleet to import, or combine all into one overall results page:</p>
             <div className="fleet-grid">
               {/* Overall Results option — merges all fleets, preserves PDF ranks */}
               <div className="fleet-card" style={{borderColor:"var(--accent)",background:"#f0f8ff"}} onClick={()=>{
@@ -10380,19 +6429,33 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         )}
 
         {importStep==="preview"&&(pending.length>0||previewEv)&&(()=>{
-          const scored=previewScored;
-          const maxR=previewMaxRaces;
-          const active=pending[activePending];
+          // Upcoming entry list: no scores exist, so no scoring pass (scorePreview
+          // would invent DNFs), no race columns, and a Rating column instead of Pos
+          // so the host can see which entrants matched an existing rated athlete.
+          const isUpEv=previewEv?.status==="Upcoming";
+          const scored=isUpEv?null:previewScored;
+          const maxR=isUpEv?0:previewMaxRaces;
+          const upRatings=isUpEv?(()=>{try{return ratingEngine.getAthleteRatings(events);}catch{return null;}})():null;
+          const upRatingOf=(members)=>{
+            if(!upRatings)return null;
+            const dk=dateKey(previewEv?.date)||"";
+            const rr=members.filter(Boolean).map(m=>ratingEngine.ratingAsOf(upRatings.get(canonName(m))||null,dk));
+            if(!rr.length)return null;
+            return{r:rr.reduce((a,x)=>a+x.r,0)/rr.length,rd:Math.sqrt(rr.reduce((a,x)=>a+x.rd*x.rd,0)/rr.length),provisional:rr.every(x=>x.provisional)};
+          };
+          const active=pending.find(p=>p.id===activePending);
           const isError=active&&active.status==="error";
-          const missingCells=previewEv&&previewEv.entries.some(e=>!e.helm||(e.races||[]).length<maxR);
+          // Editor tabs show only unpublished items — a published result's tab is closed.
+          const openTabs=pending.filter(p=>p.status!=="published");
+          const missingCells=previewEv&&previewEv.entries.some(e=>!e.helm||(!isUpEv&&(e.races||[]).length<maxR));
           // Effective class for the table comes from the previewEv itself when set
           // by the per-result selector, else the portal association's class.
           const evCls=(previewEv?.cls)||assoc?.cls||"mens";
-          const singleHanded=SINGLE_ATHLETE||evCls==="ilca"||evCls==="optimist";
+          const singleHanded=SINGLE_ATHLETE;
           // Associations may only host their own class; clubs (and edit mode) host any.
           const classLocked=!!assoc&&!editResultsEv;
           // Detect fleet groups in pending (same fleetGroupId = same multi-fleet source file)
-          const fleetGroupIds=[...new Set(pending.filter(p=>p.fleetGroupId).map(p=>p.fleetGroupId))];
+          const fleetGroupIds=[...new Set(openTabs.filter(p=>p.fleetGroupId).map(p=>p.fleetGroupId))];
           // Days on which the importing host already has competitions — reference/collision
           // info for the date picker. Keyed by the event's DD/MM/YYYY date → competition names.
           // Scope to the resolved host (self-organizing importer, else attributed host); if
@@ -10413,29 +6476,29 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             return out;
           })();
           return(<div className="mbody has-actionbar">
-            {/* ── Pending result tabs (multi-file import) ── */}
-            {pending.length>1&&(
+            {/* ── Open editor tabs (unpublished results; published tabs auto-close) ── */}
+            {openTabs.length>1&&(
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,borderBottom:"1px solid var(--line)",paddingBottom:10}}>
-                {pending.map((p,i)=>(
+                {openTabs.map(p=>{const on=p.id===activePending;return(
                   <span key={p.id}
-                    style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:220,border:"1px solid "+(i===activePending?"var(--accent)":"var(--line)"),
-                      background:i===activePending?"var(--accent)":(p.status==="error"?"#fdeceA":"#fff"),color:i===activePending?"#fff":(p.status==="error"?"#b3261e":"var(--navy)"),
+                    style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:220,border:"1px solid "+(on?"var(--accent)":"var(--line)"),
+                      background:on?"var(--accent)":(p.status==="error"?"#fdeceA":"#fff"),color:on?"#fff":(p.status==="error"?"#b3261e":"var(--navy)"),
                       borderRadius:8,padding:"6px 6px 6px 10px",fontSize:12,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden"}}>
-                    <button onClick={()=>switchPending(i)} title="Edit this result"
+                    <button onClick={()=>switchPending(p.id)} title="Edit this result"
                       style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:170,background:"none",border:0,padding:0,margin:0,cursor:"pointer",color:"inherit",font:"inherit",fontWeight:600,overflow:"hidden"}}>
                       {p.status==="error"?<AlertCircle size={12} style={{flex:"none"}}/>:p.status==="parsing"?<Loader2 size={12} className="spin" style={{flex:"none"}}/>:<FileText size={12} style={{flex:"none"}}/>}
                       <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{p.previewEv?.name||p.name}</span>
                     </button>
-                    <button onClick={()=>removePending(i)} title="Remove this result from the import"
+                    <button onClick={()=>removePending(p.id)} title="Remove this result from the import"
                       style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,borderRadius:5,border:0,cursor:"pointer",
-                        background:i===activePending?"rgba(255,255,255,.22)":"transparent",color:i===activePending?"#fff":"#9aa7b6"}}>
+                        background:on?"rgba(255,255,255,.22)":"transparent",color:on?"#fff":"#9aa7b6"}}>
                       <X size={12}/>
                     </button>
                   </span>
-                ))}
+                );})}
                 {/* Combine fleets button — shown per fleet group */}
                 {fleetGroupIds.map(gid=>{
-                  const gItems=pending.filter(p=>p.fleetGroupId===gid);
+                  const gItems=openTabs.filter(p=>p.fleetGroupId===gid);
                   if(gItems.length<2) return null;
                   // Event title = longest common prefix of the fleet names, trimmed
                   // of any trailing separator (e.g. "29er World Championship — 1-Gold"
@@ -10461,27 +6524,56 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 <AlertCircle size={14} style={{verticalAlign:"-2px",marginRight:6}}/>
                 <b>Couldn't parse "{active.name}".</b> {active.error||""} Try exporting this result in a different format (Sailwave <b>HTML</b> or a text-based <b>PDF</b>) and uploading again.
                 <div style={{marginTop:10}}>
-                  <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} onClick={()=>{
-                    const remaining=pending.filter((_,i)=>i!==activePending);
-                    setPending(remaining);
-                    if(!remaining.length){closeImport();return;}
-                    const ni=Math.min(activePending,remaining.length-1);setActivePending(ni);
-                    const t=remaining[ni];if(t?.previewEv){setPreviewEv(t.previewEv);setMf(f=>({...f,subclass:t.subclass||null,collabs:t.collabs||[]}));}
-                  }}>Dismiss this file</button>
+                  <button className="btn ghost" style={{fontSize:12,padding:"5px 11px"}} onClick={()=>removePending(active.id)}>Dismiss this file</button>
                 </div>
               </div>
             )}
             {!isError&&previewEv&&(<>
             <div className="preview-meta wide" style={{marginBottom:8}}>
+              {isUpEv&&<div style={{gridColumn:"1/-1",marginBottom:6,display:"flex",alignItems:"center",gap:6,background:"rgba(232,146,26,.09)",border:"1px solid rgba(232,146,26,.35)",borderRadius:7,padding:"5px 10px"}}>
+                <Clock size={13} style={{color:"#b8860b",flex:"none"}}/>
+                <span style={{fontSize:12,fontWeight:600,color:"#b8860b"}}>Upcoming competition</span>
+                <span style={{fontSize:11,color:"#a8873a"}}>— publishing this entry list makes the event page show a fleet forecast. Rated entrants show their current skill rating; "new" entrants start at 1200 with the widest uncertainty.</span>
+              </div>}
               {previewEv?.ai_parsed&&<div style={{gridColumn:"1/-1",marginBottom:6,display:"flex",alignItems:"center",gap:6,background:"#f0f4ff",border:"1px solid #c5d3f8",borderRadius:7,padding:"5px 10px"}}>
                 <Sparkles size={13} style={{color:"#3b5bdb",flex:"none"}}/>
                 <span style={{fontSize:12,fontWeight:600,color:"#3b5bdb"}}>AI parsed</span>
-                <span style={{fontSize:11,color:"#6278b5"}}>— This result was parsed by Claude AI. Review all cells before publishing.</span>
+                <span style={{fontSize:11,color:"#6278b5"}}>— This {isUpEv?"entry list":"result"} was parsed by Claude AI. Review all cells before publishing.</span>
               </div>}
+              {/* Attach-to-announced-event notice: this result matches an upcoming
+                  competition already published as an entry list. Default = attach
+                  (no duplicate event); the host can opt out per result. */}
+              {!isUpEv&&!editResultsEv&&(()=>{
+                const m=findUpcomingMatch({name:previewEv.name,cls:evCls,date:previewEv.date});
+                if(!m) return null;
+                const off=!!previewEv._noAttach;
+                return(
+                  <div style={{gridColumn:"1/-1",marginBottom:6,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:off?"var(--grouped)":"rgba(46,164,79,.08)",border:"1px solid "+(off?"var(--line)":"rgba(46,164,79,.35)"),borderRadius:7,padding:"5px 10px"}}>
+                    <Link2 size={13} style={{color:off?"var(--mut)":"#1a7f37",flex:"none"}}/>
+                    <span style={{fontSize:12,fontWeight:600,color:off?"var(--mut)":"#1a7f37"}}>{off?"Publishing as a separate event":"Will attach to your announced competition"}</span>
+                    <span style={{fontSize:11,color:off?"var(--mut)":"#3d8054"}}>— {off?`"${m.name}" stays a separate upcoming event.`:`these results replace the entry list on "${m.name}" (same page & link, forecast becomes final results).`}</span>
+                    <button type="button" onClick={()=>updPMeta("_noAttach",!off)}
+                      style={{marginLeft:"auto",flex:"none",border:"1px solid "+(off?"#1a7f37":"var(--line)"),background:"transparent",color:off?"#1a7f37":"var(--mut)",borderRadius:6,fontSize:11,fontWeight:600,padding:"2px 8px",cursor:"pointer"}}>
+                      {off?"Attach instead":"Publish separately"}</button>
+                  </div>
+                );
+              })()}
               <div><label>Competition name</label><input value={previewEv.name||""} onChange={e=>updPMeta("name",e.target.value)} className={!previewEv.name?"pmissing":""} placeholder="Competition name"/></div>
+              <div><label>Host Country</label><CountrySelect glass value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
               <div><label>Date</label><DateField value={previewEv.date||""} onChange={v=>updSharedMeta("date",v)} className={!previewEv.date?"pmissing":""} markedDays={markedDays} dotColor={classColor(evCls)||"var(--navy2)"}/></div>
-              <div><label>Host Country</label><CountrySelect value={previewEv.venue||""} onChange={v=>updSharedMeta("venue",v)}/></div>
-              <div><label>Discards</label><input type="number" min="0" max="20" value={previewEv.discards||1} onChange={e=>updPMeta("discards",parseInt(e.target.value)||1)}/></div>
+              {!isUpEv&&<div><label>Discards</label>
+                {/* frameless ± stepper; functional updates so rapid clicks don't read a stale count */}
+                <div className="stepper" style={{gap:5,justifyContent:"center",height:35}}>
+                  <button type="button" style={{width:26,height:26}} onClick={()=>setPreviewEv(ev=>ev?{...ev,discards:Math.max(0,(ev.discards??1)-1)}:ev)}><Minus size={12}/></button>
+                  <span style={{minWidth:16,textAlign:"center",fontSize:13}}>{previewEv.discards??1}</span>
+                  <button type="button" style={{width:26,height:26}} onClick={()=>setPreviewEv(ev=>ev?{...ev,discards:Math.min(20,(ev.discards??1)+1)}:ev)}><Plus size={12}/></button>
+                </div>
+              </div>}
+              <div><label>Division{classLocked&&<span style={{textTransform:"none",letterSpacing:0}} title={`Fixed to ${assoc.name}'s division`}> 🔒</span>}</label>
+                <ClassSelect value={evCls} subValue={mf.subclass} locked={classLocked?assoc.cls:null}
+                  classes={customClasses} onAdd={name=>addCustomClass(name)}
+                  onPick={(cid,sid)=>{updPMeta("cls",cid);updMeta("subclass",sid);}}/>
+              </div>
             </div>
             {/* ── Web-lookup suggestion strip: low-confidence date/country found
                  online for a document that printed none. Never auto-applied —
@@ -10526,75 +6618,121 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </div>
               );
             })()}
-            {/* ── Two-column: boat classes (left) · organiser controls (right) ── */}
-            <div style={{display:"flex",gap:20,flexWrap:"wrap",alignItems:"flex-start",marginBottom:10}}>
-              {/* LEFT — per-result class selector (reshapes the table). Subclass options
-                  (ILCA/Optimist) are revealed on hover/focus of the parent class button. */}
-              <div style={{flex:"1 1 300px",minWidth:260}}>
-                <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Division{classLocked&&<span style={{fontWeight:500,opacity:.7}}> — fixed to {assoc.name}'s division</span>}</label>
-                <div style={{display:"inline-flex",gap:6,flexWrap:"wrap"}}>
-                  {CLASSES.map(c=>{
-                    const on=evCls===c.id;
-                    const disabled=classLocked&&c.id!==assoc.cls;
-                    const btn=<button type="button" disabled={disabled}
-                      onClick={()=>{if(disabled)return;updPMeta("cls",c.id);updMeta("subclass",null);}}
-                      style={{border:"1px solid "+(on?classColor(c.id):"var(--line)"),background:on?classColor(c.id):"transparent",
-                        color:on?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",
-                        cursor:disabled?"not-allowed":"pointer",opacity:disabled?.35:1}}>{c.short}</button>;
-                    return SUBCLASSES[c.id]
-                      ? <SubclassHover key={c.id} cls={c.id} value={mf.subclass} active={on&&!disabled}
-                          onChange={v=>updMeta("subclass",v)} classBtn={btn}/>
-                      : <React.Fragment key={c.id}>{btn}</React.Fragment>;
-                  })}
-                  <CustomClassPicker classes={customClasses} value={evCls} disabled={classLocked}
-                    onSelect={id=>{updPMeta("cls",id);updMeta("subclass",null);}}
-                    onAdd={name=>addCustomClass(name)}/>
+            {/* ── Organizer row: addable nuggets. First nugget = the organizer (the
+                 importing host by default; X on it demotes the import to an external
+                 CONTRIBUTION). Extra nuggets = collab hosts. "+" adds an existing
+                 association/club/federation — it fills the empty organizer slot
+                 first, then adds collabs. ── */}
+            {(()=>{
+              const importerHost=(portal&&!isClassPortal)?portal:null;
+              const editing=!!editResultsEv;
+              const orgMode=previewEv._orgMode||"self";
+              const selfOrg=!editing&&!!importerHost&&orgMode!=="external";
+              const ownerId=editing?previewEv.owner:(selfOrg?importerHost:(previewEv._orgHost||null));
+              const orgName=!editing&&!ownerId?(previewEv._orgName||""):"";
+              const collabs=mf.collabs||[];
+              const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
+              // Chips go by the host's URL short name (its slug, e.g. RHKYC) when one is
+              // set — long official names would truncate; the tooltip keeps the full name.
+              const hostShort=id=>{const h=hostById(id);return h?.slug||h?.name||id;};
+              const hostFull=id=>hostById(id)?.name||id;
+              const nug=(key,label,{dark=false,dashed=false,onX=null,tag=null,onToggle=null,toggleTitle="",full=""})=>(
+                <span key={key} onClick={onToggle||undefined} title={[full,onToggle?toggleTitle:""].filter(Boolean).join(" — ")||undefined}
+                  style={{display:"inline-flex",alignItems:"center",gap:6,maxWidth:260,
+                  border:dashed?"1.5px dashed var(--line)":0,
+                  background:dark?"var(--navy)":"rgba(255,255,255,.55)",color:dark?"#fff":"var(--navy)",
+                  backdropFilter:dark?undefined:"blur(24px) saturate(190%)",WebkitBackdropFilter:dark?undefined:"blur(24px) saturate(190%)",
+                  boxShadow:dark?"inset 0 1px 0 rgba(255,255,255,.28),0 1px 3px rgba(0,0,0,.15)"
+                    :dashed?undefined:"inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.5),0 1px 3px rgba(0,0,0,.05)",
+                  borderRadius:12,padding:"6px 8px 6px 12px",fontSize:12.5,fontWeight:600,whiteSpace:"nowrap",
+                  cursor:onToggle?"pointer":"default",userSelect:"none",transition:".12s"}}>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{label}</span>
+                  {tag&&<span style={{flex:"none",fontSize:10,fontWeight:700,letterSpacing:".04em",opacity:.8,
+                    border:"1px solid "+(dark?"rgba(255,255,255,.4)":"var(--line)"),borderRadius:6,padding:"1px 6px"}}>{tag}</span>}
+                  {onX
+                    ?<button type="button" onClick={e=>{e.stopPropagation();onX();}} title="Remove"
+                      style={{flex:"none",display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,
+                        borderRadius:6,border:0,cursor:"pointer",background:dark?"rgba(255,255,255,.22)":"transparent",
+                        color:dark?"#fff":"#9aa7b6"}}><X size={12}/></button>
+                    :<span style={{width:2}}/>}
+                </span>);
+              // Organizer ↔ Collab toggling. Every host is a nugget; the ORGANIZER one is
+              // dark with a tag. Click the organizer → it steps down to a collab (the
+              // import becomes an external contribution). Click a collab → it becomes THE
+              // organizer (any previous organizer steps down to collab). × removes.
+              const demoteOrganizer=()=>{
+                if(editing||!ownerId) return;
+                if(selfOrg)updSharedMeta("_orgMode","external"); else updSharedMeta("_orgHost",null);
+                if(!collabs.includes(ownerId))updSharedCollabs([...collabs,ownerId]);
+              };
+              const promoteToOrganizer=(id)=>{
+                if(editing) return;
+                const rest=collabs.filter(x=>x!==id);
+                updSharedCollabs(ownerId&&ownerId!==id&&!rest.includes(ownerId)?[...rest,ownerId]:rest);
+                if(id===importerHost){updSharedMeta("_orgMode","self");updSharedMeta("_orgHost",null);}
+                else{updSharedMeta("_orgMode","external");updSharedMeta("_orgHost",id);}
+                updSharedMeta("_orgName","");
+              };
+              // "+" picks: the importer itself → back to self-organized; any host into an
+              // empty organizer slot → attributed organizer; otherwise → collab.
+              const addHost=id=>{
+                if(!editing&&id===importerHost){updSharedMeta("_orgMode","self");updSharedMeta("_orgHost",null);updSharedMeta("_orgName","");return;}
+                if(!editing&&!ownerId){updSharedMeta("_orgHost",id);updSharedMeta("_orgName","");return;}
+                if(!collabs.includes(id)&&id!==ownerId)updSharedCollabs([...collabs,id]);
+              };
+              return(
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:11,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600,letterSpacing:".04em",textTransform:"uppercase"}}>Organizer</label>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {ownerId&&nug("owner",hostShort(ownerId),{dark:true,tag:"Organizer",full:hostFull(ownerId),
+                    onToggle:editing?null:demoteOrganizer,toggleTitle:"click to make this host a collab instead",
+                    onX:editing?null:()=>{selfOrg?updSharedMeta("_orgMode","external"):updSharedMeta("_orgHost",null);}})}
+                  {!ownerId&&orgName&&nug("orgname",orgName,{dashed:true,tag:"Organizer — not on AthLink",
+                    onX:()=>updSharedMeta("_orgName","")})}
+                  {collabs.map(id=>nug(id,hostShort(id),{tag:"Collab",full:hostFull(id),
+                    onToggle:editing?null:()=>promoteToOrganizer(id),toggleTitle:"click to make this host the organizer",
+                    onX:()=>updSharedCollabs(collabs.filter(x=>x!==id))}))}
+                  <AddHostNugget hosts={allHosts} exclude={[ownerId,...collabs].filter(Boolean)}
+                    allowOther={!editing&&!ownerId&&!orgName}
+                    onOtherName={v=>updSharedMeta("_orgName",v)}
+                    onPick={addHost}
+                    title={(!editing&&!ownerId&&!orgName)?"Add the organizer":"Add a collab association or club"}/>
                 </div>
-              </div>
-              {/* RIGHT — organiser controls (self-organized / host picker / free-text) */}
-              {!editResultsEv&&(()=>{
-                const importerHost=(portal&&!isClassPortal)?portal:null;
-                const orgMode=previewEv._orgMode||"self";
-                const external=!importerHost||orgMode==="external";
-                const allHosts=[...ASSOCIATIONS,...CLUBS,...FEDERATIONS];
-                return <div style={{flex:"1 1 260px",minWidth:260}}>
-                  <label style={{fontSize:12,color:"var(--mut)",display:"block",marginBottom:5,fontWeight:600}}>Organizer</label>
-                  {importerHost&&<div style={{display:"inline-flex",gap:6,marginBottom:external?8:0,flexWrap:"wrap"}}>
-                    {[["self",`We organized this — ${hostById(importerHost)?.name||"this host"}`],["external","Another organizer"]].map(([m,lbl])=>(
-                      <button key={m} type="button" onClick={()=>updSharedMeta("_orgMode",m)}
-                        style={{border:"1px solid "+(orgMode===m?"var(--navy)":"var(--line)"),background:orgMode===m?"var(--navy)":"transparent",
-                          color:orgMode===m?"#fff":"var(--mut)",borderRadius:7,fontSize:12,fontWeight:700,fontFamily:"'Barlow',sans-serif",padding:"5px 11px",cursor:"pointer"}}>{lbl}</button>
-                    ))}
-                  </div>}
-                  {external&&<div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-                    <HostPicker hosts={allHosts} value={previewEv._orgHost||null}
-                      onChange={id=>{updSharedMeta("_orgHost",id||null);if(id)updSharedMeta("_orgName","");}}
-                      orgName={previewEv._orgName||""} onOrgName={v=>updSharedMeta("_orgName",v)}/>
-                  </div>}
-                  <p style={{fontSize:11.5,color:"var(--mut)",marginTop:6}}>
-                    {external
-                      ?"This competition will be filed as externally contributed — it stays off your page and the organizer can claim it later."
-                      :"You'll be recorded as the organizer; the competition appears on your page."}
-                  </p>
-                </div>;
-              })()}
-            </div>
-            <div style={{marginBottom:10}}>
-              <CollabPicker owner={editResultsEv?previewEv.owner:portal} value={mf.collabs} onChange={v=>updSharedCollabs(v)}/>
-            </div>
+                {!editing&&<p style={{fontSize:11.5,color:"var(--mut)",margin:"6px 0 0"}}>
+                  {(!ownerId&&!orgName)?"No organizer set — this will be filed as an external contribution"+(importerHost?` by ${hostById(importerHost)?.name||"you"}`:"")+"; the organizer can claim it later."
+                    :selfOrg?"Click a host to switch it between Organizer and Collab · × removes it. Collab hosts show the competition on their pages too."
+                    :`Filed as externally contributed${importerHost?` by ${hostById(importerHost)?.name||"you"}`:""} — it stays off your page and the organizer can claim it later.`}
+                </p>}
+              </div>);
+            })()}
             {missingCells&&<p className="pmissing-hint"><AlertCircle size={13}/>Amber cells have missing data — click to edit before publishing.</p>}</>)}
             {!isError&&previewEv&&(<>
             <div className="preview-table-wrap">
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12.5px",minWidth:560}}>
                 <thead>
                   <tr>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Pos</th>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Athlete</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}} title={isUpEv?"Current skill rating ± uncertainty — 'new' means no rated results on AthLink yet":undefined}>{isUpEv?"Rating":"Pos"}</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 8px",textAlign:"left",fontSize:11}}>Helm</th>
                     {!singleHanded&&<th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"left",fontSize:11}}>Crew</th>}
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>ID</th>
-                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:160}}>Gender / Div</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 5px",textAlign:"left",fontSize:11}}>Sail</th>
+                    <th style={{background:"var(--navy)",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11,minWidth:160}}>
+                      <span style={{display:"inline-flex",alignItems:"center",gap:5}}>
+                        Gender / Div
+                        {/* Rename a division tag (Jr → U18 …) across every row at once. */}
+                        <button type="button" title="Rename a division tag across all rows (e.g. Jr → U18)"
+                          onClick={e=>{
+                            const r=e.currentTarget.getBoundingClientRect();
+                            const toks=[...new Set(previewEv.entries.map(_divCatOf).filter(Boolean))];
+                            setDivHdrEdit({x:Math.round(r.left-70),y:Math.round(r.bottom+6),rows:toks.map(t=>({from:t,val:t}))});
+                          }}
+                          style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,border:0,borderRadius:5,
+                            background:"rgba(255,255,255,.18)",color:"#fff",cursor:"pointer",padding:0}}>
+                          <Pencil size={10}/>
+                        </button>
+                      </span>
+                    </th>
                     {Array.from({length:maxR}).map((_,i)=><th key={i} style={{background:"var(--navy)",color:"#fff",padding:"9px 4px",textAlign:"center",fontSize:11,minWidth:34}}>R{i+1}</th>)}
-                    <th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>
+                    {!isUpEv&&<th style={{background:"#1a4a7a",color:"#fff",padding:"9px 6px",textAlign:"center",fontSize:11}}>Net</th>}
                     <th style={{background:"var(--navy)",width:32,padding:"9px 4px"}} aria-label=""></th>
                   </tr>
                 </thead>
@@ -10604,7 +6742,15 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     .sort((a,b)=>{if(a.rank==null&&b.rank==null)return a.idx-b.idx;if(a.rank==null)return 1;if(b.rank==null)return -1;return a.rank-b.rank;})
                     .map(({entry,idx,scoredRow,rank,net})=>{
                     return(<tr key={idx} style={{borderBottom:"1px solid var(--line)"}}>
-                      <td style={{textAlign:"center",padding:"8px 5px",fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:14,color:rank===1?"var(--gold)":rank===2?"#7d8a98":rank===3?"#a86a32":"var(--ink)"}}>{rank||"—"}</td>
+                      {isUpEv
+                        ?<td style={{textAlign:"center",padding:"8px 6px",whiteSpace:"nowrap"}}>{(()=>{
+                            const rr=upRatingOf([entry.helm,entry.crew]);
+                            if(!rr) return <span style={{color:"var(--mut)"}}>—</span>;
+                            return rr.provisional
+                              ?<span title="No rated results on AthLink yet — forecast seeds them at 1200 with the widest uncertainty" style={{fontSize:10,fontWeight:800,letterSpacing:".05em",color:"#b8860b",textTransform:"uppercase",background:"rgba(232,146,26,.13)",borderRadius:6,padding:"2px 7px"}}>new</span>
+                              :<span style={{fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:13,color:"var(--navy)",fontVariantNumeric:"tabular-nums"}}>{Math.round(rr.r)}<span style={{color:"var(--mut)",fontWeight:600,fontSize:11}}> ±{Math.round(rr.rd)}</span></span>;
+                          })()}</td>
+                        :<td style={{textAlign:"center",padding:"8px 5px",fontFamily:"'Barlow',sans-serif",fontWeight:700,fontSize:14,color:rank===1?"var(--gold)":rank===2?"#7d8a98":rank===3?"#a86a32":"var(--ink)"}}>{rank||"—"}</td>}
                       <td style={{padding:"4px 6px",minWidth:110}}>
                         {previewEdit?.type==="helm"&&previewEdit.idx===idx
                           ?<input className="pe-input" autoFocus value={previewEditVal} onChange={e=>setPreviewEditVal(e.target.value)} onBlur={commitPreviewEdit} onKeyDown={e=>{if(e.key==="Enter")commitPreviewEdit();if(e.key==="Escape")setPreviewEdit(null);}}/>
@@ -10640,7 +6786,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                             </div>}
                         </td>);
                       })}
-                      <td style={{textAlign:"center",padding:"8px 6px",fontFamily:"'Barlow',sans-serif",fontWeight:700,color:"var(--navy)",fontSize:13}}>{net!==undefined?net:"—"}</td>
+                      {!isUpEv&&<td style={{textAlign:"center",padding:"8px 6px",fontFamily:"'Barlow',sans-serif",fontWeight:700,color:"var(--navy)",fontSize:13}}>{net!==undefined?net:"—"}</td>}
                       <td style={{textAlign:"center",padding:"4px 2px",width:32}}>
                         <button type="button" title="Remove this athlete"
                           onClick={()=>setPreviewEv(ev=>({...ev,entries:ev.entries.filter((_,i)=>i!==idx)}))}
@@ -10655,10 +6801,35 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 </tbody>
               </table>
             </div>
-            <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live</p>
+            <p style={{fontSize:11.5,color:"var(--mut)",margin:"8px 0 0"}}>{isUpEv?"Click any cell to edit · remove withdrawn players with the bin · reopen this entry list any time via Edit entry list on the event page":"Scores in ( ) are discards · red = penalty · click any cell to edit · Net updates live"}</p>
+            {/* ── Div-tag rename popover (fixed: the table wrap clips absolutes) ── */}
+            {divHdrEdit&&(<>
+              <div onClick={()=>setDivHdrEdit(null)} style={{position:"fixed",inset:0,zIndex:118}}/>
+              <div style={{position:"fixed",left:Math.max(10,divHdrEdit.x),top:divHdrEdit.y,zIndex:119,width:250,background:"var(--card)",
+                border:"1px solid var(--line)",borderRadius:12,boxShadow:"0 18px 44px -14px rgba(0,0,0,.32)",padding:"11px 13px"}}>
+                <div style={{fontSize:11,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",color:"var(--navy)",marginBottom:8}}>Rename division tags</div>
+                {!divHdrEdit.rows.length&&<p style={{fontSize:12,color:"var(--mut)",margin:0}}>No division tags on these results yet — tag a row first (click Jr on any row).</p>}
+                {divHdrEdit.rows.map((row,ri)=>(
+                  <div key={row.from} style={{display:"flex",alignItems:"center",gap:7,marginBottom:ri<divHdrEdit.rows.length-1?7:0}}>
+                    <span style={{flex:"none",background:DIV_COLOR[row.from]||DIV_COLOR.Jr,color:"#fff",borderRadius:5,fontSize:10,fontWeight:700,
+                      fontFamily:"'Barlow',sans-serif",padding:"2px 7px"}}>{row.from}</span>
+                    <ChevronRight size={12} style={{flex:"none",color:"var(--mut)"}}/>
+                    <input value={row.val} autoFocus={ri===0} maxLength={8}
+                      onChange={e=>setDivHdrEdit(d=>({...d,rows:d.rows.map((x,i)=>i===ri?{...x,val:e.target.value}:x)}))}
+                      onKeyDown={e=>{if(e.key==="Enter"&&row.val.trim()){renameDivToken(row.from,row.val);setDivHdrEdit(null);}if(e.key==="Escape")setDivHdrEdit(null);}}
+                      style={{flex:1,minWidth:0,border:"1px solid var(--line)",borderRadius:7,padding:"5px 8px",font:"inherit",fontSize:12.5,outline:"none"}}/>
+                    <button type="button" disabled={!row.val.trim()||row.val.trim()===row.from}
+                      onClick={()=>{renameDivToken(row.from,row.val);setDivHdrEdit(null);}}
+                      style={{flex:"none",border:0,background:(row.val.trim()&&row.val.trim()!==row.from)?"var(--accent)":"var(--line)",color:"#fff",
+                        borderRadius:7,padding:"5px 10px",fontSize:11.5,fontWeight:700,cursor:(row.val.trim()&&row.val.trim()!==row.from)?"pointer":"not-allowed"}}>Apply</button>
+                  </div>
+                ))}
+                <p style={{fontSize:10.5,color:"var(--mut)",margin:"9px 0 0",lineHeight:1.45}}>Applies to every row of this result — e.g. Jr → U18.</p>
+              </div>
+            </>)}
             <div className="import-actionbar">
-              <button className="btn ghost" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>
-              <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":(pending.length>1?"Publish this result":"Confirm & Publish")}</div></button>
+              {!isUpEv&&<button className="btn ghost" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("draft");try{await (editResultsEv?saveEditedResults(true):importPreview(true));}finally{setSavingResults(null);}}}>{savingResults==="draft"?<Loader2 size={16} className="spin"/>:<Clock size={16}/>}Save as Draft</button>}
+              <button className="btn cta liquidGlass-wrapper" disabled={!!savingResults} onClick={async()=>{if(savingResults)return;setSavingResults("publish");try{await (editResultsEv?saveEditedResults(false):importPreview(false));}finally{setSavingResults(null);}}}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{savingResults==="publish"?<Loader2 size={16} className="spin"/>:<CheckCircle size={16}/>}{editResultsEv?"Save changes":isUpEv?"Publish entry list":(pending.filter(p=>p.status!=="published").length>1?"Publish this result":"Confirm & Publish")}</div></button>
             </div>
             </>)}
           </div>);
@@ -10794,7 +6965,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         <p>Remove <span className="del-name">"{deleteConfirm.name}"</span>?</p>
         <div className="del-confirm-btns">
           <button className="btn ghost" style={{flex:1,fontSize:12,padding:"6px 10px"}} onClick={()=>setDeleteConfirm(null)}>Cancel</button>
-          <button className="btn" style={{flex:1,fontSize:12,padding:"6px 10px",background:"#e74c3c",color:"#fff"}} onClick={confirmDelete}><Trash2 size={13}/>Delete</button>
+          <button className="btn" style={{flex:1,fontSize:12,padding:"6px 10px",background:"#e74c3c",color:"#fff"}} disabled={busyAction==="delEvent"} onClick={()=>runBusy("delEvent",confirmDelete)}>{busyAction==="delEvent"?<Loader2 size={13} className="spin"/>:<Trash2 size={13}/>}Delete</button>
         </div>
       </div>
     </div>
@@ -10819,7 +6990,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
           <div className="mfoot" style={{marginTop:16}}>
             <button className="btn ghost" onClick={()=>setEditEvMeta(null)}>Cancel</button>
-            <button className="btn cta liquidGlass-wrapper" onClick={saveEvMeta}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><CheckCircle size={15}/>Save changes</div></button>
+            <button className="btn cta liquidGlass-wrapper" disabled={busyAction==="evMeta"} onClick={()=>runBusy("evMeta",saveEvMeta)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busyAction==="evMeta"?<Loader2 size={15} className="spin"/>:<CheckCircle size={15}/>}Save changes</div></button>
           </div>
         </div>
       </div>
@@ -10903,4 +7074,4 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
    The all-sports landing (apps/web/src/Landing.jsx) reuses the interactive
    globe + athlete web as live demos, and needs the DB→app event mapper plus
    the IOC→ISO country map to feed them. Re-exported via manifest.jsx. */
-export { SailingGlobe, AthleteWeb, dbToApp, IOC_ISO };
+export { SailingGlobe, AthleteWeb, ProgressChart, aggregate, dbToApp, IOC_ISO };

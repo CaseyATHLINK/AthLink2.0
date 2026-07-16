@@ -103,12 +103,18 @@ importers:
 
   sports/golf:
     dependencies:
+      '@athlink/auth':
+        specifier: workspace:*
+        version: link:../../packages/features/auth
       '@athlink/core':
         specifier: workspace:*
         version: link:../../packages/core
       '@athlink/design-system':
         specifier: workspace:*
         version: link:../../packages/design-system
+      '@athlink/rating':
+        specifier: workspace:*
+        version: link:../../packages/features/rating
       '@athlink/sport-kit':
         specifier: workspace:*
         version: link:../../packages/sport-kit
