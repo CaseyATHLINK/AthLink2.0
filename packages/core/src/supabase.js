@@ -78,3 +78,9 @@ export async function authUser(tok) {
   const r = await fetch(`${AUTH_BASE}/user`, { headers: authHeaders(tok) });
   if (!r.ok) return null; return r.json();
 }
+// Exchange a refresh token for a fresh access token (GoTrue tokens expire in ~1h).
+// Returns the new {access_token, refresh_token, ...}; throws on failure.
+export async function authRefresh(refreshToken) {
+  const r = await fetch(`${AUTH_BASE}/token?grant_type=refresh_token`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ refresh_token: refreshToken }) });
+  const d = await r.json(); if (!r.ok) throw new Error(d.msg || d.error_description || d.error || "Token refresh failed"); return d;
+}

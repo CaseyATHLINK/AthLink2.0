@@ -7,7 +7,7 @@ import {
   CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram,
   Award, TrendingUp, Pin, GripVertical
 } from "lucide-react";
-import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, setSbUserToken, authSignUp, authSignIn, authUser } from "@athlink/core";
+import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, setSbUserToken, authSignUp, authSignIn, authUser, authRefresh } from "@athlink/core";
 import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
 import { IOC_ISO, isoFlag, iocFlag } from "./util/flag.js";
 import { canonName, eventKey, ordinalOf, initials, pascalSlug, avatarColor } from "./util/name.js";
@@ -262,6 +262,20 @@ export default function AthLinkMVP(){
   // first owner-scoped scout_* fetches go out on the anon key and read [] — the
   // "workspace looks empty right after sign-in" bug. Idempotent module assignment.
   setSbUserToken(auth?.token||null);
+  // Keep the session alive: GoTrue access tokens expire in ~1h, after which every
+  // write 401s. Refresh before expiry so long dev/host sessions don't silently
+  // lose write access mid-edit. Rotated tokens are re-persisted.
+  useEffect(()=>{
+    if(!auth?.refresh) return;
+    const id=setInterval(async()=>{
+      try{
+        const d=await authRefresh(auth.refresh);
+        setAuth(a=>a?{...a,token:d.access_token,refresh:d.refresh_token||a.refresh}:a);
+        try{const raw=localStorage.getItem("athlink_auth");if(raw){const s=JSON.parse(raw);s.token=d.access_token;s.refresh=d.refresh_token||s.refresh;localStorage.setItem("athlink_auth",JSON.stringify(s));}}catch{}
+      }catch(e){ console.error("Session refresh failed",e); }
+    }, 50*60*1000); // token lasts 60 min
+    return ()=>clearInterval(id);
+  },[auth?.refresh]);
   const[showSignIn,setShowSignIn]=useState(false);
   const[signupRole,setSignupRole]=useState(null); // preselected signup role from ?role= deep-link
   const[accountOpen,setAccountOpen]=useState(false);
@@ -298,26 +312,38 @@ export default function AthLinkMVP(){
   const[barHidden,setBarHidden]=useState(false);  // hide topbar on scroll-down
   const[portalMenuOpen,setPortalMenuOpen]=useState(false); // in-portal sidebar menu
   // ── DEVELOPER VIEW ──────────────────────────────────────────────────────
-  // Lets Casey edit the platform without signing in. Forces full (association)
-  // access. ALWAYS starts OFF on every page load — dev view is strictly opt-in
-  // per session via Ctrl/Cmd+Shift+D. No URL param, no localStorage, so nobody
-  // ever lands in dev mode by accident (or by keeping a stale ?dev=1 link).
+  // Dev view lets Casey edit anything (any host / event / profile). Forces full
+  // (association) access AND signs into a dedicated ADMIN account so the writes
+  // are AUTHORISED at the DB — after the RLS hardening (#122) every write needs a
+  // real session; the admin account satisfies is_athlink_admin(). Nothing secret
+  // ships in the bundle: the "dev password" IS the admin account's password,
+  // verified server-side by Supabase. ALWAYS starts OFF per page load.
   const DEV_VIEW_ENABLED=true;
-  const ADMIN_EMAIL="casey@athlink.win";
-  const isAdminUser=(auth?.user?.email||"").toLowerCase()===ADMIN_EMAIL;
+  const ADMIN_EMAIL="casey@athlink.win";           // recognised as admin if signed in directly
+  const DEV_ADMIN_EMAIL="dev-admin@athlink.win";   // the account dev view signs into
+  const isAdminUser=[ADMIN_EMAIL,DEV_ADMIN_EMAIL].includes((auth?.user?.email||"").toLowerCase());
   const devEligible=DEV_VIEW_ENABLED||isAdminUser;
   const[devMode,setDevMode]=useState(false); // never auto-on — keyboard shortcut only
   useEffect(()=>{
     if(!devEligible){ setDevMode(false); return; }
     const onKey=(e)=>{ if((e.ctrlKey||e.metaKey)&&e.shiftKey&&(e.key==="D"||e.key==="d")){
       e.preventDefault();
-      setDevMode(d=>{
-        if(d) return false; // already on → toggle off, no password
-        return window.prompt("Enter dev mode password:")==="123456789"; // wrong/cancelled → stay in guest mode
-      });
+      if(devMode){ setDevMode(false); return; }             // already on → toggle off, no password
+      if(isAdminUser){ setDevMode(true); return; }           // already the admin session → no re-prompt
+      const pw=window.prompt("Enter dev mode password:");
+      if(pw==null) return;                                   // cancelled → stay in guest mode
+      (async()=>{
+        try{
+          const d=await authSignIn(DEV_ADMIN_EMAIL,pw);      // sign in as the admin account
+          const u=await authUser(d.access_token);
+          const prof=(u&&await fetchProfile(u.id,d.access_token))||{role:"association"};
+          onAuthed({token:d.access_token,refresh:d.refresh_token,user:u,profile:prof});
+          setDevMode(true);
+        }catch(err){ window.alert("Wrong dev password."); }  // GoTrue rejected → stay guest
+      })();
     }};
     window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);
-  },[devEligible]);
+  },[devEligible,devMode,isAdminUser]);
   const effectiveRole=devMode?"association":(auth?.profile?.role||"guest");
   const viewerTypeOf=r=>r==="athlete"?"athlete":r==="scout"?"scout":r==="club"||r==="association"||r==="federation"?"host":"guest"; // 3 viewer types: athlete|host|scout (everyone else browses as guest)
   const viewerType=viewerTypeOf(effectiveRole);
@@ -367,9 +393,16 @@ export default function AthLinkMVP(){
       if(!raw) return;
       const saved=JSON.parse(raw);
       (async()=>{
-        const u=await authUser(saved.token);
-        if(u){ const prof=await fetchProfile(u.id,saved.token)||saved.profile||{role:"guest"}; setAuth({token:saved.token,user:u,profile:prof}); }
-        else localStorage.removeItem("athlink_auth");
+        let token=saved.token, refresh=saved.refresh;
+        let u=await authUser(token);
+        if(!u&&refresh){ // access token expired → try refreshing before giving up
+          try{ const d=await authRefresh(refresh); token=d.access_token; refresh=d.refresh_token||refresh; u=await authUser(token); }catch{}
+        }
+        if(u){
+          const prof=await fetchProfile(u.id,token)||saved.profile||{role:"guest"};
+          setAuth({token,refresh,user:u,profile:prof});
+          try{localStorage.setItem("athlink_auth",JSON.stringify({token,refresh,profile:prof}));}catch{}
+        } else localStorage.removeItem("athlink_auth");
       })();
     }catch{}
   },[]);
@@ -382,7 +415,7 @@ export default function AthLinkMVP(){
   };
   const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null); setSignupRole(null);
     if(a2.pendingHostId) setPendingHostNotice(a2.pendingHostId);
-    try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,profile:a2.profile}));}catch{}
+    try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,refresh:a2.refresh,profile:a2.profile}));}catch{}
     if(a2.profile?.role==="scout") goTop("scout"); // scouts land in the scout workspace; athletes/fans/hosts keep current behavior
     loadMembershipsFor(a2); };
   const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
