@@ -884,6 +884,10 @@ export default function AthLinkMVP(){
   // ── Athlete submits a claim on their auto-built profile ──
   const submitClaim=async(profileName)=>{
     if(!auth?.user?.id||!auth?.token){setShowSignIn(true);return;}
+    // Athlete accounts only, one live claim per user — mirrors RLS 0017 so a
+    // stale UI can't fire an insert the DB would reject anyway.
+    if(auth?.profile?.role!=="athlete") return;
+    if(allClaims.some(c=>c.user_id===auth.user.id&&c.status!=="denied")) return;
     const r=await createClaim(profileName,auth.user.id,auth.token);
     if(r){setClaimNote({name:profileName,status:"pending"});setTimeout(()=>setClaimNote(null),6000);await reloadClaims();}
   };
@@ -5822,26 +5826,29 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
         {isScout&&<SaveButton owner={scoutOwnerId(auth)} events={events} kind="athlete" athleteKey={canonName(name)} title={name}
           snapshot={{athlete:name}} onRequireAuth={()=>setShowSignIn(true)}/>}
         {!devMode&&(()=>{
-          // Claim-my-profile control. Rules: one claim per user, one claim per
-          // profile (denied claims don't count). Any host the athlete competed
-          // under can later verify it.
+          // Claim-my-profile control. Rules: ATHLETE accounts only (scouts,
+          // hosts, fans and guests never see any claim affordance — RLS 0017
+          // rejects their inserts too), one live claim per user, one approved
+          // claim per profile. Any host the athlete competed under can later
+          // verify it.
           const lower=(name||"").toLowerCase();
           const uid=auth?.user?.id;
+          // Signed out, or not an athlete account → nothing claim-related at all.
+          if(!auth||auth?.profile?.role!=="athlete") return null;
           // Multiple people may have PENDING claims on a profile; only one can be approved.
           const approvedOwner=allClaims.find(c=>c.profile_name?.toLowerCase()===lower&&c.status==="approved");
           const myClaimHere=uid?allClaims.find(c=>c.profile_name?.toLowerCase()===lower&&c.user_id===uid&&c.status!=="denied"):null;
           const myClaimAnywhere=uid?allClaims.find(c=>c.user_id===uid&&c.status!=="denied"):null;
           const pill={marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,fontSize:12.5,fontWeight:700,padding:"7px 13px",borderRadius:980};
-          // Guests (signed out) see no claim control at all — keep guest view clean.
-          if(!auth) return null;
           // Verified owner of THIS profile → no button (the badge by the name says it).
           if(myClaimHere&&myClaimHere.status==="approved") return null;
           // My own pending claim here.
           if(myClaimHere) return <span style={{...pill,background:"rgba(255,149,0,.14)",color:"#a85c00",boxShadow:"inset 0 0 0 .5px rgba(255,149,0,.4)"}}><Clock size={14}/>Claim pending verification</span>;
+          // I already hold a live claim (my own profile) → other profiles show
+          // no claim affordance whatsoever.
+          if(myClaimAnywhere) return null;
           // Someone else is already the verified owner → can't claim.
           if(approvedOwner) return <span style={{...pill,background:"var(--grouped)",color:"var(--mut)"}} title="This profile already has a verified owner."><BadgeCheck size={14}/>Claimed</span>;
-          // I already hold a claim on a different profile → one profile per user.
-          if(myClaimAnywhere) return <span style={{...pill,background:"var(--grouped)",color:"var(--mut)"}} title="You can only claim one profile.">You've already claimed {myClaimAnywhere.profile_name}</span>;
           return <button className="btn cta liquidGlass-wrapper" style={{marginLeft:"auto"}} onClick={()=>submitClaim(name)}><div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text"><BadgeCheck size={15}/>Claim my profile</div></button>;
         })()}
         {isProfileOwner(name)&&<button className="btn ghost" style={{marginLeft:"auto",fontSize:12.5,padding:"7px 13px"}} onClick={()=>setShowAthEdit(name)}><Pencil size={13}/>Edit profile</button>}
