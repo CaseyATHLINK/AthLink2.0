@@ -9,6 +9,12 @@ import { dateKey } from "../util/date.js";
 import { canonName, pascalSlug } from "../util/name.js";
 import { genderCatOf } from "../util/gender.js";
 import { IOC_ISO } from "../util/flag.js";
+// Per-person gender assessed offline (regen: tools/build-name-gender.py): for each
+// athlete it's the gender their results docs actually STATED where any did, else
+// inferred from their name via a name→gender dataset (gender-guesser). Keyed by
+// canonName. This lets us show a gender on imports whose source carried NO gender
+// column (e.g. manage2sail) WITHOUT ever assuming it from the boat class.
+import NAME_GENDER from "./name-gender.js";
 
 // ── Per-athlete attribute memory (gender, birth year, recent class) ──────────
 // Single pass over all events. For each athlete (by canonName), we remember:
@@ -52,13 +58,26 @@ export function buildAthleteAttrs(evList){
 export function rememberedGender(name){
   const a=ATHLETE_ATTRS.get(canonName(name)); return a?.gender||null;
 }
-// Gender to SHOW for an entry: ONLY what the source stated for this boat.
-//   - We never assume it from the class (49erFX carries junior-men / mixed crews).
-//   - We never borrow a gender remembered from another event — a single wrong or
-//     mislabelled source would otherwise propagate onto every event the athlete
-//     appears in. If the source didn't state a gender, we show no badge.
-export function resolvedEntryGender(e/*, doublehanded */){
-  return genderCatOf(e).gender || null;
+// Per-person assessed gender by canonName (null if we don't have one).
+function assessedGender(name){
+  const k = canonName(name || "");
+  return (k && NAME_GENDER[k]) || null;
+}
+export function resolvedEntryGender(e, doublehanded){
+  if(!e) return null;
+  // 1) If THIS result stated a gender for the boat, show that — source is truth,
+  //    and we never override it (nor assume anything from the class).
+  const stated = genderCatOf(e).gender;
+  if(stated) return stated;
+  // 2) The source stated nothing → fill from the per-person assessment so the
+  //    badge still appears. For a two-person boat, combine helm + crew.
+  const gh = assessedGender(e.helm);
+  if(doublehanded && e.crew){
+    const gc = assessedGender(e.crew);
+    if(gh && gc) return gh === gc ? gh : "Mix";
+    return gh || gc || null;
+  }
+  return gh || null;
 }
 
 /* ── Public athlete usernames (name_key ⇄ username) ───────────────────────
