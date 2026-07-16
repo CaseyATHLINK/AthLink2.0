@@ -328,7 +328,9 @@ export default function AthLinkMVP(){
     if(!devEligible){ setDevMode(false); return; }
     const onKey=(e)=>{ if((e.ctrlKey||e.metaKey)&&e.shiftKey&&(e.key==="D"||e.key==="d")){
       e.preventDefault();
-      if(devMode){ setDevMode(false); return; }             // already on → toggle off, no password
+      if(devMode){ setDevMode(false);                       // already on → toggle off
+        if((auth?.user?.email||"").toLowerCase()===DEV_ADMIN_EMAIL) signOut(); // drop the hidden admin session so nothing lingers
+        return; }
       if(isAdminUser){ setDevMode(true); return; }           // already the admin session → no re-prompt
       const pw=window.prompt("Enter dev mode password:");
       if(pw==null) return;                                   // cancelled → stay in guest mode
@@ -418,7 +420,7 @@ export default function AthLinkMVP(){
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,refresh:a2.refresh,profile:a2.profile}));}catch{}
     if(a2.profile?.role==="scout") goTop("scout"); // scouts land in the scout workspace; athletes/fans/hosts keep current behavior
     loadMembershipsFor(a2); };
-  const signOut=()=>{ setAuth(null); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
+  const signOut=()=>{ setAuth(null); setDevMode(false); setAccountOpen(false); setMyMemberships([]); try{localStorage.removeItem("athlink_auth");}catch{} };
   // Save host portal edits (name + location). Persists to the hosts table and
   // updates the in-memory registry so the change shows immediately.
   const saveHost=async(hostId,patch)=>{
@@ -4192,7 +4194,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     <div className="tb-right">
       {auth
         ? <div style={{position:"relative"}}>
-            <button className="tb-profile" onClick={()=>setAccountOpen(o=>!o)} title={role} style={{position:"relative"}}>
+            <button className="tb-profile" onClick={()=>setAccountOpen(o=>!o)} title={devMode?"Developer — full edit access":role} style={{position:"relative"}}>
               <span style={{fontSize:14,fontWeight:800}}>{(auth.profile?.display_name||auth.user?.email||"?").slice(0,1).toUpperCase()}</span>
               {hasPendingHostMembership&&<span style={{position:"absolute",top:-2,right:-2,width:12,height:12,borderRadius:"50%",background:"#f5a623",border:"2px solid #fff"}} title="Host approval pending"/>}
               {showClaimNudge&&!hasPendingHostMembership&&<span style={{position:"absolute",top:-2,right:-2,width:12,height:12,borderRadius:"50%",background:"var(--accent)",border:"2px solid #fff"}} title="Claim your athlete profile"/>}
@@ -4216,9 +4218,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   {fullName&&(canGoToMe
                     ? <button onClick={goToMe} title="Go to my profile" style={{display:"block",width:"100%",textAlign:"left",border:0,background:"none",cursor:"pointer",padding:"6px 10px 1px",fontSize:13.5,fontWeight:700,color:"var(--accent)"}}>{fullName}</button>
                     : <div style={{padding:"6px 10px 1px",fontSize:13.5,fontWeight:700,color:"var(--navy)"}}>{fullName}</div>)}
-                  <div style={{padding:fullName?"0 10px 6px":"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>
+                  {/* Dev view uses a hidden admin session — never surface its account email. */}
+                  {!devMode&&<div style={{padding:fullName?"0 10px 6px":"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>}
                   {devMode
-                    ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Role: <b style={{color:"var(--navy)"}}>Developer</b></div>
+                    ? <div style={{padding:fullName?"0 10px 8px":"6px 10px 8px",fontSize:12,color:"var(--mut)"}}>Role: <b style={{color:"var(--navy)"}}>Developer</b> — full edit access</div>
                     : myHostNames.length>0
                       ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>{myHostNames.length>1?"Hosts":"Host"}: <b style={{color:"var(--navy)"}}>{myHostNames.join(", ")}</b></div>
                       : role==="athlete"
@@ -4255,7 +4258,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <span>Your host setup is pending AthLink approval. You're browsing as a guest until verified.</span>
                 </div>
               )}
-              <button onClick={signOut} style={{width:"100%",textAlign:"left",border:0,background:"none",padding:"8px 10px",fontSize:13,cursor:"pointer",color:"var(--ink)",borderRadius:8}}>Sign out</button>
+              <button onClick={signOut} style={{width:"100%",textAlign:"left",border:0,background:"none",padding:"8px 10px",fontSize:13,cursor:"pointer",color:"var(--ink)",borderRadius:8}}>{devMode?"Exit dev view":"Sign out"}</button>
             </div>)}
           </div>
         : <button className="tb-profile" onClick={()=>setShowSignIn(true)} title="Sign in / sign up"><User size={18}/></button>}
