@@ -547,17 +547,31 @@ export default function Landing({ sports = [] }) {
 
   // ── Dev copy editor: session-only toggle + overrides map (see EdText above) ──
   const [dev, setDev] = useState(false); // never auto-on — keyboard shortcut only
+  const devRef = useRef(false); useEffect(() => { devRef.current = dev; }, [dev]);
   const [ov, setOv] = useState({});
   const [saveSt, setSaveSt] = useState("");
   useEffect(() => {
+    // Same dev toggle as the app: entering dev view signs into the shared admin
+    // account (the password IS that account's password, verified by Supabase) and
+    // persists the session, so dev view + write access carry into the app too.
+    const DEV_ADMIN_EMAIL = "dev-admin@athlink.win";
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "D" || e.key === "d")) {
         e.preventDefault();
-        setDev(d => {
-          if (d) return false; // already on → toggle off, no password
-          const pass = window.prompt("Enter dev mode password:");
-          return pass === "123456789"; // only unlock on correct password
-        });
+        if (devRef.current) { setDev(false); return; }   // already on → toggle off
+        const pass = window.prompt("Enter dev mode password:");
+        if (pass == null || !SB) return;
+        (async () => {
+          try {
+            const r = await fetch(`${SB}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: SK, "Content-Type": "application/json" }, body: JSON.stringify({ email: DEV_ADMIN_EMAIL, password: pass }) });
+            const d = await r.json();
+            if (!r.ok || !d.access_token) { window.alert("Wrong dev password."); return; }
+            // Persist in the shape the app restores on load, so the admin session
+            // (and its write access) follows you into the sailing app.
+            try { localStorage.setItem("athlink_auth", JSON.stringify({ token: d.access_token, refresh: d.refresh_token, profile: { role: "association" } })); } catch {}
+            setDev(true);
+          } catch { window.alert("Wrong dev password."); }
+        })();
       }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
