@@ -257,7 +257,11 @@ export default function AthLinkMVP(){
   const[auth,setAuth]=useState(null);
   // Keep the core REST wrappers on the signed-in JWT — RLS (0015) scopes writes
   // `to authenticated`, so sbPost/sbPatch must carry the user token, not the anon key.
-  useEffect(()=>{setSbUserToken(auth?.token||null);},[auth]);
+  // Synchronous during render, NOT an effect: child effects (ScoutPortal reload,
+  // SaveButton hydrate) run before parent effects, so an effect here would let the
+  // first owner-scoped scout_* fetches go out on the anon key and read [] — the
+  // "workspace looks empty right after sign-in" bug. Idempotent module assignment.
+  setSbUserToken(auth?.token||null);
   const[showSignIn,setShowSignIn]=useState(false);
   const[signupRole,setSignupRole]=useState(null); // preselected signup role from ?role= deep-link
   const[accountOpen,setAccountOpen]=useState(false);
@@ -4751,7 +4755,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       {isScout
         ? <ScoutPortal events={events} auth={auth} hostById={hostById}
             onPick={name=>go({name:"profile",id:name})}
-            onOpenEvent={id=>go({name:"event",id})}/>
+            onOpenEvent={id=>go({name:"event",id})}
+            onRequireAuth={()=>setShowSignIn(true)}/>
         : <ScoutLocked onSignUp={()=>{setSignupRole("scout");setShowSignIn(true);}}/>}
     </div>
   )}
@@ -5413,7 +5418,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
           </div>
           <div style={{flex:"none",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
             {isScout&&<SaveButton owner={scoutOwnerId(auth)} events={events} kind={isUpcomingEvent(ev)?"upcoming":"event"} eventId={ev.id} title={ev.name}
-              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}}/>}
+              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}} onRequireAuth={()=>setShowSignIn(true)}/>}
             {canEdit&&<button className="btn ghost" style={{fontSize:12,padding:"6px 12px",justifyContent:"flex-start"}} onClick={()=>openEditResults(ev)}><Pencil size={13}/>{isUpcoming?"Edit entry list":"Edit results"}</button>}
           </div>
         </div>);
@@ -5522,7 +5527,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             <td className="net">{r.net}</td>
             <td style={{textAlign:"center",whiteSpace:"nowrap"}}>{isScout&&<SaveButton size="sm" owner={scoutOwnerId(auth)} events={events} kind="result"
               athleteKey={canonName(r.helm)} eventId={ev.id} entryId={r._dbId} title={r.helm}
-              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls,rank:r.rank,fleet:s.fleet,athlete:r.helm}}/>}</td>
+              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls,rank:r.rank,fleet:s.fleet,athlete:r.helm}} onRequireAuth={()=>setShowSignIn(true)}/>}</td>
           </tr>
           </React.Fragment>
         ))}</tbody>
@@ -5777,7 +5782,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
         <button className="back" onClick={navBack} style={{marginBottom:0}}><ArrowLeft size={16}/>Back</button>
         {isScout&&<SaveButton owner={scoutOwnerId(auth)} events={events} kind="athlete" athleteKey={canonName(name)} title={name}
-          snapshot={{athlete:name}}/>}
+          snapshot={{athlete:name}} onRequireAuth={()=>setShowSignIn(true)}/>}
         {!devMode&&(()=>{
           // Claim-my-profile control. Rules: one claim per user, one claim per
           // profile (denied claims don't count). Any host the athlete competed

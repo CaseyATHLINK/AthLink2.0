@@ -27,7 +27,8 @@ import { ratingEngine, InfoHint } from "./charts.jsx";
 import { ConfirmModal } from "./atoms.jsx";
 import {
   scoutOwnerId, fetchBinders, createBinder, ensureDefaultBinder, renameBinder, deleteBinder,
-  fetchClips, addClip, removeClip,
+  fetchClips, addClip, removeClip, moveClip,
+  fetchBindersShared, fetchClipsShared, binderNS, binderLabel, DEFAULT_BINDER_NAME,
   fetchNotes, addNote, updateNote, deleteNote,
   logActivity, fetchDigestPrefs, upsertDigestPref,
 } from "../data/scout.js";
@@ -100,118 +101,246 @@ function DeltaChip({d,size=12}){
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   SaveButton — bookmark control embedded across the app (result rows, event
-   headers, athlete profiles). Self-contained; lazy-loads binders/clips only on
-   first interaction so a 100-row event table never fires 100 fetches on mount.
-   ════════════════════════════════════════════════════════════════════════ */
-export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryId,title,snapshot,size,onSaved}){
+   SaveButton — Instagram-style bookmark control embedded across the app
+   (result rows, event headers, athlete profiles, discovery rows).
+
+   Tap = INSTANT save into the namespace's default folder: the icon fills
+   optimistically, then a transient liquid-glass popover confirms "Saved to
+   <folder> · Change folder" (folder list + inline "+ New folder"). If the DB
+   rejects the write (RLS 0015: scout writes need a signed-in session) the fill
+   ROLLS BACK and a visible error shows — no more fake saves. Tap again =
+   unsave. Press-and-hold opens the folder picker directly. Signed out →
+   onRequireAuth() (sign-in prompt) instead of pretending to save.
+
+   Athlete saves file into the 'athletes' folder namespace, result/event/
+   upcoming saves into 'results' — the two namespaces never mix.
+
+   Hydration goes through the shared per-owner caches in data/scout.js, so a
+   100-row event table costs two fetches, not two hundred, and fill states are
+   truthful on mount. Styles inject once into <head> (buttons render far from
+   ScoutPortal's <style> block). ═══════════════════════════════════════════ */
+let _saveCssIn=false;
+function ensureSaveCss(){
+  if(_saveCssIn||typeof document==="undefined") return;
+  const el=document.createElement("style");
+  el.textContent=SAVE_CSS;
+  document.head.appendChild(el);
+  _saveCssIn=true;
+}
+
+export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryId,title,snapshot,size,onSaved,onRequireAuth}){
   const sm = size==="sm";
-  const [ready,setReady]=React.useState(false);      // lazily hydrated once
+  const ns = kind==="athlete"?"athletes":"results";
+  const targetKey = athleteKey?canonName(athleteKey):null;
+  const displayName = title||athleteKey||"";
+
   const [binders,setBinders]=React.useState([]);
-  const [clips,setClips]=React.useState([]);         // this athlete/target's clips
+  const [clips,setClips]=React.useState([]);         // this target's clips
   const [busy,setBusy]=React.useState(false);
-  const [open,setOpen]=React.useState(false);        // popover (non-athlete kinds)
+  const [pop,setPop]=React.useState(null);           // null | "toast" | "picker"
+  const [err,setErr]=React.useState(null);
   const [newName,setNewName]=React.useState("");
   const wrapRef=React.useRef(null);
+  const timerRef=React.useRef(null);                 // toast/error auto-dismiss
+  const pressRef=React.useRef({t:null,fired:false}); // long-press bookkeeping
 
-  const targetKey = athleteKey?canonName(athleteKey):null;
+  const nsBinders=binders.filter(b=>binderNS(b)===ns);
+  const saved=clips.length>0;
+  const curBinder=saved?nsBinders.find(b=>String(b.id)===String(clips[0].binder_id))||null:null;
 
-  // Lazy hydrate binders + existing clips for this target. Idempotent.
+  // Does an existing clip row belong to this button's target?
+  const isMine=React.useCallback(c=>{
+    if(kind==="athlete") return c.kind==="athlete"&&canonName(c.athlete_key||"")===targetKey;
+    if(c.kind==="athlete"||eventId==null) return false;
+    if(String(c.event_id)!==String(eventId)) return false;
+    // an event-header save (entryId null) must not light up because one of the
+    // event's RESULT rows is saved, and vice versa.
+    return entryId==null ? c.entry_id==null : String(c.entry_id)===String(entryId);
+  },[kind,targetKey,eventId,entryId]);
+
+  // Hydrate from the shared caches; re-runs whenever the owner (auth) changes
+  // so per-button state can never go stale across sign-in/out.
   const hydrate=React.useCallback(async()=>{
-    const [bs,cs]=await Promise.all([fetchBinders(owner),fetchClips(owner)]);
-    setBinders(bs);
-    setClips(cs.filter(c=>{
-      if(kind==="athlete") return c.kind==="athlete" && canonName(c.athlete_key||"")===targetKey;
-      if(eventId!=null) return String(c.event_id)===String(eventId) && (entryId==null||String(c.entry_id)===String(entryId));
-      return false;
-    }));
-    setReady(true);
+    if(!owner){ setBinders([]); setClips([]); return []; }
+    const [bs,cs]=await Promise.all([fetchBindersShared(owner),fetchClipsShared(owner)]);
+    setBinders(bs); setClips(cs.filter(isMine));
     return bs;
-  },[owner,kind,targetKey,eventId,entryId]);
+  },[owner,isMine]);
+  React.useEffect(()=>{ ensureSaveCss(); setPop(null); setErr(null); hydrate(); },[hydrate]);
 
-  // Close popover on outside click.
+  // Popover lifetime: outside click / Escape close; toast+error auto-expire.
   React.useEffect(()=>{
-    if(!open) return;
-    const fn=e=>{ if(wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown",fn);
-    return()=>document.removeEventListener("mousedown",fn);
-  },[open]);
+    if(!pop&&!err) return;
+    const down=e=>{ if(wrapRef.current&&!wrapRef.current.contains(e.target)){ setPop(null); setErr(null); } };
+    const key=e=>{ if(e.key==="Escape"){ setPop(null); setErr(null); } };
+    document.addEventListener("mousedown",down);
+    document.addEventListener("keydown",key);
+    return()=>{ document.removeEventListener("mousedown",down); document.removeEventListener("keydown",key); };
+  },[pop,err]);
+  React.useEffect(()=>()=>{ clearTimeout(timerRef.current); clearTimeout(pressRef.current.t); },[]);
+  const arm=(fn,ms)=>{ clearTimeout(timerRef.current); timerRef.current=setTimeout(fn,ms); };
+  const openToast=()=>{ setErr(null); setPop("toast"); arm(()=>setPop(p=>p==="toast"?null:p),3500); };
+  const flashErr=msg=>{ setPop(null); setErr(msg); arm(()=>setErr(null),3500); };
 
-  const saved = clips.length>0;
+  async function doSave(){
+    // Optimistic fill first (Instagram principle), reconciled honestly below.
+    const optimistic={id:"tmp_"+Date.now(),kind,athlete_key:targetKey,event_id:eventId??null,entry_id:entryId??null,binder_id:null};
+    setClips([optimistic]);
+    try{
+      const [def,cs]=await Promise.all([ensureDefaultBinder(owner,ns),fetchClipsShared(owner)]);
+      const existing=cs.filter(isMine);
+      if(existing.length){ setClips(existing); openToast(); return; }  // saved earlier (stale button) — adopt, never duplicate
+      if(!def){ setClips([]); flashErr("Couldn't save — try again"); return; }
+      const real=await addClip(owner,def.id,{kind,athlete_key:targetKey,event_id:eventId,entry_id:entryId,
+        title:displayName||null,
+        snapshot:{...(snapshot||{}),...(displayName?{title:displayName}:{}),...(kind==="athlete"&&displayName?{athlete:displayName}:{})}});
+      if(real){
+        setClips([real]);
+        fetchBindersShared(owner).then(bs=>setBinders(bs));   // picker needs fresh folders
+        openToast();
+        if(kind==="athlete") logActivity(owner,targetKey,"added_watchlist");
+        else if(kind==="result") logActivity(owner,targetKey,"saved_result");
+        onSaved&&onSaved();
+      }else{
+        setClips([]); flashErr("Couldn't save — try again");
+      }
+    }catch{ setClips([]); flashErr("Couldn't save — try again"); }
+  }
 
-  // athlete kind — a single toggle pill (Watch / Watching).
-  async function toggleWatch(e){
+  async function doUnsave(){
+    const gone=clips;
+    setClips([]); setPop(null);
+    try{
+      const real=gone.filter(c=>!String(c.id).startsWith("tmp_"));
+      const rs=await Promise.all(real.map(c=>removeClip(c.id)));
+      // sbDel returns the deleted rows; [] = RLS zero-row no-op = silent failure.
+      if(real.length&&!rs.every(r=>Array.isArray(r)&&r.length>0)){
+        setClips(gone); flashErr("Couldn't remove — try again");
+      }else onSaved&&onSaved();
+    }catch{ setClips(gone); flashErr("Couldn't remove — try again"); }
+  }
+
+  async function onTap(e){
     e.stopPropagation();
+    if(pressRef.current.fired){ pressRef.current.fired=false; return; }  // long-press consumed this tap
     if(busy) return;
+    if(!owner){ onRequireAuth&&onRequireAuth(); return; }
+    setBusy(true);
+    try{ if(saved) await doUnsave(); else await doSave(); }
+    finally{ setBusy(false); }
+  }
+
+  // Press-and-hold (450ms) = open the folder picker directly (saving first if
+  // needed, like Instagram's long-press).
+  function pressStart(){
+    if(!owner) return;
+    pressRef.current.fired=false;
+    clearTimeout(pressRef.current.t);
+    pressRef.current.t=setTimeout(async()=>{
+      pressRef.current.fired=true;
+      if(busy) return;
+      setBusy(true);
+      try{ if(!saved) await doSave(); setPop("picker"); clearTimeout(timerRef.current); }
+      finally{ setBusy(false); }
+    },450);
+  }
+  const pressEnd=()=>clearTimeout(pressRef.current.t);
+
+  async function fileTo(binderId){
+    if(busy) return;
+    const cur=clips[0];
+    if(!cur||String(cur.id).startsWith("tmp_")) return;         // still settling
+    if(String(cur.binder_id)===String(binderId)){ setPop(null); return; }
     setBusy(true);
     try{
-      let bs = ready?binders:await hydrate();
-      if(saved){
-        const gone=clips[0];
-        setClips([]);                                  // optimistic
-        await removeClip(gone.id);
-      }else{
-        let binderId = bs[0]?.id || null;
-        if(!binderId){ const b=await ensureDefaultBinder(owner); binderId=b?.id||null; if(b) setBinders([b]); }
-        const optimistic={id:"tmp_"+Date.now(),kind:"athlete",athlete_key:athleteKey,binder_id:binderId};
-        setClips([optimistic]);                        // optimistic
-        const real=await addClip(owner,binderId,{kind:"athlete",athlete_key:athleteKey,title:title||athleteKey,snapshot:snapshot||{}});
-        if(real) setClips([real]);
-        logActivity(owner,targetKey,"added_watchlist");
-      }
-      onSaved&&onSaved();
-    }catch{/* silent — bookmarking must never break a row */}
+      const r=await moveClip(cur.id,binderId);
+      if(Array.isArray(r)&&r.length){ setClips([{...cur,binder_id:binderId}]); openToast(); onSaved&&onSaved(); }
+      else flashErr("Couldn't move — try again");
+    }catch{ flashErr("Couldn't move — try again"); }
     setBusy(false);
   }
+  async function fileToNew(){
+    const nm=newName.trim();
+    if(!nm||busy) return;
+    setBusy(true);
+    try{
+      const b=await createBinder(owner,nm,ns);
+      if(b){ setBinders(bs=>[...bs,b]); setNewName(""); setBusy(false); await fileTo(b.id); return; }
+      flashErr("Couldn't create folder");
+    }catch{ flashErr("Couldn't create folder"); }
+    setBusy(false);
+  }
+
+  const popEl=(err||pop)?(
+    <div className={"sc-pop"+(err?" sc-pop-err":"")} onClick={e=>e.stopPropagation()}>
+      {err
+        ? <div className="sc-pop-row" style={{color:"#c0392b",fontWeight:700}}>{err}</div>
+        : pop==="toast"
+        ? <div className="sc-pop-row">
+            <BookmarkCheck size={15} color="var(--accent)" style={{flex:"none"}}/>
+            <span style={{flex:1,fontSize:12.5,fontWeight:700,whiteSpace:"nowrap"}}>{curBinder?`Saved to ${binderLabel(curBinder)}`:"Saved"}</span>
+            <button type="button" className="sc-pop-link" onClick={()=>{ clearTimeout(timerRef.current); setPop("picker"); }}>Change folder</button>
+          </div>
+        : <>
+            <div className="sc-pop-head">Save to folder</div>
+            <div className="sc-pop-list">
+              {nsBinders.map(b=>{
+                const on=curBinder&&String(b.id)===String(curBinder.id);
+                return(
+                  <button key={b.id} type="button" className={"sc-pop-item"+(on?" on":"")} disabled={busy} onClick={()=>fileTo(b.id)}>
+                    {on?<BookmarkCheck size={14} style={{flex:"none"}}/>:<Bookmark size={14} style={{flex:"none"}}/>}
+                    <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"left"}}>{binderLabel(b)}</span>
+                    {on&&<Check size={13} style={{flex:"none"}}/>}
+                  </button>
+                );
+              })}
+              {nsBinders.length===0&&<div style={{fontSize:12,color:"var(--mut)",padding:"4px 8px 6px"}}>No folders yet — name one below.</div>}
+            </div>
+            <div className="sc-pop-new">
+              <input value={newName} onChange={e=>setNewName(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter") fileToNew(); }} placeholder="New folder…"/>
+              <button type="button" onClick={fileToNew} disabled={!newName.trim()||busy} title="Create folder"><Plus size={15}/></button>
+            </div>
+            {saved&&!String(clips[0].id).startsWith("tmp_")&&(
+              <button type="button" className="sc-pop-removebtn" disabled={busy}
+                onClick={async()=>{ setBusy(true); try{ await doUnsave(); } finally{ setBusy(false); } }}>
+                <Trash2 size={13}/>Remove from saved
+              </button>
+            )}
+          </>}
+    </div>
+  ):null;
+
+  const holdTitle=saved?"Saved — tap to remove, hold to change folder":"Save — hold to pick a folder";
 
   if(kind==="athlete"){
     const label = saved?"Watching":"Watch";
     const Ic = saved?BookmarkCheck:Bookmark;
     return(
-      <button type="button" onClick={toggleWatch} disabled={busy}
-        title={saved?"Remove from watchlist":"Add to watchlist"}
-        onMouseEnter={()=>{ if(!ready) hydrate(); }}
-        style={{display:"inline-flex",alignItems:"center",gap:sm?0:6,padding:sm?"5px 6px":"5px 12px",
-          borderRadius:980,cursor:busy?"default":"pointer",border:0,fontWeight:700,fontSize:12.5,
-          fontFamily:"'Barlow',sans-serif",transition:".15s",whiteSpace:"nowrap",
-          background:saved?"rgba(10,132,255,.16)":"var(--grouped)",
-          color:saved?"var(--accent)":"var(--mut)",
-          boxShadow:saved?"inset 0 0 0 .5px rgba(10,132,255,.4)":"inset 0 0 0 .5px var(--line)"}}>
-        <Ic size={14}/>{!sm&&label}
-      </button>
+      <span ref={wrapRef} className="sc-savewrap sc-savewrap-l" onClick={e=>e.stopPropagation()}>
+        <button type="button" onClick={onTap} disabled={busy}
+          onPointerDown={pressStart} onPointerUp={pressEnd} onPointerLeave={pressEnd}
+          onContextMenu={e=>{ if(pressRef.current.fired) e.preventDefault(); }}
+          title={saved?"Watching — tap to remove, hold to change folder":"Add to watchlist"}
+          style={{display:"inline-flex",alignItems:"center",gap:sm?0:6,padding:sm?"5px 6px":"5px 12px",
+            borderRadius:980,cursor:busy?"default":"pointer",border:0,fontWeight:700,fontSize:12.5,
+            fontFamily:"'Barlow',sans-serif",transition:".15s",whiteSpace:"nowrap",
+            background:saved?"rgba(10,132,255,.16)":"var(--grouped)",
+            color:saved?"var(--accent)":"var(--mut)",
+            boxShadow:saved?"inset 0 0 0 .5px rgba(10,132,255,.4)":"inset 0 0 0 .5px var(--line)"}}>
+          <Ic size={14}/>{!sm&&label}
+        </button>
+        {popEl}
+      </span>
     );
-  }
-
-  // non-athlete kinds — icon button opening a binder-picker popover.
-  async function onIcon(e){
-    e.stopPropagation();
-    if(!ready) await hydrate();
-    setOpen(o=>!o);
-  }
-  async function saveTo(binderId){
-    if(busy) return;
-    setBusy(true);
-    try{
-      const optimistic={id:"tmp_"+Date.now(),kind,event_id:eventId,entry_id:entryId,binder_id:binderId};
-      setClips(c=>[...c,optimistic]);
-      const real=await addClip(owner,binderId,{kind,athlete_key:athleteKey,event_id:eventId,entry_id:entryId,title,snapshot:snapshot||{}});
-      if(real) setClips(c=>c.map(x=>x===optimistic?real:x));
-      if(kind==="result") logActivity(owner,targetKey,"saved_result");
-      onSaved&&onSaved();
-      setOpen(false);
-    }catch{/* silent */}
-    setBusy(false);
-  }
-  async function saveToNew(){
-    const nm=newName.trim(); if(!nm) return;
-    const b=await createBinder(owner,nm);
-    if(b){ setBinders(bs=>[...bs,b]); setNewName(""); saveTo(b.id); }
   }
 
   const Ic = saved?BookmarkCheck:Bookmark;
   return(
-    <span ref={wrapRef} style={{position:"relative",display:"inline-flex"}} onClick={e=>e.stopPropagation()}>
-      <button type="button" onClick={onIcon} title={saved?"Saved — manage":"Save to a binder"}
+    <span ref={wrapRef} className="sc-savewrap" onClick={e=>e.stopPropagation()}>
+      <button type="button" onClick={onTap} disabled={busy} title={holdTitle}
+        onPointerDown={pressStart} onPointerUp={pressEnd} onPointerLeave={pressEnd}
+        onContextMenu={e=>{ if(pressRef.current.fired) e.preventDefault(); }}
         style={{display:"grid",placeItems:"center",width:sm?26:30,height:sm?26:30,borderRadius:8,
           border:0,cursor:"pointer",transition:".15s",
           background:saved?"rgba(10,132,255,.14)":"transparent",
@@ -220,42 +349,36 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
         onMouseLeave={e=>{ if(!saved) e.currentTarget.style.background="transparent"; }}>
         <Ic size={16}/>
       </button>
-      {open&&(
-        <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,zIndex:90,minWidth:200,
-          background:"var(--card)",border:"1px solid var(--line)",borderRadius:12,padding:6,
-          boxShadow:"0 14px 34px -12px rgba(0,0,0,.28)"}}>
-          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".06em",textTransform:"uppercase",color:"var(--mut)",padding:"5px 8px 3px"}}>Save to</div>
-          {binders.length===0&&<div style={{fontSize:12,color:"var(--mut)",padding:"4px 8px 8px"}}>No binders yet — make one below.</div>}
-          {binders.map(b=>{
-            const inHere=clips.some(c=>String(c.binder_id)===String(b.id));
-            return(
-              <button key={b.id} type="button" onClick={()=>saveTo(b.id)} disabled={busy||inHere}
-                style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",border:0,
-                  background:"transparent",borderRadius:8,padding:"7px 8px",cursor:inHere?"default":"pointer",
-                  fontSize:13,color:inHere?"var(--accent)":"var(--ink)",transition:".12s"}}
-                onMouseEnter={e=>{ if(!inHere) e.currentTarget.style.background="var(--grouped)"; }}
-                onMouseLeave={e=>{ e.currentTarget.style.background="transparent"; }}>
-                {inHere?<BookmarkCheck size={14}/>:<Bookmark size={14}/>}
-                <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}</span>
-              </button>
-            );
-          })}
-          <div style={{display:"flex",gap:6,padding:"6px 6px 4px",borderTop:"1px solid var(--line)",marginTop:4}}>
-            <input value={newName} onChange={e=>setNewName(e.target.value)}
-              onKeyDown={e=>{ if(e.key==="Enter") saveToNew(); }} placeholder="New binder…"
-              style={{flex:1,minWidth:0,border:"1px solid var(--line)",borderRadius:7,padding:"5px 8px",
-                fontSize:12.5,outline:"none",background:"#fff",color:"var(--ink)"}}/>
-            <button type="button" onClick={saveToNew} disabled={!newName.trim()}
-              style={{display:"grid",placeItems:"center",width:28,height:28,borderRadius:7,border:0,
-                background:"var(--accent)",color:"#fff",cursor:newName.trim()?"pointer":"default",opacity:newName.trim()?1:.5}}>
-              <Plus size={15}/>
-            </button>
-          </div>
-        </div>
-      )}
+      {popEl}
     </span>
   );
 }
+
+/* Popover styles injected once into <head> — SaveButton renders all over
+   App.jsx, far from ScoutPortal's scoped <style> block. */
+const SAVE_CSS=`
+.sc-savewrap{position:relative;display:inline-flex;}
+.sc-savewrap .sc-pop{position:absolute;top:calc(100% + 7px);right:0;z-index:120;min-width:224px;max-width:min(268px,calc(100vw - 24px));padding:7px;
+  background:rgba(255,255,255,0.8);backdrop-filter:blur(26px) saturate(190%);-webkit-backdrop-filter:blur(26px) saturate(190%);
+  border-radius:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 14px 38px -12px rgba(0,0,0,.3);
+  animation:sc-popin .16s ease-out both;}
+.sc-savewrap-l .sc-pop{right:auto;left:0;}
+@keyframes sc-popin{from{opacity:0;transform:translateY(-4px) scale(.98);}to{opacity:1;transform:none;}}
+.sc-pop-err{min-width:0;white-space:nowrap;background:rgba(255,243,242,.92);}
+.sc-pop-row{display:flex;align-items:center;gap:8px;padding:5px 7px;font-size:12.5px;color:var(--ink);}
+.sc-pop-link{border:0;background:none;color:var(--accent);font-size:12px;font-weight:700;cursor:pointer;padding:2px 4px;white-space:nowrap;font-family:'Barlow',sans-serif;}
+.sc-pop-head{font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);padding:5px 8px 4px;}
+.sc-pop-list{max-height:200px;overflow:auto;}
+.sc-pop-item{display:flex;align-items:center;gap:8px;width:100%;border:0;background:transparent;border-radius:8px;padding:7px 8px;cursor:pointer;font-size:13px;color:var(--ink);transition:.12s;font-family:inherit;}
+.sc-pop-item:hover{background:rgba(10,132,255,.08);}
+.sc-pop-item.on{color:var(--accent);font-weight:700;}
+.sc-pop-new{display:flex;gap:6px;padding:6px 4px 2px;border-top:1px solid var(--line);margin-top:4px;}
+.sc-pop-new input{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12.5px;outline:none;background:rgba(255,255,255,.92);color:var(--ink);font-family:inherit;}
+.sc-pop-new button{display:grid;place-items:center;width:28px;height:28px;border-radius:7px;border:0;background:var(--accent);color:#fff;cursor:pointer;flex:none;}
+.sc-pop-new button:disabled{opacity:.5;cursor:default;}
+.sc-pop-removebtn{display:flex;align-items:center;gap:6px;width:100%;border:0;background:none;border-radius:8px;padding:7px 8px;margin-top:2px;cursor:pointer;font-size:12px;font-weight:700;color:#c0392b;transition:.12s;font-family:'Barlow',sans-serif;}
+.sc-pop-removebtn:hover{background:rgba(192,57,43,.08);}
+`;
 
 /* HighlightsStrip / PinPicker REMOVED: pinned results now live inline in the
    results lists (App.jsx) — a pin icon on each row + a "Pinned" section at the
@@ -576,11 +699,14 @@ function DetailPanel({owner,events,ratings,name,notes,clips,onClose,onPick,onNot
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   Watchlist tab — athlete cards for kind='athlete' clips + clippings list.
+   Watchlist tab — athlete cards for kind='athlete' clips.
    ════════════════════════════════════════════════════════════════════════ */
 function AthleteCard({owner,events,ratings,clip,note,onOpenDetail,onPick,onRemove,
   compareMode,selected,onToggleSelect,selectDisabled}){
   const name=clip.athlete_key||clip.title||"";
+  // Stable display name: live results casing first, then the display name frozen
+  // in the clip at save time — never the sorted-lowercase canon key if avoidable.
+  const savedDisp=clip.snapshot?.athlete||clip.title||"";
   const spine=React.useMemo(()=>athleteIndex(events).get(canonName(name))||[],[events,name]);
   const face=React.useMemo(()=>athleteFace(spine),[spine]);
   const rec=ratings&&ratings.get?ratings.get(canonName(name)):null;
@@ -602,7 +728,7 @@ function AthleteCard({owner,events,ratings,clip,note,onOpenDetail,onPick,onRemov
         <div style={{flex:1,minWidth:0}}>
           <span className={compareMode?"":"sc-link"} onClick={compareMode?undefined:(()=>onOpenDetail(name))}
             style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:16,color:"var(--ink)",lineHeight:1.15,display:"inline-flex",alignItems:"center",gap:7}}>
-            <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{face.disp||name}</span>
+            <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{face.disp||savedDisp||name}</span>
             {face.nat&&<span style={{fontSize:15,lineHeight:1,flex:"none"}}>{iocFlag(face.nat)}</span>}
           </span>
           <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:5}}>
@@ -637,14 +763,27 @@ function AthleteCard({owner,events,ratings,clip,note,onOpenDetail,onPick,onRemov
   );
 }
 
-// A clippings row for non-athlete clips (result/event/upcoming/link).
-function ClippingRow({clip,events,onOpenEvent,onRemove}){
+// One saved result/event/upcoming/link row in the "Saved results" tab:
+// kind chip, event title (click-through), athlete + finish context for results,
+// date, a move-to-folder menu (results-namespace binders only) and remove.
+function SavedRow({clip,events,binders,onOpenEvent,onMove,onRemove}){
   const evById=React.useMemo(()=>{const m=new Map();(events||[]).forEach(e=>m.set(String(e.id),e));return m;},[events]);
   const ev=clip.event_id!=null?evById.get(String(clip.event_id)):null;
   const snap=clip.snapshot||{};
-  const title=clip.title||ev?.name||snap.evName||snap.title||(clip.kind==="link"?clip.url:"Saved item");
+  const title=snap.evName||ev?.name||clip.title||snap.title||(clip.kind==="link"?clip.url:"Saved item");
   const date=ev?.date||snap.evDate||null;
   const kindLabel={result:"Result",event:"Event",upcoming:"Upcoming",link:"Link",snapshot:"Snapshot"}[clip.kind]||"Clip";
+  const context=clip.kind==="result"&&(snap.athlete||clip.title)
+    ? `${snap.athlete||clip.title}${snap.rank!=null?` · ${rankOfFleet(snap.rank,snap.fleet)}`:""}`
+    : null;
+  const [menu,setMenu]=React.useState(false);
+  const menuRef=React.useRef(null);
+  React.useEffect(()=>{
+    if(!menu) return;
+    const fn=e=>{ if(menuRef.current&&!menuRef.current.contains(e.target)) setMenu(false); };
+    document.addEventListener("mousedown",fn);
+    return()=>document.removeEventListener("mousedown",fn);
+  },[menu]);
   const open=()=>{
     if(clip.url){ window.open(clip.url,"_blank","noopener"); return; }
     if(clip.event_id!=null&&onOpenEvent) onOpenEvent(clip.event_id);
@@ -653,10 +792,37 @@ function ClippingRow({clip,events,onOpenEvent,onRemove}){
   return(
     <div className="sc-cliprow">
       <span style={{fontSize:9.5,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",color:"var(--accent)",flex:"none",width:64}}>{kindLabel}</span>
-      <span className={canOpen?"sc-link":""} onClick={canOpen?open:undefined}
-        style={{flex:1,minWidth:0,fontSize:13,fontWeight:600,color:"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</span>
+      <span style={{flex:1,minWidth:0}}>
+        <span className={canOpen?"sc-link":""} onClick={canOpen?open:undefined}
+          style={{display:"block",fontSize:13,fontWeight:600,color:"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</span>
+        {context&&<span style={{display:"block",fontSize:11.5,color:"var(--mut)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{context}</span>}
+      </span>
       {date&&<span style={{fontSize:11.5,color:"var(--mut)",flex:"none"}}>{formatDate(date)}</span>}
       {clip.url&&<ExternalLink size={13} color="var(--mut)" style={{flex:"none"}}/>}
+      <span ref={menuRef} className="sc-savewrap" style={{flex:"none"}}>
+        <button type="button" className="sc-minibtn" title="Move to folder" onClick={()=>setMenu(m=>!m)}>
+          <FolderPlus size={12}/>Folder
+        </button>
+        {menu&&(
+          <div className="sc-pop" onClick={e=>e.stopPropagation()}>
+            <div className="sc-pop-head">Move to folder</div>
+            <div className="sc-pop-list">
+              {binders.length===0&&<div style={{fontSize:12,color:"var(--mut)",padding:"4px 8px 6px"}}>No folders yet — create one in the sidebar.</div>}
+              {binders.map(b=>{
+                const on=String(clip.binder_id)===String(b.id);
+                return(
+                  <button key={b.id} type="button" className={"sc-pop-item"+(on?" on":"")}
+                    onClick={()=>{ setMenu(false); if(!on) onMove(clip,b.id); }}>
+                    {on?<BookmarkCheck size={14} style={{flex:"none"}}/>:<Bookmark size={14} style={{flex:"none"}}/>}
+                    <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"left"}}>{binderLabel(b)}</span>
+                    {on&&<Check size={13} style={{flex:"none"}}/>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </span>
       <button type="button" onClick={()=>onRemove(clip)} title="Remove"
         style={{border:0,background:"none",color:"var(--mut)",cursor:"pointer",padding:2,flex:"none"}}
         onMouseEnter={e=>e.currentTarget.style.color="#c0392b"} onMouseLeave={e=>e.currentTarget.style.color="var(--mut)"}><X size={14}/></button>
@@ -894,8 +1060,8 @@ function CompareModal({owner,events,ratings,names,onClose,onPick}){
 /* ══════════════════════════════════════════════════════════════════════════
    ScoutPortal — the workspace root.
    ════════════════════════════════════════════════════════════════════════ */
-export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
-  const owner=React.useMemo(()=>scoutOwnerId(auth),[auth]);
+export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onRequireAuth}){
+  const owner=React.useMemo(()=>scoutOwnerId(auth),[auth]);   // null when signed out
   const ratings=React.useMemo(()=>ratingEngine.getAthleteRatings(events),[events]);
 
   const [bump,setBump]=React.useState(0);            // re-fetch trigger
@@ -905,8 +1071,9 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
   const [digestPrefs,setDigestPrefs]=React.useState([]);
   const [loading,setLoading]=React.useState(true);
 
-  const [tab,setTab]=React.useState("watchlist");    // watchlist | discover | week
-  const [selBinder,setSelBinder]=React.useState("all"); // "all" | binder id
+  const [tab,setTab]=React.useState("watchlist");    // watchlist | saved | discover | week
+  const [selBinder,setSelBinder]=React.useState("all");       // athletes ns: "all" | binder id
+  const [selResBinder,setSelResBinder]=React.useState("all"); // results ns:  "all" | binder id
   const [detailName,setDetailName]=React.useState(null);
   const [aiCache,setAiCache]=React.useState({});
   const [sortMode,setSortMode]=React.useState(()=>{ try{return localStorage.getItem("sc-sort")||"movers";}catch{return "movers";} });
@@ -914,28 +1081,46 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
   const [compareSel,setCompareSel]=React.useState([]);   // canon keys? no — display names
   const [showCompare,setShowCompare]=React.useState(false);
   React.useEffect(()=>{ try{localStorage.setItem("sc-sort",sortMode);}catch{} },[sortMode]);
+  React.useEffect(()=>{ ensureSaveCss(); },[]);   // sc-pop styles for SavedRow menus
   const [confirm,setConfirm]=React.useState(null);
-  const [newBinder,setNewBinder]=React.useState("");
-  const [renaming,setRenaming]=React.useState(null); // {id,name}
+  const [newAthBinder,setNewAthBinder]=React.useState("");
+  const [newResBinder,setNewResBinder]=React.useState("");
+  const [renaming,setRenaming]=React.useState(null); // {id,name,ns}
 
   const reload=React.useCallback(async()=>{
+    if(!owner){ setBinders([]); setClips([]); setNotes([]); setDigestPrefs([]); setLoading(false); return; }
     const [bs,cs,ns,dp]=await Promise.all([fetchBinders(owner),fetchClips(owner),fetchNotes(owner),fetchDigestPrefs(owner)]);
     setBinders(bs); setClips(cs); setNotes(ns); setDigestPrefs(dp); setLoading(false);
   },[owner]);
-  React.useEffect(()=>{ setLoading(true); reload(); },[reload,bump]);
+  // Full-screen loader only on first load / owner change; bump-triggered
+  // refetches run in the background so open popovers/toasts don't get
+  // unmounted mid-save by the loading branch swapping the tab out.
+  React.useEffect(()=>{ setLoading(true); },[owner]);
+  React.useEffect(()=>{ reload(); },[reload,bump]);
 
-  // clip → its display athlete key; count athlete clips per binder for sidebar.
+  // The two folder namespaces, kept strictly apart in the sidebar + tabs:
+  // athlete binders hold kind='athlete' clips; results binders hold the rest.
+  const athBinders=binders.filter(b=>binderNS(b)==="athletes");
+  const resBinders=binders.filter(b=>binderNS(b)==="results");
   const athClips=clips.filter(c=>c.kind==="athlete");
-  const countFor=id=>athClips.filter(c=>id==="all"?true:String(c.binder_id)===String(id)).length;
+  const resClips=clips.filter(c=>c.kind!=="athlete");
+  const countAth=id=>athClips.filter(c=>id==="all"?true:String(c.binder_id)===String(id)).length;
+  const countRes=id=>resClips.filter(c=>id==="all"?true:String(c.binder_id)===String(id)).length;
 
-  // clips for the selected binder
-  const binderClips=clips.filter(c=>selBinder==="all"?true:String(c.binder_id)===String(selBinder));
-  const clippings=binderClips.filter(c=>c.kind!=="athlete");
-  // watched athletes, ordered by the chosen sort. "Movers" = |30-day rating
-  // move| desc (biggest swing first); "Recent" = most-recently added; "A–Z".
+  // clips for the selected athlete binder
+  const binderClips=athClips.filter(c=>selBinder==="all"?true:String(c.binder_id)===String(selBinder));
+  // watched athletes, deduped by canon key (the same athlete saved under two
+  // name variants must never render as two cards — clips arrive created_at
+  // desc, so the first hit is the newest), ordered by the chosen sort.
+  // "Movers" = |30-day rating move| desc; "Recent" = most-recently added; "A–Z".
   const watchAthletes=React.useMemo(()=>{
-    const list=binderClips.filter(c=>c.kind==="athlete");
-    const nameOf=c=>{const spine=athleteIndex(events).get(canonName(c.athlete_key||c.title||""))||[];return (athleteFace(spine).disp||c.athlete_key||c.title||"").toLowerCase();};
+    const seen=new Set(); const list=[];
+    for(const c of binderClips){
+      const k=canonName(c.athlete_key||c.title||"");
+      if(!k||seen.has(k)) continue;
+      seen.add(k); list.push(c);
+    }
+    const nameOf=c=>{const spine=athleteIndex(events).get(canonName(c.athlete_key||c.title||""))||[];return (athleteFace(spine).disp||c.snapshot?.athlete||c.title||c.athlete_key||"").toLowerCase();};
     const d30Of=c=>{const m=metricsForAthlete(c.athlete_key||c.title||"",events,ratings);return m?.delta30??0;};
     const addedAt=c=>{const t=c.created_at?Date.parse(c.created_at):NaN;return Number.isNaN(t)?0:t;};
     const arr=[...list];
@@ -944,26 +1129,65 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
     else arr.sort((a,b)=>Math.abs(d30Of(b))-Math.abs(d30Of(a))); // movers
     return arr;
   },[binderClips,sortMode,events,ratings]);
+  // saved results/events for the selected results binder, newest event first
+  // (falling back to save time when the clip carries no event date).
+  const evById=React.useMemo(()=>{const m=new Map();(events||[]).forEach(e=>m.set(String(e.id),e));return m;},[events]);
+  const savedRows=React.useMemo(()=>{
+    const rows=resClips.filter(c=>selResBinder==="all"?true:String(c.binder_id)===String(selResBinder));
+    const dkOf=c=>{
+      const ev=c.event_id!=null?evById.get(String(c.event_id)):null;
+      const d=ev?.date||c.snapshot?.evDate;
+      const dk=d?dateKey(d):"";
+      if(dk) return dk;
+      const t=c.created_at?new Date(c.created_at):null;
+      return t&&!Number.isNaN(t.getTime())?`${t.getUTCFullYear()}${String(t.getUTCMonth()+1).padStart(2,"0")}${String(t.getUTCDate()).padStart(2,"0")}`:"";
+    };
+    return [...rows].sort((a,b)=>String(dkOf(b)).localeCompare(String(dkOf(a))));
+  },[resClips,selResBinder,evById]);
   // latest note per athlete
   const latestNote=name=>{const k=canonName(name);return notes.find(n=>canonName(n.athlete_key||"")===k)||null;};
   // every watched athlete (across all binders) as canon keys — used by discovery watch state + digest
   const watchedKeys=React.useMemo(()=>new Set(athClips.map(c=>canonName(c.athlete_key||"")).filter(Boolean)),[athClips]);
 
-  async function makeBinder(){
-    const nm=newBinder.trim(); if(!nm) return;
-    const b=await createBinder(owner,nm);
-    if(b){ setBinders(bs=>[...bs,b]); setNewBinder(""); setSelBinder(b.id); }
+  async function makeBinder(ns){
+    const nm=(ns==="results"?newResBinder:newAthBinder).trim(); if(!nm) return;
+    const b=await createBinder(owner,nm,ns);
+    if(b){
+      setBinders(bs=>[...bs,b]);
+      if(ns==="results"){ setNewResBinder(""); setSelResBinder(b.id); setTab("saved"); }
+      else{ setNewAthBinder(""); setSelBinder(b.id); setTab("watchlist"); }
+    }
   }
   async function doRename(){
     if(!renaming||!renaming.name.trim()) return;
-    await renameBinder(renaming.id,renaming.name.trim());
+    await renameBinder(renaming.id,renaming.name.trim(),renaming.ns);
     setRenaming(null); setBump(b=>b+1);
   }
   function askDelete(b){
-    setConfirm({title:"Delete binder?",message:`"${b.name}" and its saved items will be removed. This can't be undone.`,confirmLabel:"Delete binder",
-      onConfirm:async()=>{ await deleteBinder(b.id); if(String(selBinder)===String(b.id)) setSelBinder("all"); setBump(x=>x+1); }});
+    setConfirm({title:"Delete folder?",message:`"${binderLabel(b)}" and its saved items will be removed. This can't be undone.`,confirmLabel:"Delete folder",
+      onConfirm:async()=>{ await deleteBinder(b.id);
+        if(String(selBinder)===String(b.id)) setSelBinder("all");
+        if(String(selResBinder)===String(b.id)) setSelResBinder("all");
+        setBump(x=>x+1); }});
   }
-  async function removeAthlete(clip){ setClips(cs=>cs.filter(c=>c.id!==clip.id)); await removeClip(clip.id); }
+  // Optimistic removes with an honest reconcile: if the DELETE came back as an
+  // RLS zero-row no-op, refetch so the row visibly comes back.
+  async function removeAthlete(clip){
+    setClips(cs=>cs.filter(c=>c.id!==clip.id));
+    const r=await removeClip(clip.id);
+    if(!(Array.isArray(r)&&r.length)) setBump(b=>b+1);
+  }
+  async function removeSaved(clip){
+    setClips(cs=>cs.filter(c=>c.id!==clip.id));
+    const r=await removeClip(clip.id);
+    if(!(Array.isArray(r)&&r.length)) setBump(b=>b+1);
+  }
+  async function moveSaved(clip,binderId){
+    const prev=clips;
+    setClips(cs=>cs.map(c=>c.id===clip.id?{...c,binder_id:binderId}:c));
+    const r=await moveClip(clip.id,binderId);
+    if(!(Array.isArray(r)&&r.length)) setClips(prev);
+  }
 
   /* ── discovery data (memoised on events/ratings) ── */
   const [radarThreshold,setRadarThreshold]=React.useState(1400);
@@ -1010,7 +1234,59 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
 
   const refreshNotes=React.useCallback(async()=>{ const ns=await fetchNotes(owner); setNotes(ns); },[owner]);
 
-  const TABS=[["watchlist","Watchlist"],["discover","Discover"],["week","This week"]];
+  const TABS=[["watchlist","Watchlist"],["saved","Saved results"],["discover","Discover"],["week","This week"]];
+
+  // Signed out (dev mode can reach the portal without a session): the workspace
+  // is owner-private under RLS 0015, so there is nothing to load — prompt for
+  // sign-in instead of showing an empty workspace that silently drops writes.
+  if(!owner) return(
+    <div className="wrap sec" style={{paddingTop:16}}>
+      <style>{SCOUT_CSS}</style>
+      <div style={{minHeight:"46vh",display:"grid",placeItems:"center",padding:"32px 16px"}}>
+        <div className="sc-panel" style={{width:"100%",maxWidth:440,textAlign:"center",padding:"38px 30px 34px"}}>
+          <div style={{fontSize:40,lineHeight:1,marginBottom:12}}>🔭</div>
+          <h2 style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:22,color:"var(--ink)",margin:"0 0 8px"}}>Sign in to open your workspace</h2>
+          <p style={{fontSize:13.5,color:"var(--mut)",lineHeight:1.55,margin:"0 0 20px"}}>Your watchlist, saved results and notes are private to your scout account — sign in and they'll be right here.</p>
+          <button type="button" className="btn cta" style={{fontSize:13.5,padding:"10px 24px"}} onClick={()=>onRequireAuth&&onRequireAuth()}>Sign in</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // one sidebar group per namespace: heading, "All" row, folders, inline create.
+  const sideGroup=(nsKey,heading,allLabel,AllIcon,groupBinders,sel,setSel,count,newVal,setNewVal,tabId)=>(
+    <>
+      <div className="sc-side-h">{heading}</div>
+      <button type="button" className={"sc-binder"+(tab===tabId&&sel==="all"?" on":"")} onClick={()=>{setSel("all");setTab(tabId);}}>
+        <AllIcon size={14}/><span style={{flex:1,textAlign:"left"}}>{allLabel}</span><span className="sc-count">{count("all")}</span>
+      </button>
+      {groupBinders.map(b=>(
+        <div key={b.id} className="sc-binder-wrap">
+          {renaming&&renaming.id===b.id
+            ? <div style={{display:"flex",gap:5,padding:"3px 6px",width:"100%"}}>
+                <input autoFocus value={renaming.name} onChange={e=>setRenaming(r=>({...r,name:e.target.value}))}
+                  onKeyDown={e=>{if(e.key==="Enter")doRename();if(e.key==="Escape")setRenaming(null);}}
+                  style={{flex:1,minWidth:0,border:"1px solid var(--accent)",borderRadius:7,padding:"4px 7px",fontSize:12.5,outline:"none",background:"#fff",color:"var(--ink)"}}/>
+                <button type="button" onClick={doRename} style={{border:0,background:"var(--accent)",color:"#fff",borderRadius:6,width:26,display:"grid",placeItems:"center",cursor:"pointer"}}><Check size={13}/></button>
+              </div>
+            : <>
+                <button type="button" className={"sc-binder"+(tab===tabId&&String(sel)===String(b.id)?" on":"")} onClick={()=>{setSel(b.id);setTab(tabId);}}>
+                  <Bookmark size={14}/><span style={{flex:1,textAlign:"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{binderLabel(b)}</span>
+                  <span className="sc-count">{count(b.id)}</span>
+                </button>
+                <div className="sc-binder-actions">
+                  <button type="button" title="Rename" onClick={()=>setRenaming({id:b.id,name:binderLabel(b),ns:nsKey})}><Pencil size={12}/></button>
+                  <button type="button" title="Delete" onClick={()=>askDelete(b)}><Trash2 size={12}/></button>
+                </div>
+              </>}
+        </div>
+      ))}
+      <div className="sc-newfolder">
+        <input value={newVal} onChange={e=>setNewVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")makeBinder(nsKey);}} placeholder="New folder…"/>
+        <button type="button" onClick={()=>makeBinder(nsKey)} disabled={!newVal.trim()} title="Create folder"><FolderPlus size={15}/></button>
+      </div>
+    </>
+  );
 
   return(
     <div className="wrap sec" style={{paddingTop:16}}>
@@ -1028,40 +1304,12 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
       </div>
 
       <div className="sc-layout">
-        {/* ── sidebar: binders ── */}
+        {/* ── sidebar: folders, grouped by namespace (athletes / results) ── */}
         <aside className="sc-side">
           <div className="sc-panel" style={{padding:"8px 8px 10px"}}>
-            <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--mut)",padding:"6px 8px 8px"}}>Binders</div>
-            <button type="button" className={"sc-binder"+(selBinder==="all"?" on":"")} onClick={()=>setSelBinder("all")}>
-              <Bookmark size={14}/><span style={{flex:1,textAlign:"left"}}>All watched</span><span className="sc-count">{countFor("all")}</span>
-            </button>
-            {binders.map(b=>(
-              <div key={b.id} className="sc-binder-wrap">
-                {renaming&&renaming.id===b.id
-                  ? <div style={{display:"flex",gap:5,padding:"3px 6px",width:"100%"}}>
-                      <input autoFocus value={renaming.name} onChange={e=>setRenaming(r=>({...r,name:e.target.value}))}
-                        onKeyDown={e=>{if(e.key==="Enter")doRename();if(e.key==="Escape")setRenaming(null);}}
-                        style={{flex:1,minWidth:0,border:"1px solid var(--accent)",borderRadius:7,padding:"4px 7px",fontSize:12.5,outline:"none",background:"#fff",color:"var(--ink)"}}/>
-                      <button type="button" onClick={doRename} style={{border:0,background:"var(--accent)",color:"#fff",borderRadius:6,width:26,display:"grid",placeItems:"center",cursor:"pointer"}}><Check size={13}/></button>
-                    </div>
-                  : <>
-                      <button type="button" className={"sc-binder"+(String(selBinder)===String(b.id)?" on":"")} onClick={()=>setSelBinder(b.id)}>
-                        <Bookmark size={14}/><span style={{flex:1,textAlign:"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}</span>
-                        <span className="sc-count">{countFor(b.id)}</span>
-                      </button>
-                      <div className="sc-binder-actions">
-                        <button type="button" title="Rename" onClick={()=>setRenaming({id:b.id,name:b.name})}><Pencil size={12}/></button>
-                        <button type="button" title="Delete" onClick={()=>askDelete(b)}><Trash2 size={12}/></button>
-                      </div>
-                    </>}
-              </div>
-            ))}
-            <div style={{display:"flex",gap:5,padding:"8px 6px 2px",marginTop:4,borderTop:"1px solid var(--line)"}}>
-              <input value={newBinder} onChange={e=>setNewBinder(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")makeBinder();}} placeholder="New binder…"
-                style={{flex:1,minWidth:0,border:"1px solid var(--line)",borderRadius:7,padding:"6px 8px",fontSize:12.5,outline:"none",background:"#fff",color:"var(--ink)"}}/>
-              <button type="button" onClick={makeBinder} disabled={!newBinder.trim()} title="Create binder"
-                style={{display:"grid",placeItems:"center",width:30,flex:"none",borderRadius:7,border:0,background:"var(--accent)",color:"#fff",cursor:newBinder.trim()?"pointer":"default",opacity:newBinder.trim()?1:.5}}><FolderPlus size={15}/></button>
-            </div>
+            {sideGroup("athletes","Athletes","All watched",Bookmark,athBinders,selBinder,setSelBinder,countAth,newAthBinder,setNewAthBinder,"watchlist")}
+            <div style={{borderTop:"1px solid var(--line)",margin:"10px 2px 2px"}}/>
+            {sideGroup("results","Results & events","All saved",FileText,resBinders,selResBinder,setSelResBinder,countRes,newResBinder,setNewResBinder,"saved")}
           </div>
         </aside>
 
@@ -1085,48 +1333,35 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
                       onClose={()=>setDetailName(null)} onPick={onPick} onNotesChanged={refreshNotes}
                       aiCache={aiCache} setAiCache={setAiCache}/>
                   )}
-                  {watchAthletes.length===0&&clippings.length===0
+                  {watchAthletes.length===0
                     ? <EmptyWatchlist/>
                     : <>
-                        {watchAthletes.length>0&&(
-                          <>
-                            {/* toolbar: sort + compare */}
-                            <div className="sc-wtools">
-                              <div className="seg sc-sortseg">
-                                {[["movers","Movers"],["recent","Recent"],["az","A–Z"]].map(([id,label])=>(
-                                  <button key={id} className={sortMode===id?"on":""} onClick={()=>setSortMode(id)}>{label}</button>
-                                ))}
-                              </div>
-                              <span style={{flex:1}}/>
-                              <button type="button" className={"sc-cmpbtn"+(compareMode?" on":"")}
-                                onClick={()=>{ setCompareMode(v=>!v); setCompareSel([]); }}
-                                title={compareMode?"Exit compare":"Select athletes to compare"}>
-                                <Columns3 size={13}/>{compareMode?"Done":"Compare"}
-                              </button>
-                            </div>
-                            <div className="sc-cardgrid" style={{marginBottom:clippings.length?16:0}}>
-                              {watchAthletes.map(clip=>{
-                                const nm=clip.athlete_key||clip.title||"";
-                                const sel=compareSel.includes(nm);
-                                return(
-                                  <AthleteCard key={clip.id} owner={owner} events={events} ratings={ratings} clip={clip}
-                                    note={latestNote(clip.athlete_key)} onOpenDetail={setDetailName} onPick={onPick} onRemove={removeAthlete}
-                                    compareMode={compareMode} selected={sel} selectDisabled={compareSel.length>=3}
-                                    onToggleSelect={n=>setCompareSel(s=>s.includes(n)?s.filter(x=>x!==n):(s.length>=3?s:[...s,n]))}/>
-                                );
-                              })}
-                            </div>
-                          </>
-                        )}
-                        {clippings.length>0&&(
-                          <div className="sc-panel" style={{padding:"6px 8px 8px"}}>
-                            <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--mut)",padding:"7px 8px"}}>Clippings</div>
-                            {clippings.map(clip=>(
-                              <ClippingRow key={clip.id} clip={clip} events={events} onOpenEvent={onOpenEvent}
-                                onRemove={async(c)=>{setClips(cs=>cs.filter(x=>x.id!==c.id));await removeClip(c.id);}}/>
+                        {/* toolbar: sort + compare */}
+                        <div className="sc-wtools">
+                          <div className="seg sc-sortseg">
+                            {[["movers","Movers"],["recent","Recent"],["az","A–Z"]].map(([id,label])=>(
+                              <button key={id} className={sortMode===id?"on":""} onClick={()=>setSortMode(id)}>{label}</button>
                             ))}
                           </div>
-                        )}
+                          <span style={{flex:1}}/>
+                          <button type="button" className={"sc-cmpbtn"+(compareMode?" on":"")}
+                            onClick={()=>{ setCompareMode(v=>!v); setCompareSel([]); }}
+                            title={compareMode?"Exit compare":"Select athletes to compare"}>
+                            <Columns3 size={13}/>{compareMode?"Done":"Compare"}
+                          </button>
+                        </div>
+                        <div className="sc-cardgrid">
+                          {watchAthletes.map(clip=>{
+                            const nm=clip.athlete_key||clip.title||"";
+                            const sel=compareSel.includes(nm);
+                            return(
+                              <AthleteCard key={clip.id} owner={owner} events={events} ratings={ratings} clip={clip}
+                                note={latestNote(clip.athlete_key)} onOpenDetail={setDetailName} onPick={onPick} onRemove={removeAthlete}
+                                compareMode={compareMode} selected={sel} selectDisabled={compareSel.length>=3}
+                                onToggleSelect={n=>setCompareSel(s=>s.includes(n)?s.filter(x=>x!==n):(s.length>=3?s:[...s,n]))}/>
+                            );
+                          })}
+                        </div>
                       </>}
 
                   {/* floating Compare N launcher (liquid-glass) */}
@@ -1140,6 +1375,21 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
                       onClose={()=>{ setShowCompare(false); }}/>
                   )}
                 </>
+              )}
+
+              {/* ============ SAVED RESULTS ============ */}
+              {tab==="saved"&&(
+                savedRows.length===0
+                  ? <EmptySaved/>
+                  : <div className="sc-panel" style={{padding:"6px 8px 8px"}}>
+                      <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--mut)",padding:"7px 8px"}}>
+                        Saved results & events{selResBinder!=="all"&&(()=>{const b=resBinders.find(x=>String(x.id)===String(selResBinder));return b?` — ${binderLabel(b)}`:"";})()}
+                      </div>
+                      {savedRows.map(clip=>(
+                        <SavedRow key={clip.id} clip={clip} events={events} binders={resBinders}
+                          onOpenEvent={onOpenEvent} onMove={moveSaved} onRemove={removeSaved}/>
+                      ))}
+                    </div>
               )}
 
               {/* ============ DISCOVER ============ */}
@@ -1278,6 +1528,21 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById}){
 function ordSuffix(n){const s=["th","st","nd","rd"],v=n%100;return s[(v-20)%10]||s[v]||s[0];}
 const Muted=({children})=><p style={{fontSize:12.5,color:"var(--mut)",padding:"8px 10px",margin:0}}>{children}</p>;
 
+function EmptySaved(){
+  return(
+    <div className="sc-panel" style={{padding:"40px 24px",textAlign:"center"}}>
+      <div style={{display:"grid",placeItems:"center",width:52,height:52,borderRadius:16,background:"var(--sky)",color:"var(--navy)",margin:"0 auto 14px"}}>
+        <FileText size={26}/>
+      </div>
+      <h3 style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:18,margin:"0 0 6px",color:"var(--ink)"}}>No saved results yet</h3>
+      <p style={{fontSize:13.5,lineHeight:1.6,color:"var(--mut)",maxWidth:420,margin:"0 auto"}}>
+        Tap the <Bookmark size={13} style={{verticalAlign:"-2px"}}/> bookmark on any result row or event header across AthLink
+        and it lands here instantly — then file it into a folder if you want.
+      </p>
+    </div>
+  );
+}
+
 function EmptyWatchlist(){
   return(
     <div className="sc-panel" style={{padding:"40px 24px",textAlign:"center"}}>
@@ -1298,6 +1563,11 @@ const SCOUT_CSS=`
 .sc-layout{display:grid;grid-template-columns:236px 1fr;gap:16px;align-items:start;}
 .sc-side{position:sticky;top:12px;}
 .sc-panel{background:rgba(255,255,255,0.85);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border:0;border-radius:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 .5px rgba(255,255,255,.4),0 1px 2px rgba(0,0,0,.06);}
+.sc-side-h{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--mut);padding:6px 8px 6px;}
+.sc-newfolder{display:flex;gap:5px;padding:6px 6px 2px;margin-top:2px;}
+.sc-newfolder input{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:12.5px;outline:none;background:#fff;color:var(--ink);font-family:inherit;}
+.sc-newfolder button{display:grid;place-items:center;width:30px;flex:none;border-radius:7px;border:0;background:var(--accent);color:#fff;cursor:pointer;}
+.sc-newfolder button:disabled{opacity:.5;cursor:default;}
 .sc-binder-wrap{position:relative;display:flex;align-items:center;}
 .sc-binder{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;border-radius:9px;padding:7px 9px;font-size:13px;font-weight:600;color:var(--mut);cursor:pointer;transition:.13s;font-family:inherit;}
 .sc-binder:hover{background:var(--grouped);color:var(--navy);}
@@ -1307,7 +1577,9 @@ const SCOUT_CSS=`
 .sc-binder-actions button{border:0;background:rgba(255,255,255,.85);color:var(--mut);width:22px;height:22px;border-radius:6px;display:grid;place-items:center;cursor:pointer;transition:.12s;}
 .sc-binder-actions button:hover{color:var(--navy);background:#fff;}
 .sc-count{font-size:11px;font-weight:800;color:var(--mut);font-variant-numeric:tabular-nums;background:var(--grouped);border-radius:980px;padding:1px 7px;min-width:20px;text-align:center;flex:none;}
-.sc-tabs{background:var(--grouped);border-radius:980px;padding:3px;display:inline-flex;}
+.sc-tabs{background:var(--grouped);border-radius:980px;padding:3px;display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none;}
+.sc-tabs::-webkit-scrollbar{display:none;}
+.sc-tabs button{white-space:nowrap;flex:none;}
 .sc-freq{background:var(--grouped);border-radius:980px;padding:2px;display:inline-flex;flex:none;}
 .sc-freq button{padding:5px 14px;font-size:12px;}
 .sc-sechead{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:11px 12px;cursor:pointer;color:var(--ink);font-family:inherit;transition:.12s;border-radius:16px;}
