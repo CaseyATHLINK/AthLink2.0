@@ -4783,8 +4783,10 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
   })()}
 
   {/* ── SCOUT: talent-scouting workspace ── */}
+  {/* wider than the default wrap: the Stocks-style split view (list + chart
+      pane) inside ScoutPortal needs the room on desktop. */}
   {!portal&&view.name==="scout"&&(
-    <div className="wrap sec" style={{paddingTop:16}}>
+    <div className="wrap sec" style={{paddingTop:16,maxWidth:1500}}>
       {isScout
         ? <ScoutPortal events={events} auth={auth} hostById={hostById}
             onPick={name=>go({name:"profile",id:name})}
