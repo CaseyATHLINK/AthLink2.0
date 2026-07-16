@@ -16,10 +16,12 @@ import ReactDOM from "react-dom";
 import { Telescope, Bookmark, BookmarkCheck, Plus, X, Trash2, Pencil, Check,
   Flame, ListChecks, CalendarClock, Sparkles, Radar, TrendingUp, TrendingDown,
   ChevronDown, ChevronRight, StickyNote, Search, ExternalLink, FolderPlus,
-  FileText, Printer, Columns3, ArrowUpDown,
+  FileText, Printer, Columns3, ArrowUpDown, Share, CalendarPlus,
   LoaderCircle as Loader2 } from "lucide-react";
 import { canonName } from "../util/name.js";
 import { dateKey, formatDate } from "../util/date.js";
+import { isUpcomingEvent } from "../data/scoring.js";
+import { usernameForName } from "../data/athletes.js";
 import { iocFlag } from "../util/flag.js";
 import { nuggetFor } from "../util/class.js";
 import { aiComplete } from "@athlink/core";
@@ -70,7 +72,11 @@ function rankOfFleet(rank,fleet){
 const medalColor = rank => rank===1?"var(--gold)":rank===2?"#7d8a98":rank===3?"#a86a32":"var(--navy)";
 
 // Tiny SVG sparkline of a rating history's .r series (last ~15 points).
-function Sparkline({history,w=88,h=22}){
+// `baseline` adds Stocks-style dashes at the window's starting rating, and
+// `fill` shades under the line with a soft gradient like the Stocks previews.
+let _sparkGrad=0;
+function Sparkline({history,w=88,h=22,baseline=false,fill=false}){
+  const gid=React.useRef("scspark"+(++_sparkGrad)).current;
   const pts=(history||[]).filter(p=>p&&typeof p.r==="number").slice(-15);
   if(pts.length<2) return <svg width={w} height={h} aria-hidden="true"/>;
   const rs=pts.map(p=>p.r), lo=Math.min(...rs), hi=Math.max(...rs), span=Math.max(1,hi-lo);
@@ -80,8 +86,21 @@ function Sparkline({history,w=88,h=22}){
   const up=rs[rs.length-1]>=rs[0];
   const col=up?"#2e9e5b":"#c0392b";
   const last=coords[coords.length-1];
+  const baseY=coords[0][1];
   return(
     <svg width={w} height={h} style={{display:"block"}} aria-hidden="true">
+      {fill&&(
+        <>
+          <defs>
+            <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={col} stopOpacity=".28"/>
+              <stop offset="100%" stopColor={col} stopOpacity="0"/>
+            </linearGradient>
+          </defs>
+          <polygon points={`0,${h} ${d} ${w},${h}`} fill={`url(#${gid})`}/>
+        </>
+      )}
+      {baseline&&<line x1="0" y1={baseY} x2={w} y2={baseY} stroke={col} strokeOpacity=".55" strokeWidth="1" strokeDasharray="2.5 2.5"/>}
       <polyline points={d} fill="none" stroke={col} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
       <circle cx={last[0]} cy={last[1]} r="1.9" fill={col}/>
     </svg>
@@ -97,6 +116,180 @@ function DeltaChip({d,size=12}){
     <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:size,fontWeight:800,color:col,fontVariantNumeric:"tabular-nums"}}>
       <Ic size={size+1}/>{fmtDelta(d)}
     </span>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Stocks-style watchlist pieces — Apple Stocks structure in AthLink's light
+   liquid-glass skin: ticker rows (name / baseline sparkline / rating + delta
+   chip) on the left, a detail pane (big rating, range tabs, gradient area
+   chart with hover scrub, stats grid, recent results as "news") on the right.
+   ════════════════════════════════════════════════════════════════════════ */
+
+// Chart ranges are anchored on the DATASET's latest result (dk), consistent
+// with the rest of the portal's "last N days of the dataset" convention.
+const CHART_RANGES=[["1m","1M",1],["3m","3M",3],["6m","6M",6],["ytd","YTD",0],["1y","1Y",12],["2y","2Y",24],["all","ALL",Infinity]];
+function dkMonthsBack(latestDk,months){
+  const y=+latestDk.slice(0,4),mo=+latestDk.slice(4,6)-1,d=+latestDk.slice(6,8);
+  const t=new Date(Date.UTC(y,mo,d)); t.setUTCMonth(t.getUTCMonth()-months);
+  return `${t.getUTCFullYear()}${String(t.getUTCMonth()+1).padStart(2,"0")}${String(t.getUTCDate()).padStart(2,"0")}`;
+}
+function filterHistory(history,rangeKey){
+  const h=(history||[]).filter(p=>p&&typeof p.r==="number"&&p.dk);
+  if(h.length<2) return h;
+  const latest=String(h[h.length-1].dk);
+  const def=CHART_RANGES.find(x=>x[0]===rangeKey);
+  let cut="";
+  if(def&&def[2]!==Infinity) cut=rangeKey==="ytd"?latest.slice(0,4)+"0101":dkMonthsBack(latest,def[2]);
+  const out=h.filter(p=>!cut||String(p.dk)>=cut);
+  return out.length>=2?out:h.slice(-2);   // Stocks always draws something
+}
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtDk=(dk,long)=>long?`${MONTHS[+String(dk).slice(4,6)-1]} ${String(dk).slice(2,4)}`:`${+String(dk).slice(6,8)} ${MONTHS[+String(dk).slice(4,6)-1]}`;
+
+// Rounded solid delta chip, Stocks-style (green up / red down / grey flat).
+function RatingChip({d,size="sm"}){
+  const flat=d==null||Math.abs(d)<0.5;
+  const bg=flat?"#9aa3ad":d>0?"#2e9e5b":"#c0392b";
+  const label=d==null?"—":flat?"±0":`${d>0?"+":"−"}${Math.abs(Math.round(d))}`;
+  return <span className={"sk-chip"+(size==="lg"?" lg":"")} style={{background:bg}}>{label}</span>;
+}
+
+/* The big detail chart: gradient area, dashed range-start reference line,
+   horizontal gridlines with right-side labels, x date labels, and a hover
+   scrub (crosshair + dot + floating "rating · event · date" readout). Width
+   tracks the container via ResizeObserver so text stays crisp. */
+let _skGrad=0;
+function StocksChart({points,h=300}){
+  const gid=React.useRef("skchart"+(++_skGrad)).current;
+  const wrapRef=React.useRef(null);
+  const [w,setW]=React.useState(680);
+  const [hov,setHov]=React.useState(null);
+  React.useEffect(()=>{
+    const el=wrapRef.current; if(!el||typeof ResizeObserver==="undefined") return;
+    const ro=new ResizeObserver(es=>{const cw=es[0]?.contentRect?.width;if(cw>60)setW(cw);});
+    ro.observe(el); return()=>ro.disconnect();
+  },[]);
+  const pts=points||[];
+  if(pts.length<2) return(
+    <div ref={wrapRef} style={{height:h,display:"grid",placeItems:"center",color:"var(--mut)",fontSize:13}}>
+      Not enough rated results in this range.
+    </div>
+  );
+  const padL=6,padR=52,padT=12,padB=26;
+  const iw=Math.max(60,w-padL-padR), ih=h-padT-padB;
+  const rs=pts.map(p=>p.r);
+  const base=pts[0].r;
+  let lo=Math.min(...rs),hi=Math.max(...rs);
+  const span0=Math.max(1,hi-lo); lo-=span0*0.1; hi+=span0*0.1;
+  const span=hi-lo;
+  const dayN=dk=>{const s=String(dk);return Date.UTC(+s.slice(0,4),+s.slice(4,6)-1,+s.slice(6,8))/86400000;};
+  const x0=dayN(pts[0].dk), x1=Math.max(x0+1,dayN(pts[pts.length-1].dk));
+  const X=p=>padL+((dayN(p.dk)-x0)/(x1-x0))*iw;
+  const Y=r=>padT+ih-((r-lo)/span)*ih;
+  const up=rs[rs.length-1]>=base;
+  const col=up?"#2e9e5b":"#c0392b";
+  const line=pts.map(p=>`${X(p).toFixed(1)},${Y(p.r).toFixed(1)}`).join(" ");
+  const area=`${X(pts[0]).toFixed(1)},${(padT+ih).toFixed(1)} ${line} ${X(pts[pts.length-1]).toFixed(1)},${(padT+ih).toFixed(1)}`;
+  const yTicks=[0.12,0.4,0.68,0.96].map(f=>lo+span*f);
+  const long=(x1-x0)>200;
+  const nLab=Math.min(5,pts.length);
+  const labIdx=[...new Set(Array.from({length:nLab},(_,i)=>Math.round(i*(pts.length-1)/Math.max(1,nLab-1))))];
+  const onMove=e=>{
+    const r=e.currentTarget.getBoundingClientRect();
+    const mx=e.clientX-r.left;
+    let best=0,bd=1e9;
+    pts.forEach((p,i)=>{const d=Math.abs(X(p)-mx);if(d<bd){bd=d;best=i;}});
+    setHov(best);
+  };
+  const hp=hov!=null?pts[hov]:null;
+  return(
+    <div ref={wrapRef} style={{position:"relative"}}>
+      <svg width={w} height={h} style={{display:"block"}} onMouseMove={onMove} onMouseLeave={()=>setHov(null)}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={col} stopOpacity=".30"/>
+            <stop offset="100%" stopColor={col} stopOpacity="0"/>
+          </linearGradient>
+        </defs>
+        {yTicks.map((t,i)=>(
+          <g key={i}>
+            <line x1={padL} y1={Y(t)} x2={padL+iw} y2={Y(t)} stroke="var(--line)" strokeWidth="1"/>
+            <text x={padL+iw+8} y={Y(t)+4} fontSize="11" fill="var(--mut)" fontFamily="'Barlow',sans-serif" style={{fontVariantNumeric:"tabular-nums"}}>{Math.round(t)}</text>
+          </g>
+        ))}
+        <line x1={padL} y1={Y(base)} x2={padL+iw} y2={Y(base)} stroke={col} strokeOpacity=".5" strokeWidth="1" strokeDasharray="3 3.5"/>
+        <polygon points={area} fill={`url(#${gid})`}/>
+        <polyline points={line} fill="none" stroke={col} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+        {labIdx.map(i=>(
+          <text key={i} x={Math.min(padL+iw-14,Math.max(padL+6,X(pts[i])))} y={h-8} fontSize="11" fill="var(--mut)" textAnchor="middle" fontFamily="'Barlow',sans-serif">{fmtDk(pts[i].dk,long)}</text>
+        ))}
+        {hp&&(
+          <g>
+            <line x1={X(hp)} y1={padT} x2={X(hp)} y2={padT+ih} stroke="var(--mut)" strokeOpacity=".55" strokeWidth="1"/>
+            <circle cx={X(hp)} cy={Y(hp.r)} r="4" fill={col} stroke="#fff" strokeWidth="1.5"/>
+          </g>
+        )}
+      </svg>
+      {hp&&(
+        <div className="sk-scrub" style={{left:Math.min(Math.max(X(hp)-90,0),Math.max(0,w-190))}}>
+          <b style={{fontVariantNumeric:"tabular-nums"}}>{Math.round(hp.r)}</b>
+          <span>{hp.evName||"Rated event"}</span>
+          <span style={{color:"var(--mut)"}}>{rankOfFleet(hp.rank,hp.fleet)} · {fmtDk(hp.dk)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One .ics download so "Add to Calendar" works everywhere without integration.
+function downloadIcs(evName,dk){
+  const d=String(dk).slice(0,8);
+  const ics=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//AthLink//Scout//EN","BEGIN:VEVENT",
+    `UID:${d}-${Math.random().toString(36).slice(2)}@athlink.win`,`DTSTAMP:${d}T000000Z`,
+    `DTSTART;VALUE=DATE:${d}`,`SUMMARY:${String(evName||"Regatta").replace(/[\n,;]/g," ")}`,
+    "END:VEVENT","END:VCALENDAR"].join("\r\n");
+  const url=URL.createObjectURL(new Blob([ics],{type:"text/calendar"}));
+  const a=document.createElement("a");
+  a.href=url; a.download=String(evName||"event").replace(/[^\w]+/g,"-").slice(0,60)+".ics";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),4000);
+}
+
+/* One watchlist row — Stocks list anatomy: bold name + muted class/nat line,
+   baseline sparkline centre, rating over a solid delta chip right. */
+function WatchRow({clip,events,ratings,selected,onSelect,onRemove,compareMode,cmpSelected,cmpDisabled,onToggleCmp}){
+  const name=clip.athlete_key||clip.title||"";
+  const savedDisp=clip.snapshot?.athlete||clip.title||"";
+  const spine=React.useMemo(()=>athleteIndex(events).get(canonName(name))||[],[events,name]);
+  const face=React.useMemo(()=>athleteFace(spine),[spine]);
+  const m=React.useMemo(()=>metricsForAthlete(name,events,ratings),[name,events,ratings]);
+  const rec=ratings&&ratings.get?ratings.get(canonName(name)):null;
+  const disp=face.disp||savedDisp||name;
+  const sub=[face.classes.slice(0,2).map(c=>nuggetFor(c,null).label).join(" · "),face.nat].filter(Boolean).join(" · ");
+  const cmpKey=clip.athlete_key||clip.title||"";
+  const click=()=>{ if(compareMode){ if(!cmpDisabled||cmpSelected) onToggleCmp(cmpKey); } else onSelect(name); };
+  return(
+    <div className={"sk-row"+(selected&&!compareMode?" on":"")+(compareMode&&cmpSelected?" cmp":"")} onClick={click}>
+      {compareMode&&(
+        <span className="sk-cbx" style={{background:cmpSelected?"var(--accent)":"#fff",borderColor:cmpSelected?"var(--accent)":"var(--line)",opacity:(cmpDisabled&&!cmpSelected)?.4:1}}>
+          {cmpSelected&&<Check size={11} color="#fff"/>}
+        </span>
+      )}
+      <div className="sk-row-id">
+        <div className="sk-row-name">{disp}{face.nat&&<span style={{marginLeft:6,fontWeight:400}}>{iocFlag(face.nat)}</span>}</div>
+        <div className="sk-row-sub">{sub||"—"}</div>
+      </div>
+      <div className="sk-row-spark"><Sparkline history={rec?.history} w={74} h={28} baseline fill/></div>
+      <div className="sk-row-px">
+        <div className="sk-row-price">{fmtR(m?.ratingNow)}</div>
+        <RatingChip d={m?.delta30}/>
+      </div>
+      {!compareMode&&(
+        <button type="button" className="sk-row-x" title="Remove from watchlist"
+          onClick={e=>{e.stopPropagation();onRemove(clip);}}><X size={12}/></button>
+      )}
+    </div>
   );
 }
 
@@ -515,13 +708,49 @@ const METRIC_HINTS={
    ════════════════════════════════════════════════════════════════════════ */
 const RUBRIC=[["starts","Starts"],["speed","Speed"],["handling","Boat handling"],["tactics","Tactics"],["attitude","Attitude"]];
 
-function DetailPanel({owner,events,ratings,name,notes,clips,onClose,onPick,onNotesChanged,aiCache,setAiCache}){
+function StocksDetail({owner,events,ratings,name,notes,clips,onPick,onOpenEvent,onNotesChanged,aiCache,setAiCache}){
   const spine=React.useMemo(()=>athleteIndex(events).get(canonName(name))||[],[events,name]);
   const face=React.useMemo(()=>athleteFace(spine),[spine]);
   const m=React.useMemo(()=>metricsForAthlete(name,events,ratings),[name,events,ratings]);
   const rec=ratings&&ratings.get?ratings.get(canonName(name)):null;
   const myNotes=React.useMemo(()=>notes.filter(n=>canonName(n.athlete_key||"")===canonName(name)),[notes,name]);
   const [showReport,setShowReport]=React.useState(false);
+  const dispName=face.disp||name;
+
+  // Stocks anatomy: range tabs + range-scoped delta headline + share.
+  const [range,setRange]=React.useState("1y");
+  const chartPts=React.useMemo(()=>filterHistory(rec?.history,range),[rec,range]);
+  const rangeDelta=chartPts.length>=2?chartPts[chartPts.length-1].r-chartPts[0].r:null;
+  const RANGE_LABEL={"1m":"Past Month","3m":"Past 3 Months","6m":"Past 6 Months",ytd:"Year to Date","1y":"Past Year","2y":"Past 2 Years",all:"All Time"};
+  const recent=React.useMemo(()=>[...spine].sort((a,b)=>String(b.dk).localeCompare(String(a.dk))).slice(0,8),[spine]);
+  const dkDate=dk=>dk?formatDate(`${+String(dk).slice(6,8)}/${+String(dk).slice(4,6)}/${String(dk).slice(0,4)}`):"";
+  const deltaFor=s=>{const h=rec?.history?.find(p=>p.evId===s.ev.id);return h?h.delta:null;};
+
+  // "Earnings Report · Add to Calendar" → the athlete's next upcoming entry.
+  const nextRace=React.useMemo(()=>{
+    const k=canonName(name); let best=null;
+    for(const ev of (events||[])){
+      if(!ev||ev.status==="Draft"||!isUpcomingEvent(ev)) continue;
+      const inIt=(ev.entries||[]).some(e=>canonName(e.helm||"")===k||canonName(e.crew||"")===k);
+      if(!inIt) continue;
+      const dk=dateKey(ev.date)||"";
+      if(!best||String(dk)<String(best.dk)) best={evName:ev.name,evId:ev.id,dk,date:ev.date};
+    }
+    return best;
+  },[events,name]);
+
+  const [shareNote,setShareNote]=React.useState(null);
+  async function share(){
+    const url=`${window.location.origin}/${usernameForName(dispName)||""}`;
+    const text=`${dispName} on AthLink — rating ${fmtR(m?.ratingNow)} (${fmtDelta(m?.delta30)} past 30 days)`;
+    if(navigator.share){
+      try{ await navigator.share({title:`${dispName} · AthLink`,text,url}); return; }
+      catch(e){ if(e&&e.name==="AbortError") return; /* fall through to copy */ }
+    }
+    try{ await navigator.clipboard.writeText(url); setShareNote("Link copied"); }
+    catch{ setShareNote(url); }
+    setTimeout(()=>setShareNote(null),2200);
+  }
 
   // note composer state
   const [body,setBody]=React.useState("");
@@ -580,55 +809,101 @@ function DetailPanel({owner,events,ratings,name,notes,clips,onClose,onPick,onNot
   }
 
   return(
-    <div className="sc-panel sc-detail">
-      <div style={{display:"flex",alignItems:"flex-start",gap:10,padding:"14px 16px 10px",borderBottom:"1px solid var(--line)"}}>
+    <div className="sc-panel sk-detail">
+      {/* ── header: identity + share / report / watch ── */}
+      <div className="sk-head">
         <div style={{flex:1,minWidth:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-            <span className="sc-link" onClick={()=>onPick&&onPick(name)}
-              style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:20,color:"var(--ink)",lineHeight:1.1}}>{face.disp||name}</span>
-            {face.nat&&<span style={{fontSize:18,lineHeight:1}}>{iocFlag(face.nat)}</span>}
+          <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+            <span className="sc-link sk-title" onClick={()=>onPick&&onPick(name)}>{dispName}</span>
+            {face.nat&&<span style={{fontSize:20,lineHeight:1}}>{iocFlag(face.nat)}</span>}
             {face.classes.slice(0,3).map(c=>{const ng=nuggetFor(c);return <span key={c} style={{background:ng.color,color:"#fff",borderRadius:980,padding:"1px 9px",fontWeight:700,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})}
           </div>
-          <div style={{fontSize:11.5,color:"var(--mut)",marginTop:4}}>{m?`${m.events} rated events · ${m.races} races`:"Not enough results yet"}</div>
+          <div style={{fontSize:12,color:"var(--mut)",marginTop:4}}>AthLink skill rating{m?` · ${m.events} rated events · ${m.races} races`:" · not enough results yet"}</div>
         </div>
-        <button type="button" onClick={()=>setShowReport(true)} title="Open a printable scout report"
-          style={{display:"inline-flex",alignItems:"center",gap:6,padding:"5px 12px",borderRadius:980,border:0,cursor:"pointer",
-            fontWeight:700,fontSize:12.5,fontFamily:"'Barlow',sans-serif",whiteSpace:"nowrap",flex:"none",transition:".15s",
-            background:"var(--grouped)",color:"var(--navy)",boxShadow:"inset 0 0 0 .5px var(--line)"}}>
-          <FileText size={14}/>Report
-        </button>
-        <SaveButton owner={owner} events={events} kind="athlete" athleteKey={name}/>
-        <button type="button" onClick={onClose} title="Close"
-          style={{display:"grid",placeItems:"center",width:30,height:30,borderRadius:8,border:0,background:"var(--grouped)",color:"var(--mut)",cursor:"pointer",flex:"none"}}><X size={16}/></button>
+        <div className="sk-actions">
+          <button type="button" className="sk-iconbtn" title="Share" onClick={share}><Share size={15}/></button>
+          <button type="button" className="sk-iconbtn" title="Printable scout report" onClick={()=>setShowReport(true)}><FileText size={15}/></button>
+          <SaveButton owner={owner} events={events} kind="athlete" athleteKey={name} title={dispName}/>
+        </div>
       </div>
-      {showReport&&(
-        <ScoutReport name={name} face={face} m={m} rec={rec} spine={spine}
-          notes={myNotes} clips={clips} onClose={()=>setShowReport(false)}/>
+      {shareNote&&<div className="sk-sharenote">{shareNote}</div>}
+
+      {/* ── rating headline, Stocks price-line style ── */}
+      <div className="sk-pxline">
+        <span className="sk-bigpx">{fmtR(m?.ratingNow)}</span>
+        {m?.rd!=null&&<span style={{fontSize:13,color:"var(--mut)"}}>±{Math.round(m.rd)}</span>}
+        <span style={{fontSize:17,fontWeight:800,fontFamily:"'Barlow',sans-serif",fontVariantNumeric:"tabular-nums",
+          color:rangeDelta==null||Math.abs(rangeDelta)<0.5?"var(--mut)":rangeDelta>0?"#2e9e5b":"#c0392b"}}>{fmtDelta(rangeDelta)}</span>
+        <span style={{fontSize:12,color:"var(--mut)",fontWeight:600}}>{RANGE_LABEL[range]}</span>
+        <span style={{marginLeft:"auto",display:"inline-flex",gap:10,alignItems:"center",fontSize:11.5}}>
+          <span style={{color:"var(--mut)"}}>30d <DeltaChip d={m?.delta30}/></span>
+          <span style={{color:"var(--mut)"}}>90d <DeltaChip d={m?.delta90}/></span>
+          <span style={{color:"var(--mut)"}}>1y <DeltaChip d={m?.delta365}/></span>
+        </span>
+      </div>
+
+      {/* ── "Earnings Report · Add to Calendar" → next upcoming entry ── */}
+      {nextRace&&(
+        <div className="sk-upc">
+          <CalendarClock size={15} color="var(--accent)" style={{flex:"none"}}/>
+          <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            Racing next: <b className="sc-link" onClick={()=>onOpenEvent&&onOpenEvent(nextRace.evId)}>{nextRace.evName}</b>
+            {nextRace.date?` · ${formatDate(nextRace.date)}`:""}
+          </span>
+          <button type="button" className="sk-cal" onClick={()=>downloadIcs(nextRace.evName,nextRace.dk)}>
+            <CalendarPlus size={14}/>Add to Calendar
+          </button>
+        </div>
       )}
 
-      <div className="sc-detail-grid">
-        {/* LEFT — the numbers */}
-        <div style={{padding:"12px 16px",borderRight:"1px solid var(--line)"}}>
-          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--mut)",marginBottom:8}}>The numbers</div>
-          <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:10,flexWrap:"wrap"}}>
-            <span style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:26,color:"var(--navy)",fontVariantNumeric:"tabular-nums"}}>{fmtR(m?.ratingNow)}</span>
-            {m?.rd!=null&&<span style={{fontSize:12,color:"var(--mut)"}}>±{Math.round(m.rd)}</span>}
-            <span style={{display:"inline-flex",gap:10,alignItems:"center",marginLeft:"auto",fontSize:11.5}}>
-              <span style={{color:"var(--mut)"}}>30d <DeltaChip d={m?.delta30}/></span>
-              <span style={{color:"var(--mut)"}}>90d <DeltaChip d={m?.delta90}/></span>
-              <span style={{color:"var(--mut)"}}>1y <DeltaChip d={m?.delta365}/></span>
-            </span>
-          </div>
-          {METRIC_ROWS.map(row=>(
-            <StatRow key={row.key} label={row.label} hint={METRIC_HINTS[row.key]}
-              value={row.value(m)} tone={row.tone(m)}/>
-          ))}
+      {/* ── range tabs + big chart ── */}
+      <div className="sk-ranges">
+        {CHART_RANGES.map(([k,label])=>(
+          <button key={k} type="button" className={range===k?"on":""} onClick={()=>setRange(k)}>{label}</button>
+        ))}
+      </div>
+      <StocksChart points={chartPts}/>
+
+      {/* ── stats grid (Open/High/Low anatomy → the 11 results-only metrics) ── */}
+      <div className="sk-sech">The numbers</div>
+      <div className="sk-stats">
+        {METRIC_ROWS.map(row=>{
+          const tone=row.tone(m);
+          return(
+            <div key={row.key} className="sk-stat">
+              <span className="sk-stat-l">{row.label}{METRIC_HINTS[row.key]&&<InfoHint text={METRIC_HINTS[row.key]}/>}</span>
+              <span className="sk-stat-v" style={tone?{color:tone==="good"?"#2e9e5b":"#c0392b"}:undefined}>{row.value(m)}</span>
+            </div>
+          );
+        })}
+        <div className="sk-stat">
+          <span className="sk-stat-l">Evidence</span>
+          <span className="sk-stat-v">{m?`${m.events} ev · ${m.races} races`:"—"}</span>
+        </div>
+      </div>
+
+      <div className="sk-bottom">
+        {/* recent results as the "news" list */}
+        <div style={{minWidth:0}}>
+          <div className="sk-sech">Recent results</div>
+          {recent.length===0
+            ? <Muted>No rated results yet.</Muted>
+            : recent.map((s,i)=>(
+                <div key={i} className="sk-news" onClick={()=>onOpenEvent&&onOpenEvent(s.ev.id)}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div className="sk-news-t">{s.ev.name}</div>
+                    <div className="sk-news-s">{dkDate(s.dk)}{s.ev.cls?` · ${nuggetFor(s.ev.cls,s.ev.subclass).label}`:""}</div>
+                  </div>
+                  <span className="sk-news-r" style={{color:medalColor(s.rank)}}>{rankOfFleet(s.rank,s.fleet)}</span>
+                  <DeltaChip d={deltaFor(s)}/>
+                </div>
+              ))}
 
           {/* AI overview */}
-          <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid var(--line)"}}>
+          <div style={{marginTop:16,paddingTop:12,borderTop:"1px solid var(--line)"}}>
             <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
               <Sparkles size={13} color="var(--accent)"/>
-              <span style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--mut)"}}>AI overview</span>
+              <span className="sk-sech" style={{margin:0}}>AI overview</span>
             </div>
             {cached
               ? <p style={{margin:0,fontSize:12.5,lineHeight:1.6,color:"var(--ink)"}}>{cached}</p>
@@ -639,9 +914,9 @@ function DetailPanel({owner,events,ratings,name,notes,clips,onClose,onPick,onNot
           </div>
         </div>
 
-        {/* RIGHT — notes */}
-        <div style={{padding:"12px 16px",minWidth:0}}>
-          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--mut)",marginBottom:8}}>Notes</div>
+        {/* notes */}
+        <div style={{minWidth:0}}>
+          <div className="sk-sech">Notes</div>
           <div style={{background:"var(--grouped)",borderRadius:12,padding:"10px 12px",marginBottom:12}}>
             <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
               {RUBRIC.map(([k,label])=>{
@@ -694,71 +969,11 @@ function DetailPanel({owner,events,ratings,name,notes,clips,onClose,onPick,onNot
               </div>}
         </div>
       </div>
-    </div>
-  );
-}
 
-/* ══════════════════════════════════════════════════════════════════════════
-   Watchlist tab — athlete cards for kind='athlete' clips.
-   ════════════════════════════════════════════════════════════════════════ */
-function AthleteCard({owner,events,ratings,clip,note,onOpenDetail,onPick,onRemove,
-  compareMode,selected,onToggleSelect,selectDisabled}){
-  const name=clip.athlete_key||clip.title||"";
-  // Stable display name: live results casing first, then the display name frozen
-  // in the clip at save time — never the sorted-lowercase canon key if avoidable.
-  const savedDisp=clip.snapshot?.athlete||clip.title||"";
-  const spine=React.useMemo(()=>athleteIndex(events).get(canonName(name))||[],[events,name]);
-  const face=React.useMemo(()=>athleteFace(spine),[spine]);
-  const rec=ratings&&ratings.get?ratings.get(canonName(name)):null;
-  const m=React.useMemo(()=>metricsForAthlete(name,events,ratings),[name,events,ratings]);
-  const evidence=spine.length;
-
-  const clickCard=compareMode?(()=>{ if(!selectDisabled||selected) onToggleSelect(name); }):undefined;
-  return(
-    <div className={"sc-card"+(compareMode?" sc-card-sel":"")+(selected?" on":"")}
-      onClick={clickCard} style={compareMode?{cursor:(selectDisabled&&!selected)?"default":"pointer"}:undefined}>
-      {compareMode&&(
-        <span className="sc-cbx" aria-hidden="true"
-          style={{background:selected?"var(--accent)":"#fff",borderColor:selected?"var(--accent)":"var(--line)",
-            opacity:(selectDisabled&&!selected)?.4:1}}>
-          {selected&&<Check size={12} color="#fff"/>}
-        </span>
+      {showReport&&(
+        <ScoutReport name={name} face={face} m={m} rec={rec} spine={spine}
+          notes={myNotes} clips={clips} onClose={()=>setShowReport(false)}/>
       )}
-      <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
-        <div style={{flex:1,minWidth:0}}>
-          <span className={compareMode?"":"sc-link"} onClick={compareMode?undefined:(()=>onOpenDetail(name))}
-            style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:16,color:"var(--ink)",lineHeight:1.15,display:"inline-flex",alignItems:"center",gap:7}}>
-            <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{face.disp||savedDisp||name}</span>
-            {face.nat&&<span style={{fontSize:15,lineHeight:1,flex:"none"}}>{iocFlag(face.nat)}</span>}
-          </span>
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:5}}>
-            {face.classes.slice(0,3).map(c=>{const ng=nuggetFor(c);return <span key={c} style={{background:ng.color,color:"#fff",borderRadius:980,padding:"1px 8px",fontWeight:700,fontSize:10,fontFamily:"'Barlow',sans-serif"}}>{ng.label}</span>;})}
-          </div>
-        </div>
-        <button type="button" onClick={e=>{e.stopPropagation();onRemove(clip);}} title="Remove from binder"
-          style={{border:0,background:"none",color:"var(--mut)",cursor:"pointer",padding:3,flex:"none"}}
-          onMouseEnter={e=>e.currentTarget.style.color="#c0392b"} onMouseLeave={e=>e.currentTarget.style.color="var(--mut)"}><X size={15}/></button>
-      </div>
-
-      <div style={{display:"flex",alignItems:"center",gap:10,marginTop:10}}>
-        <span style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:20,color:"var(--navy)",fontVariantNumeric:"tabular-nums"}}>{fmtR(m?.ratingNow)}</span>
-        <DeltaChip d={m?.delta30}/>
-        <span style={{marginLeft:"auto"}}><Sparkline history={rec?.history}/></span>
-      </div>
-
-      {note?.body&&(
-        <div style={{marginTop:9,display:"flex",gap:6,fontSize:11.5,color:"var(--mut)",lineHeight:1.4}}>
-          <StickyNote size={12} style={{flex:"none",marginTop:1}}/>
-          <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{note.body}</span>
-        </div>
-      )}
-
-      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:11,paddingTop:9,borderTop:"1px solid var(--line)"}}>
-        <span style={{fontSize:11,color:"var(--mut)",fontWeight:600}}>{evidence} event{evidence===1?"":"s"} of evidence</span>
-        <span style={{flex:1}}/>
-        <button type="button" className="sc-minibtn" disabled={compareMode} style={compareMode?{opacity:.4,pointerEvents:"none"}:undefined} onClick={e=>{e.stopPropagation();onOpenDetail(name);}}><StickyNote size={12}/>Notes</button>
-        <button type="button" className="sc-minibtn" disabled={compareMode} style={compareMode?{opacity:.4,pointerEvents:"none"}:undefined} onClick={e=>{e.stopPropagation();onPick(name);}}><ExternalLink size={12}/>Profile</button>
-      </div>
     </div>
   );
 }
@@ -1086,6 +1301,7 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
   const [newAthBinder,setNewAthBinder]=React.useState("");
   const [newResBinder,setNewResBinder]=React.useState("");
   const [renaming,setRenaming]=React.useState(null); // {id,name,ns}
+  const [wq,setWq]=React.useState("");               // watchlist filter query
 
   const reload=React.useCallback(async()=>{
     if(!owner){ setBinders([]); setClips([]); setNotes([]); setDigestPrefs([]); setLoading(false); return; }
@@ -1144,8 +1360,23 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
     };
     return [...rows].sort((a,b)=>String(dkOf(b)).localeCompare(String(dkOf(a))));
   },[resClips,selResBinder,evById]);
-  // latest note per athlete
-  const latestNote=name=>{const k=canonName(name);return notes.find(n=>canonName(n.athlete_key||"")===k)||null;};
+  // watchlist rows surviving the filter box, and the row the detail pane shows
+  // (explicit selection if it's still visible, else the first row — the pane is
+  // always populated, Stocks-style).
+  const filteredWatch=React.useMemo(()=>{
+    const q=wq.trim().toLowerCase();
+    if(!q) return watchAthletes;
+    return watchAthletes.filter(c=>{
+      const spine=athleteIndex(events).get(canonName(c.athlete_key||c.title||""))||[];
+      const disp=(athleteFace(spine).disp||c.snapshot?.athlete||c.title||c.athlete_key||"").toLowerCase();
+      return disp.includes(q);
+    });
+  },[watchAthletes,wq,events]);
+  const selName=React.useMemo(()=>{
+    const names=filteredWatch.map(c=>c.athlete_key||c.title||"");
+    if(detailName&&names.some(n=>canonName(n)===canonName(detailName))) return detailName;
+    return names[0]||null;
+  },[filteredWatch,detailName]);
   // every watched athlete (across all binders) as canon keys — used by discovery watch state + digest
   const watchedKeys=React.useMemo(()=>new Set(athClips.map(c=>canonName(c.athlete_key||"")).filter(Boolean)),[athClips]);
 
@@ -1289,7 +1520,9 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
   );
 
   return(
-    <div className="wrap sec" style={{paddingTop:16}}>
+    // wider than the default wrap: the Stocks-style split view needs room for
+    // the chart pane next to the ticker list.
+    <div className="wrap sec" style={{paddingTop:16,maxWidth:1500}}>
       <style>{SCOUT_CSS}</style>
 
       {/* page header */}
@@ -1325,44 +1558,57 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
           {loading
             ? <div className="sc-panel" style={{padding:"40px 20px",textAlign:"center",color:"var(--mut)"}}><Loader2 size={22} className="sc-spin"/><div style={{marginTop:8,fontSize:13}}>Loading your workspace…</div></div>
             : <>
-              {/* ============ WATCHLIST ============ */}
+              {/* ============ WATCHLIST — Stocks-style split view ============ */}
               {tab==="watchlist"&&(
                 <>
-                  {detailName&&(
-                    <DetailPanel owner={owner} events={events} ratings={ratings} name={detailName} notes={notes} clips={clips}
-                      onClose={()=>setDetailName(null)} onPick={onPick} onNotesChanged={refreshNotes}
-                      aiCache={aiCache} setAiCache={setAiCache}/>
-                  )}
                   {watchAthletes.length===0
                     ? <EmptyWatchlist/>
-                    : <>
-                        {/* toolbar: sort + compare */}
-                        <div className="sc-wtools">
-                          <div className="seg sc-sortseg">
-                            {[["movers","Movers"],["recent","Recent"],["az","A–Z"]].map(([id,label])=>(
-                              <button key={id} className={sortMode===id?"on":""} onClick={()=>setSortMode(id)}>{label}</button>
-                            ))}
+                    : <div className="sk-split">
+                        {/* left: ticker list */}
+                        <div className="sc-panel sk-list">
+                          <div className="sk-listhead">
+                            <div className="srch sk-search">
+                              <Search size={14} color="var(--mut)"/>
+                              <input value={wq} onChange={e=>setWq(e.target.value)} placeholder="Filter watchlist…"/>
+                            </div>
+                            <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8}}>
+                              <div className="seg sc-sortseg">
+                                {[["movers","Movers"],["recent","Recent"],["az","A–Z"]].map(([id,label])=>(
+                                  <button key={id} className={sortMode===id?"on":""} onClick={()=>setSortMode(id)}>{label}</button>
+                                ))}
+                              </div>
+                              <span style={{flex:1}}/>
+                              <button type="button" className={"sc-cmpbtn"+(compareMode?" on":"")}
+                                onClick={()=>{ setCompareMode(v=>!v); setCompareSel([]); }}
+                                title={compareMode?"Exit compare":"Select athletes to compare"}>
+                                <Columns3 size={13}/>{compareMode?"Done":"Compare"}
+                              </button>
+                            </div>
                           </div>
-                          <span style={{flex:1}}/>
-                          <button type="button" className={"sc-cmpbtn"+(compareMode?" on":"")}
-                            onClick={()=>{ setCompareMode(v=>!v); setCompareSel([]); }}
-                            title={compareMode?"Exit compare":"Select athletes to compare"}>
-                            <Columns3 size={13}/>{compareMode?"Done":"Compare"}
-                          </button>
+                          <div className="sk-rows">
+                            {filteredWatch.length===0&&<Muted>No matches in this folder.</Muted>}
+                            {filteredWatch.map(clip=>{
+                              const nm=clip.athlete_key||clip.title||"";
+                              return(
+                                <WatchRow key={clip.id} clip={clip} events={events} ratings={ratings}
+                                  selected={!!selName&&canonName(selName)===canonName(nm)}
+                                  onSelect={setDetailName} onRemove={removeAthlete}
+                                  compareMode={compareMode} cmpSelected={compareSel.includes(nm)}
+                                  cmpDisabled={compareSel.length>=3}
+                                  onToggleCmp={n=>setCompareSel(s=>s.includes(n)?s.filter(x=>x!==n):(s.length>=3?s:[...s,n]))}/>
+                              );
+                            })}
+                          </div>
                         </div>
-                        <div className="sc-cardgrid">
-                          {watchAthletes.map(clip=>{
-                            const nm=clip.athlete_key||clip.title||"";
-                            const sel=compareSel.includes(nm);
-                            return(
-                              <AthleteCard key={clip.id} owner={owner} events={events} ratings={ratings} clip={clip}
-                                note={latestNote(clip.athlete_key)} onOpenDetail={setDetailName} onPick={onPick} onRemove={removeAthlete}
-                                compareMode={compareMode} selected={sel} selectDisabled={compareSel.length>=3}
-                                onToggleSelect={n=>setCompareSel(s=>s.includes(n)?s.filter(x=>x!==n):(s.length>=3?s:[...s,n]))}/>
-                            );
-                          })}
+                        {/* right: Stocks-style detail pane */}
+                        <div style={{minWidth:0}}>
+                          {selName&&(
+                            <StocksDetail owner={owner} events={events} ratings={ratings} name={selName}
+                              notes={notes} clips={clips} onPick={onPick} onOpenEvent={onOpenEvent}
+                              onNotesChanged={refreshNotes} aiCache={aiCache} setAiCache={setAiCache}/>
+                          )}
                         </div>
-                      </>}
+                      </div>}
 
                   {/* floating Compare N launcher (liquid-glass) */}
                   {compareMode&&compareSel.length>=2&&(
@@ -1584,9 +1830,6 @@ const SCOUT_CSS=`
 .sc-freq button{padding:5px 14px;font-size:12px;}
 .sc-sechead{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:11px 12px;cursor:pointer;color:var(--ink);font-family:inherit;transition:.12s;border-radius:16px;}
 .sc-sechead:hover{background:rgba(10,132,255,.04);}
-.sc-cardgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:12px;}
-.sc-card{background:rgba(255,255,255,.9);border-radius:15px;padding:14px 15px;box-shadow:inset 0 0 0 .5px var(--line),0 1px 2px rgba(0,0,0,.05);transition:box-shadow .15s,transform .15s;}
-.sc-card:hover{box-shadow:inset 0 0 0 .5px rgba(10,132,255,.35),0 8px 22px -10px rgba(0,0,0,.18);transform:translateY(-1px);}
 .sc-minibtn{display:inline-flex;align-items:center;gap:4px;border:0;background:var(--grouped);color:var(--mut);border-radius:980px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;transition:.12s;font-family:'Barlow',sans-serif;}
 .sc-minibtn:hover{background:rgba(10,132,255,.14);color:var(--accent);}
 .sc-cliprow{display:flex;align-items:center;gap:9px;padding:8px 8px;border-radius:9px;transition:.12s;}
@@ -1597,21 +1840,79 @@ const SCOUT_CSS=`
 .sc-statrow:last-child{border-bottom:0;}
 .sc-link{cursor:pointer;transition:color .12s;}
 .sc-link:hover{color:var(--accent)!important;}
-.sc-detail{margin-bottom:16px;overflow:hidden;}
-.sc-detail-grid{display:grid;grid-template-columns:1fr 1fr;}
 .sc-spin{animation:sc-rot 1s linear infinite;}
 @keyframes sc-rot{to{transform:rotate(360deg);}}
 
 /* ── watchlist toolbar: sort + compare ── */
-.sc-wtools{display:flex;align-items:center;gap:10px;margin:0 0 12px;flex-wrap:wrap;}
 .sc-sortseg{background:var(--grouped);border-radius:980px;padding:2px;display:inline-flex;}
 .sc-sortseg button{padding:5px 13px;font-size:12px;}
 .sc-cmpbtn{display:inline-flex;align-items:center;gap:6px;border:0;background:var(--grouped);color:var(--mut);border-radius:980px;padding:6px 13px;font-size:12px;font-weight:700;cursor:pointer;transition:.13s;font-family:'Barlow',sans-serif;box-shadow:inset 0 0 0 .5px var(--line);}
 .sc-cmpbtn:hover{color:var(--accent);}
 .sc-cmpbtn.on{background:rgba(10,132,255,.16);color:var(--accent);box-shadow:inset 0 0 0 .5px rgba(10,132,255,.4);}
-.sc-card-sel{position:relative;}
-.sc-card-sel.on{box-shadow:inset 0 0 0 1.5px var(--accent),0 8px 22px -10px rgba(0,0,0,.18);}
-.sc-cbx{position:absolute;top:11px;right:12px;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line);display:grid;place-items:center;transition:.12s;z-index:2;}
+
+/* ── Stocks-style watchlist: split view, ticker rows, detail pane ── */
+.sk-split{display:grid;grid-template-columns:322px minmax(0,1fr);gap:14px;align-items:start;}
+.sk-list{padding:10px 8px 8px;position:sticky;top:12px;display:flex;flex-direction:column;max-height:calc(100vh - 88px);}
+.sk-listhead{padding:0 4px 8px;border-bottom:1px solid var(--line);}
+.sk-listhead>div{flex-wrap:wrap;}
+.sk-listhead .sc-sortseg button{padding:4px 9px;font-size:11.5px;}
+.sk-listhead .sc-cmpbtn{padding:5px 10px;font-size:11.5px;}
+.sk-search{display:flex;align-items:center;gap:7px;background:var(--grouped);border-radius:10px;padding:7px 10px;}
+.sk-search input{flex:1;min-width:0;border:0;background:none;outline:none;font-size:13px;color:var(--ink);font-family:inherit;}
+.sk-rows{overflow-y:auto;min-height:0;padding-top:4px;}
+.sk-row{display:flex;align-items:center;gap:9px;padding:9px 9px;border-radius:11px;cursor:pointer;transition:.12s;position:relative;}
+.sk-row+.sk-row{margin-top:1px;}
+.sk-row::after{content:"";position:absolute;left:9px;right:9px;bottom:-1px;height:1px;background:var(--line);}
+.sk-row:last-child::after{display:none;}
+.sk-row:hover{background:var(--grouped);}
+.sk-row.on{background:rgba(10,132,255,.12);box-shadow:inset 0 0 0 .5px rgba(10,132,255,.28);}
+.sk-row.on::after,.sk-row:hover::after{opacity:0;}
+.sk-row.cmp{background:rgba(10,132,255,.07);}
+.sk-cbx{width:19px;height:19px;flex:none;border-radius:6px;border:1.5px solid var(--line);display:grid;place-items:center;transition:.12s;}
+.sk-row-id{flex:1;min-width:0;}
+.sk-row-name{font-family:'Barlow',sans-serif;font-weight:800;font-size:14.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;}
+.sk-row-sub{font-size:11px;color:var(--mut);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sk-row-spark{flex:none;}
+.sk-row-px{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:none;min-width:62px;}
+.sk-row-price{font-family:'Barlow',sans-serif;font-weight:800;font-size:14.5px;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1.1;}
+.sk-chip{display:inline-block;min-width:52px;text-align:center;padding:2px 7px;border-radius:7px;color:#fff;font-weight:700;font-size:12px;font-family:'Barlow',sans-serif;font-variant-numeric:tabular-nums;line-height:1.35;}
+.sk-chip.lg{min-width:64px;font-size:14px;padding:3px 9px;}
+.sk-row-x{position:absolute;top:6px;right:6px;display:grid;place-items:center;width:18px;height:18px;border-radius:6px;border:0;background:rgba(255,255,255,.9);color:var(--mut);cursor:pointer;opacity:0;transition:.12s;box-shadow:inset 0 0 0 .5px var(--line);}
+.sk-row:hover .sk-row-x{opacity:1;}
+.sk-row-x:hover{color:#c0392b;}
+
+.sk-detail{padding:16px 18px 18px;position:relative;}
+.sk-head{display:flex;align-items:flex-start;gap:10px;}
+.sk-title{font-family:'Barlow',sans-serif;font-weight:800;font-size:28px;color:var(--ink);line-height:1.05;}
+.sk-actions{display:flex;align-items:center;gap:7px;flex:none;}
+.sk-iconbtn{display:grid;place-items:center;width:32px;height:32px;border-radius:980px;border:0;cursor:pointer;background:var(--grouped);color:var(--navy);box-shadow:inset 0 0 0 .5px var(--line);transition:.13s;}
+.sk-iconbtn:hover{color:var(--accent);background:rgba(10,132,255,.1);}
+.sk-sharenote{position:absolute;top:54px;right:18px;z-index:30;background:rgba(255,255,255,.85);backdrop-filter:blur(22px) saturate(190%);-webkit-backdrop-filter:blur(22px) saturate(190%);border-radius:10px;padding:7px 12px;font-size:12px;font-weight:700;color:var(--navy);box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 10px 26px -10px rgba(0,0,0,.25);}
+.sk-pxline{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:10px 0 4px;}
+.sk-bigpx{font-family:'Barlow',sans-serif;font-weight:800;font-size:36px;color:var(--navy);font-variant-numeric:tabular-nums;line-height:1;}
+.sk-upc{display:flex;align-items:center;gap:9px;margin:10px 0 2px;padding:9px 12px;border-radius:12px;background:rgba(10,132,255,.07);font-size:12.5px;color:var(--ink);}
+.sk-upc b{font-weight:700;}
+.sk-cal{display:inline-flex;align-items:center;gap:6px;flex:none;border:0;cursor:pointer;border-radius:980px;padding:6px 13px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;color:var(--accent);background:rgba(10,132,255,.12);transition:.13s;}
+.sk-cal:hover{background:rgba(10,132,255,.2);}
+.sk-ranges{display:inline-flex;gap:2px;background:var(--grouped);border-radius:980px;padding:3px;margin:12px 0 6px;max-width:100%;overflow-x:auto;scrollbar-width:none;}
+.sk-ranges::-webkit-scrollbar{display:none;}
+.sk-ranges button{border:0;background:none;padding:5px 13px;border-radius:980px;font-weight:700;font-size:12px;color:var(--mut);cursor:pointer;white-space:nowrap;flex:none;font-family:'Barlow',sans-serif;transition:.13s;}
+.sk-ranges button.on{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.14);}
+.sk-scrub{position:absolute;top:2px;display:flex;flex-direction:column;gap:1px;pointer-events:none;background:rgba(255,255,255,.88);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-radius:9px;padding:6px 10px;font-size:11px;color:var(--ink);box-shadow:inset 0 0 0 .5px var(--line),0 8px 20px -8px rgba(0,0,0,.2);max-width:188px;}
+.sk-scrub b{font-size:13px;}
+.sk-scrub span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sk-sech{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--mut);margin:16px 0 6px;}
+.sk-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:0 22px;}
+.sk-stat{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px;min-width:0;}
+.sk-stat-l{display:inline-flex;align-items:center;gap:5px;color:var(--mut);font-weight:600;white-space:nowrap;}
+.sk-stat-v{font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sk-bottom{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:4px;}
+.sk-news{display:flex;align-items:center;gap:10px;padding:8px 6px;border-radius:9px;cursor:pointer;transition:.12s;border-bottom:1px solid var(--line);}
+.sk-news:hover{background:var(--grouped);}
+.sk-news:last-of-type{border-bottom:0;}
+.sk-news-t{font-size:12.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sk-news-s{font-size:11px;color:var(--mut);margin-top:1px;}
+.sk-news-r{font-size:12px;font-weight:800;font-family:'Barlow',sans-serif;font-variant-numeric:tabular-nums;flex:none;}
 .sc-cmpfloat{position:sticky;bottom:18px;float:right;display:inline-flex;align-items:center;gap:7px;margin-top:8px;
   border:0;cursor:pointer;border-radius:980px;padding:11px 20px;font-size:13.5px;font-weight:800;font-family:'Barlow',sans-serif;color:#fff;
   background:linear-gradient(135deg,rgba(10,132,255,.95),rgba(10,132,255,.82));backdrop-filter:blur(18px) saturate(180%);-webkit-backdrop-filter:blur(18px) saturate(180%);
@@ -1665,11 +1966,18 @@ const SCOUT_CSS=`
 .sc-rep-empty{font-size:12.5px;color:#999;padding:2px 0 4px;}
 .sc-rep-foot{margin-top:26px;padding-top:12px;border-top:1px solid #ddd;font-size:10.5px;color:#999;text-align:center;letter-spacing:.02em;}
 
+@media(max-width:1080px){
+  .sk-stats{grid-template-columns:1fr 1fr;}
+  .sk-bottom{grid-template-columns:1fr;}
+}
 @media(max-width:860px){
   .sc-layout{grid-template-columns:1fr;}
   .sc-side{position:static;}
-  .sc-detail-grid{grid-template-columns:1fr;}
-  .sc-detail-grid>div{border-right:0!important;border-bottom:1px solid var(--line);}
+  .sk-split{grid-template-columns:1fr;}
+  .sk-list{position:static;max-height:380px;}
+  .sk-stats{grid-template-columns:1fr;}
+  .sk-title{font-size:23px;}
+  .sk-bigpx{font-size:30px;}
   .sc-rep-metrics{grid-template-columns:1fr;}
   .sc-report{padding:22px 20px 26px;}
 }
