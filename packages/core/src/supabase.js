@@ -50,9 +50,16 @@ export async function sbPatch(table, filter, body) {
   } catch (e) { console.error("Supabase PATCH network error", e); return null; }
 }
 
+// Returns the deleted rows (Prefer: return=representation), so callers can tell
+// a real delete ([row, …]) from an RLS-filtered zero-row no-op ([]) or an HTTP
+// error (null). Existing callers that ignored the old void return are unaffected.
 export async function sbDel(table, filter) {
-  if (!baseHeaders) return;
-  await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: { ...hdrs(), Prefer: "" } });
+  if (!baseHeaders) return null;
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: hdrs() });
+    if (!r.ok) { console.error("Supabase DELETE error", r.status, await r.text()); return null; }
+    const txt = await r.text(); return txt ? JSON.parse(txt) : [];
+  } catch (e) { console.error("Supabase DELETE network error", e); return null; }
 }
 
 /* ── Auth (Supabase GoTrue) ── */

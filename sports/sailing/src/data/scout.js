@@ -3,71 +3,136 @@
    result highlights, the append-only activity ledger, and digest prefs).
    Mirrors data/profiles.js: thin async wrappers over sbGet/sbPost/sbPatch/sbDel
    from @athlink/core, tolerant of failure (return []/null, never throw). Owner
-   is TEXT — auth.uid() when signed in, else a per-browser anon id (0013/0014
-   app-gated stance). All filter values are URL-encoded like the core helpers. */
+   is TEXT = auth.uid() — since 0015_role_rls_hardening scout_* writes require
+   an authenticated session and rows are owner-private, so there is NO anon
+   owner anymore: scoutOwnerId returns null when signed out and every helper
+   no-ops on a null owner. All filter values are URL-encoded like the core
+   helpers. Writes go out under the user JWT (setSbUserToken in @athlink/core). */
 
 import { sbGet, sbPost, sbPatch, sbDel, SB_URL, SB_KEY, authHeaders } from "@athlink/core";
 
 const enc = encodeURIComponent;
 
-// Owner key: auth uid when signed in, else a per-browser anon id persisted in
-// localStorage ("anon_<rand>", minted on first use). Synchronous. Falls back to
-// a volatile anon id if localStorage is unavailable (private mode / SSR).
+// Owner key: the auth uid, or null when signed out. RLS (0015) rejects writes
+// and hides rows for any other identity, so minting local anon ids would only
+// fake saves that the DB silently drops — callers must treat null as
+// "sign in first". (Legacy localStorage anon ids are ignored; their rows are
+// invisible under RLS anyway.)
 export function scoutOwnerId(auth){
-  const uid=auth?.user?.id;
-  if(uid) return uid;
-  try{
-    let id=localStorage.getItem("athlink_scout_owner");
-    if(!id){id="anon_"+Math.random().toString(36).slice(2)+Date.now().toString(36);localStorage.setItem("athlink_scout_owner",id);}
-    return id;
-  }catch{ return "anon_"+Math.random().toString(36).slice(2); }
+  return auth?.user?.id||null;
 }
 
-/* ── binders (scout_binders) — a scout's watchlist folders ─────────────────── */
+/* ── binder namespaces ─────────────────────────────────────────────────────────
+   Binders live in one of two disjoint folder namespaces:
+     'athletes' → watchlist folders (kind='athlete' clips only)
+     'results'  → saved results/events folders (result/event/upcoming/link clips)
+   Encoded as a name prefix ("res::") rather than a column so no migration is
+   needed (0015 is live; MCP write access pending — a proper scout_binders.kind
+   column can replace this convention later with a one-off backfill). The prefix
+   never reaches the UI: binderLabel() strips it, createBinder/renameBinder
+   apply it, and user input is sanitised so a typed "res::" can't cross spaces. */
+const RES_PREFIX="res::";
+export const binderNS   = b  => (b?.name||"").startsWith(RES_PREFIX)?"results":"athletes";
+export const binderLabel= b  => binderNS(b)==="results"?b.name.slice(RES_PREFIX.length):(b?.name||"");
+const nsName=(name,ns)=>{
+  let n=String(name||"").trim();
+  while(n.startsWith(RES_PREFIX)) n=n.slice(RES_PREFIX.length).trim();
+  return (ns==="results"?RES_PREFIX:"")+n;
+};
+export const DEFAULT_BINDER_NAME={athletes:"My watchlist",results:"Saved results"};
+
+/* ── binders (scout_binders) — a scout's folders, per namespace ────────────── */
 export async function fetchBinders(owner){
+  if(!owner) return [];
   return (await sbGet(`scout_binders?owner=eq.${enc(owner)}&select=id,name,sort_order,created_at&order=sort_order.asc,created_at.asc`))||[];
 }
-export async function createBinder(owner,name){
-  const r=await sbPost("scout_binders",{owner,name});
-  return r?.[0]||null;
+export async function createBinder(owner,name,ns="athletes"){
+  if(!owner||!String(name||"").trim()) return null;
+  const r=await sbPost("scout_binders",{owner,name:nsName(name,ns)});
+  const row=r?.[0]||null;
+  if(row) invalidateScoutCaches();
+  return row;
 }
-// Default binder, single-flight per owner: concurrent first-watch toggles share
-// one creation, and an existing binder is reused — the DB has no unique(owner,name),
-// so idempotency has to live here.
+// Default binder for a namespace, single-flight per owner+ns: concurrent
+// first-save toggles share one creation, and an existing binder is reused —
+// the DB has no unique(owner,name), so idempotency has to live here.
 const _defBinder={};
-export function ensureDefaultBinder(owner){
-  if(!_defBinder[owner]) _defBinder[owner]=(async()=>{
-    const ex=await fetchBinders(owner);
-    const hit=ex.find(b=>b.name==="My watchlist")||ex[0];
+export function ensureDefaultBinder(owner,ns="athletes"){
+  if(!owner) return Promise.resolve(null);
+  const key=`${owner}|${ns}`;
+  if(!_defBinder[key]) _defBinder[key]=(async()=>{
+    const ex=(await fetchBinders(owner)).filter(b=>binderNS(b)===ns);
+    const hit=ex.find(b=>binderLabel(b)===DEFAULT_BINDER_NAME[ns])||ex[0];
     if(hit) return hit;
-    const b=await createBinder(owner,"My watchlist");
-    if(!b) delete _defBinder[owner];               // failed create → allow retry
+    const b=await createBinder(owner,DEFAULT_BINDER_NAME[ns],ns);
+    if(!b) delete _defBinder[key];                 // failed create → allow retry
     return b;
-  })().catch(e=>{ delete _defBinder[owner]; throw e; });
-  return _defBinder[owner];
+  })().catch(e=>{ delete _defBinder[key]; throw e; });
+  return _defBinder[key];
 }
-export async function renameBinder(id,name){
-  return sbPatch("scout_binders",`id=eq.${enc(id)}`,{name});
+export async function renameBinder(id,name,ns="athletes"){
+  const r=await sbPatch("scout_binders",`id=eq.${enc(id)}`,{name:nsName(name,ns)});
+  if(Array.isArray(r)&&r.length) invalidateScoutCaches();
+  return r;
 }
 export async function deleteBinder(id){
-  return sbDel("scout_binders",`id=eq.${enc(id)}`);
+  const r=await sbDel("scout_binders",`id=eq.${enc(id)}`);
+  if(Array.isArray(r)&&r.length) invalidateScoutCaches();
+  return r;
 }
 
-/* ── clips (scout_clips) — polymorphic saved items inside a binder ─────────── */
+/* ── clips (scout_clips) — polymorphic saved items inside a binder ───────────
+   Writes return honestly: addClip → the created row or null; removeClip /
+   moveClip → the affected rows ([] means RLS filtered the request to zero rows,
+   i.e. a silent failure the caller must surface). Successful writes invalidate
+   the shared read caches below. */
 export async function fetchClips(owner){
+  if(!owner) return [];
   return (await sbGet(`scout_clips?owner=eq.${enc(owner)}&select=*&order=created_at.desc`))||[];
 }
 export async function addClip(owner,binderId,{kind,athlete_key,event_id,entry_id,url,title,snapshot}={}){
+  if(!owner) return null;
   const r=await sbPost("scout_clips",{owner,binder_id:binderId||null,kind,
     athlete_key:athlete_key||null,event_id:event_id||null,entry_id:entry_id||null,
     url:url||null,title:title||null,snapshot:snapshot||{}});
-  return r?.[0]||null;
+  const row=r?.[0]||null;
+  if(row) invalidateScoutCaches();
+  return row;
 }
 export async function removeClip(id){
-  return sbDel("scout_clips",`id=eq.${enc(id)}`);
+  const r=await sbDel("scout_clips",`id=eq.${enc(id)}`);
+  if(Array.isArray(r)&&r.length) invalidateScoutCaches();
+  return r;
 }
 export async function moveClip(id,binderId){
-  return sbPatch("scout_clips",`id=eq.${enc(id)}`,{binder_id:binderId||null});
+  const r=await sbPatch("scout_clips",`id=eq.${enc(id)}`,{binder_id:binderId||null});
+  if(Array.isArray(r)&&r.length) invalidateScoutCaches();
+  return r;
+}
+
+/* ── shared read caches ────────────────────────────────────────────────────────
+   Every SaveButton on a page hydrates its binders + "is this saved?" state; a
+   100-row results table must not fire 200 fetches. These share one in-flight
+   promise per owner (short TTL), invalidated by any successful scout write, so
+   fill states stay truthful without per-button network cost. */
+const TTL=15000;
+let _clipsCache={owner:null,promise:null,at:0};
+let _bindersCache={owner:null,promise:null,at:0};
+export function fetchClipsShared(owner){
+  if(!owner) return Promise.resolve([]);
+  if(_clipsCache.owner===owner&&_clipsCache.promise&&Date.now()-_clipsCache.at<TTL) return _clipsCache.promise;
+  _clipsCache={owner,promise:fetchClips(owner),at:Date.now()};
+  return _clipsCache.promise;
+}
+export function fetchBindersShared(owner){
+  if(!owner) return Promise.resolve([]);
+  if(_bindersCache.owner===owner&&_bindersCache.promise&&Date.now()-_bindersCache.at<TTL) return _bindersCache.promise;
+  _bindersCache={owner,promise:fetchBinders(owner),at:Date.now()};
+  return _bindersCache.promise;
+}
+export function invalidateScoutCaches(){
+  _clipsCache={owner:null,promise:null,at:0};
+  _bindersCache={owner:null,promise:null,at:0};
 }
 
 /* ── notes (scout_notes) — scouting observations + rubric scores ──────────── */
