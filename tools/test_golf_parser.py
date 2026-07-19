@@ -54,8 +54,14 @@ def test_interpret_grid_missed_cut():
     r = gp.interpret_golf_grid(rows, "")
     check("cut rounds", r["rounds"], 4)
     ben = r["entries"][1]
-    check("cut code present", ben["race_codes"][2], "MC")
-    check("cut races len", len(ben["races"]), 2)             # only the two played rounds carry a value
+    # races[] and race_codes[] MUST stay parallel (same length). The MC marker is
+    # stored IN races[] (sailing-consistent: races may hold a status string, as it
+    # holds "DNF"/"DNS" in sailing); the code lane stays None. The trailing blank
+    # round (post-cut, not played) is trimmed from BOTH arrays.
+    check("cut arrays parallel", len(ben["races"]), len(ben["race_codes"]))
+    check("cut races len", len(ben["races"]), 3)             # R1, R2, MC — R4 (blank, post-cut) trimmed
+    check("cut marker in races", ben["races"][2], "MC")
+    check("cut codes clean", ben["race_codes"], [None, None, None])
 
 if __name__ == "__main__":
     for fn in list(globals()):

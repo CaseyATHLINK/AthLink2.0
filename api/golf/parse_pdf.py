@@ -101,14 +101,23 @@ def interpret_golf_grid(rows, title_text: str = ""):
         name = clean_name(r[player_i]) if player_i < len(r) else ""
         if not name:
             continue
+        # Build races[] and race_codes[] as PARALLEL arrays — one element per round,
+        # same index = same round. Sailing convention: a pure status round (MC/WD/DQ)
+        # stores its marker string IN races[] (just as sailing stores "DNF"/"DNS"),
+        # with the code lane None; a numeric round stores the number and any annotation
+        # in the code lane. A blank round gets a None placeholder so positions never
+        # shift. Trailing blank rounds (post-cut / not played) are trimmed from both.
         races, codes = [], []
         for i in round_idxs:
             v, code = parse_round_cell(r[i] if i < len(r) else "")
             if v is not None:
-                races.append(v); codes.append(code)
+                races.append(v); codes.append(code)          # numeric (code annotates it, usually None)
             elif code is not None:
-                # status stands in place of a score: keep it, no numeric value
-                codes.append(code)
+                races.append(code); codes.append(None)        # status marker lives in races[]
+            else:
+                races.append(None); codes.append(None)        # blank placeholder keeps arrays parallel
+        while races and races[-1] is None and codes[-1] is None:
+            races.pop(); codes.pop()                           # trim trailing not-played rounds
         rank = clean_int(r[pos_i]) if (pos_i is not None and pos_i < len(r)) else None
         net = clean_int(r[total_i]) if (total_i is not None and total_i < len(r)) else None
         entries.append({
