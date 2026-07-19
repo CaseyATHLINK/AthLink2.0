@@ -252,3 +252,31 @@ def parse_bytes(fb: bytes) -> dict:
     res = extractor(fb)
     res["detected_format"] = {"family": family, "input_type": itype, "confidence": conf}
     return res
+
+# ── Vercel HTTP handler ──────────────────────────────────────────────────────
+from http.server import BaseHTTPRequestHandler
+
+class handler(BaseHTTPRequestHandler):
+    def _send(self, code, obj):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(n) if n else b""
+            ctype = (self.headers.get("Content-Type") or "").lower()
+            if "application/json" in ctype:
+                # {url} form is a follow-on concern; for now report it clearly.
+                self._send(400, {"ok": False, "error": "Send the file as an octet-stream body."})
+                return
+            res = parse_bytes(raw)
+            self._send(200, res)
+        except ValueError as e:
+            self._send(200, {"ok": False, "error": str(e)})
+        except Exception as e:  # never 500 the client
+            self._send(200, {"ok": False, "error": f"Golf parser failed: {e}"})
