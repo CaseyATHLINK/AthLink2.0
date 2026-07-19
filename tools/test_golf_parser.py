@@ -63,6 +63,22 @@ def test_interpret_grid_missed_cut():
     check("cut marker in races", ben["races"][2], "MC")
     check("cut codes clean", ben["race_codes"], [None, None, None])
 
+def test_csv_fixture():
+    fb = open(os.path.join(FIXTURES, "mini_grid.csv"), "rb").read()
+    r = gp.parse_csv_bytes(fb)
+    check("csv n_entries", len(r["entries"]), 3)
+    check("csv rounds", r["rounds"], 2)
+    check("csv course_par", r["course_par"], 71)
+    check("csv net0", r["entries"][0]["pdf_net"], 138)
+
+def test_xlsx_fixture():
+    fb = open(os.path.join(FIXTURES, "mini_grid.xlsx"), "rb").read()
+    r = gp.parse_xlsx_bytes(fb)
+    check("xlsx n_entries", len(r["entries"]), 3)
+    check("xlsx rounds", r["rounds"], 3)
+    check("xlsx course_par", r["course_par"], 72)
+    check("xlsx detect family", gp.detect_format(fb, "")[0], "golf-grid-xlsx")
+
 if __name__ == "__main__":
     for fn in list(globals()):
         if fn.startswith("test_"):

@@ -143,7 +143,46 @@ def interpret_golf_grid(rows, title_text: str = ""):
         "notes": [f"Read {len(entries)} golf player rows over {len(round_idxs)} rounds."],
     }
 
+# ── xlsx / csv adapters ──────────────────────────────────────────────────────
+def _grid_and_title(rows):
+    """Split leading single-cell title rows (above the header) from the grid.
+    Returns (title_text, rows). Title rows carry the event name + a 'Par NN' hint."""
+    title_bits = []
+    for r in rows[:4]:
+        ne = [c for c in r if str(c).strip()]
+        if len(ne) == 1:
+            title_bits.append(str(ne[0]).strip())
+        elif ne:
+            break
+    return ("\n".join(title_bits), rows)
+
+def parse_xlsx_bytes(fb: bytes):
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(fb), read_only=True, data_only=True)
+    ws = wb.worksheets[0]
+    rows = [["" if c is None else str(c).strip() for c in row]
+            for row in ws.iter_rows(values_only=True)]
+    title_text, rows = _grid_and_title(rows)
+    return interpret_golf_grid(rows, title_text)
+
+def parse_csv_bytes(fb: bytes):
+    try:
+        text = fb.decode("utf-8")
+    except UnicodeDecodeError:
+        text = fb.decode("latin-1", errors="replace")
+    rows = [r for r in _csv.reader(io.StringIO(text)) if any((c or "").strip() for c in r)]
+    title_text, rows = _grid_and_title(rows)
+    return interpret_golf_grid(rows, title_text)
+
+# A single-sheet golf workbook is always our grid; a CSV likewise. Detection is by
+# input_type (there is no vendor stamp to sniff), so the signature just returns True.
 FORMAT_REGISTRY = []  # filled in Tasks 5-6: list of {"family","input_types","detect","extractor"}
+FORMAT_REGISTRY.extend([
+    {"family": "golf-grid-xlsx", "input_types": ["xlsx"],
+     "detect": lambda fb, low: True, "extractor": parse_xlsx_bytes},
+    {"family": "golf-grid-csv",  "input_types": ["csv"],
+     "detect": lambda fb, low: True, "extractor": parse_csv_bytes},
+])
 
 def detect_format(file_bytes: bytes, full_text_lower: str):
     """(family, input_type, confidence). Never raises. input_type is vision-free."""
