@@ -1,8 +1,9 @@
 /* Golf sport manifest.
-   Golf is a verbatim clone of the full sailing app (see sports/sailing) —
-   src/App.jsx is the Portal as-is; it carries its own chrome/theme, so it
-   renders standalone inside the shell. Relabel pass (sailing → golf wording)
-   happens inside src/App.jsx only. */
+   Golf mirrors sailing's decomposed structure (src/{util,data,views}/ + App.jsx) —
+   it is a relabeled clone of the sailing modules. App.jsx is the Portal as-is; it
+   carries its own chrome/theme, so it renders standalone inside the shell. The
+   sailing→golf relabel is display-only and lives across the copied modules.
+   See sports/sailing/src/README.md for the module map and change rules. */
 import { defineSport } from "@athlink/sport-kit";
 import { Flag } from "lucide-react";
 import App from "./src/App.jsx";
