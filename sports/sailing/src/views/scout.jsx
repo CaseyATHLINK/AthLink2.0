@@ -15,8 +15,8 @@ import React from "react";
 import ReactDOM from "react-dom";
 import { Telescope, Bookmark, BookmarkCheck, Plus, X, Trash2, Pencil, Check,
   Flame, ListChecks, CalendarClock, Sparkles, Radar, TrendingUp, TrendingDown,
-  ChevronDown, ChevronRight, StickyNote, Search, ExternalLink, FolderPlus,
-  FileText, Printer, Columns3, ArrowUpDown, Share, CalendarPlus,
+  ChevronDown, ChevronRight, Search, ExternalLink, FolderPlus,
+  FileText, Printer, Columns3, Share, CalendarPlus,
   LoaderCircle as Loader2 } from "lucide-react";
 import { canonName } from "../util/name.js";
 import { dateKey, formatDate } from "../util/date.js";
@@ -31,11 +31,10 @@ import {
   scoutOwnerId, fetchBinders, createBinder, ensureDefaultBinder, renameBinder, deleteBinder,
   fetchClips, addClip, removeClip, moveClip,
   fetchBindersShared, fetchClipsShared, binderNS, binderLabel, DEFAULT_BINDER_NAME,
-  fetchNotes, addNote, updateNote, deleteNote,
   logActivity, fetchDigestPrefs, upsertDigestPref,
 } from "../data/scout.js";
 import {
-  athleteIndex, metricsForAthlete, onFire, streaks, radar, beatForecast, digestFor,
+  athleteIndex, metricsForAthlete, universalMetrics, validDk, onFire, streaks, radar, beatForecast, digestFor,
 } from "../data/scoutMetrics.js";
 
 /* ── tiny formatting helpers ─────────────────────────────────────────────── */
@@ -270,7 +269,10 @@ function WatchRow({clip,events,ratings,selected,onSelect,onRemove,compareMode,cm
   const cmpKey=clip.athlete_key||clip.title||"";
   const click=()=>{ if(compareMode){ if(!cmpDisabled||cmpSelected) onToggleCmp(cmpKey); } else onSelect(name); };
   return(
-    <div className={"sk-row"+(selected&&!compareMode?" on":"")+(compareMode&&cmpSelected?" cmp":"")} onClick={click}>
+    <div className={"sk-row"+(selected&&!compareMode?" on":"")+(compareMode&&cmpSelected?" cmp":"")} onClick={click}
+      draggable={!compareMode}
+      onDragStart={e=>{ e.dataTransfer.setData("text/athlink-athlete",String(clip.id)); e.dataTransfer.effectAllowed="move"; }}
+      title={compareMode?undefined:"Drag onto a sidebar folder to file"}>
       {compareMode&&(
         <span className="sk-cbx" style={{background:cmpSelected?"var(--accent)":"#fff",borderColor:cmpSelected?"var(--accent)":"var(--line)",opacity:(cmpDisabled&&!cmpSelected)?.4:1}}>
           {cmpSelected&&<Check size={11} color="#fff"/>}
@@ -372,7 +374,10 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
   },[pop,err]);
   React.useEffect(()=>()=>{ clearTimeout(timerRef.current); clearTimeout(pressRef.current.t); },[]);
   const arm=(fn,ms)=>{ clearTimeout(timerRef.current); timerRef.current=setTimeout(fn,ms); };
-  const openToast=()=>{ setErr(null); setPop("toast"); arm(()=>setPop(p=>p==="toast"?null:p),3500); };
+  // The folder picker IS the save confirmation: it opens the same instant the
+  // button is tapped (no round-trip lag), its header flips "Saving…" → "Saved
+  // to <folder>", and it self-dismisses unless the pointer is over it.
+  const openPicker=(ms=5000)=>{ setErr(null); setPop("picker"); arm(()=>setPop(p=>p==="picker"?null:p),ms); };
   const flashErr=msg=>{ setPop(null); setErr(msg); arm(()=>setErr(null),3500); };
 
   async function doSave(){
@@ -382,7 +387,7 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
     try{
       const [def,cs]=await Promise.all([ensureDefaultBinder(owner,ns),fetchClipsShared(owner)]);
       const existing=cs.filter(isMine);
-      if(existing.length){ setClips(existing); openToast(); return; }  // saved earlier (stale button) — adopt, never duplicate
+      if(existing.length){ setClips(existing); return; }  // saved earlier (stale button) — adopt, never duplicate
       if(!def){ setClips([]); flashErr("Couldn't save — try again"); return; }
       const real=await addClip(owner,def.id,{kind,athlete_key:targetKey,event_id:eventId,entry_id:entryId,
         title:displayName||null,
@@ -390,7 +395,6 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
       if(real){
         setClips([real]);
         fetchBindersShared(owner).then(bs=>setBinders(bs));   // picker needs fresh folders
-        openToast();
         if(kind==="athlete") logActivity(owner,targetKey,"added_watchlist");
         else if(kind==="result") logActivity(owner,targetKey,"saved_result");
         onSaved&&onSaved();
@@ -419,7 +423,10 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
     if(busy) return;
     if(!owner){ onRequireAuth&&onRequireAuth(); return; }
     setBusy(true);
-    try{ if(saved) await doUnsave(); else await doSave(); }
+    try{
+      if(saved) await doUnsave();
+      else { openPicker(); await doSave(); }   // picker up BEFORE the network round-trip
+    }
     finally{ setBusy(false); }
   }
 
@@ -433,7 +440,7 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
       pressRef.current.fired=true;
       if(busy) return;
       setBusy(true);
-      try{ if(!saved) await doSave(); setPop("picker"); clearTimeout(timerRef.current); }
+      try{ openPicker(8000); if(!saved) await doSave(); }
       finally{ setBusy(false); }
     },450);
   }
@@ -447,7 +454,11 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
     setBusy(true);
     try{
       const r=await moveClip(cur.id,binderId);
-      if(Array.isArray(r)&&r.length){ setClips([{...cur,binder_id:binderId}]); openToast(); onSaved&&onSaved(); }
+      if(Array.isArray(r)&&r.length){
+        setClips([{...cur,binder_id:binderId}]);
+        arm(()=>setPop(null),1100);            // brief "Saved to <new folder>" confirm, then close
+        onSaved&&onSaved();
+      }
       else flashErr("Couldn't move — try again");
     }catch{ flashErr("Couldn't move — try again"); }
     setBusy(false);
@@ -465,17 +476,17 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
   }
 
   const popEl=(err||pop)?(
-    <div className={"sc-pop"+(err?" sc-pop-err":"")} onClick={e=>e.stopPropagation()}>
+    <div className={"sc-pop"+(err?" sc-pop-err":"")} onClick={e=>e.stopPropagation()}
+      onPointerEnter={()=>clearTimeout(timerRef.current)}
+      onPointerLeave={()=>{ if(pop==="picker") arm(()=>setPop(p=>p==="picker"?null:p),2500); }}>
       {err
         ? <div className="sc-pop-row" style={{color:"#c0392b",fontWeight:700}}>{err}</div>
-        : pop==="toast"
-        ? <div className="sc-pop-row">
-            <BookmarkCheck size={15} color="var(--accent)" style={{flex:"none"}}/>
-            <span style={{flex:1,fontSize:12.5,fontWeight:700,whiteSpace:"nowrap"}}>{curBinder?`Saved to ${binderLabel(curBinder)}`:"Saved"}</span>
-            <button type="button" className="sc-pop-link" onClick={()=>{ clearTimeout(timerRef.current); setPop("picker"); }}>Change folder</button>
-          </div>
         : <>
-            <div className="sc-pop-head">Save to folder</div>
+            <div className="sc-pop-head sc-pop-status">
+              {saved
+                ? <><BookmarkCheck size={13} color="var(--accent)" style={{flex:"none"}}/>{curBinder?`Saved to ${binderLabel(curBinder)}`:"Saving…"}</>
+                : "Save to folder"}
+            </div>
             <div className="sc-pop-list">
               {nsBinders.map(b=>{
                 const on=curBinder&&String(b.id)===String(curBinder.id);
@@ -551,10 +562,13 @@ export function SaveButton({owner,events,kind="result",athleteKey,eventId,entryI
    App.jsx, far from ScoutPortal's scoped <style> block. */
 const SAVE_CSS=`
 .sc-savewrap{position:relative;display:inline-flex;}
-.sc-savewrap .sc-pop{position:absolute;top:calc(100% + 7px);right:0;z-index:120;min-width:224px;max-width:min(268px,calc(100vw - 24px));padding:7px;
-  background:rgba(255,255,255,0.8);backdrop-filter:blur(26px) saturate(190%);-webkit-backdrop-filter:blur(26px) saturate(190%);
-  border-radius:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.75),inset 0 0 0 .5px rgba(255,255,255,.45),0 14px 38px -12px rgba(0,0,0,.3);
-  animation:sc-popin .16s ease-out both;}
+.sc-savewrap .sc-pop{position:absolute;top:calc(100% + 7px);right:0;z-index:120;min-width:230px;max-width:min(272px,calc(100vw - 24px));padding:8px;
+  background:linear-gradient(160deg,rgba(255,255,255,.86),rgba(255,255,255,.68));
+  backdrop-filter:blur(36px) saturate(210%);-webkit-backdrop-filter:blur(36px) saturate(210%);
+  border-radius:15px;
+  box-shadow:inset 0 1.5px 0 rgba(255,255,255,.9),inset 0 0 0 1px rgba(255,255,255,.5),0 4px 10px -4px rgba(10,60,120,.12),0 18px 44px -14px rgba(10,40,90,.35);
+  animation:sc-popin .18s cubic-bezier(.2,.9,.3,1.2) both;}
+.sc-pop-status{display:flex;align-items:center;gap:6px;color:var(--navy);font-size:11px;}
 .sc-savewrap-l .sc-pop{right:auto;left:0;}
 @keyframes sc-popin{from{opacity:0;transform:translateY(-4px) scale(.98);}to{opacity:1;transform:none;}}
 .sc-pop-err{min-width:0;white-space:nowrap;background:rgba(255,243,242,.92);}
@@ -703,17 +717,61 @@ const METRIC_HINTS={
   streak:"Their active run of strong finishes across consecutive events, newest-first.",
 };
 
-/* ══════════════════════════════════════════════════════════════════════════
-   Athlete detail panel — "The numbers" + notes timeline + AI overview.
-   ════════════════════════════════════════════════════════════════════════ */
-const RUBRIC=[["starts","Starts"],["speed","Speed"],["handling","Boat handling"],["tactics","Tactics"],["attitude","Attitude"]];
+/* ── universal stats grid (scout athlete card) ────────────────────────────────
+   Nine sport-agnostic metrics on the finish-percentile primitive
+   P=(N−r)/(N−1)×100 — see universalMetrics() in data/scoutMetrics.js.
+   Reading order: level (beat/top-10/podium) → now (form/consistency/season
+   best) → ceiling+volume (best finish/events-yr/starts). */
+const fmtRate=v=>v==null?"—":`${Math.round(v*100)}%`;
+const UNI_ROWS=[
+  {key:"beat", label:"Beat rate",
+    value:u=>u?.beatRate==null?"—":`Beats ${Math.round(u.beatRate)}%`,
+    tone:u=>u?.beatRate==null?undefined:u.beatRate>=75?"good":u.beatRate<40?"bad":undefined,
+    hint:"Average share of the field they finish ahead of (last 24 months of results)."},
+  {key:"top10", label:"Top-10 rate",
+    value:u=>fmtRate(u?.top10Rate),
+    tone:u=>u?.top10Rate!=null&&u.top10Rate>=0.5?"good":undefined,
+    hint:"How often they finish top-10 (top quarter in fields under 20). Last 24 months."},
+  {key:"podium", label:"Podium rate",
+    value:u=>fmtRate(u?.podiumRate),
+    tone:u=>u?.podiumRate!=null&&u.podiumRate>=0.25?"good":undefined,
+    hint:"Share of career events finished in the top 3."},
+  {key:"form", label:"Form trend",
+    value:u=>u?.formTrend==null?"—":`${u.formTrend>=0?"+":"−"}${Math.abs(Math.round(u.formTrend))} pts`,
+    tone:u=>u?.formTrend==null?undefined:u.formTrend>=3?"good":u.formTrend<=-3?"bad":undefined,
+    hint:"Average finish percentile, last 12 months vs the 12 before. Positive = climbing."},
+  {key:"consist", label:"Consistency",
+    value:u=>u?.consistency==null?"—":`${u.consistency}/100`,
+    tone:u=>u?.consistency==null?undefined:u.consistency>=75?"good":u.consistency<50?"bad":undefined,
+    hint:"How tightly their finishes cluster (100 = metronome, low = boom-or-bust). Last 24 months."},
+  {key:"sbest", label:"Season best",
+    value:u=>u?.seasonBest?rankOfFleet(u.seasonBest.rank,u.seasonBest.fleet):"—",
+    tone:u=>u?.seasonBest&&u.seasonBest.rank<=3?"good":undefined,
+    hint:"Best finish in the last 12 months — their current ceiling."},
+  {key:"pbest", label:"Best finish",
+    value:u=>u?.bestFinish?`${rankOfFleet(u.bestFinish.rank,u.bestFinish.fleet)}${u.bestFinish.year?` · ${u.bestFinish.year}`:""}`:"—",
+    tone:u=>u?.bestFinish&&u.bestFinish.rank===1?"good":undefined,
+    hint:"Career-best finish, field size included so a club win can't masquerade as a championship."},
+  {key:"epy", label:"Events / year",
+    value:u=>u?`${u.eventsPerYear}/yr`:"—",
+    tone:u=>u&&u.eventsPerYear>=8?"good":undefined,
+    hint:"Competitions in the trailing 12 months — competitive mileage, and how much data backs this card."},
+  {key:"starts", label:"Career starts",
+    value:u=>u?`${u.starts}${u.sinceYear?` · since ${u.sinceYear}`:""}`:"—",
+    hint:"Total ranked events on record."},
+];
 
-function StocksDetail({owner,events,ratings,name,notes,clips,onPick,onOpenEvent,onNotesChanged,aiCache,setAiCache}){
+/* ══════════════════════════════════════════════════════════════════════════
+   Athlete detail panel — universal stats + recent results + AI overview.
+   (Notes UI removed 2026-07-20 on Casey's call — to be re-thought later; the
+   scout_notes table + data helpers stay for when it comes back.)
+   ════════════════════════════════════════════════════════════════════════ */
+function StocksDetail({owner,events,ratings,name,clips,onPick,onOpenEvent,aiCache,setAiCache}){
   const spine=React.useMemo(()=>athleteIndex(events).get(canonName(name))||[],[events,name]);
   const face=React.useMemo(()=>athleteFace(spine),[spine]);
   const m=React.useMemo(()=>metricsForAthlete(name,events,ratings),[name,events,ratings]);
+  const uni=React.useMemo(()=>universalMetrics(name,events),[name,events]);
   const rec=ratings&&ratings.get?ratings.get(canonName(name)):null;
-  const myNotes=React.useMemo(()=>notes.filter(n=>canonName(n.athlete_key||"")===canonName(name)),[notes,name]);
   const [showReport,setShowReport]=React.useState(false);
   const dispName=face.disp||name;
 
@@ -752,37 +810,9 @@ function StocksDetail({owner,events,ratings,name,notes,clips,onPick,onOpenEvent,
     setTimeout(()=>setShareNote(null),2200);
   }
 
-  // note composer state
-  const [body,setBody]=React.useState("");
-  const [rubric,setRubric]=React.useState({});
-  const [editing,setEditing]=React.useState(null);   // note id being edited
-  const [savingNote,setSavingNote]=React.useState(false);
-
   // AI overview
   const cached=aiCache[canonName(name)];
   const [aiBusy,setAiBusy]=React.useState(false);
-
-  React.useEffect(()=>{ setBody(""); setRubric({}); setEditing(null); },[name]);
-
-  function cycle(k){ setRubric(r=>{ const v=(r[k]||0); const nv=v>=5?0:v+1; const nx={...r}; if(nv===0) delete nx[k]; else nx[k]=nv; return nx; }); }
-
-  async function saveNote(){
-    const b=body.trim(); if(!b && !Object.keys(rubric).length) return;
-    setSavingNote(true);
-    try{
-      if(editing){
-        await updateNote(editing,{body:b,rubric});
-      }else{
-        const latestEv=spine.length?spine[spine.length-1].ev.id:null;
-        await addNote(owner,{athlete_key:name,event_id:latestEv,body:b,rubric});
-      }
-      setBody(""); setRubric({}); setEditing(null);
-      onNotesChanged&&await onNotesChanged();
-    }catch{/* silent */}
-    setSavingNote(false);
-  }
-  function startEdit(n){ setEditing(n.id); setBody(n.body||""); setRubric(n.rubric||{}); }
-  async function removeNote(id){ await deleteNote(id); onNotesChanged&&await onNotesChanged(); if(editing===id){setEditing(null);setBody("");setRubric({});} }
 
   async function runAI(){
     if(aiBusy) return;
@@ -864,22 +894,20 @@ function StocksDetail({owner,events,ratings,name,notes,clips,onPick,onOpenEvent,
       </div>
       <StocksChart points={chartPts}/>
 
-      {/* ── stats grid (Open/High/Low anatomy → the 11 results-only metrics) ── */}
+      {/* ── stats grid (Open/High/Low anatomy → nine universal, sport-agnostic
+          metrics; every ratio gated on a minimum event count so a 2-start
+          athlete can't show a flattering 100%) ── */}
       <div className="sk-sech">The numbers</div>
       <div className="sk-stats">
-        {METRIC_ROWS.map(row=>{
-          const tone=row.tone(m);
+        {UNI_ROWS.map(row=>{
+          const tone=row.tone?row.tone(uni):undefined;
           return(
             <div key={row.key} className="sk-stat">
-              <span className="sk-stat-l">{row.label}{METRIC_HINTS[row.key]&&<InfoHint text={METRIC_HINTS[row.key]}/>}</span>
-              <span className="sk-stat-v" style={tone?{color:tone==="good"?"#2e9e5b":"#c0392b"}:undefined}>{row.value(m)}</span>
+              <span className="sk-stat-l">{row.label}{row.hint&&<InfoHint text={row.hint}/>}</span>
+              <span className="sk-stat-v" style={tone?{color:tone==="good"?"#2e9e5b":"#c0392b"}:undefined}>{row.value(uni)}</span>
             </div>
           );
         })}
-        <div className="sk-stat">
-          <span className="sk-stat-l">Evidence</span>
-          <span className="sk-stat-v">{m?`${m.events} ev · ${m.races} races`:"—"}</span>
-        </div>
       </div>
 
       <div className="sk-bottom">
@@ -913,66 +941,11 @@ function StocksDetail({owner,events,ratings,name,notes,clips,onPick,onOpenEvent,
             {cached&&<button type="button" onClick={runAI} disabled={aiBusy} style={{marginTop:8,border:0,background:"none",color:"var(--accent)",fontSize:11.5,fontWeight:700,cursor:"pointer",padding:0}}>{aiBusy?"Thinking…":"Regenerate"}</button>}
           </div>
         </div>
-
-        {/* notes */}
-        <div style={{minWidth:0}}>
-          <div className="sk-sech">Notes</div>
-          <div style={{background:"var(--grouped)",borderRadius:12,padding:"10px 12px",marginBottom:12}}>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
-              {RUBRIC.map(([k,label])=>{
-                const v=rubric[k]||0;
-                return(
-                  <button key={k} type="button" onClick={()=>cycle(k)} title="Tap to score 1–5"
-                    style={{display:"inline-flex",alignItems:"center",gap:5,border:0,cursor:"pointer",borderRadius:980,
-                      padding:"3px 9px",fontSize:11,fontWeight:700,fontFamily:"'Barlow',sans-serif",transition:".12s",
-                      background:v?"var(--accent)":"rgba(255,255,255,.7)",color:v?"#fff":"var(--mut)",
-                      boxShadow:v?"none":"inset 0 0 0 .5px var(--line)"}}>
-                    {label}{v?<span style={{fontVariantNumeric:"tabular-nums"}}>{v}</span>:""}
-                  </button>
-                );
-              })}
-            </div>
-            <textarea value={body} onChange={e=>setBody(e.target.value)} placeholder={editing?"Edit note…":"Add a scouting note…"}
-              rows={3} style={{width:"100%",resize:"vertical",border:"1px solid var(--line)",borderRadius:9,padding:"8px 10px",
-                fontSize:13,lineHeight:1.5,outline:"none",background:"#fff",color:"var(--ink)",fontFamily:"inherit"}}/>
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:8}}>
-              {editing&&<button type="button" className="btn ghost" style={{fontSize:12,padding:"6px 12px"}} onClick={()=>{setEditing(null);setBody("");setRubric({});}}>Cancel</button>}
-              <button type="button" className="btn cta" style={{fontSize:12.5,padding:"7px 15px"}} onClick={saveNote} disabled={savingNote||(!body.trim()&&!Object.keys(rubric).length)}>
-                {savingNote?<Loader2 size={14} className="sc-spin"/>:<Check size={14}/>}{editing?"Save":"Add note"}
-              </button>
-            </div>
-          </div>
-
-          {myNotes.length===0
-            ? <p style={{fontSize:12.5,color:"var(--mut)",lineHeight:1.5,margin:"6px 2px"}}>No notes yet. Score the rubric and jot what you see — it stays private to you.</p>
-            : <div style={{display:"flex",flexDirection:"column",gap:9}}>
-                {myNotes.map(n=>(
-                  <div key={n.id} style={{background:"#fff",border:"1px solid var(--line)",borderRadius:11,padding:"10px 12px"}}>
-                    {n.rubric&&Object.keys(n.rubric).length>0&&(
-                      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:6}}>
-                        {RUBRIC.filter(([k])=>n.rubric[k]).map(([k,label])=>(
-                          <span key={k} style={{display:"inline-flex",gap:4,alignItems:"center",background:"var(--grouped)",borderRadius:980,padding:"1px 8px",fontSize:10.5,fontWeight:700,color:"var(--navy)",fontFamily:"'Barlow',sans-serif"}}>
-                            {label}<b style={{color:"var(--accent)",fontVariantNumeric:"tabular-nums"}}>{n.rubric[k]}</b>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {n.body&&<p style={{margin:0,fontSize:13,lineHeight:1.55,color:"var(--ink)",whiteSpace:"pre-wrap"}}>{n.body}</p>}
-                    <div style={{display:"flex",alignItems:"center",gap:10,marginTop:7,fontSize:11,color:"var(--mut)"}}>
-                      <span>{n.created_at?formatDate(new Date(n.created_at).toLocaleDateString("en-GB")):""}</span>
-                      <span style={{flex:1}}/>
-                      <button type="button" onClick={()=>startEdit(n)} title="Edit" style={{border:0,background:"none",color:"var(--mut)",cursor:"pointer",display:"inline-flex",padding:2}}><Pencil size={13}/></button>
-                      <button type="button" onClick={()=>removeNote(n.id)} title="Delete" style={{border:0,background:"none",color:"#c0392b",cursor:"pointer",display:"inline-flex",padding:2}}><Trash2 size={13}/></button>
-                    </div>
-                  </div>
-                ))}
-              </div>}
-        </div>
       </div>
 
       {showReport&&(
         <ScoutReport name={name} face={face} m={m} rec={rec} spine={spine}
-          notes={myNotes} clips={clips} onClose={()=>setShowReport(false)}/>
+          clips={clips} onClose={()=>setShowReport(false)}/>
       )}
     </div>
   );
@@ -1005,7 +978,9 @@ function SavedRow({clip,events,binders,onOpenEvent,onMove,onRemove}){
   };
   const canOpen=clip.url||clip.event_id!=null;
   return(
-    <div className="sc-cliprow">
+    <div className="sc-cliprow" draggable
+      onDragStart={e=>{ e.dataTransfer.setData("text/athlink-result",String(clip.id)); e.dataTransfer.effectAllowed="move"; }}
+      title="Drag onto a sidebar folder to file">
       <span style={{fontSize:9.5,fontWeight:800,letterSpacing:".05em",textTransform:"uppercase",color:"var(--accent)",flex:"none",width:64}}>{kindLabel}</span>
       <span style={{flex:1,minWidth:0}}>
         <span className={canOpen?"sc-link":""} onClick={canOpen?open:undefined}
@@ -1052,7 +1027,7 @@ function SavedRow({clip,events,binders,onOpenEvent,onMove,onRemove}){
    the report itself so only the dossier hits the page. Monochrome-friendly:
    avoids colour dependence, uses hairlines + weight for hierarchy.
    ════════════════════════════════════════════════════════════════════════ */
-function ScoutReport({name,face,m,rec,spine,notes,clips,onClose}){
+function ScoutReport({name,face,m,rec,spine,clips,onClose}){
   React.useEffect(()=>{
     const onKey=e=>{ if(e.key==="Escape") onClose(); };
     document.addEventListener("keydown",onKey);
@@ -1141,26 +1116,6 @@ function ScoutReport({name,face,m,rec,spine,notes,clips,onClose}){
                   ))}
                 </tbody>
               </table>}
-
-          {/* scout notes */}
-          <div className="sc-rep-section-h">Scout notes</div>
-          {notes.length===0
-            ? <div className="sc-rep-empty">No notes recorded.</div>
-            : <div className="sc-rep-notes">
-                {notes.map(n=>(
-                  <div key={n.id} className="sc-rep-note">
-                    {n.rubric&&Object.keys(n.rubric).length>0&&(
-                      <div className="sc-rep-rubric">
-                        {RUBRIC.filter(([k])=>n.rubric[k]).map(([k,label])=>(
-                          <span key={k} className="sc-rep-score">{label} <b>{n.rubric[k]}</b></span>
-                        ))}
-                      </div>
-                    )}
-                    {n.body&&<div className="sc-rep-nbody">{n.body}</div>}
-                    {n.created_at&&<div className="sc-rep-ndate">{formatDate(new Date(n.created_at).toLocaleDateString("en-GB"))}</div>}
-                  </div>
-                ))}
-              </div>}
 
           {/* saved evidence */}
           <div className="sc-rep-section-h">Saved evidence</div>
@@ -1282,11 +1237,11 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
   const [bump,setBump]=React.useState(0);            // re-fetch trigger
   const [binders,setBinders]=React.useState([]);
   const [clips,setClips]=React.useState([]);
-  const [notes,setNotes]=React.useState([]);
   const [digestPrefs,setDigestPrefs]=React.useState([]);
   const [loading,setLoading]=React.useState(true);
 
-  const [tab,setTab]=React.useState("watchlist");    // watchlist | saved | discover | week
+  const [tab,setTab]=React.useState("home");         // home | discover | saved (Instagram structure)
+  const [savedSub,setSavedSub]=React.useState("athletes"); // saved tab: athletes | results
   const [selBinder,setSelBinder]=React.useState("all");       // athletes ns: "all" | binder id
   const [selResBinder,setSelResBinder]=React.useState("all"); // results ns:  "all" | binder id
   const [detailName,setDetailName]=React.useState(null);
@@ -1302,11 +1257,12 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
   const [newResBinder,setNewResBinder]=React.useState("");
   const [renaming,setRenaming]=React.useState(null); // {id,name,ns}
   const [wq,setWq]=React.useState("");               // watchlist filter query
+  const [dropTarget,setDropTarget]=React.useState(null); // folder id a dragged athlete row hovers
 
   const reload=React.useCallback(async()=>{
-    if(!owner){ setBinders([]); setClips([]); setNotes([]); setDigestPrefs([]); setLoading(false); return; }
-    const [bs,cs,ns,dp]=await Promise.all([fetchBinders(owner),fetchClips(owner),fetchNotes(owner),fetchDigestPrefs(owner)]);
-    setBinders(bs); setClips(cs); setNotes(ns); setDigestPrefs(dp); setLoading(false);
+    if(!owner){ setBinders([]); setClips([]); setDigestPrefs([]); setLoading(false); return; }
+    const [bs,cs,dp]=await Promise.all([fetchBinders(owner),fetchClips(owner),fetchDigestPrefs(owner)]);
+    setBinders(bs); setClips(cs); setDigestPrefs(dp); setLoading(false);
   },[owner]);
   // Full-screen loader only on first load / owner change; bump-triggered
   // refetches run in the background so open popovers/toasts don't get
@@ -1385,8 +1341,9 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
     const b=await createBinder(owner,nm,ns);
     if(b){
       setBinders(bs=>[...bs,b]);
-      if(ns==="results"){ setNewResBinder(""); setSelResBinder(b.id); setTab("saved"); }
-      else{ setNewAthBinder(""); setSelBinder(b.id); setTab("watchlist"); }
+      setTab("saved"); setSavedSub(ns==="results"?"results":"athletes");
+      if(ns==="results"){ setNewResBinder(""); setSelResBinder(b.id); }
+      else{ setNewAthBinder(""); setSelBinder(b.id); }
     }
   }
   async function doRename(){
@@ -1419,6 +1376,13 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
     const r=await moveClip(clip.id,binderId);
     if(!(Array.isArray(r)&&r.length)) setClips(prev);
   }
+  // Drag-and-drop filing: an athlete row dropped on a sidebar folder.
+  async function dropOnFolder(clipId,binderId){
+    setDropTarget(null);
+    const clip=clips.find(c=>String(c.id)===String(clipId));
+    if(!clip||String(clip.binder_id)===String(binderId)) return;
+    await moveSaved(clip,binderId);
+  }
 
   /* ── discovery data (memoised on events/ratings) ── */
   const [radarThreshold,setRadarThreshold]=React.useState(1400);
@@ -1443,15 +1407,19 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
   },[allNames,discQuery,discCls]);
   const classOptions=React.useMemo(()=>{const s=new Set();allNames.forEach(a=>a.classes.forEach(c=>s.add(c)));return [...s];},[allNames]);
 
-  /* ── digest / this-week ── */
+  /* ── home feed (digest + suggestions) ── */
+  const latestDk=React.useMemo(()=>{
+    // validDk: one mm/dd-formatted event date would otherwise anchor every
+    // window a year into the future and zero the whole feed.
+    let l=""; (events||[]).forEach(ev=>{const dk=dateKey(ev.date); if(dk&&validDk(dk)&&dk>l) l=dk;});
+    return l;
+  },[events]);
   const sinceDk=React.useMemo(()=>{
-    // latest dk across all events minus 7 days
-    let latest=""; (events||[]).forEach(ev=>{const dk=dateKey(ev.date); if(dk&&dk>latest) latest=dk;});
-    if(!latest) return "";
-    const y=+latest.slice(0,4),mo=+latest.slice(4,6)-1,d=+latest.slice(6,8);
+    if(!latestDk) return "";
+    const y=+latestDk.slice(0,4),mo=+latestDk.slice(4,6)-1,d=+latestDk.slice(6,8);
     const t=new Date(Date.UTC(y,mo,d)); t.setUTCDate(t.getUTCDate()-7);
     return `${t.getUTCFullYear()}${String(t.getUTCMonth()+1).padStart(2,"0")}${String(t.getUTCDate()).padStart(2,"0")}`;
-  },[events]);
+  },[latestDk]);
   const digest=React.useMemo(()=>digestFor(events,ratings,{watchedKeys,sinceDk}),[events,ratings,watchedKeys,sinceDk]);
   const digestBinderId=selBinder==="all"?null:selBinder;
   const curFreq=React.useMemo(()=>{
@@ -1462,10 +1430,29 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
     setDigestPrefs(ps=>{const rest=ps.filter(x=>String(x.binder_id||"")!==String(digestBinderId||""));return [...rest,{binder_id:digestBinderId,frequency:freq,kind:"watchlist"}];});
     await upsertDigestPref(owner,digestBinderId,{frequency:freq});
   }
+  // Suggested competitions, algorithm v1 (Instagram-feed style): recent events
+  // in the classes this scout's watched athletes sail (class affinity), that
+  // they haven't saved and that none of their athletes raced — those already
+  // surface under "Your athletes". Affinity-scored, newest first, capped at 6.
+  const suggested=React.useMemo(()=>{
+    if(!watchedKeys.size||!latestDk) return [];
+    const idx=athleteIndex(events);
+    const aff=new Map();
+    watchedKeys.forEach(k=>{(idx.get(k)||[]).forEach(s=>{const c=s.ev.cls; if(c) aff.set(c,(aff.get(c)||0)+1);});});
+    if(!aff.size) return [];
+    const savedEvIds=new Set(resClips.map(c=>String(c.event_id)));
+    const cutoff=dkMonthsBack(latestDk,12);
+    const watchedRaced=ev=>(ev.entries||[]).some(e=>watchedKeys.has(canonName(e.helm||""))||watchedKeys.has(canonName(e.crew||"")));
+    return (events||[])
+      .filter(ev=>ev&&ev.status!=="Draft"&&ev.cls&&aff.has(ev.cls))
+      .filter(ev=>{const dk=dateKey(ev.date); return dk&&dk>=cutoff;})
+      .filter(ev=>!savedEvIds.has(String(ev.id))&&!watchedRaced(ev))
+      .map(ev=>({ev,score:aff.get(ev.cls),dk:dateKey(ev.date)}))
+      .sort((a,b)=>b.score-a.score||String(b.dk).localeCompare(String(a.dk)))
+      .slice(0,6);
+  },[events,watchedKeys,resClips,latestDk]);
 
-  const refreshNotes=React.useCallback(async()=>{ const ns=await fetchNotes(owner); setNotes(ns); },[owner]);
-
-  const TABS=[["watchlist","Watchlist"],["saved","Saved results"],["discover","Discover"],["week","This week"]];
+  const TABS=[["home","Home"],["discover","Discover"],["saved","Saved"]];
 
   // Signed out (dev mode can reach the portal without a session): the workspace
   // is owner-private under RLS 0015, so there is nothing to load — prompt for
@@ -1484,11 +1471,15 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
     </div>
   );
 
-  // one sidebar group per namespace: heading, "All" row, folders, inline create.
-  const sideGroup=(nsKey,heading,allLabel,AllIcon,groupBinders,sel,setSel,count,newVal,setNewVal,tabId)=>(
+  // one sidebar group per namespace: heading, "All" row, folders, inline
+  // create. Folder rows are DROP TARGETS: dragging a watchlist athlete (or a
+  // saved result) onto one files it there. Clicking navigates to Saved with
+  // the right sub-view.
+  const sideGroup=(nsKey,heading,allLabel,AllIcon,groupBinders,sel,setSel,count,newVal,setNewVal,subKey)=>(
     <>
       <div className="sc-side-h">{heading}</div>
-      <button type="button" className={"sc-binder"+(tab===tabId&&sel==="all"?" on":"")} onClick={()=>{setSel("all");setTab(tabId);}}>
+      <button type="button" className={"sc-binder"+(tab==="saved"&&savedSub===subKey&&sel==="all"?" on":"")}
+        onClick={()=>{setSel("all");setTab("saved");setSavedSub(subKey);}}>
         <AllIcon size={14}/><span style={{flex:1,textAlign:"left"}}>{allLabel}</span><span className="sc-count">{count("all")}</span>
       </button>
       {groupBinders.map(b=>(
@@ -1501,7 +1492,12 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
                 <button type="button" onClick={doRename} style={{border:0,background:"var(--accent)",color:"#fff",borderRadius:6,width:26,display:"grid",placeItems:"center",cursor:"pointer"}}><Check size={13}/></button>
               </div>
             : <>
-                <button type="button" className={"sc-binder"+(tab===tabId&&String(sel)===String(b.id)?" on":"")} onClick={()=>{setSel(b.id);setTab(tabId);}}>
+                <button type="button"
+                  className={"sc-binder"+(tab==="saved"&&savedSub===subKey&&String(sel)===String(b.id)?" on":"")+(String(dropTarget)===String(b.id)?" drop":"")}
+                  onClick={()=>{setSel(b.id);setTab("saved");setSavedSub(subKey);}}
+                  onDragOver={e=>{ if([...e.dataTransfer.types].includes(nsKey==="athletes"?"text/athlink-athlete":"text/athlink-result")){ e.preventDefault(); e.dataTransfer.dropEffect="move"; setDropTarget(b.id); } }}
+                  onDragLeave={()=>setDropTarget(t=>String(t)===String(b.id)?null:t)}
+                  onDrop={e=>{ e.preventDefault(); const id=e.dataTransfer.getData(nsKey==="athletes"?"text/athlink-athlete":"text/athlink-result"); if(id) dropOnFolder(id,b.id); }}>
                   <Bookmark size={14}/><span style={{flex:1,textAlign:"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{binderLabel(b)}</span>
                   <span className="sc-count">{count(b.id)}</span>
                 </button>
@@ -1532,7 +1528,7 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
         </div>
         <div>
           <h2 className="page-title" style={{fontSize:26}}>Scout</h2>
-          <p className="page-sub" style={{margin:"2px 0 0"}}>Your private watchlist, notes and results-only talent radar.</p>
+          <p className="page-sub" style={{margin:"2px 0 0"}}>Your private watchlist and results-only talent radar.</p>
         </div>
       </div>
 
@@ -1540,9 +1536,9 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
         {/* ── sidebar: folders, grouped by namespace (athletes / results) ── */}
         <aside className="sc-side">
           <div className="sc-panel" style={{padding:"8px 8px 10px"}}>
-            {sideGroup("athletes","Athletes","All watched",Bookmark,athBinders,selBinder,setSelBinder,countAth,newAthBinder,setNewAthBinder,"watchlist")}
+            {sideGroup("athletes","Athletes","All watched",Bookmark,athBinders,selBinder,setSelBinder,countAth,newAthBinder,setNewAthBinder,"athletes")}
             <div style={{borderTop:"1px solid var(--line)",margin:"10px 2px 2px"}}/>
-            {sideGroup("results","Results & events","All saved",FileText,resBinders,selResBinder,setSelResBinder,countRes,newResBinder,setNewResBinder,"saved")}
+            {sideGroup("results","Results & events","All saved",FileText,resBinders,selResBinder,setSelResBinder,countRes,newResBinder,setNewResBinder,"results")}
           </div>
         </aside>
 
@@ -1558,9 +1554,83 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
           {loading
             ? <div className="sc-panel" style={{padding:"40px 20px",textAlign:"center",color:"var(--mut)"}}><Loader2 size={22} className="sc-spin"/><div style={{marginTop:8,fontSize:13}}>Loading your workspace…</div></div>
             : <>
-              {/* ============ WATCHLIST — Stocks-style split view ============ */}
-              {tab==="watchlist"&&(
+              {/* ============ HOME — Instagram-style feed ============ */}
+              {tab==="home"&&(
+                watchedKeys.size===0
+                  ? <EmptyHome onDiscover={()=>setTab("discover")}/>
+                  : <>
+                    <div className="sc-panel" style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",marginBottom:12,flexWrap:"wrap"}}>
+                      <CalendarClock size={16} color="var(--accent)"/>
+                      <span style={{fontWeight:800,fontSize:14}}>Your week</span>
+                      <span style={{flex:1,fontSize:11.5,color:"var(--mut)"}}>What your athletes did, where they race next, and competitions worth a look.</span>
+                      <div className="seg sc-freq">
+                        {[["weekly","Weekly"],["daily","Daily"]].map(([id,label])=>(
+                          <button key={id} className={curFreq===id?"on":""} onClick={()=>setFreq(id)}>{label}</button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <Section icon={Sparkles} title="Your athletes" count={digest.newResults.length} hint="Results your watched athletes posted in the last 7 days of the dataset.">
+                      {digest.newResults.length===0?<Muted>No new results from your athletes this week.</Muted>:digest.newResults.map((r,i)=>(
+                        <div key={i} className="sc-drow sc-link" onClick={()=>onOpenEvent&&onOpenEvent(r.evId)}>
+                          <span style={{fontWeight:700,fontSize:13.5,color:"var(--ink)",flex:"none",maxWidth:170,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
+                          <span style={{flex:1,minWidth:0,fontSize:12,color:"var(--mut)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.evName}</span>
+                          <span style={{fontSize:12,fontWeight:700,color:"var(--navy)",fontVariantNumeric:"tabular-nums",flex:"none"}}>{r.rank}{r.fleet?`/${r.fleet}`:""}</span>
+                          <span style={{flex:"none"}}><DeltaChip d={r.delta}/></span>
+                        </div>
+                      ))}
+                    </Section>
+
+                    <Section icon={CalendarClock} title="Racing next" count={digest.upcoming.length} hint="Upcoming entry lists your watched athletes appear on.">
+                      {digest.upcoming.length===0?<Muted>None of your athletes have an upcoming entry.</Muted>:digest.upcoming.map((r,i)=>(
+                        <div key={i} className="sc-drow sc-link" onClick={()=>onOpenEvent&&onOpenEvent(r.evId)}>
+                          <span style={{fontWeight:700,fontSize:13.5,color:"var(--ink)",flex:"none",maxWidth:170,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
+                          <span style={{flex:1,minWidth:0,fontSize:12,color:"var(--mut)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.evName}</span>
+                          <span style={{fontSize:11.5,color:"var(--mut)",flex:"none"}}>{r.dk?formatDate(`${+r.dk.slice(6,8)}/${+r.dk.slice(4,6)}/${r.dk.slice(0,4)}`):""}</span>
+                        </div>
+                      ))}
+                    </Section>
+
+                    <Section icon={Flame} title="Suggested competitions" count={suggested.length} hint="Recent events in the classes you scout, picked from who you watch. Save one to follow it.">
+                      {suggested.length===0?<Muted>Watch a few athletes and suggestions will appear here.</Muted>:suggested.map(({ev})=>{
+                        const ng=nuggetFor(ev.cls,ev.subclass);
+                        return(
+                          <div key={ev.id} className="sc-drow">
+                            <span style={{background:ng.color,color:"#fff",borderRadius:980,padding:"1px 8px",fontWeight:700,fontSize:10,fontFamily:"'Barlow',sans-serif",flex:"none"}}>{ng.label}</span>
+                            <span className="sc-link" style={{flex:1,minWidth:0,fontSize:13,fontWeight:700,color:"var(--ink)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}
+                              onClick={()=>onOpenEvent&&onOpenEvent(ev.id)}>{ev.name}</span>
+                            <span style={{fontSize:11.5,color:"var(--mut)",flex:"none"}}>{ev.date?formatDate(ev.date):""}</span>
+                            <span style={{fontSize:11.5,color:"var(--mut)",flex:"none"}}>{(ev.entries||[]).length} boats</span>
+                            {/* no bump onSaved: a refetch would recompute the feed and unmount
+                                this row (and its folder popover) mid-save — Instagram keeps the
+                                post in the feed; the exclusion applies on the next visit */}
+                            <SaveButton size="sm" owner={owner} events={events} kind={isUpcomingEvent(ev)?"upcoming":"event"} eventId={ev.id} title={ev.name}
+                              snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}} onRequireAuth={onRequireAuth}/>
+                          </div>
+                        );
+                      })}
+                    </Section>
+
+                    <Section icon={TrendingUp} title="Movers" count={digest.movers.length} hint="Your watched athletes' 30-day rating moves, biggest swing first.">
+                      {digest.movers.length===0?<Muted>No rating moves in the last month.</Muted>:digest.movers.map((r,i)=>(
+                        <DiscoverRow key={r.name} owner={owner} events={events} nat={null} name={r.name} onPick={onPick}>
+                          <DeltaChip d={r.delta30}/><span style={{fontSize:11.5,color:"var(--mut)"}}>over 30 days</span>
+                        </DiscoverRow>
+                      ))}
+                    </Section>
+                  </>
+              )}
+
+              {/* ============ SAVED — athletes (Stocks split) | competitions ============ */}
+              {tab==="saved"&&(
                 <>
+                  <div className="seg sc-sortseg" style={{marginBottom:12}}>
+                    {[["athletes",`Athletes (${countAth("all")})`],["results",`Competitions (${countRes("all")})`]].map(([id,label])=>(
+                      <button key={id} className={savedSub===id?"on":""} onClick={()=>setSavedSub(id)}>{label}</button>
+                    ))}
+                  </div>
+                  {savedSub==="athletes"&&(
+                  <>
                   {watchAthletes.length===0
                     ? <EmptyWatchlist/>
                     : <div className="sk-split">
@@ -1604,8 +1674,8 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
                         <div style={{minWidth:0}}>
                           {selName&&(
                             <StocksDetail owner={owner} events={events} ratings={ratings} name={selName}
-                              notes={notes} clips={clips} onPick={onPick} onOpenEvent={onOpenEvent}
-                              onNotesChanged={refreshNotes} aiCache={aiCache} setAiCache={setAiCache}/>
+                              clips={clips} onPick={onPick} onOpenEvent={onOpenEvent}
+                              aiCache={aiCache} setAiCache={setAiCache}/>
                           )}
                         </div>
                       </div>}
@@ -1620,22 +1690,22 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
                     <CompareModal owner={owner} events={events} ratings={ratings} names={compareSel} onPick={onPick}
                       onClose={()=>{ setShowCompare(false); }}/>
                   )}
-                </>
-              )}
+                  </>)}
 
-              {/* ============ SAVED RESULTS ============ */}
-              {tab==="saved"&&(
-                savedRows.length===0
-                  ? <EmptySaved/>
-                  : <div className="sc-panel" style={{padding:"6px 8px 8px"}}>
-                      <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--mut)",padding:"7px 8px"}}>
-                        Saved results & events{selResBinder!=="all"&&(()=>{const b=resBinders.find(x=>String(x.id)===String(selResBinder));return b?` — ${binderLabel(b)}`:"";})()}
-                      </div>
-                      {savedRows.map(clip=>(
-                        <SavedRow key={clip.id} clip={clip} events={events} binders={resBinders}
-                          onOpenEvent={onOpenEvent} onMove={moveSaved} onRemove={removeSaved}/>
-                      ))}
-                    </div>
+                  {savedSub==="results"&&(
+                    savedRows.length===0
+                      ? <EmptySaved/>
+                      : <div className="sc-panel" style={{padding:"6px 8px 8px"}}>
+                          <div style={{fontSize:10.5,fontWeight:800,letterSpacing:".07em",textTransform:"uppercase",color:"var(--mut)",padding:"7px 8px"}}>
+                            Saved results & events{selResBinder!=="all"&&(()=>{const b=resBinders.find(x=>String(x.id)===String(selResBinder));return b?` — ${binderLabel(b)}`:"";})()}
+                          </div>
+                          {savedRows.map(clip=>(
+                            <SavedRow key={clip.id} clip={clip} events={events} binders={resBinders}
+                              onOpenEvent={onOpenEvent} onMove={moveSaved} onRemove={removeSaved}/>
+                          ))}
+                        </div>
+                  )}
+                </>
               )}
 
               {/* ============ DISCOVER ============ */}
@@ -1711,56 +1781,6 @@ export default function ScoutPortal({events,auth,onPick,onOpenEvent,hostById,onR
                   </Section>
                 </>
               )}
-
-              {/* ============ THIS WEEK ============ */}
-              {tab==="week"&&(
-                <>
-                  <div className="sc-panel" style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",marginBottom:12,flexWrap:"wrap"}}>
-                    <CalendarClock size={16} color="var(--accent)"/>
-                    <span style={{fontWeight:800,fontSize:14}}>Your digest</span>
-                    <span style={{flex:1,fontSize:11.5,color:"var(--mut)"}}>Email delivery coming — this inbox always has the latest.</span>
-                    <div className="seg sc-freq">
-                      {[["weekly","Weekly"],["daily","Daily"]].map(([id,label])=>(
-                        <button key={id} className={curFreq===id?"on":""} onClick={()=>setFreq(id)}>{label}</button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {watchedKeys.size===0
-                    ? <div className="sc-panel" style={{padding:"32px 20px",textAlign:"center",color:"var(--mut)"}}>
-                        <CalendarClock size={26} style={{opacity:.5}}/>
-                        <p style={{margin:"10px 0 0",fontSize:13.5,lineHeight:1.5,maxWidth:360,marginInline:"auto"}}>Watch a few athletes and their new results, upcoming races and rating moves will land here.</p>
-                      </div>
-                    : <>
-                        <Section icon={Sparkles} title="New results" count={digest.newResults.length} hint="Results for your watched athletes that landed in the last 7 days of the dataset.">
-                          {digest.newResults.length===0?<Muted>No new results this week.</Muted>:digest.newResults.map((r,i)=>(
-                            <div key={i} className="sc-drow sc-link" onClick={()=>onOpenEvent&&onOpenEvent(r.evId)}>
-                              <span style={{fontWeight:700,fontSize:13.5,color:"var(--ink)",flex:"none",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
-                              <span style={{flex:1,minWidth:0,fontSize:12,color:"var(--mut)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.evName}</span>
-                              <span style={{fontSize:12,fontWeight:700,color:"var(--navy)",fontVariantNumeric:"tabular-nums",flex:"none"}}>{r.rank}{r.fleet?`/${r.fleet}`:""}</span>
-                              <span style={{flex:"none"}}><DeltaChip d={r.delta}/></span>
-                            </div>
-                          ))}
-                        </Section>
-                        <Section icon={CalendarClock} title="Racing next" count={digest.upcoming.length} hint="Upcoming entry lists your watched athletes appear on.">
-                          {digest.upcoming.length===0?<Muted>None of your watched athletes have an upcoming entry.</Muted>:digest.upcoming.map((r,i)=>(
-                            <div key={i} className="sc-drow sc-link" onClick={()=>onOpenEvent&&onOpenEvent(r.evId)}>
-                              <span style={{fontWeight:700,fontSize:13.5,color:"var(--ink)",flex:"none",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
-                              <span style={{flex:1,minWidth:0,fontSize:12,color:"var(--mut)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.evName}</span>
-                              <span style={{fontSize:11.5,color:"var(--mut)",flex:"none"}}>{r.dk?formatDate(`${+r.dk.slice(6,8)}/${+r.dk.slice(4,6)}/${r.dk.slice(0,4)}`):""}</span>
-                            </div>
-                          ))}
-                        </Section>
-                        <Section icon={TrendingUp} title="Movers" count={digest.movers.length} hint="Your watched athletes' 30-day rating moves, biggest swing first.">
-                          {digest.movers.length===0?<Muted>No rating moves in the last month.</Muted>:digest.movers.map((r,i)=>(
-                            <DiscoverRow key={i} owner={owner} events={events} nat={null} name={r.name} onPick={onPick} onSaved={()=>setBump(b=>b+1)}>
-                              <DeltaChip d={r.delta30}/><span style={{fontSize:11.5,color:"var(--mut)"}}>over 30 days</span>
-                            </DiscoverRow>
-                          ))}
-                        </Section>
-                      </>}
-                </>
-              )}
             </>}
         </main>
       </div>
@@ -1785,6 +1805,22 @@ function EmptySaved(){
         Tap the <Bookmark size={13} style={{verticalAlign:"-2px"}}/> bookmark on any result row or event header across AthLink
         and it lands here instantly — then file it into a folder if you want.
       </p>
+    </div>
+  );
+}
+
+function EmptyHome({onDiscover}){
+  return(
+    <div className="sc-panel" style={{padding:"40px 24px",textAlign:"center"}}>
+      <div style={{display:"grid",placeItems:"center",width:52,height:52,borderRadius:16,background:"var(--sky)",color:"var(--navy)",margin:"0 auto 14px"}}>
+        <Telescope size={26}/>
+      </div>
+      <h3 style={{fontFamily:"'Barlow',sans-serif",fontWeight:800,fontSize:18,margin:"0 0 6px",color:"var(--ink)"}}>Your feed starts with a watchlist</h3>
+      <p style={{fontSize:13.5,lineHeight:1.6,color:"var(--mut)",maxWidth:420,margin:"0 auto 18px"}}>
+        Watch a few athletes and this page becomes your weekly brief — their new results,
+        where they race next, and competitions worth a look.
+      </p>
+      <button type="button" className="btn cta" style={{fontSize:13,padding:"9px 20px"}} onClick={onDiscover}><Search size={14}/>Browse Discover</button>
     </div>
   );
 }
@@ -1818,6 +1854,9 @@ const SCOUT_CSS=`
 .sc-binder{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;border-radius:9px;padding:7px 9px;font-size:13px;font-weight:600;color:var(--mut);cursor:pointer;transition:.13s;font-family:inherit;}
 .sc-binder:hover{background:var(--grouped);color:var(--navy);}
 .sc-binder.on{background:rgba(10,132,255,.12);color:var(--navy);box-shadow:inset 0 0 0 .5px rgba(10,132,255,.28);}
+.sc-binder.drop{background:rgba(10,132,255,.2);color:var(--navy);box-shadow:inset 0 0 0 1.5px var(--accent);}
+.sk-row[draggable=true]{cursor:grab;}
+.sk-row[draggable=true]:active{cursor:grabbing;}
 .sc-binder-wrap:hover .sc-binder-actions{opacity:1;}
 .sc-binder-actions{position:absolute;right:6px;display:flex;gap:2px;opacity:0;transition:.13s;pointer-events:auto;}
 .sc-binder-actions button{border:0;background:rgba(255,255,255,.85);color:var(--mut);width:22px;height:22px;border-radius:6px;display:grid;place-items:center;cursor:pointer;transition:.12s;}
@@ -1906,7 +1945,7 @@ const SCOUT_CSS=`
 .sk-stat{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px;min-width:0;}
 .sk-stat-l{display:inline-flex;align-items:center;gap:5px;color:var(--mut);font-weight:600;white-space:nowrap;}
 .sk-stat-v{font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.sk-bottom{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:4px;}
+.sk-bottom{display:block;max-width:660px;margin-top:4px;}
 .sk-news{display:flex;align-items:center;gap:10px;padding:8px 6px;border-radius:9px;cursor:pointer;transition:.12s;border-bottom:1px solid var(--line);}
 .sk-news:hover{background:var(--grouped);}
 .sk-news:last-of-type{border-bottom:0;}
