@@ -317,10 +317,12 @@ git commit -m "feat(golf): parser scaffold — detect_format + round-cell helper
 - Consumes: `clean_name`, `clean_int`, `parse_round_cell` (Task 3).
 - Produces: `interpret_golf_grid(rows: list[list[str]], title_text: str = "") -> dict` returning:
   ```
-  {"ok": True, "name": str, "date": str, "discards": 0,
+  {"ok": True, "multi": False, "name": str, "date": str, "discards": 0,
    "scoring_format": "stroke", "rounds": int, "cut_after_round": int|None,
    "course_par": int|None, "entries": [ <entry dict> ], "notes": [str]}
   ```
+  (`"multi": False` mirrors the sailing parser response the deferred frontend
+  consumes — kept intentionally, single-result golf grids are never multi.)
   Each entry: `{helm, crew:"", sail:"—", nat:"", div:"", gender:"", category:"",
   races:[int...], race_codes:[str|None...], pdf_rank:int|None, pdf_net:int|None,
   birth_year:None, crew_birth_year:None}`.
@@ -359,8 +361,14 @@ def test_interpret_grid_missed_cut():
     r = gp.interpret_golf_grid(rows, "")
     check("cut rounds", r["rounds"], 4)
     ben = r["entries"][1]
-    check("cut code present", ben["race_codes"][2], "MC")
-    check("cut races len", len(ben["races"]), 2)             # only the two played rounds carry a value
+    # races[] and race_codes[] MUST stay parallel (same length). The MC marker is
+    # stored IN races[] (sailing-consistent: races may hold a status string, as it
+    # holds "DNF"/"DNS" in sailing); the code lane stays None. The trailing blank
+    # round (post-cut, not played) is trimmed from BOTH arrays.
+    check("cut arrays parallel", len(ben["races"]), len(ben["race_codes"]))
+    check("cut races len", len(ben["races"]), 3)             # R1, R2, MC — R4 (blank, post-cut) trimmed
+    check("cut marker in races", ben["races"][2], "MC")
+    check("cut codes clean", ben["race_codes"], [None, None, None])
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -429,14 +437,23 @@ def interpret_golf_grid(rows, title_text: str = ""):
         name = clean_name(r[player_i]) if player_i < len(r) else ""
         if not name:
             continue
+        # Build races[] and race_codes[] as PARALLEL arrays — one element per round,
+        # same index = same round. Sailing convention: a pure status round (MC/WD/DQ)
+        # stores its marker string IN races[] (just as sailing stores "DNF"/"DNS"),
+        # with the code lane None; a numeric round stores the number and any annotation
+        # in the code lane. A blank round gets a None placeholder so positions never
+        # shift. Trailing blank rounds (post-cut / not played) are trimmed from both.
         races, codes = [], []
         for i in round_idxs:
             v, code = parse_round_cell(r[i] if i < len(r) else "")
             if v is not None:
-                races.append(v); codes.append(code)
+                races.append(v); codes.append(code)          # numeric (code annotates it, usually None)
             elif code is not None:
-                # status stands in place of a score: keep it, no numeric value
-                codes.append(code)
+                races.append(code); codes.append(None)        # status marker lives in races[]
+            else:
+                races.append(None); codes.append(None)        # blank placeholder keeps arrays parallel
+        while races and races[-1] is None and codes[-1] is None:
+            races.pop(); codes.pop()                           # trim trailing not-played rounds
         rank = clean_int(r[pos_i]) if (pos_i is not None and pos_i < len(r)) else None
         net = clean_int(r[total_i]) if (total_i is not None and total_i < len(r)) else None
         entries.append({
