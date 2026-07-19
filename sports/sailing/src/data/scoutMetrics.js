@@ -518,13 +518,99 @@ export function digestFor(events,ratings,{watchedKeys,sinceDk}={}){
   return {newResults,upcoming,movers};
 }
 
+// A dk is only trusted as a window anchor when it's a REAL calendar key. One
+// event stored with a mm/dd/yyyy date ("06/28/2026") makes dateKey emit
+// "20262806" (month 28) — which string-sorts above every legitimate dk and
+// silently shoves every rolling window a year into the future, zeroing the
+// digest and the discovery feeds. Validate before comparing.
+export function validDk(dk){
+  const s=String(dk||"");
+  if(!/^\d{8}$/.test(s)) return false;
+  const m=+s.slice(4,6), d=+s.slice(6,8);
+  return m>=1&&m<=12&&d>=1&&d<=31;
+}
+
 // dataset's latest dated event key — "now" for windowed metrics (demo-data safe).
 function latestDk(events){
   let now="";
   for(const ev of (events||[])){
     if(!ev||ev.status==="Draft") continue;
     const dk=dateKey(ev.date);
-    if(dk&&dk>now) now=dk;
+    if(dk&&validDk(dk)&&dk>now) now=dk;
   }
   return now;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   universalMetrics — nine sport-agnostic stats for the scout athlete card,
+   modelled on how OWGR/ATP/motorsport/athletics profiles summarise form.
+
+   Core primitive: the FINISH PERCENTILE of one event,
+       P = (N − r) / (N − 1) × 100        (winner 100, last 0; N<2 skipped)
+   — sailing's High-Point "% of boats beaten", the only fair way to compare a
+   5th of 90 with a 2nd of 8, and computable from rank+fleet+date alone.
+
+   Window conventions (all anchored on the DATASET's latest result date, like
+   the rest of the scout portal): level = rolling 24 mo · form = 12 mo vs the
+   prior 12 mo · peak = career (+ 12-mo season best) · activity = trailing
+   12 mo. Every ratio is gated on a minimum event count (≥5, or ≥3 for form
+   sides) and returns null below it — a 2-start athlete must show "—", not a
+   flattering 100%. */
+export function universalMetrics(name,events){
+  const spine=athleteIndex(events).get(canonName(name))||[];
+  const rows=spine
+    .filter(s=>s.rank!=null&&s.fleet!=null&&s.fleet>=2&&validDk(s.dk))
+    .map(s=>({dk:String(s.dk),rank:s.rank,fleet:s.fleet,evName:s.ev.name,
+      p:(s.fleet-s.rank)/(s.fleet-1)*100}));
+  if(!rows.length) return null;
+  rows.sort((a,b)=>a.dk.localeCompare(b.dk));
+  const latest=rows[rows.length-1].dk;
+  const back=m=>{
+    const y=+latest.slice(0,4),mo=+latest.slice(4,6)-1,d=+latest.slice(6,8);
+    const t=new Date(Date.UTC(y,mo,d)); t.setUTCMonth(t.getUTCMonth()-m);
+    return `${t.getUTCFullYear()}${String(t.getUTCMonth()+1).padStart(2,"0")}${String(t.getUTCDate()).padStart(2,"0")}`;
+  };
+  const dk12=back(12), dk24=back(24);
+  const w24=rows.filter(r=>r.dk>=dk24);
+  const w12=rows.filter(r=>r.dk>=dk12);
+  const prior12=rows.filter(r=>r.dk>=dk24&&r.dk<dk12);
+  const mean=a=>a.length?a.reduce((s,r)=>s+r.p,0)/a.length:null;
+
+  // level — beat rate over 24 mo (career fallback below 5 events)
+  const levelSet=w24.length>=5?w24:rows;
+  const beatRate=levelSet.length>=3?mean(levelSet):null;
+
+  // top-10 rate, fleet-adaptive: r≤10 in fields of 20+, else the top quarter
+  const isTop10=r=>r.fleet>=20?r.rank<=10:r.rank<=Math.ceil(r.fleet/4);
+  const t10Set=w24.length>=5?w24:rows;
+  const top10Rate=t10Set.length>=5?t10Set.filter(isTop10).length/t10Set.length:null;
+
+  // podium + win rate — career
+  const podiumRate=rows.length>=5?rows.filter(r=>r.rank<=3).length/rows.length:null;
+  const winRate=rows.length>=5?rows.filter(r=>r.rank===1).length/rows.length:null;
+
+  // form — mean percentile, last 12 mo vs the 12 before (≥3 events per side)
+  const formTrend=(w12.length>=3&&prior12.length>=3)?mean(w12)-mean(prior12):null;
+
+  // consistency — 100 − 2σ(P) over 24 mo, clamped
+  let consistency=null;
+  if(w24.length>=5){
+    const mu=mean(w24);
+    const sd=Math.sqrt(w24.reduce((s,r)=>s+(r.p-mu)*(r.p-mu),0)/w24.length);
+    consistency=Math.max(0,Math.min(100,Math.round(100-2*sd)));
+  }
+
+  // peak — career best + season (12-mo) best, raw rank/fleet so field size shows
+  const bestOf=a=>a.length?a.reduce((b,r)=>r.p>b.p||(r.p===b.p&&r.fleet>b.fleet)?r:b):null;
+  const bestFinish=bestOf(rows);
+  const seasonBest=bestOf(w12);
+
+  // activity — trailing-12-mo event count + career starts
+  const eventsPerYear=w12.length;
+  const sinceYear=+rows[0].dk.slice(0,4);
+
+  return {beatRate,top10Rate,podiumRate,winRate,formTrend,consistency,
+    bestFinish:bestFinish?{rank:bestFinish.rank,fleet:bestFinish.fleet,evName:bestFinish.evName,year:+bestFinish.dk.slice(0,4)}:null,
+    seasonBest:seasonBest?{rank:seasonBest.rank,fleet:seasonBest.fleet,evName:seasonBest.evName}:null,
+    eventsPerYear,starts:rows.length,sinceYear,window24:w24.length};
 }

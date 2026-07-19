@@ -522,7 +522,7 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
   React.useEffect(()=>{if(deselectKey)setSelPt(null);},[deselectKey]);    // external deselect (popup header)
   React.useEffect(()=>{onSelectionChange&&onSelectionChange(selPt);},[selPt]); // report selection for the deselect button
   const S=w/260;                                             // scales the line / dot geometry with the chart width
-  const glowId="pgGlow"+Math.round(w), softId="pgSoft"+Math.round(w), hatchId="pgHatch"+Math.round(w);
+  const glowId="pgGrad"+Math.round(w), hatchId="pgHatch"+Math.round(w);   // gradient + forecast hatch defs
   const AX=9.5;                                              // axis label size — fixed, matching the Rating/Competition legend
   // Title removed (popup chrome already titles the view); its old 24px allowance
   // is folded into plot breathing room rather than being reclaimed as blank space.
@@ -573,15 +573,15 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
     const xOf=p=>Math.min(Math.max(xForTs(tsOf(p)),M.l),w-M.r);
     const yEnd=fc?Math.max(y1,new Date(fcEndTs).getUTCFullYear()):y1;   // last gridline year incl. forecast
     const nY=yEnd-y0+1, every=nY>12?3:nY>7?2:1;
-    // Rating line + uncertainty band (band = actual points only, never interpolated in gaps).
-    // Monotone-cubic curves pass EXACTLY through every point — no value smoothing.
+    // Rating line, Apple-Stocks skin: trend-coloured (green up / red down over
+    // the visible window) with a gradient area fading to the baseline — the
+    // blue uncertainty band is gone (±rd still shows in text; the forecast
+    // cone stays as the honest "projected" region). Monotone-cubic curves pass
+    // EXACTLY through every point — no value smoothing.
     const lineXY=pts.map(p=>[xOf(p),yOf(p.r)]);
     const linePath=monoPath(lineXY);
-    // Band: upper edge L→R, then lower edge R→L, one closed path. monoPath emits an
-    // "M…" prefix; strip the second one and prepend an "L" so both edges join cleanly.
-    const bandUpPath=monoPath(pts.map(p=>[xOf(p),yOf(p.r+p.rd)]));
-    const bandLoPath=monoPath(pts.map(p=>[xOf(p),yOf(p.r-p.rd)]).reverse());
-    const bandPath=`${bandUpPath}L${bandLoPath.slice(1)}Z`;
+    const trendCol=pts[pts.length-1].r>=pts[0].r?"#30d158":"#ff5b52";   // Stocks-dark green/red
+    const areaPath=`${linePath}L${lineXY[lineXY.length-1][0]},${M.t+plotH}L${lineXY[0][0]},${M.t+plotH}Z`;
     const overlayPath=oShow&&oShow.length?monoPath(oShow.map(p=>[xOf(p),yOf(p.r)])):null;
     // Forecast geometry: grey damped-trend line inside its widening cone, both
     // ANCHORED at the last rated event (the cone opens from today's band edge, so
@@ -602,15 +602,13 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
     body=(
       <svg width="100%" height={CH} viewBox={`0 0 ${w} ${CH}`} style={{display:"block"}}>
         <defs>
-          <filter id={glowId} x="-25%" y="-25%" width="150%" height="150%">
-            <feGaussianBlur stdDeviation={1.8*S} result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-          </filter>
-          {/* soft blur (no source merge) → the moving contrail reads as a diffuse glow */}
-          <filter id={softId} x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation={3.4*S}/>
-          </filter>
+          {/* Stocks-style gradient wash under the rating line, in the trend colour */}
+          <linearGradient id={glowId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={trendCol} stopOpacity=".32"/>
+            <stop offset="100%" stopColor={trendCol} stopOpacity="0"/>
+          </linearGradient>
           {/* grey diagonal hatch for the forecast cone — texture (not tint) is what
-              separates "projected" from the solid blue uncertainty band */}
+              separates "projected" from measured history */}
           <pattern id={hatchId} patternUnits="userSpaceOnUse" width={5*S} height={5*S} patternTransform="rotate(45)">
             <rect width={5*S} height={5*S} fill="rgba(159,178,201,.05)"/>
             <line x1={0} y1={0} x2={0} y2={5*S} stroke="rgba(159,178,201,.26)" strokeWidth={1*S}/>
@@ -624,11 +622,8 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         {ticks.map(v=>
           <text key={v} x={M.l-4} y={yOf(v)+3} textAnchor="end" fontSize={AX} fill="#7fa0c0">{v}</text>)}
         <line x1={M.l} y1={M.t+plotH} x2={w-M.r} y2={M.t+plotH} stroke="rgba(220,236,248,.18)" strokeWidth={S}/>
-        {/* start·1200 anchor: dashed reference line only when 1200 sits in-domain */}
-        {1200>=lo&&1200<=hi&&(<g>
-          <line x1={M.l} y1={yOf(1200)} x2={w-M.r} y2={yOf(1200)} stroke="rgba(220,236,248,.25)" strokeWidth={S} strokeDasharray="1.5 2.5"/>
-          <text x={w-M.r} y={yOf(1200)-3} textAnchor="end" fontSize={8.5} fill="#7fa0c0">start · 1200</text>
-        </g>)}
+        {/* Stocks prior-close analogue: dashed reference at the window's opening rating */}
+        <line x1={M.l} y1={yOf(pts[0].r)} x2={w-M.r} y2={yOf(pts[0].r)} stroke={trendCol} strokeOpacity=".5" strokeWidth={S} strokeDasharray="3 3.5"/>
         {/* x axis: a gridline + label per year (thinned if the window is wide) */}
         {Array.from({length:nY},(_,i)=>y0+i).map((Y,idx)=>{
           const gx=xForTs(Date.UTC(Y,0,1));
@@ -639,12 +634,12 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
             {show&&<text x={cx} y={CH-(enlarged?8:4)} textAnchor="middle" fontSize={AX} fill="#7fa0c0">{Y}</text>}
           </g>);
         })}
-        {/* uncertainty band, under everything */}
-        <path d={bandPath} fill="rgba(52,169,230,.13)" stroke="none"/>
-        {/* 1-yr forecast: grey hatched cone + solid grey trend line that mirrors
-            the rating line's look — grey + hatching is what says "predicted". */}
+        {/* gradient area under the line, Stocks-style */}
+        <path d={areaPath} fill={`url(#${glowId})`} stroke="none"/>
+        {/* 1-yr forecast: grey hatched cone + solid grey trend line — grey +
+            hatching is what says "predicted". */}
         {fcConePath&&<path d={fcConePath} fill={`url(#${hatchId})`} stroke="none"/>}
-        {fcLinePath&&<path d={fcLinePath} fill="none" stroke="#9fb2c9" strokeWidth={1.05*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>}
+        {fcLinePath&&<path d={fcLinePath} fill="none" stroke="#9fb2c9" strokeWidth={1.05*S} strokeLinejoin="round" strokeLinecap="round"/>}
         {fcEnd&&(<g>
           <line x1={fcAnchorX} y1={M.t} x2={fcAnchorX} y2={M.t+plotH} stroke="rgba(220,236,248,.14)" strokeWidth={S} strokeDasharray="1.5 3"/>
           <text x={fcAnchorX+4} y={M.t+9} fontSize={8.5} fill="#7fa0c0">forecast →</text>
@@ -653,17 +648,16 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         </g>)}
         {/* rival overlay: dashed muted line, no band, no dots, no glow */}
         {overlayPath&&<path d={overlayPath} fill="none" stroke="#8fa8c4" strokeWidth={1.05*S} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={`${2.5*S} ${2.5*S}`}/>}
-        {/* the rating line: always shown, with a slow soft glow gliding left → right */}
-        <path d={linePath} fill="none" stroke="#34a9e6" strokeWidth={1.05*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${glowId})`}/>
-        <path className="pg-pulse" pathLength="1" d={linePath} fill="none" stroke="#a9e0ff" strokeWidth={1.7*S} strokeLinejoin="round" strokeLinecap="round" filter={`url(#${softId})`}/>
+        {/* the rating line — clean trend-coloured stroke, no glow effects */}
+        <path d={linePath} fill="none" stroke={trendCol} strokeWidth={1.6*S} strokeLinejoin="round" strokeLinecap="round"/>
         {/* per-competition dots ringed in their boat-class colour. The visible dot is
             deliberately small; an invisible twin on top keeps the click/hover target
             finger-sized so shrinking the mark never shrinks the interaction. */}
         {pts.map((p,i)=>{const on=enlarged&&selPt===i;const cc=classColor(p.cls);return(<g key={i}>
           <circle cx={xOf(p)} cy={yOf(p.r)} r={(on?2.76:1.44)*S} fill={on?cc:"#fff"} stroke={on?"#fff":cc} strokeWidth={(on?1.2:0.8)*S} pointerEvents="none"/>
           <circle cx={xOf(p)} cy={yOf(p.r)} r={5*S} fill="transparent" stroke="none" style={{cursor:"pointer"}}
-            onClick={enlarged?()=>setSelPt(i===selPt?null:i):undefined}
-            onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Rating ${Math.round(p.r)} (${fmtDelta(p.delta)})`,`${ordinalOf(p.rank)} of ${p.fleet} overall`])}
+            onClick={enlarged?()=>setSelPt(i===selPt?null:i):(onOpenEvent?()=>onOpenEvent(p.evId):undefined)}
+            onMouseEnter={enlarged?undefined:e=>showTip(e,[p.evName,formatDate(p.date),`Rating ${Math.round(p.r)} (${fmtDelta(p.delta)})`,`${ordinalOf(p.rank)} of ${p.fleet} overall`,onOpenEvent?"Click to open the competition":null].filter(Boolean))}
             onMouseLeave={enlarged?undefined:()=>setTip(null)}/>
         </g>);})}
       </svg>);
@@ -689,9 +683,8 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
         </div>)}
       {body}
       {enlarged&&<div style={{flex:"none",display:"flex",gap:16,justifyContent:"center",alignItems:"center",marginTop:10,flexWrap:"wrap"}}>
-        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#34a9e6",boxShadow:"0 0 5px #34a9e6"}}/>Rating</span>
+        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#30d158"}}/>Rating (green up · red down)</span>
         <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:9,height:9,borderRadius:"50%",background:"#fff",boxShadow:"0 0 0 1.5px var(--accent)"}}/>Competition</span>
-        <span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:9,borderRadius:3,background:"rgba(52,169,230,.25)"}}/>Uncertainty</span>
         {proj&&showFc&&<span style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,color:"#cfe0f2",fontWeight:600}}><span style={{width:17,height:3,borderRadius:2,background:"#9fb2c9"}}/>1-yr forecast</span>}
       </div>}
       {tip&&!enlarged&&(
@@ -748,6 +741,12 @@ export function ProgressChart({name,events,history,selYears=null,yrKey="",height
             </div>
             <div style={{marginTop:8,fontSize:12,color:"#cfe0f2"}}>Rating <b>{Math.round(sp.r)}</b> ({fmtDelta(sp.delta)})</div>
             <div style={{marginTop:4,fontSize:12,color:"#cfe0f2"}}>Your result: <b>{ordinalOf(sp.rank)}</b> of <b>{sp.fleet}</b></div>
+            {onOpenEvent&&(
+              <button type="button" onClick={()=>onOpenEvent(sp.evId)}
+                style={{marginTop:9,display:"inline-flex",alignItems:"center",gap:6,border:0,cursor:"pointer",borderRadius:980,
+                  padding:"5px 13px",fontSize:11.5,fontWeight:700,fontFamily:"'Barlow',sans-serif",color:"#fff",
+                  background:"var(--accent)"}}>Open competition →</button>
+            )}
           </div>
           <div style={{padding:"11px 16px 4px",fontSize:10.5,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"#7fa0c0"}}>Rivals here</div>
           {rows}

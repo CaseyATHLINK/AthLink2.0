@@ -4697,6 +4697,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
               <span className="ev-count"><Users size={13}/>{isUpcomingEvent(ev)?`${s.fleet} entered`:`${s.fleet} boats · ${s.races} races`}</span>
             </div>
           </div>
+          {isScout&&<SaveButton size="sm" owner={scoutOwnerId(auth)} events={events} kind={isUpcomingEvent(ev)?"upcoming":"event"} eventId={ev.id} title={ev.name}
+            snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}} onRequireAuth={()=>setShowSignIn(true)}/>}
           {isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}} title="Entry list published — results pending. Open for the fleet forecast.">UPCOMING</span>}
           {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
           <ChevronRight size={18} color="#9fb2c8"/>
@@ -5331,6 +5333,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <span className="ev-count"><Users size={13}/>{isUpcomingEvent(ev)?`${s.fleet} entered`:`${s.fleet} boats · ${s.races} races`}{s.countries>0?` · ${s.countries} countr${s.countries===1?"y":"ies"}`:""}</span>
                 </div>
               </div>
+              {isScout&&!isDraft&&<SaveButton size="sm" owner={scoutOwnerId(auth)} events={events} kind={isUpcomingEvent(ev)?"upcoming":"event"} eventId={ev.id} title={ev.name}
+                snapshot={{evName:ev.name,evDate:ev.date,cls:ev.cls}} onRequireAuth={()=>setShowSignIn(true)}/>}
               {!isDraft&&isUpcomingEvent(ev)&&<span className="cls" style={{background:"rgba(232,146,26,.15)",color:"#b8860b",boxShadow:"inset 0 0 0 1px rgba(232,146,26,.4)"}} title="Entry list published — results pending. Open for the fleet forecast.">UPCOMING</span>}
               {isDraft&&<span className="draftbadge"><Clock size={11}/> Draft</span>}
               {(()=>{const n=nuggetFor(ev.cls,ev.subclass);return <span className="cls" style={{background:n.color}}>{n.label}</span>;})()}
@@ -6004,7 +6008,7 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                     style={{position:"absolute",inset:0,cursor:"pointer",transition:"opacity .35s ease,transform .35s ease",
                       opacity:profileTab==="progress"?1:0,transform:profileTab==="progress"?"scale(1)":"scale(.82)",
                       pointerEvents:profileTab==="progress"?"auto":"none"}}>
-                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} selYears={null} yrKey="" height={220} w={286}/>}
+                    {profileTab==="progress"&&<ProgressChart name={name} events={events} history={ag.history} selYears={null} yrKey="" height={220} w={286} onOpenEvent={id=>go({name:"event",id})}/>}
                     <div className="expand-tip" style={{position:"absolute",top:4,right:6,background:"rgba(8,24,45,.72)",color:"#dcecf8",fontSize:11,fontWeight:600,padding:"3px 8px",borderRadius:6,pointerEvents:"none"}}>Click to expand ⤢</div>
                   </div>
                 </div>

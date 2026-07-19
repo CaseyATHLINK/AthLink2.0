@@ -26,29 +26,31 @@ export function scoutOwnerId(auth){
    Binders live in one of two disjoint folder namespaces:
      'athletes' → watchlist folders (kind='athlete' clips only)
      'results'  → saved results/events folders (result/event/upcoming/link clips)
-   Encoded as a name prefix ("res::") rather than a column so no migration is
-   needed (0015 is live; MCP write access pending — a proper scout_binders.kind
-   column can replace this convention later with a one-off backfill). The prefix
-   never reaches the UI: binderLabel() strips it, createBinder/renameBinder
-   apply it, and user input is sanitised so a typed "res::" can't cross spaces. */
+   Stored in scout_binders.kind (migration 0016). #125 originally shipped the
+   split as a "res::" prefix on the name (that session had no Supabase write
+   access); 0016 backfilled those rows onto the column. binderNS/binderLabel
+   keep reading the prefix as a fallback for stragglers — a stale pre-0016 tab
+   still writes "res::<name>" with the column defaulting to 'athletes'. User
+   input stays sanitised so a typed "res::" can't cross namespaces (or get
+   mangled by a 0016 re-run). */
 const RES_PREFIX="res::";
-export const binderNS   = b  => (b?.name||"").startsWith(RES_PREFIX)?"results":"athletes";
-export const binderLabel= b  => binderNS(b)==="results"?b.name.slice(RES_PREFIX.length):(b?.name||"");
-const nsName=(name,ns)=>{
+export const binderNS   = b  => b?.kind==="results"||(b?.name||"").startsWith(RES_PREFIX)?"results":"athletes";
+export const binderLabel= b  => (b?.name||"").startsWith(RES_PREFIX)?b.name.slice(RES_PREFIX.length):(b?.name||"");
+const cleanName=name=>{
   let n=String(name||"").trim();
   while(n.startsWith(RES_PREFIX)) n=n.slice(RES_PREFIX.length).trim();
-  return (ns==="results"?RES_PREFIX:"")+n;
+  return n;
 };
 export const DEFAULT_BINDER_NAME={athletes:"My watchlist",results:"Saved results"};
 
 /* ── binders (scout_binders) — a scout's folders, per namespace ────────────── */
 export async function fetchBinders(owner){
   if(!owner) return [];
-  return (await sbGet(`scout_binders?owner=eq.${enc(owner)}&select=id,name,sort_order,created_at&order=sort_order.asc,created_at.asc`))||[];
+  return (await sbGet(`scout_binders?owner=eq.${enc(owner)}&select=id,name,kind,sort_order,created_at&order=sort_order.asc,created_at.asc`))||[];
 }
 export async function createBinder(owner,name,ns="athletes"){
   if(!owner||!String(name||"").trim()) return null;
-  const r=await sbPost("scout_binders",{owner,name:nsName(name,ns)});
+  const r=await sbPost("scout_binders",{owner,name:cleanName(name),kind:ns});
   const row=r?.[0]||null;
   if(row) invalidateScoutCaches();
   return row;
@@ -71,7 +73,7 @@ export function ensureDefaultBinder(owner,ns="athletes"){
   return _defBinder[key];
 }
 export async function renameBinder(id,name,ns="athletes"){
-  const r=await sbPatch("scout_binders",`id=eq.${enc(id)}`,{name:nsName(name,ns)});
+  const r=await sbPatch("scout_binders",`id=eq.${enc(id)}`,{name:cleanName(name),kind:ns});
   if(Array.isArray(r)&&r.length) invalidateScoutCaches();
   return r;
 }
