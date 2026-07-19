@@ -88,6 +88,14 @@ def test_federation_pdf_fixture():
     check("pdf rank0", r["entries"][0]["pdf_rank"], 1)
     check("pdf detect family", gp.detect_format(fb, "pos player total")[0], "federation-pdf")
 
+def test_parse_bytes_routes_all_three():
+    for fn in ("mini_grid.csv", "mini_grid.xlsx", "mini_federation.pdf"):
+        fb = open(os.path.join(FIXTURES, fn), "rb").read()
+        r = gp.parse_bytes(fb)
+        check(f"dispatch {fn} entries", len(r["entries"]), 3)
+        check(f"dispatch {fn} scoring_format", r["scoring_format"], "stroke")
+        check(f"dispatch {fn} has detected_format", bool(r.get("detected_format")), True)
+
 if __name__ == "__main__":
     for fn in list(globals()):
         if fn.startswith("test_"):

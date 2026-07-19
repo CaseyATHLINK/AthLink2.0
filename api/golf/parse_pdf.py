@@ -223,3 +223,32 @@ def detect_format(file_bytes: bytes, full_text_lower: str):
         except Exception:
             continue
     return "unknown", itype, 0.3
+
+# ── main rule parse: detect -> route -> extract ──────────────────────────────
+def _text_for_detect(fb: bytes) -> str:
+    """Cheap lowercase text sniff for detect_format's signatures."""
+    itype = _input_type(fb, "")
+    if itype == "pdf-text":
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(fb)) as pdf:
+                return "\n".join((p.extract_text() or "") for p in pdf.pages[:2]).lower()
+        except Exception:
+            return ""
+    if itype in ("csv", "html"):
+        try:
+            return fb[:4000].decode("utf-8", errors="replace").lower()
+        except Exception:
+            return ""
+    return ""   # xlsx: routed by input_type, no text sniff needed
+
+def parse_bytes(fb: bytes) -> dict:
+    low = _text_for_detect(fb)
+    family, itype, conf = detect_format(fb, low)
+    extractor = next((s["extractor"] for s in FORMAT_REGISTRY if s["family"] == family), None)
+    if extractor is None:
+        raise ValueError("This file doesn't look like a golf results grid "
+                         "(need Pos / Player / round / Total columns).")
+    res = extractor(fb)
+    res["detected_format"] = {"family": family, "input_type": itype, "confidence": conf}
+    return res
