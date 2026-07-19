@@ -174,6 +174,30 @@ def parse_csv_bytes(fb: bytes):
     title_text, rows = _grid_and_title(rows)
     return interpret_golf_grid(rows, title_text)
 
+# ── federation PDF adapter ───────────────────────────────────────────────────
+def parse_pdf_bytes(fb: bytes):
+    import pdfplumber
+    title_lines, all_rows = [], []
+    with pdfplumber.open(io.BytesIO(fb)) as pdf:
+        for page in pdf.pages:
+            txt = page.extract_text() or ""
+            title_lines.extend(l.strip() for l in txt.splitlines()[:3] if l.strip())
+            for strategy in ({"vertical_strategy": "lines", "horizontal_strategy": "lines"},
+                             {"vertical_strategy": "text",  "horizontal_strategy": "text"}):
+                tbls = page.extract_tables(strategy) or []
+                if tbls:
+                    for tb in tbls:
+                        all_rows.extend(tb)
+                    break
+    if not all_rows:
+        raise ValueError("No results table found in this PDF.")
+    return interpret_golf_grid(all_rows, "\n".join(title_lines))
+
+# A generic golf grid with NO vendor stamp: detect only that the text carries the
+# tell-tale column words. Appended LAST so any future vendor family wins first.
+def _sig_federation(fb, low):
+    return ("player" in low or "name" in low) and ("total" in low or "gross" in low)
+
 # A single-sheet golf workbook is always our grid; a CSV likewise. Detection is by
 # input_type (there is no vendor stamp to sniff), so the signature just returns True.
 FORMAT_REGISTRY = []  # filled in Tasks 5-6: list of {"family","input_types","detect","extractor"}
@@ -183,6 +207,9 @@ FORMAT_REGISTRY.extend([
     {"family": "golf-grid-csv",  "input_types": ["csv"],
      "detect": lambda fb, low: True, "extractor": parse_csv_bytes},
 ])
+FORMAT_REGISTRY.append(
+    {"family": "federation-pdf", "input_types": ["pdf-text"],
+     "detect": _sig_federation, "extractor": parse_pdf_bytes})
 
 def detect_format(file_bytes: bytes, full_text_lower: str):
     """(family, input_type, confidence). Never raises. input_type is vision-free."""

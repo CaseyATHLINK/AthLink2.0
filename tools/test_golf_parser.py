@@ -79,6 +79,15 @@ def test_xlsx_fixture():
     check("xlsx course_par", r["course_par"], 72)
     check("xlsx detect family", gp.detect_format(fb, "")[0], "golf-grid-xlsx")
 
+def test_federation_pdf_fixture():
+    fb = open(os.path.join(FIXTURES, "mini_federation.pdf"), "rb").read()
+    r = gp.parse_pdf_bytes(fb)
+    check("pdf n_entries", len(r["entries"]), 3)
+    check("pdf rounds", r["rounds"], 3)
+    check("pdf course_par", r["course_par"], 72)
+    check("pdf rank0", r["entries"][0]["pdf_rank"], 1)
+    check("pdf detect family", gp.detect_format(fb, "pos player total")[0], "federation-pdf")
+
 if __name__ == "__main__":
     for fn in list(globals()):
         if fn.startswith("test_"):
