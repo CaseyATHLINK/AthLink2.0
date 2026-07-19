@@ -25,6 +25,38 @@ def test_detect_format_input_types():
     check("pdf sniff",  gp.detect_format(b'%PDF-1.4', '')[1], "pdf-text")
     check("csv sniff",  gp.detect_format(b'Pos,Player,R1,Total\n1,A,70,70', 'pos,player')[1], "csv")
 
+def test_interpret_grid_basic():
+    rows = [
+        ["Pos", "Player", "R1", "R2", "R3", "Total"],
+        ["1",   "Amy Chan",   "70", "71", "69", "210"],
+        ["T2",  "Ben Wong",   "72", "70", "70", "212"],
+        ["T2",  "Cara Diaz",  "71", "71", "70", "212"],
+    ]
+    r = gp.interpret_golf_grid(rows, "Spring Open  Par 72")
+    check("grid n_entries", len(r["entries"]), 3)
+    check("grid rounds", r["rounds"], 3)
+    check("grid scoring_format", r["scoring_format"], "stroke")
+    check("grid course_par", r["course_par"], 72)
+    e0 = r["entries"][0]
+    check("grid rank0", e0["pdf_rank"], 1)
+    check("grid net0", e0["pdf_net"], 210)
+    check("grid races0", e0["races"], [70, 71, 69])
+    check("grid codes0", e0["race_codes"], [None, None, None])
+    check("grid helm0", e0["helm"], "Amy Chan")
+    check("grid tie rank", r["entries"][1]["pdf_rank"], 2)   # 'T2' -> 2, ground truth
+
+def test_interpret_grid_missed_cut():
+    rows = [
+        ["Pos", "Player", "Rd1", "Rd2", "Rd3", "Rd4", "Total"],
+        ["1",   "Amy Chan", "70", "71", "69", "68", "278"],
+        ["",    "Ben Wong", "80", "82", "MC", "",   "162"],
+    ]
+    r = gp.interpret_golf_grid(rows, "")
+    check("cut rounds", r["rounds"], 4)
+    ben = r["entries"][1]
+    check("cut code present", ben["race_codes"][2], "MC")
+    check("cut races len", len(ben["races"]), 2)             # only the two played rounds carry a value
+
 if __name__ == "__main__":
     for fn in list(globals()):
         if fn.startswith("test_"):
