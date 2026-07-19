@@ -6,7 +6,7 @@
 
 **Architecture:** A new golf parser mirrors the sailing pipeline *shape* (detect → route → parse → normalise) but is written fresh and lean — no vision path, no handicap/sail-country logic. Its heart is one pure function, `interpret_golf_grid(rows, title_text)`, that turns a Pos/Player/round-scores/Total grid into golf entry dicts plus per-event fields. Two format-independent adapters feed it: an openpyxl/CSV reader (`golf-grid-xlsx`) and a pdfplumber reader (`federation-pdf`). The entries reuse the existing sailing entry shape verbatim (a golf *round* = the sailing `races[]` slot); four new per-event columns on the shared `events` table carry the golf-specific metadata.
 
-**Tech Stack:** Python 3 (pdfplumber, openpyxl — both present in `/opt/anaconda3/bin/python3`), Postgres/Supabase (SQL migration), React data-layer JS (`sports/golf/src/data/events.js`).
+**Tech Stack:** Python 3 (pdfplumber, openpyxl — both present in `./.venv/bin/python3`), Postgres/Supabase (SQL migration), React data-layer JS (`sports/golf/src/data/events.js`).
 
 ## Scope & handoff
 
@@ -34,7 +34,7 @@ _Every task's requirements implicitly include this section. Values copied verbat
 - **Scope = stroke play.** Every event this parser emits is tagged `scoring_format: "stroke"`. Stableford / match play are future phases — do not build them.
 - **Exact column names:** `scoring_format` (text), `rounds` (int), `cut_after_round` (int, nullable), `course_par` (int, nullable) — all on `events`.
 - **Migrations are idempotent** and end with `NOTIFY pgrst, 'reload schema';`.
-- **Test interpreter:** run all Python with `/opt/anaconda3/bin/python3` (it has pdfplumber + openpyxl; the default `python3` may not).
+- **Test interpreter:** run all Python with `./.venv/bin/python3`. This machine (Ben's) has NO `/opt/anaconda3` (that path is Casey's). One-time setup already done this session: `python3 -m venv .venv && ./.venv/bin/python3 -m pip install -r requirements.txt reportlab` (`.venv/` is gitignored). The default `python3` (3.14) lacks pdfplumber/openpyxl/reportlab.
 - **Entry dict shape (must match sailing exactly):** `{helm, crew, sail, nat, div, gender, category, races[], race_codes[], pdf_rank, pdf_net, birth_year, crew_birth_year}`.
 
 ---
@@ -180,7 +180,7 @@ Create `tools/test_golf_parser.py`:
 
 ```python
 #!/usr/bin/env python3
-"""Local harness for the golf rule parser. Run with /opt/anaconda3/bin/python3.
+"""Local harness for the golf rule parser. Run with ./.venv/bin/python3.
 No network, no AI — pure rule logic. Asserts against inline expected values;
 exits non-zero on the first mismatch so it works as a pre-commit gate."""
 import os, io, importlib.util, sys
@@ -217,7 +217,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: FAIL — `No module named ...` / `AttributeError: module ... has no attribute 'detect_format'` (the parser file doesn't exist yet).
 
 - [ ] **Step 3: Write the scaffold**
@@ -290,12 +290,12 @@ def detect_format(file_bytes: bytes, full_text_lower: str):
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: PASS — the three `detect_format` checks print `ok` and the script ends `ALL PASS`.
 
 - [ ] **Step 5: Python syntax check**
 
-Run: `/opt/anaconda3/bin/python3 -c "import ast; ast.parse(open('api/golf/parse_pdf.py').read())"`
+Run: `./.venv/bin/python3 -c "import ast; ast.parse(open('api/golf/parse_pdf.py').read())"`
 Expected: no output (exit 0).
 
 - [ ] **Step 6: Commit**
@@ -373,7 +373,7 @@ def test_interpret_grid_missed_cut():
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: FAIL — `AttributeError: ... 'interpret_golf_grid'`.
 
 - [ ] **Step 3: Implement `interpret_golf_grid`**
@@ -482,7 +482,7 @@ def interpret_golf_grid(rows, title_text: str = ""):
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: PASS — all `test_interpret_grid_*` checks print `ok`, script ends `ALL PASS`.
 
 - [ ] **Step 5: Commit**
@@ -522,7 +522,7 @@ T2,Cara Diaz,69,71,140
 Run this one-off generator (it writes the binary fixture):
 
 ```bash
-/opt/anaconda3/bin/python3 - <<'PY'
+./.venv/bin/python3 - <<'PY'
 import openpyxl, os
 wb = openpyxl.Workbook(); ws = wb.active
 for r in [
@@ -565,7 +565,7 @@ def test_xlsx_fixture():
 
 - [ ] **Step 4: Run to verify failure**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: FAIL — `AttributeError: ... 'parse_csv_bytes'`.
 
 - [ ] **Step 5: Implement the adapters + register families**
@@ -616,7 +616,7 @@ FORMAT_REGISTRY.extend([
 
 - [ ] **Step 6: Run to verify pass**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: PASS — `csv_*` and `xlsx_*` checks print `ok`, `ALL PASS`.
 
 - [ ] **Step 7: Commit**
@@ -644,7 +644,7 @@ git commit -m "feat(golf): xlsx + csv grid adapters + fixtures"
 pdfplumber reads tables best from ruled grids. Generate one with reportlab (present in the anaconda env):
 
 ```bash
-/opt/anaconda3/bin/python3 - <<'PY'
+./.venv/bin/python3 - <<'PY'
 import os
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -687,7 +687,7 @@ def test_federation_pdf_fixture():
 
 - [ ] **Step 3: Run to verify failure**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: FAIL — `AttributeError: ... 'parse_pdf_bytes'`.
 
 - [ ] **Step 4: Implement the PDF adapter + register the family**
@@ -726,7 +726,7 @@ FORMAT_REGISTRY.append(
 
 - [ ] **Step 5: Run to verify pass**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: PASS — `pdf_*` checks print `ok`, `ALL PASS`.
 
 - [ ] **Step 6: Commit**
@@ -764,7 +764,7 @@ def test_parse_bytes_routes_all_three():
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: FAIL — `AttributeError: ... 'parse_bytes'`.
 
 - [ ] **Step 3: Implement `parse_bytes`**
@@ -804,7 +804,7 @@ def parse_bytes(fb: bytes) -> dict:
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: PASS — all three dispatch checks print `ok`, `ALL PASS`.
 
 - [ ] **Step 5: Commit**
@@ -874,15 +874,15 @@ In `vercel.json`, in the `functions` block (alongside `api/sailing/parse_pdf.py`
 
 - [ ] **Step 3: Syntax + JSON validity checks**
 
-Run: `/opt/anaconda3/bin/python3 -c "import ast; ast.parse(open('api/golf/parse_pdf.py').read())"`
+Run: `./.venv/bin/python3 -c "import ast; ast.parse(open('api/golf/parse_pdf.py').read())"`
 Expected: no output (exit 0).
 
-Run: `/opt/anaconda3/bin/python3 -c "import json; json.load(open('vercel.json')); print('vercel.json ok')"`
+Run: `./.venv/bin/python3 -c "import json; json.load(open('vercel.json')); print('vercel.json ok')"`
 Expected: prints `vercel.json ok`.
 
 - [ ] **Step 4: Full harness re-run (regression)**
 
-Run: `/opt/anaconda3/bin/python3 tools/test_golf_parser.py`
+Run: `./.venv/bin/python3 tools/test_golf_parser.py`
 Expected: `ALL PASS` (handler addition didn't break the rule path).
 
 - [ ] **Step 5: Commit**
