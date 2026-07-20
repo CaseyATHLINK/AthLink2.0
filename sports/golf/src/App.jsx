@@ -6077,7 +6077,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                       <Pin size={13} fill={pinned?"currentColor":"none"}/>
                     </button>
                   )}
-                  <span className={"rolechip "+h.role.toLowerCase()}>{h.role}</span>
                 </div>
                 <div className="evmeta" style={{marginTop:3}}>
                   <span><Calendar size={13}/><span style={{cursor:"pointer",color:"var(--link)",fontWeight:600}} onClick={(e)=>{e.stopPropagation();openSailorCalAt(h.ev.date,name);}}>{formatDate(h.ev.date)}</span></span>

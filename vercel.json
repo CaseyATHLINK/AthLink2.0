@@ -19,6 +19,9 @@
     },
     "api/ai_filter.py": {
       "includeFiles": "api/_shared/**"
+    },
+    "api/golf/parse_pdf.py": {
+      "maxDuration": 60
     }
   },
   "rewrites": [

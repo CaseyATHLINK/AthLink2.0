@@ -16,3 +16,6 @@ ds-bundle/
 .design-sync/learnings/
 .design-sync/node_modules
 corpus_baseline
+
+# Local Python venv for the parser test harness
+.venv/
