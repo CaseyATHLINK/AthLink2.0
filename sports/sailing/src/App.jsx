@@ -5,7 +5,7 @@ import {
   Calendar, Users, Waves, ArrowLeft, Flag, Loader2, Sparkles, Link2,
   X, FileText, ClipboardPaste, AlertCircle, Pencil, Trash2, Plus, Minus,
   CheckCircle, Clock, Eye, Home, Globe, Menu, User, LayoutGrid, Settings, Instagram,
-  Award, TrendingUp, Pin, GripVertical
+  Award, TrendingUp, Pin, GripVertical, LogOut
 } from "lucide-react";
 import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, sbPost, sbPatch, sbDel, setSbUserToken, authSignUp, authSignIn, authUser, authRefresh } from "@athlink/core";
 import { MON, formatDate, dateKey, monthsBetween } from "./util/date.js";
@@ -3616,7 +3616,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     .crumbs .c-root{color:var(--mut);}
     .tb-profile{width:44px;height:44px;border-radius:980px;border:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6),inset 0 1px 0 rgba(255,255,255,.72),0 8px 24px -12px rgba(0,0,0,.28);transition:.18s;}
     .tb-profile:hover{background:rgba(255,255,255,.74);transform:translateY(-1px);}
-    .tb-acct{position:absolute;right:0;top:calc(100% + 8px);background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;min-width:200px;z-index:80;}
+    .tb-acct{position:absolute;right:0;top:calc(100% + 8px);background:var(--mat-thick);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:14px;box-shadow:0 18px 44px -16px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.6);padding:8px;min-width:248px;max-width:300px;z-index:80;}
+    .tb-acct .acct-head{display:flex;align-items:center;gap:10px;padding:6px 8px 10px;border-bottom:1px solid var(--line);margin-bottom:6px;}
+    .tb-acct .acct-av{width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:800;font-size:15px;flex:none;}
+    .tb-acct .acct-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:0;background:none;padding:9px 10px;font:inherit;font-size:13px;font-weight:600;color:var(--ink);border-radius:9px;cursor:pointer;transition:background .12s;}
+    .tb-acct .acct-item:hover{background:rgba(10,132,255,.07);}
+    .tb-acct .acct-item.danger{color:#c0392b;}
+    .tb-acct .acct-item.danger:hover{background:rgba(200,50,50,.08);}
     @media(max-width:640px){.np-link{font-size:12.5px;padding:8px 10px;}.np-srchbtn{width:32px;height:32px;}}
     @media(max-width:560px){.tb-sport{display:none;}.menupill{max-width:none;}.tb-divider{display:none;}.np-bar .np-item{display:none;}.np-menubtn{display:grid;}}
     .classes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}
@@ -4234,7 +4240,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                 const myHostNames=myMemberships.filter(m=>m.verified).map(m=>hostById(m.host_id)?.name).filter(Boolean);
                 const myHostId=myMemberships.filter(m=>m.verified).map(m=>m.host_id)[0]||null;
                 const myAthleteName=auth.profile?.athlete_name||fullName;
-                // Clicking the name jumps to the athlete's own profile, or their host portal.
                 const goToMe=()=>{
                   setAccountOpen(false);
                   if(role==="athlete"&&myAthleteName){go({name:"profile",id:myAthleteName});}
@@ -4242,21 +4247,21 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   else if(myAthleteName){go({name:"profile",id:myAthleteName});}
                 };
                 const canGoToMe=(role==="athlete"&&!!myAthleteName)||!!myHostId;
+                const roleLine=devMode?"Developer — full edit access"
+                  :myHostNames.length>0?`${myHostNames.length>1?"Hosts":"Host"}: ${myHostNames.join(", ")}`
+                  :role==="athlete"?"Athlete":role==="scout"?"Scout":"Guest";
                 return(<>
-                  {fullName&&(canGoToMe
-                    ? <button onClick={goToMe} title="Go to my profile" style={{display:"block",width:"100%",textAlign:"left",border:0,background:"none",cursor:"pointer",padding:"6px 10px 1px",fontSize:13.5,fontWeight:700,color:"var(--accent)"}}>{fullName}</button>
-                    : <div style={{padding:"6px 10px 1px",fontSize:13.5,fontWeight:700,color:"var(--navy)"}}>{fullName}</div>)}
-                  {/* Dev view uses a hidden admin session — never surface its account email. */}
-                  {!devMode&&<div style={{padding:fullName?"0 10px 6px":"6px 10px",fontSize:12,color:"var(--mut)"}}>{auth.user?.email}</div>}
-                  {devMode
-                    ? <div style={{padding:fullName?"0 10px 8px":"6px 10px 8px",fontSize:12,color:"var(--mut)"}}>Role: <b style={{color:"var(--navy)"}}>Developer</b> — full edit access</div>
-                    : myHostNames.length>0
-                      ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>{myHostNames.length>1?"Hosts":"Host"}: <b style={{color:"var(--navy)"}}>{myHostNames.join(", ")}</b></div>
-                      : role==="athlete"
-                        ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)",textTransform:"capitalize"}}><b style={{color:"var(--navy)"}}>Athlete</b></div>
-                        : role==="scout"
-                          ? <div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}><b style={{color:"var(--navy)"}}>Scout</b></div>
-                          : null}
+                  {/* identity header: avatar + name + email + role/username line */}
+                  <div className="acct-head">
+                    <div className="acct-av">{(auth.profile?.display_name||auth.user?.email||"?").slice(0,1).toUpperCase()}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13.5,fontWeight:700,color:"var(--navy)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fullName||"Account"}</div>
+                      {/* Dev view uses a hidden admin session — never surface its account email. */}
+                      {!devMode&&<div style={{fontSize:11.5,color:"var(--mut)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{auth.user?.email}</div>}
+                      <div style={{fontSize:11,color:"var(--mut)",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{roleLine}{auth.profile?.username&&!devMode?` · @${auth.profile.username}`:""}</div>
+                    </div>
+                  </div>
+                  {canGoToMe&&<button className="acct-item" onClick={goToMe}><User size={15}/>View my profile</button>}
                 </>);
               })()}
               {/* Username reminder — gentle nudge, only if they haven't set one */}
@@ -4269,7 +4274,6 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <button onClick={()=>{setAccountOpen(false);setShowUsername(true);}} style={{marginTop:7,width:"100%",border:0,background:"var(--accent)",color:"#fff",borderRadius:7,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Create username</button>
                 </div>
               )}
-              {auth.profile?.username&&<div style={{padding:"0 10px 8px",fontSize:12,color:"var(--mut)"}}>Username: <b style={{color:"var(--navy)"}}>@{auth.profile.username}</b></div>}
               {/* Claim-your-profile nudge — athletes who haven't claimed yet */}
               {showClaimNudge&&(
                 <div style={{margin:"2px 8px 6px",padding:"9px 11px",background:"rgba(10,132,255,.07)",border:"1px solid rgba(10,132,255,.18)",borderRadius:9,fontSize:11.5,color:"var(--navy)",lineHeight:1.45}}>
@@ -4286,7 +4290,8 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
                   <span>Your host setup is pending AthLink approval. You're browsing as a guest until verified.</span>
                 </div>
               )}
-              <button onClick={signOut} style={{width:"100%",textAlign:"left",border:0,background:"none",padding:"8px 10px",fontSize:13,cursor:"pointer",color:"var(--ink)",borderRadius:8}}>{devMode?"Exit dev view":"Sign out"}</button>
+              <div style={{height:1,background:"var(--line)",margin:"6px 2px"}}/>
+              <button className="acct-item danger" onClick={signOut}><LogOut size={15}/>{devMode?"Exit dev view":"Sign out"}</button>
             </div>)}
           </div>
         : <button className="tb-profile" onClick={()=>setShowSignIn(true)} title="Sign in / sign up"><User size={18}/></button>}
