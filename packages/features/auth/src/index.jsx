@@ -491,26 +491,27 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
       <div className="modal" onClick={e=>e.stopPropagation()}
         style={{maxWidth:440,overflow:"visible"}}>
 
-        {/* ── Header ── */}
-        <div className="mhead" style={{flexDirection:"column",alignItems:"stretch",gap:0,padding:"20px 24px 0"}}>
+        {/* ── Header — flat & light (audit: the navy gradient block read as
+               template-y); scoped inline overrides so other modals keep theirs ── */}
+        <div className="mhead" style={{flexDirection:"column",alignItems:"stretch",gap:0,padding:"22px 24px 0",background:"none",boxShadow:"none",color:"var(--navy)"}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{flex:1}}>
-              <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"rgba(255,255,255,.55)"}}>
+              <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)"}}>
                 {mode==="confirm"?"One more step":isInviteMode&&mode==="signup"?(step===1?"Accept invitation":"Your details"):mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":step===3?"Your name":hostKind==="club"?"Find your club":hostKind==="federation"?"Find your federation":"Find your association"}
               </p>
-              <h3 style={{marginTop:2}}>
+              <h3 style={{marginTop:2,color:"var(--navy)"}}>
                 {mode==="confirm"?"Check your inbox":isInviteMode&&mode==="signup"?(step===1?"Create your account":"Complete your profile"):mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose how you'll use AthLink":step===3?(isHost?"Your details":"Almost done"):"Link your club"}
               </h3>
             </div>
-            <button className="x" onClick={onClose}><X size={16}/></button>
+            <button className="x" onClick={onClose} style={{background:"rgba(12,24,44,.06)",color:"var(--navy)"}}><X size={16}/></button>
           </div>
           {/* progress bar — only during signup after step 1 */}
           {mode==="signup"&&(
-            <div style={{marginTop:14,height:3,borderRadius:3,background:"rgba(255,255,255,.18)",overflow:"hidden"}}>
-              <div style={{height:"100%",width:`${pct}%`,background:"rgba(255,255,255,.75)",borderRadius:3,transition:"width .4s cubic-bezier(.4,0,.2,1)"}}/>
+            <div style={{marginTop:14,height:3,borderRadius:3,background:"rgba(12,24,44,.08)",overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${pct}%`,background:"var(--accent)",borderRadius:3,transition:"width .4s cubic-bezier(.4,0,.2,1)"}}/>
             </div>
           )}
-          <div style={{height:20}}/>
+          <div style={{height:16}}/>
         </div>
 
         {/* ── Body ── */}
@@ -573,9 +574,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               </div>
             </div>
 
-            <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}}
+            <button className="btn cta" style={{width:"100%",justifyContent:"center"}}
               disabled={busy||!email.trim()||!pw} onClick={doSignIn}>
-              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:null}Sign in</div>
+              {busy?<Loader2 size={15} className="spin"/>:null}Sign in
             </button>
 
             <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
@@ -663,9 +664,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               </div>
             )}
 
-            <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}}
+            <button className="btn cta" style={{width:"100%",justifyContent:"center"}}
               disabled={busy||!step1Valid} onClick={doCreateAccount}>
-              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:null}Continue <ChevronRight size={16}/></div>
+              {busy?<Loader2 size={15} className="spin"/>:null}Continue <ChevronRight size={16}/>
             </button>
 
             <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
@@ -703,8 +704,8 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setStep(1)}>
                 <ArrowLeft size={15}/>Back
               </button>
-              <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={()=>{setErr("");setStep(3);}}>
-                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
+              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy} onClick={()=>{setErr("");setStep(3);}}>
+                Continue <ChevronRight size={16}/>
               </button>
             </div>
           </>)}
@@ -758,14 +759,14 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               </button>
               {/* Athlete & scout finish here; host advances to step 4; invite mode finishes here */}
               {(role==="athlete"||role==="scout"||isInviteMode)
-                ? <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">
+                ? <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={doSignUp}>
+                    
                     {busy?<Loader2 size={15} className="spin"/>:null}
                     {isInviteMode?"Accept invitation":isMinor?"Send guardian approval":"Create account"}
-                    </div>
+                    
                   </button>
-                : <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={()=>{setErr("");setStep(4);}}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
+                : <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!step3Valid} onClick={()=>{setErr("");setStep(4);}}>
+                    Continue <ChevronRight size={16}/>
                   </button>}
             </div>
           </>)}
@@ -786,9 +787,9 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
                     onChange={e=>{ setInviteCodeInput(e.target.value.toUpperCase().replace(/[^A-Za-z0-9]/g,"")); setInviteCodeErr(""); }}
                     onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
                     onKeyDown={async e=>{ if(e.key==="Enter"&&inviteCodeInput.length>=6) await applyInviteCode(); }}/>
-                  <button className="btn cta liquidGlass-wrapper" style={{fontSize:13,padding:"9px 14px",whiteSpace:"nowrap"}}
+                  <button className="btn cta" style={{fontSize:13,padding:"9px 14px",whiteSpace:"nowrap"}}
                     disabled={inviteCodeBusy||inviteCodeInput.length<6} onClick={applyInviteCode}>
-                    <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{inviteCodeBusy?<Loader2 size={13} className="spin"/>:null}Apply</div>
+                    {inviteCodeBusy?<Loader2 size={13} className="spin"/>:null}Apply
                   </button>
                 </div>
                 {inviteCodeErr&&<p style={{margin:"7px 0 0",fontSize:12,color:"#c0392b"}}>{inviteCodeErr}</p>}
@@ -955,11 +956,11 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               <button className="btn ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>{addingNew?setAddingNew(false):setStep(3);}}>
                 <ArrowLeft size={15}/>Back
               </button>
-              <button className="btn cta liquidGlass-wrapper" style={{flex:2,justifyContent:"center"}} disabled={busy||!(localInviteCtx||step4Valid)} onClick={doSignUp}>
-                <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">
+              <button className="btn cta" style={{flex:2,justifyContent:"center"}} disabled={busy||!(localInviteCtx||step4Valid)} onClick={doSignUp}>
+                
                 {busy?<Loader2 size={15} className="spin"/>:<BadgeCheck size={15}/>}
                 {localInviteCtx?"Accept invitation & create account":addingNew?`Create ${hostKind} & request ownership`:"Request ownership"}
-                </div>
+                
               </button>
             </div>
           </>)}
@@ -995,12 +996,12 @@ export function ResetPasswordModal({token,onClose,onDone}){
   return(
     <div className="ov" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:400}}>
-        <div className="mhead" style={{padding:"20px 24px 14px"}}>
+        <div className="mhead" style={{padding:"22px 24px 10px",background:"none",boxShadow:"none",color:"var(--navy)"}}>
           <div style={{flex:1}}>
-            <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"rgba(255,255,255,.55)"}}>Password reset</p>
-            <h3 style={{marginTop:2}}>Choose a new password</h3>
+            <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"var(--mut)"}}>Password reset</p>
+            <h3 style={{marginTop:2,color:"var(--navy)"}}>Choose a new password</h3>
           </div>
-          <button className="x" onClick={onClose}><X size={16}/></button>
+          <button className="x" onClick={onClose} style={{background:"rgba(12,24,44,.06)",color:"var(--navy)"}}><X size={16}/></button>
         </div>
         <div style={{padding:"16px 24px 26px",display:"flex",flexDirection:"column",gap:12}}>
           {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#c0392b",display:"flex",alignItems:"center",gap:8}}><AlertCircle size={14} style={{flex:"none"}}/>{err}</div>}
@@ -1013,8 +1014,8 @@ export function ResetPasswordModal({token,onClose,onDone}){
               onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
               onKeyDown={e=>{if(e.key==="Enter"&&pw&&pw2&&!busy)submit();}}/>
           </div>
-          <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}} disabled={busy||!pw||!pw2} onClick={submit}>
-            <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:null}Set new password</div>
+          <button className="btn cta" style={{width:"100%",justifyContent:"center"}} disabled={busy||!pw||!pw2} onClick={submit}>
+            {busy?<Loader2 size={15} className="spin"/>:null}Set new password
           </button>
         </div>
       </div>
