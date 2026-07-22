@@ -66,9 +66,25 @@ export async function sbDel(table, filter) {
 export const AUTH_BASE = SB_URL ? `${SB_URL}/auth/v1` : null;
 export const authHeaders = (tok) => ({ apikey: SB_KEY, "Content-Type": "application/json", ...(tok ? { Authorization: `Bearer ${tok}` } : {}) });
 
-export async function authSignUp(email, password) {
-  const r = await fetch(`${AUTH_BASE}/signup`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ email, password }) });
+export async function authSignUp(email, password, redirectTo) {
+  // redirect_to controls where the confirmation-email link lands (must be in the
+  // Supabase redirect allow-list, else GoTrue falls back to the Site URL).
+  const q = redirectTo ? `?redirect_to=${encodeURIComponent(redirectTo)}` : "";
+  const r = await fetch(`${AUTH_BASE}/signup${q}`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ email, password }) });
   const d = await r.json(); if (!r.ok) throw new Error(d.msg || d.error_description || d.error || "Sign-up failed"); return d;
+}
+// Send a password-reset email. The link returns to the app with
+// #access_token=…&type=recovery; App.jsx opens the set-new-password modal.
+export async function authRecover(email, redirectTo) {
+  const q = redirectTo ? `?redirect_to=${encodeURIComponent(redirectTo)}` : "";
+  const r = await fetch(`${AUTH_BASE}/recover${q}`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ email }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.msg || d.error_description || d.error || "Couldn't send the reset email"); return d;
+}
+// Update the signed-in user's attributes (e.g. {password}) — recovery flow.
+export async function authUpdateUser(tok, attrs) {
+  const r = await fetch(`${AUTH_BASE}/user`, { method: "PUT", headers: authHeaders(tok), body: JSON.stringify(attrs) });
+  const d = await r.json(); if (!r.ok) throw new Error(d.msg || d.error_description || d.error || "Couldn't update the account"); return d;
 }
 export async function authSignIn(email, password) {
   const r = await fetch(`${AUTH_BASE}/token?grant_type=password`, { method: "POST", headers: authHeaders(), body: JSON.stringify({ email, password }) });
