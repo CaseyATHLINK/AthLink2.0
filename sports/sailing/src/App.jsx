@@ -32,7 +32,7 @@ import { HostMembersModal, HostEditModal, HostDiscoveryModal, hgCompKey, hgRunPo
 import { SignInModal } from "./views/auth.jsx";
 import ScoutPortal, { SaveButton, ScoutLocked } from "./views/scout.jsx";
 import { scoutOwnerId, logActivity, fetchPins, addPin, removePin, reorderPins } from "./data/scout.js";
-import { fetchProfile, upsertProfile, authGoogleOAuth } from "@athlink/auth";
+import { fetchProfile, upsertProfile, authGoogleOAuth, completePendingSignup, clearPendingSignup, ResetPasswordModal } from "@athlink/auth";
 
 
 
@@ -361,13 +361,21 @@ export default function AthLinkMVP(){
     ||(!!myClaimFor(nm)&&myClaimFor(nm).status==="approved");
   // googleOnboarding: {token, user} — set when a Google sign-in returns with no profile yet
   const[googleOnboarding,setGoogleOnboarding]=useState(null);
+  // recoverySession: {token, refresh, user} — set when a password-reset link returns
+  const[recoverySession,setRecoverySession]=useState(null);
+  // one-shot info banner for the sign-in modal (e.g. minor-athlete guardian notice)
+  const[signInNotice,setSignInNotice]=useState("");
   useEffect(()=>{
     if(!AUTH_BASE) return;
-    // ── Detect Supabase OAuth return (access_token in URL hash) ──────────────
+    // ── Detect Supabase auth return (access_token in URL hash) ────────────────
+    // Covers Google OAuth, email-confirmation links (type=signup) and
+    // password-reset links (type=recovery) — GoTrue uses the same hash shape.
     const hash=window.location.hash;
     if(hash&&hash.includes("access_token")){
       const params=new URLSearchParams(hash.replace(/^#/,""));
       const tok=params.get("access_token");
+      const refresh=params.get("refresh_token")||undefined;
+      const linkType=params.get("type"); // "signup" | "recovery" | null (OAuth)
       // Clean the hash from the URL immediately
       window.history.replaceState(null,"",window.location.pathname+window.location.search);
       if(tok){
@@ -375,14 +383,30 @@ export default function AthLinkMVP(){
           try{
             const u=await authUser(tok);
             if(!u) return;
+            if(linkType==="recovery"){ setRecoverySession({token:tok,refresh,user:u}); return; }
             const prof=await fetchProfile(u.id,tok);
             if(prof){
-              // Returning Google user with an existing profile → sign straight in
-              onAuthed({token:tok,user:u,profile:prof});
+              // Returning user with an existing profile → sign straight in
+              onAuthed({token:tok,refresh,user:u,profile:prof});
             } else {
-              // New Google user — needs role/name onboarding
-              setGoogleOnboarding({token:tok,user:u});
-              setShowSignIn(true);
+              // No profile yet: an email signup whose details were stashed
+              // pre-confirmation replays here; otherwise it's a first-time
+              // Google user who still needs the role/name onboarding.
+              const done=await completePendingSignup({user:u,tok},{
+                onCreateHost:createHostFromSignup,onClaimHost:claimHostFromSignup,
+                hostRest,fetchInviteByToken,markInviteUsed,hostById,
+              }).catch(e=>{console.error("Pending signup replay:",e);return null;});
+              if(done&&done.guardianPending){
+                // Minor athlete: profile written but gated on guardian consent — mirror
+                // the live-signup behaviour (no session) and say why.
+                setSignInNotice(`Email confirmed. A guardian consent email was sent — your profile activates once it's approved.`);
+                setShowSignIn(true);
+              } else if(done){
+                onAuthed({token:tok,refresh,user:u,profile:done.profile,...(done.pendingHostId?{pendingHostId:done.pendingHostId}:{})});
+              } else {
+                setGoogleOnboarding({token:tok,user:u});
+                setShowSignIn(true);
+              }
             }
           }catch(e){console.error("OAuth return error:",e);}
         })();
@@ -415,7 +439,7 @@ export default function AthLinkMVP(){
     const rows=await fetchMyMemberships(a2.user.id,a2.token);
     if(rows) setMyMemberships(rows);
   };
-  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null); setSignupRole(null);
+  const onAuthed=(a2)=>{ setAuth(a2); setShowSignIn(false); setGoogleOnboarding(null); setSignupRole(null); setSignInNotice(""); clearPendingSignup();
     if(a2.pendingHostId) setPendingHostNotice(a2.pendingHostId);
     try{localStorage.setItem("athlink_auth",JSON.stringify({token:a2.token,refresh:a2.refresh,profile:a2.profile}));}catch{}
     if(a2.profile?.role==="scout") goTop("scout"); // scouts land in the scout workspace; athletes/fans/hosts keep current behavior
@@ -4279,10 +4303,18 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
     </div>
   )}
   <div style={{height:74}}/>
-  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);setSignupRole(null);}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
+  {showSignIn&&<SignInModal onClose={()=>{setShowSignIn(false);setGoogleOnboarding(null);setPendingInviteToken(null);setSignupRole(null);setSignInNotice("");}} onAuthed={onAuthed} googleOnboarding={googleOnboarding}
     clubs={CLUBS} associations={ASSOCIATIONS} federations={FEDERATIONS}
     onCreateHost={createHostFromSignup} onClaimHost={claimHostFromSignup}
-    initialRole={signupRole} pendingInviteToken={pendingInviteToken}/>}
+    initialRole={signupRole} pendingInviteToken={pendingInviteToken} initialInfo={signInNotice}/>}
+  {recoverySession&&<ResetPasswordModal token={recoverySession.token}
+    onClose={()=>setRecoverySession(null)}
+    onDone={async()=>{
+      const{token,refresh,user}=recoverySession;
+      const prof=await fetchProfile(user.id,token)||{role:"guest"};
+      onAuthed({token,refresh,user,profile:prof});
+      setRecoverySession(null);
+    }}/>}
   {showMembers&&host&&!isClassPortal&&(()=>{
     // Athlete names appearing in this host's events (for vouching scope)
     const hostEvents=events.filter(e=>eventAssocs(e).includes(portal));

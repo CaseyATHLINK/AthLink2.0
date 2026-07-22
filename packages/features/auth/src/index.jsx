@@ -7,8 +7,14 @@
    sport binds it once (sailing: sports/sailing/src/views/auth.jsx). */
 
 import React, { useState, useEffect, useRef } from "react";
-import { AlertCircle, ArrowLeft, BadgeCheck, CheckCircle, ChevronRight, Clock, Link2, Loader2, Plus, Search, X } from "lucide-react";
-import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, authSignUp, authSignIn } from "@athlink/core";
+import { AlertCircle, ArrowLeft, BadgeCheck, CheckCircle, ChevronRight, Clock, Link2, Loader2, MailCheck, Plus, Search, X } from "lucide-react";
+import { SB_URL, SB_KEY, sbH, AUTH_BASE, authHeaders, sbGet, authSignUp, authSignIn, authRecover, authUpdateUser } from "@athlink/core";
+
+// Auth links (OAuth return, email confirmation, password reset) must never point
+// back at a protected *.vercel.app preview — Google sign-in there dead-ends on
+// Vercel's "You Need Access" wall. Previews borrow the production origin instead.
+const PROD_ORIGIN="https://athlink.win";
+export const authReturnOrigin=()=>/\.vercel\.app$/i.test(window.location.hostname)?PROD_ORIGIN:window.location.origin;
 
 // profiles table: {user_id (uuid, pk), role, display_name, class_id, athlete_name}
 export async function fetchProfile(userId,tok){
@@ -30,8 +36,94 @@ export async function upsertProfile(profile,tok){
 // On return, the URL hash contains the session; AthLinkMVP picks it up on mount.
 export function authGoogleOAuth(){
   if(!SB_URL||!SB_KEY) return;
-  const redirectTo=encodeURIComponent(window.location.origin+window.location.pathname);
+  const redirectTo=encodeURIComponent(authReturnOrigin()+window.location.pathname);
   window.location.href=`${SB_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectTo}`;
+}
+
+/* ── Pending signup (email-confirmation deferral) ─────────────────────────
+   With "Confirm email" ON, /signup returns a user but NO session, so the
+   profile row (RLS: authenticated writes only) can't be written yet. The
+   details collected in the signup steps are stashed here and replayed by
+   completePendingSignup() once a confirmed session exists — either on the
+   confirmation-link return (App.jsx hash pickup) or on the next manual
+   sign-in that finds no profile row. */
+const PENDING_KEY="athlink_pending_signup";
+const PENDING_TTL_MS=7*24*3600*1000; // confirmation links die within a day; stale stashes just rot
+export const stashPendingSignup=(s)=>{try{localStorage.setItem(PENDING_KEY,JSON.stringify({...s,savedAt:Date.now()}));}catch{}};
+export const clearPendingSignup=()=>{try{localStorage.removeItem(PENDING_KEY);}catch{}};
+const readPendingSignup=()=>{
+  try{
+    const raw=localStorage.getItem(PENDING_KEY); if(!raw) return null;
+    const s=JSON.parse(raw);
+    if(!s.savedAt||Date.now()-s.savedAt>PENDING_TTL_MS){ clearPendingSignup(); return null; }
+    return s;
+  }catch{return null;}
+};
+
+/* Everything that happens AFTER a session exists: write the profile row, then
+   the role-specific path (guardian gate / invite redemption / host claim).
+   Shared by the live modal submit and the deferred confirmation replay so the
+   two paths stay behaviourally identical.
+   s: serializable signup state (see liveSignupState in the modal)
+   d: {onCreateHost,onClaimHost,hostRest,fetchInviteByToken,markInviteUsed,hostById}
+   → {profile, pendingHostId?, guardianPending?} */
+async function finalizeSignup({tok,user},s,d){
+  const profilePayload={user_id:user.id,role:s.role,
+    display_name:s.fallbackName,
+    class_id:s.role==="association"?s.classId:null,
+    athlete_name:s.role==="athlete"?s.fullNameStr||null:null,
+    first_name:s.firstName||null,
+    last_name:s.lastName||null};
+  if(s.role==="athlete"&&s.birthYear) profilePayload.birth_year=parseInt(s.birthYear);
+  const minorGuardian=s.role==="athlete"&&s.isMinor&&s.guardianEmail;
+  if(minorGuardian){profilePayload.guardian_pending=true;profilePayload.guardian_email=s.guardianEmail;}
+  await upsertProfile(profilePayload,tok);
+
+  if(s.role==="athlete") return minorGuardian?{profile:profilePayload,guardianPending:true}:{profile:profilePayload};
+  if(s.role==="scout") return {profile:profilePayload};
+
+  // ── Invite path: link token or code → immediate verified access ──
+  if(s.inviteRow){
+    // Re-validate with the user's token (RLS-safe) before committing.
+    let inv=s.inviteRow;
+    const recheck=await d.fetchInviteByToken(inv.token,tok);
+    if(recheck&&recheck[0]) inv=recheck[0];
+    if(!inv||inv.used_at||new Date(inv.expires_at)<new Date())
+      throw new Error("This invitation is no longer valid. Ask your host admin to send a new one.");
+    const hostRows=await sbGet(`hosts?id=eq.${encodeURIComponent(inv.host_id)}&select=type`);
+    const hostType=hostRows?.[0]?.type||d.hostById(inv.host_id)?.type||"club";
+    profilePayload.role=hostType;
+    delete profilePayload.birth_year; delete profilePayload.guardian_pending; delete profilePayload.guardian_email;
+    profilePayload.athlete_name=null; profilePayload.class_id=hostType==="association"?(d.hostById(inv.host_id)?.cls||null):null;
+    await upsertProfile(profilePayload,tok);
+    await d.hostRest("host_members",{method:"POST",
+      headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
+      body:JSON.stringify({host_id:inv.host_id,user_id:user.id,role:inv.role,status:"active",verified:true})},tok);
+    await d.markInviteUsed(inv.token,user.id,tok);
+    return {profile:{...profilePayload,role:hostType}};
+  }
+
+  // ── Host: claim existing OR create new → pending Owner (guest access) ──
+  let hostId=s.selectedHostId;
+  if(s.newHost){
+    const created=await d.onCreateHost?.(s.newHost,tok);
+    if(!created?.id) throw new Error("Couldn't create the host page.");
+    hostId=created.id;
+  }
+  if(!hostId) throw new Error("Please select or add a host.");
+  await d.onClaimHost?.(hostId,user.id,tok);
+  return {profile:profilePayload,pendingHostId:hostId};
+}
+
+// Deferred signup completion. Returns {profile,pendingHostId?,guardianPending?}
+// when a stashed signup matched this user and was replayed, else null. The
+// stash is only cleared on success, so a transient failure retries next time.
+export async function completePendingSignup({user,tok},deps){
+  const s=readPendingSignup();
+  if(!s||!user?.email||String(s.email||"").toLowerCase()!==user.email.toLowerCase()) return null;
+  const done=await finalizeSignup({tok,user},s,deps);
+  clearPendingSignup();
+  return done;
 }
 
 export function makeSignInModal(deps){
@@ -47,8 +139,8 @@ const {ClassPicker,CountrySelect,classColor,classColorA,classLabel,iocFlag,hostB
    ═══════════════════════════════════════════════════════════════════════ */
 
 
-function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[],federations=[],onCreateHost,onClaimHost,pendingInviteToken=null,initialRole=null}){
-  /* ── mode: "signin" | "signup" ── */
+function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[],federations=[],onCreateHost,onClaimHost,pendingInviteToken=null,initialRole=null,initialInfo=""}){
+  /* ── mode: "signin" | "signup" | "confirm" (check-your-inbox screen) ── */
   // If arriving from Google OAuth with no profile yet, jump straight to role-pick
   const[mode,setMode]=React.useState(googleOnboarding?"signup":"signin");
   /* ── multi-step signup state ── */
@@ -87,7 +179,12 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
   /* shared */
   const[busy,setBusy]=React.useState(false);
   const[err,setErr]=React.useState("");
-  const[info,setInfo]=React.useState("");
+  const[info,setInfo]=React.useState(initialInfo);
+  /* auth user created at step 1 — {tok|null,user}. tok is null when email
+     confirmation is ON (no session until the link is clicked). Invalidated
+     whenever the email/password fields change. */
+  const[cred,setCred]=React.useState(null);
+  const[dupEmail,setDupEmail]=React.useState(false); // step-1 "already registered" banner
   /* invite redemption state */
   const[resolvedInvite,setResolvedInvite]=React.useState(null);  // fetched invite row (from link)
   const[inviteCodeInput,setInviteCodeInput]=React.useState("");   // 8-char code user types
@@ -222,6 +319,27 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
     }finally{setInviteCodeBusy(false);}
   };
 
+  /* ── deps for finalizeSignup / completePendingSignup ── */
+  const finalizeDeps={onCreateHost,onClaimHost,hostRest,fetchInviteByToken,markInviteUsed,hostById};
+
+  /* ── serializable snapshot of the collected signup details ──
+     Fed to finalizeSignup directly (session available) or stashed for the
+     email-confirmation replay (no session yet). Keep it JSON-safe. */
+  const liveSignupState=()=>({
+    email:email.trim(),role,
+    firstName:firstName.trim(),lastName:lastName.trim(),
+    fullNameStr,fallbackName,birthYear,guardianEmail:guardianEmail.trim(),isMinor,
+    classId,selectedHostId,
+    newHost:addingNew?{
+      type:hostKind,scope:hostScopeVal,name:newHostName.trim(),
+      cls:hostKind==="association"?classId:null,
+      country:hostCountryVal,
+      website:hostWebsite.trim()||null,     // official results site (scopes discovery)
+      dossier:confirmedDossier||null,       // host auto-grab: confirmed "Is this you?" research
+    }:null,
+    inviteRow:resolvedInvite||localInviteCtx?.inv||null,
+  });
+
   /* ── sign-in submit ── */
   const doSignIn=async()=>{
     setErr("");setBusy(true);
@@ -229,99 +347,92 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
       if(!AUTH_BASE) throw new Error("Auth not configured.");
       const d=await authSignIn(email.trim(),pw);
       const tok=d.access_token;const user=d.user;
-      const prof=await fetchProfile(user.id,tok)||{role:"guest"};
-      onAuthed({token:tok,user,profile:prof});
+      let prof=await fetchProfile(user.id,tok);
+      if(!prof){
+        // No profile row: maybe an email signup confirmed elsewhere — replay the stash.
+        const done=await completePendingSignup({user,tok},finalizeDeps).catch(()=>null);
+        if(done){
+          onAuthed({token:tok,refresh:d.refresh_token,user,profile:done.profile,...(done.pendingHostId?{pendingHostId:done.pendingHostId}:{})});
+          return;
+        }
+      }
+      onAuthed({token:tok,refresh:d.refresh_token,user,profile:prof||{role:"guest"}});
     }catch(e){setErr(e.message||"Sign-in failed.");}
+    finally{setBusy(false);}
+  };
+
+  /* ── forgot password ── */
+  const doRecover=async()=>{
+    const em=email.trim();
+    if(!em){setErr("Enter your email above first, then tap Forgot password.");return;}
+    setErr("");setBusy(true);
+    try{
+      await authRecover(em,authReturnOrigin()+window.location.pathname);
+      setInfo(`Password reset link sent to ${em}. Check your inbox.`);
+    }catch(e){setErr(e.message||"Couldn't send the reset email.");}
+    finally{setBusy(false);}
+  };
+
+  /* ── step 1 "Continue" — create the auth user NOW ──
+     Doing this up front means a duplicate email is caught here, with a
+     "Sign in instead" path, rather than after the user has typed all their
+     details. With email confirmation ON, GoTrue answers an existing address
+     with an obfuscated user carrying identities:[] instead of an error —
+     treat both shapes as a duplicate. */
+  const doCreateAccount=async()=>{
+    if(cred){setErr("");setStep(isInviteMode?3:2);return;} // unchanged credentials — don't re-signup (GoTrue rate-limits resends)
+    setErr("");setBusy(true);
+    try{
+      if(!AUTH_BASE) throw new Error("Auth not configured.");
+      const d=await authSignUp(email.trim(),pw,authReturnOrigin()+window.location.pathname);
+      const user=d.user||d;
+      if(Array.isArray(user?.identities)&&user.identities.length===0){setDupEmail(true);return;}
+      setCred({tok:d.access_token||d.session?.access_token||null,refresh:d.refresh_token||d.session?.refresh_token||null,user});
+      setStep(isInviteMode?3:2);
+    }catch(e){
+      if(/already.{0,10}registered/i.test(e.message||"")) setDupEmail(true);
+      else setErr(e.message||"Sign-up failed.");
+    }
+    finally{setBusy(false);}
+  };
+
+  /* ── resend the confirmation email (GoTrue re-sends on repeat /signup) ── */
+  const doResend=async()=>{
+    setErr("");setInfo("");setBusy(true);
+    try{
+      await authSignUp(email.trim(),pw,authReturnOrigin()+window.location.pathname);
+      setInfo("Confirmation email re-sent.");
+    }catch(e){
+      setErr(/security purposes|rate/i.test(e.message||"")?"Please wait a minute before resending.":e.message||"Couldn't resend the email.");
+    }
     finally{setBusy(false);}
   };
 
   /* ── final sign-up submit ── */
   // Athletes finish at step 3; hosts finish at step 4 (after Find-my-club).
+  // The auth user already exists (step 1 / Google); this writes the profile.
   const doSignUp=async()=>{
     setErr("");setBusy(true);
     try{
       if(!AUTH_BASE) throw new Error("Auth not configured.");
-      // Obtain a session: Google path already has one; email path signs up now.
       let tok,user;
-      if(googleOnboarding){
-        tok=googleOnboarding.token; user=googleOnboarding.user;
-      } else {
-        const d=await authSignUp(email.trim(),pw);
-        tok=d.access_token||d.session?.access_token;
-        user=d.user||d;
-        if(!tok){
-          setInfo("Account created — check your email to confirm, then sign in.");
-          resetToSignin();setBusy(false);return;
-        }
+      if(googleOnboarding){ tok=googleOnboarding.token; user=googleOnboarding.user; }
+      else if(cred?.tok){ tok=cred.tok; user=cred.user; }
+      else if(cred?.user){
+        // Email confirmation ON — no session until the link is clicked. Stash
+        // the details for the confirmation-return replay and show the inbox screen.
+        stashPendingSignup(liveSignupState());
+        setMode("confirm");setBusy(false);return;
       }
+      else throw new Error("Session missing — go back and re-enter your details.");
 
-      // ── Write the profile row (all roles capture first/last now) ──
-      const profilePayload={user_id:user.id,role,
-        display_name:fallbackName,
-        class_id:role==="association"?classId:null,
-        athlete_name:role==="athlete"?fullNameStr||null:null,
-        first_name:firstName.trim()||null,
-        last_name:lastName.trim()||null};
-      if(role==="athlete"&&birthYear) profilePayload.birth_year=parseInt(birthYear);
-      if(role==="athlete"&&isMinor&&guardianEmail.trim()){profilePayload.guardian_pending=true;profilePayload.guardian_email=guardianEmail.trim();}
-      await upsertProfile(profilePayload,tok);
-
-      // ── Athlete: minor guardian path or straight in ──
-      if(role==="athlete"){
-        if(isMinor&&guardianEmail.trim()){
-          setInfo(`Guardian consent email sent to ${guardianEmail.trim()}. Profile activates once approved.`);
-          setTimeout(onClose,5000);setBusy(false);return;
-        }
-        onAuthed({token:tok,user,profile:profilePayload});return;
+      const done=await finalizeSignup({tok,user},liveSignupState(),finalizeDeps);
+      clearPendingSignup();
+      if(done.guardianPending){
+        setInfo(`Guardian consent email sent to ${guardianEmail.trim()}. Profile activates once approved.`);
+        setTimeout(onClose,5000);setBusy(false);return;
       }
-
-      // ── Scout: no athlete claim, no host — straight in with a display name ──
-      if(role==="scout"){ onAuthed({token:tok,user,profile:profilePayload});return; }
-
-      // ── Invite path: link token or code → immediate verified access ──
-      const activeInvRow=resolvedInvite||localInviteCtx?.inv;
-      if(activeInvRow){
-        // Re-validate with the user's token (RLS-safe) before committing.
-        let inv=activeInvRow;
-        const recheck=await fetchInviteByToken(inv.token,tok);
-        if(recheck&&recheck[0]) inv=recheck[0];
-        if(!inv||inv.used_at||new Date(inv.expires_at)<new Date())
-          throw new Error("This invitation is no longer valid. Ask your host admin to send a new one.");
-        // Profile role mirrors the host type (club / association / federation).
-        const hostRows=await sbGet(`hosts?id=eq.${encodeURIComponent(inv.host_id)}&select=type`);
-        const hostType=hostRows?.[0]?.type||hostById(inv.host_id)?.type||"club";
-        profilePayload.role=hostType;
-        delete profilePayload.birth_year; delete profilePayload.guardian_pending; delete profilePayload.guardian_email;
-        profilePayload.athlete_name=null; profilePayload.class_id=hostType==="association"?(hostById(inv.host_id)?.cls||null):null;
-        await upsertProfile(profilePayload,tok);
-        // Create membership: verified:true, active — immediate full access.
-        await hostRest("host_members",{method:"POST",
-          headers:{"Prefer":"resolution=ignore-duplicates,return=representation"},
-          body:JSON.stringify({host_id:inv.host_id,user_id:user.id,role:inv.role,status:"active",verified:true})},tok);
-        await markInviteUsed(inv.token,user.id,tok);
-        onAuthed({token:tok,user,profile:{...profilePayload,role:hostType}});
-        return;
-      }
-
-      // ── Host: claim existing OR create new → pending Owner (guest access) ──
-      let hostId=selectedHostId;
-      if(addingNew){
-        const created=await onCreateHost?.({
-          type:hostKind,scope:hostScopeVal,name:newHostName.trim(),
-          cls:hostKind==="association"?classId:null,
-          country:hostCountryVal,
-          website:hostWebsite.trim()||null,     // official results site (scopes discovery)
-          dossier:confirmedDossier||null,       // host auto-grab: confirmed "Is this you?" research
-        },tok);
-        if(!created?.id) throw new Error("Couldn't create the host page.");
-        hostId=created.id;
-      }
-      if(!hostId) throw new Error("Please select or add a host.");
-      // Register the user as Owner, status active but verified=false (gated → guest UX).
-      await onClaimHost?.(hostId,user.id,tok);
-
-      // Sign them in as their (pending) profile; UI stays guest-level until verified.
-      onAuthed({token:tok,user,profile:profilePayload,pendingHostId:hostId});
+      onAuthed({token:tok,refresh:cred?.refresh,user,profile:done.profile,...(done.pendingHostId?{pendingHostId:done.pendingHostId}:{})});
     }catch(e){setErr(e.message||"Sign-up failed.");}
     finally{setBusy(false);}
   };
@@ -385,10 +496,10 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{flex:1}}>
               <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"rgba(255,255,255,.55)"}}>
-                {isInviteMode&&mode==="signup"?(step===1?"Accept invitation":"Your details"):mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":step===3?"Your name":hostKind==="club"?"Find your club":hostKind==="federation"?"Find your federation":"Find your association"}
+                {mode==="confirm"?"One more step":isInviteMode&&mode==="signup"?(step===1?"Accept invitation":"Your details"):mode==="signin"?"Welcome back":step===1?"Create account":step===2?"Who are you?":step===3?"Your name":hostKind==="club"?"Find your club":hostKind==="federation"?"Find your federation":"Find your association"}
               </p>
               <h3 style={{marginTop:2}}>
-                {isInviteMode&&mode==="signup"?(step===1?"Create your account":"Complete your profile"):mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose how you'll use AthLink":step===3?(isHost?"Your details":"Almost done"):"Link your club"}
+                {mode==="confirm"?"Check your inbox":isInviteMode&&mode==="signup"?(step===1?"Create your account":"Complete your profile"):mode==="signin"?"Sign in to AthLink":step===1?"Get started":step===2?"Choose how you'll use AthLink":step===3?(isHost?"Your details":"Almost done"):"Link your club"}
               </h3>
             </div>
             <button className="x" onClick={onClose}><X size={16}/></button>
@@ -454,6 +565,12 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
                   onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
                   onKeyDown={e=>{if(e.key==="Enter"&&email&&pw)doSignIn();}}/>
               </div>
+              <div style={{textAlign:"right"}}>
+                <button type="button" onClick={doRecover} disabled={busy}
+                  style={{border:0,background:"none",color:"var(--accent)",fontWeight:600,cursor:"pointer",fontSize:12.5,padding:0}}>
+                  Forgot password?
+                </button>
+              </div>
             </div>
 
             <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}}
@@ -466,6 +583,31 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
               <button type="button" onClick={()=>{setMode("signup");setStep(1);setErr("");}}
                 style={{border:0,background:"none",color:"var(--accent)",fontWeight:700,cursor:"pointer",fontSize:13}}>
                 Create one
+              </button>
+            </p>
+          </>)}
+
+          {/* ════ CONFIRM: check-your-inbox (email confirmation ON) ════ */}
+          {mode==="confirm"&&(<>
+            <div style={{textAlign:"center",padding:"8px 0 2px"}}>
+              <div style={{width:54,height:54,margin:"0 auto 14px",borderRadius:"50%",background:"rgba(10,132,255,.1)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <MailCheck size={26} color="var(--accent)"/>
+              </div>
+              <p style={{fontSize:14,color:"var(--navy)",lineHeight:1.6,margin:0}}>
+                We sent a confirmation link to<br/><b>{email.trim()}</b>
+              </p>
+              <p style={{fontSize:12.5,color:"var(--mut)",lineHeight:1.55,margin:"10px 0 0"}}>
+                Click it and you'll be signed in automatically — everything you just entered is saved.
+              </p>
+            </div>
+            <button className="btn ghost" style={{width:"100%",justifyContent:"center"}} disabled={busy} onClick={doResend}>
+              {busy?<Loader2 size={14} className="spin"/>:null}Resend email
+            </button>
+            <p style={{fontSize:12.5,color:"var(--mut)",textAlign:"center",margin:0}}>
+              Wrong address?{" "}
+              <button type="button" onClick={()=>{setMode("signup");setStep(1);setCred(null);setInfo("");}}
+                style={{border:0,background:"none",color:"var(--accent)",fontWeight:700,cursor:"pointer",fontSize:12.5}}>
+                Go back
               </button>
             </p>
           </>)}
@@ -490,19 +632,40 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
 
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               <div><Label>Email</Label>
-                <input style={FW()} type="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)}
+                <input style={FW()} type="email" placeholder="you@example.com" value={email}
+                  onChange={e=>{setEmail(e.target.value);setCred(null);setDupEmail(false);}}
                   onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
               </div>
               <div><Label>Password <span style={{fontWeight:400,textTransform:"none",fontSize:10.5}}>(min 8 characters)</span></Label>
-                <input style={FW()} type="password" placeholder="Choose a password" value={pw} onChange={e=>setPw(e.target.value)}
+                <input style={FW()} type="password" placeholder="Choose a password" value={pw}
+                  onChange={e=>{setPw(e.target.value);setCred(null);}}
                   onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
-                  onKeyDown={e=>{if(e.key==="Enter"&&step1Valid)setStep(2);}}/>
+                  onKeyDown={e=>{if(e.key==="Enter"&&step1Valid&&!busy)doCreateAccount();}}/>
               </div>
             </div>
 
+            {/* Duplicate email → offer the two useful exits instead of a dead-end error */}
+            {dupEmail&&(
+              <div style={{background:"rgba(200,50,50,.07)",border:"1px solid rgba(200,50,50,.25)",borderRadius:12,padding:"12px 15px"}}>
+                <p style={{margin:"0 0 9px",fontSize:13,color:"#c0392b",display:"flex",alignItems:"center",gap:8}}>
+                  <AlertCircle size={14} style={{flex:"none"}}/>This email already has an AthLink account.
+                </p>
+                <div style={{display:"flex",gap:8}}>
+                  <button type="button" className="btn cta" style={{flex:1,justifyContent:"center",fontSize:13}}
+                    onClick={()=>{setDupEmail(false);resetToSignin();}}>
+                    Sign in instead
+                  </button>
+                  <button type="button" className="btn ghost" style={{flex:1,justifyContent:"center",fontSize:13}}
+                    disabled={busy} onClick={doRecover}>
+                    Reset password
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}}
-              disabled={busy||!step1Valid} onClick={()=>{setErr("");setStep(isInviteMode?3:2);}}>
-              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">Continue <ChevronRight size={16}/></div>
+              disabled={busy||!step1Valid} onClick={doCreateAccount}>
+              <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:null}Continue <ChevronRight size={16}/></div>
             </button>
 
             <p style={{fontSize:13,color:"var(--mut)",textAlign:"center",margin:0}}>
@@ -808,4 +971,53 @@ function SignInModal({onClose,onAuthed,googleOnboarding,clubs=[],associations=[]
 }
 
 return SignInModal;
+}
+
+/* ═══ Set-new-password modal — shown when a /recover link returns with
+   #access_token=…&type=recovery (App.jsx hash pickup). Self-contained: no
+   sport deps, so it's exported directly rather than via a factory. ═══ */
+export function ResetPasswordModal({token,onClose,onDone}){
+  const[pw,setPw]=useState("");
+  const[pw2,setPw2]=useState("");
+  const[busy,setBusy]=useState(false);
+  const[err,setErr]=useState("");
+  const F={width:"100%",border:"1px solid var(--line)",borderRadius:10,padding:"11px 13px",
+    font:"inherit",fontSize:14,background:"rgba(255,255,255,.82)",outline:"none",transition:"box-shadow .15s"};
+  const Label=({children})=><p style={{fontSize:11.5,fontWeight:700,color:"var(--mut)",letterSpacing:".05em",textTransform:"uppercase",margin:"0 0 6px"}}>{children}</p>;
+  const submit=async()=>{
+    if(pw.length<8){setErr("Password must be at least 8 characters.");return;}
+    if(pw!==pw2){setErr("Passwords don't match.");return;}
+    setErr("");setBusy(true);
+    try{ await authUpdateUser(token,{password:pw}); onDone(); }
+    catch(e){setErr(e.message||"Couldn't update the password.");}
+    finally{setBusy(false);}
+  };
+  return(
+    <div className="ov" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:400}}>
+        <div className="mhead" style={{padding:"20px 24px 14px"}}>
+          <div style={{flex:1}}>
+            <p style={{margin:0,fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"rgba(255,255,255,.55)"}}>Password reset</p>
+            <h3 style={{marginTop:2}}>Choose a new password</h3>
+          </div>
+          <button className="x" onClick={onClose}><X size={16}/></button>
+        </div>
+        <div style={{padding:"16px 24px 26px",display:"flex",flexDirection:"column",gap:12}}>
+          {err&&<div style={{background:"rgba(200,50,50,.1)",border:"1px solid rgba(200,50,50,.3)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#c0392b",display:"flex",alignItems:"center",gap:8}}><AlertCircle size={14} style={{flex:"none"}}/>{err}</div>}
+          <div><Label>New password</Label>
+            <input style={F} type="password" placeholder="Min 8 characters" value={pw} onChange={e=>setPw(e.target.value)}
+              onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}/>
+          </div>
+          <div><Label>Repeat password</Label>
+            <input style={F} type="password" placeholder="Same again" value={pw2} onChange={e=>setPw2(e.target.value)}
+              onFocus={e=>e.target.style.boxShadow="0 0 0 4px var(--halo)"} onBlur={e=>e.target.style.boxShadow="none"}
+              onKeyDown={e=>{if(e.key==="Enter"&&pw&&pw2&&!busy)submit();}}/>
+          </div>
+          <button className="btn cta liquidGlass-wrapper" style={{width:"100%",justifyContent:"center"}} disabled={busy||!pw||!pw2} onClick={submit}>
+            <div className="liquidGlass-effect"/><div className="liquidGlass-tint"/><div className="liquidGlass-shine"/><div className="liquidGlass-text">{busy?<Loader2 size={15} className="spin"/>:null}Set new password</div>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
