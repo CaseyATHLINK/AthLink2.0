@@ -3129,8 +3129,15 @@ _AI_MODEL = _anthropic_fallback_model()
 # honoured through llm.route('vision')) without a code change.
 _PARSE_GEMINI_MODEL = os.environ.get("VISION_MODEL", "") or os.environ.get("PARSE_GEMINI_MODEL", "gemini-3.5-flash")
 # Kimi handles IMAGES natively (png/jpeg/webp/gif) — but NOT PDFs — so it only
-# serves image uploads. k2.5 is vision-capable.
-_VISION_KIMI_MODEL = os.environ.get("VISION_KIMI_MODEL", "kimi-k2.5")
+# serves image uploads. Verified against the live API 2026-07-22: kimi-k3
+# rejects PDFs every way (inline base64 400s "unsupported image format",
+# ms://file-id 400s, type:file 400s) — its "native document understanding" is a
+# Kimi-app feature, not in the chat API. K3 also always thinks (the k2.x
+# thinking-disable param is silently ignored); reasoning_effort="low" is the
+# only speed knob, and even then a real 18-row results page took 137-219s —
+# far over the 60s function ceiling. So Kimi stays a LAST-RESORT image
+# primary for when no Gemini key is configured, never a mid-chain fallback.
+_VISION_KIMI_MODEL = os.environ.get("VISION_KIMI_MODEL", "kimi-k3")
 _KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 
 _GEMINI_PROMPT = """Parse this sailing regatta results file. Return ONLY a JSON object, no markdown/explanation.
@@ -3372,8 +3379,11 @@ def _kimi_vision_raw(file_bytes: bytes, mime_type: str, prompt: str, key: str, t
     messages = [{"role": "user", "content": [
         {"type": "image_url", "image_url": {"url": data_url}},
         {"type": "text", "text": prompt}]}]
+    # k3 can't disable thinking; "low" effort is the only latency lever.
+    effort = "low" if _VISION_KIMI_MODEL.startswith("kimi-k3") else None
     resp = call_openai_compat(_KIMI_BASE_URL, key, _VISION_KIMI_MODEL,
-                              messages, max_tokens=8192, timeout=timeout)
+                              messages, max_tokens=8192, timeout=timeout,
+                              reasoning_effort=effort)
     raw = (openai_text(resp) or "").strip()
     try:
         fr = resp["choices"][0].get("finish_reason", "")

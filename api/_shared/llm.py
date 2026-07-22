@@ -147,7 +147,7 @@ def _post_json(url, payload, headers, timeout):
 
 
 def call_openai_compat(base_url, key, model, messages, max_tokens, tools=None,
-                       timeout=20):
+                       timeout=20, reasoning_effort=None):
     """OpenAI chat-completions shape — kept so a provider (Kimi/DeepSeek/…) can
     be re-added purely via env. Not used by any DEFAULT route in v3.
 
@@ -156,9 +156,13 @@ def call_openai_compat(base_url, key, model, messages, max_tokens, tools=None,
     payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
     if tools:
         payload["tools"] = tools
-    # Moonshot/Kimi turns "thinking" ON by default, which eats the whole
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
+    # Moonshot/Kimi k2.x turns "thinking" ON by default, which eats the whole
     # max_tokens budget on our short-output tasks and returns empty content.
-    # Harmless for other providers (only sent to moonshot).
+    # Harmless for other providers (only sent to moonshot); kimi-k3 silently
+    # tolerates it (verified 2026-07-22) but always thinks regardless — only
+    # reasoning_effort ("low"/"high"/"max") actually moderates k3.
     if "moonshot" in base_url:
         payload["thinking"] = {"type": "disabled"}
     url = base_url.rstrip("/") + "/chat/completions"
