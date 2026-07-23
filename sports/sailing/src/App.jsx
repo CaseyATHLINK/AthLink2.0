@@ -945,15 +945,17 @@ export default function AthLinkMVP(){
     setShowSignIn(true); // open signup modal
   },[]);
 
-  // ── Detect ?signup=1 on mount (landing page "Create a profile" button) ──
-  // Strips the param and opens the sign-in/sign-up modal.
+  // ── Detect ?signup=1 / ?signin=1 on mount (landing page buttons) ──
+  // Strips the param and opens the sign-in/sign-up modal (signup preselects a
+  // role and starts in signup mode; signin opens the plain sign-in view).
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
-    if(params.get("signup")!=="1") return;
+    const wantSignup=params.get("signup")==="1", wantSignin=params.get("signin")==="1";
+    if(!wantSignup&&!wantSignin) return;
     const rl=params.get("role"); // athlete|scout|fan|host|club|association|federation
-    const clean=new URL(window.location.href); clean.searchParams.delete("signup"); clean.searchParams.delete("role");
+    const clean=new URL(window.location.href); clean.searchParams.delete("signup"); clean.searchParams.delete("signin"); clean.searchParams.delete("role");
     window.history.replaceState(null,"",clean.pathname+(clean.search||""));
-    if(rl) setSignupRole(rl);
+    if(wantSignup&&rl) setSignupRole(rl);
     setShowSignIn(true);
   },[]);
 
@@ -4697,12 +4699,13 @@ Name: ${name}. Active years: ${years.join(', ')||'unknown'}. Class-by-year: ${jo
             </span>
           </div>);
         const cfg=lens?SPORT_MODELS[lens]:null;
-        if(!cfg) return(<>{head}{search}{chips}</>);
-        return( // class explainer: title + search + filters left, the two diagrams packed right on the same row
-          <div className="spm-classgrid">
-            <div className="spm-classhead">{head}{search}{chips}</div>
-            <SpmDuo cfg={cfg}/>
-          </div>);
+        // Audit consistency fix: picking a class filter must NOT reshape the page.
+        // Header/search/chips keep their full-width layout; the class explainer
+        // diagrams render as a strip below the controls instead of a side column.
+        return(<>
+          {head}{search}{chips}
+          {cfg&&<div style={{margin:"4px 0 18px"}}><SpmDuo cfg={cfg}/></div>}
+        </>);
       })()}
       {evItems.map(item=>{
         if(item.type==='divider') return(
