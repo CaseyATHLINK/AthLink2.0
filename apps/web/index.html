@@ -7,11 +7,18 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="/brand/favicon-512.png" />
     <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
-    <meta name="theme-color" content="#163a63" />
+    <!-- Matches the app's light background so the browser chrome blends in
+         instead of drawing a dark frame around the page (July 2026 audit). -->
+    <meta name="theme-color" content="#dfe8f5" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&display=swap" rel="stylesheet" />
   </head>
+  <style>
+    /* Kill the UA default body margin — it drew a grey frame around the app's
+       dark hero/topbar on every page (July 2026 audit: "border across the site"). */
+    html,body{margin:0;padding:0;}
+  </style>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>

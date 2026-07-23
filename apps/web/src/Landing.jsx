@@ -37,7 +37,9 @@ const CSS = `
 .tb-nav{display:inline-flex;align-items:center;gap:2px;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border-radius:980px;padding:5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 26px -12px rgba(0,0,0,.3);}
 .tb-link{font:inherit;font-size:14px;font-weight:700;color:var(--navy);border:0;background:none;border-radius:980px;padding:9px 18px;cursor:pointer;transition:background .16s;white-space:nowrap;}
 .tb-link:hover{background:rgba(255,255,255,.85);}
-.tb-spacer{width:34px;flex:none;}
+/* Right-side profile entry (audit): landing previously had NO way to sign in. */
+.tb-profile{width:40px;height:40px;border-radius:980px;border:0;background:rgba(255,255,255,.60);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);color:var(--navy);display:grid;place-items:center;cursor:pointer;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 8px 24px -12px rgba(0,0,0,.28);transition:transform .15s,background .15s;}
+.tb-profile:hover{background:rgba(255,255,255,.85);transform:translateY(-1px);}
 .hero-lockup{display:flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 26px;filter:drop-shadow(0 6px 22px rgba(0,0,0,.28));}
 .hero-mark{height:52px;width:auto;display:block;}
 .hero-word{font-weight:800;font-size:46px;color:#fff;letter-spacing:-.04em;line-height:1;}
@@ -55,7 +57,9 @@ const CSS = `
 .hero{position:relative;overflow:hidden;color:#fff;border-radius:0 0 36px 36px;background:radial-gradient(120% 120% at 20% 0%,#1a4372 0%,#12263f 45%,#0a1c31 100%);}
 .hero-liquid{position:absolute;inset:0;width:100%;height:100%;filter:blur(30px) saturate(135%);opacity:.7;}
 .hero-veil{position:absolute;inset:0;background:radial-gradient(80% 60% at 80% 20%,rgba(10,132,255,.22),transparent 60%);}
-.al-landing .hero-inner{position:relative;z-index:2;padding:170px 24px 120px;text-align:center;}
+/* Full-viewport hero (audit): the fold lands exactly where the collaborators
+   section starts. svh keeps mobile URL-bar changes from causing jumps. */
+.al-landing .hero-inner{position:relative;z-index:2;min-height:100vh;min-height:100svh;display:flex;flex-direction:column;justify-content:center;padding:110px 24px 70px;text-align:center;}
 .hero h1{font-size:62px;line-height:1.02;font-weight:800;letter-spacing:-.04em;max-width:16ch;margin:0 auto 34px;}
 .hero h1 .g{background:linear-gradient(100deg,#bfe0ff,#7cb4ff);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .hsearch{position:relative;max-width:620px;margin:0 auto;}
@@ -108,8 +112,9 @@ const CSS = `
 .frow:first-child{margin-top:44px;}
 .frow.flip .ftext{order:2;} .frow.flip .fshot{order:1;}
 .ftext h3{font-size:28px;font-weight:800;letter-spacing:-.028em;color:var(--navy);line-height:1.1;}
-.pain{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;color:#a8492f;background:rgba(232,72,53,.09);border-radius:980px;padding:6px 13px;margin:14px 0;}
-.pain b{font-weight:800;color:#8f3a22;}
+/* "Solves:" — plain prose, not a red pill (audit: the chip read as odd/templated) */
+.pain{display:block;font-size:14.5px;font-weight:500;color:var(--mut);margin:12px 0 10px;line-height:1.5;}
+.pain b{font-weight:700;color:var(--navy);}
 .value{font-size:15px;font-weight:800;color:var(--accent);letter-spacing:-.01em;margin-bottom:6px;}
 .ftext p{font-size:16px;line-height:1.6;color:var(--mut);max-width:44ch;}
 .shot{position:relative;border-radius:14px;overflow:hidden;box-shadow:0 22px 50px -22px rgba(17,40,66,.55),inset 0 0 0 .5px rgba(255,255,255,.55);background:#fff;}
@@ -162,7 +167,8 @@ const CSS = `
 .modal h3{font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--navy);margin-bottom:6px;}
 .modal p{font-size:14px;color:var(--mut);margin-bottom:20px;}
 .email-row{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.6);border-radius:14px;padding:12px 14px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.6);}
-.email-row .em-addr{flex:1;text-align:left;font-size:16px;font-weight:700;color:var(--navy);letter-spacing:-.01em;}
+.email-row .em-addr{flex:1;text-align:left;font-size:16px;font-weight:700;color:var(--navy);letter-spacing:-.01em;cursor:pointer;transition:color .15s;}
+.email-row .em-addr:hover{color:var(--accent);text-decoration:underline;}
 .email-row .copy{border:0;cursor:pointer;font:inherit;font-size:13px;font-weight:700;color:#fff;background:var(--accent);border-radius:980px;padding:8px 16px;display:inline-flex;align-items:center;gap:6px;transition:.15s;}
 .email-row .copy:hover{background:var(--accent2);}
 .email-row .copy.done{background:#34c759;}
@@ -678,7 +684,7 @@ export default function Landing({ sports = [] }) {
             <button className="tb-link" onClick={openContact}>Contact</button>
           </nav>
         </div>
-        <div className="tb-spacer" />
+        <button className="tb-profile" title="Sign in / create account" aria-label="Sign in / create account" onClick={() => goPath("/sailing?signin=1")}><User size={17} /></button>
       </div>
 
       {/* HERO — search-first */}
@@ -843,7 +849,7 @@ export default function Landing({ sports = [] }) {
             <h3>Get in touch</h3>
             <p>Drop us a line and we'll get your results on AthLink.</p>
             <div className="email-row">
-              <span className="em-addr">{EMAIL}</span>
+              <a className="em-addr" href={`mailto:${EMAIL}`}>{EMAIL}</a>
               <button className={"copy" + (copied ? " done" : "")} onClick={copyEmail}>
                 {copied ? <><Check size={14} />Copied</> : <><Copy size={14} />Copy</>}
               </button>
